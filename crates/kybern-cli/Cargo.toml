@@ -16,6 +16,7 @@ kybern-protocol.workspace = true
 kybern-client.workspace = true
 anyhow.workspace = true
 base64.workspace = true
+chrono.workspace = true
 clap.workspace = true
 directories.workspace = true
 futures.workspace = true

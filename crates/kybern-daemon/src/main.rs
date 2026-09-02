@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod orchestrator;
 mod rpc;
+mod settings;
 mod state;
 mod terminal;
 mod ws;

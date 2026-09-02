@@ -470,6 +470,37 @@ impl Store {
         })
     }
 
+    pub fn usage_summary(&self, since: Option<DateTime<Utc>>, group: methods::UsageGroup) -> Result<Vec<methods::UsageRow>> {
+        self.with(|c| {
+            let key_expr = match group {
+                methods::UsageGroup::Provider => "provider_kind",
+                methods::UsageGroup::Model => "COALESCE(model, '(default)')",
+                methods::UsageGroup::Day => "substr(at, 1, 10)",
+                methods::UsageGroup::Thread => "thread_id",
+            };
+            let sql = format!(
+                "SELECT {key_expr} AS k, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_write_tokens), COALESCE(SUM(cost_usd), 0)
+                 FROM turn_usage WHERE at >= ?1 GROUP BY k ORDER BY k"
+            );
+            let since = since.map(|s| s.to_rfc3339()).unwrap_or_else(|| "1970-01-01T00:00:00Z".into());
+            let mut st = c.prepare(&sql)?;
+            let rows = st.query_map([since], |r| {
+                Ok(methods::UsageRow {
+                    key: r.get::<_, String>(0)?,
+                    turns: r.get::<_, i64>(1)? as u64,
+                    usage: Usage {
+                        input_tokens: r.get::<_, i64>(2)? as u64,
+                        output_tokens: r.get::<_, i64>(3)? as u64,
+                        cache_read_tokens: r.get::<_, i64>(4)? as u64,
+                        cache_write_tokens: r.get::<_, i64>(5)? as u64,
+                    },
+                    cost_usd: r.get::<_, f64>(6)?,
+                })
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     // ---- push tokens (mobile, later) ----
 
     pub fn push_token_upsert(&self, token: &str, platform: &str) -> Result<()> {

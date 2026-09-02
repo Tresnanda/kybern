@@ -66,6 +66,15 @@ pub fn transcript(r: &ThreadsGetResult) {
                     println!("    (error)");
                 }
             }
+            TranscriptEntry::Approval { approval, decision, .. } => {
+                let d = match decision {
+                    Some(ApprovalDecision::AllowOnce) => "allowed",
+                    Some(ApprovalDecision::AllowAlways) => "always allowed",
+                    Some(ApprovalDecision::Deny { .. }) => "denied",
+                    None => "pending",
+                };
+                println!("  ? {}  ({d})", approval.summary);
+            }
             TranscriptEntry::TurnSummary { usage, cost_usd, duration_ms, error, stop_reason, .. } => {
                 let cost = cost_usd.map(|c| format!("  ${c:.4}")).unwrap_or_default();
                 match error {
@@ -223,6 +232,21 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
     Ok(())
 }
 
+
+pub fn usage(r: &UsageSummaryResult) {
+    println!("{:<28} {:>6} {:>10} {:>10} {:>10} {:>9}", "", "turns", "input", "output", "cache", "cost");
+    for row in r.rows.iter().chain(std::iter::once(&r.total)) {
+        println!(
+            "{:<28} {:>6} {:>10} {:>10} {:>10} {:>9}",
+            row.key.chars().take(28).collect::<String>(),
+            row.turns,
+            row.usage.input_tokens,
+            row.usage.output_tokens,
+            row.usage.cache_read_tokens + row.usage.cache_write_tokens,
+            format!("${:.2}", row.cost_usd)
+        );
+    }
+}
 
 pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) -> Result<()> {
     use base64::Engine;

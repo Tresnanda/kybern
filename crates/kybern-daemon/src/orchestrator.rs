@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
 use crate::config::Paths;
+use crate::settings::SettingsStore;
 
 #[derive(Clone)]
 pub struct Orchestrator {
@@ -27,6 +28,7 @@ struct Inner {
     drivers: DriverRegistry,
     events: broadcast::Sender<ThreadEvent>,
     paths: Paths,
+    settings: SettingsStore,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
     /// Threads whose next session must fork the provider conversation at this point.
     pending_rewinds: Mutex<HashMap<ThreadId, RewindPoint>>,
@@ -51,8 +53,17 @@ struct ActiveTurn {
 pub const DEFAULT_TITLE: &str = "New thread";
 
 impl Orchestrator {
-    pub fn new(store: Store, drivers: DriverRegistry, events: broadcast::Sender<ThreadEvent>, paths: Paths) -> Self {
-        Self { inner: Arc::new(Inner { store, drivers, events, paths, sessions: Mutex::new(HashMap::new()), pending_rewinds: Mutex::new(HashMap::new()) }) }
+    pub fn new(store: Store, drivers: DriverRegistry, events: broadcast::Sender<ThreadEvent>, paths: Paths, settings: SettingsStore) -> Self {
+        Self { inner: Arc::new(Inner { store, drivers, events, paths, settings, sessions: Mutex::new(HashMap::new()), pending_rewinds: Mutex::new(HashMap::new()) }) }
+    }
+
+    pub fn settings(&self) -> Settings {
+        self.inner.settings.get()
+    }
+
+    /// Binary override for a provider from settings.
+    fn binary_for(&self, kind: ProviderKind) -> Option<PathBuf> {
+        self.inner.settings.get().providers.get(&kind).and_then(|p| p.binary.clone()).map(PathBuf::from)
     }
 
     /// Threads persisted as running belong to a dead daemon; close their turns.
@@ -139,7 +150,8 @@ impl Orchestrator {
 
     pub async fn create_thread(&self, params: methods::ThreadsCreateParams) -> Result<Thread> {
         let project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-        let use_worktree = params.use_worktree.or(project.worktrees_default).unwrap_or(false);
+        let settings = self.inner.settings.get();
+        let use_worktree = params.use_worktree.or(project.worktrees_default).unwrap_or(settings.worktrees_default);
         if use_worktree && !project.is_git {
             return Err(anyhow!("project is not a git repository; cannot create a worktree"));
         }
@@ -151,9 +163,9 @@ impl Orchestrator {
             id,
             project_id: project.id,
             title: params.title.clone().unwrap_or_else(|| DEFAULT_TITLE.to_string()),
+            model: params.model.or_else(|| settings.providers.get(&params.provider.kind).and_then(|p| p.model.clone())),
             provider: params.provider,
-            model: params.model,
-            permission_mode: params.permission_mode.unwrap_or(PermissionMode::Supervised),
+            permission_mode: params.permission_mode.unwrap_or(settings.default_permission_mode),
             status: ThreadStatus::Idle,
             worktree,
             cwd,
@@ -329,6 +341,71 @@ impl Orchestrator {
         let _ = self.emit(thread.id, Some(turn_id), EventPayload::CheckpointUpdated { checkpoint });
     }
 
+    /// Kick off a background title generation for threads still carrying the derived title.
+    fn maybe_generate_title(&self, thread: &Thread) {
+        if !self.inner.settings.get().generate_titles {
+            return;
+        }
+        let Ok(events) = self.inner.store.events_for_thread(thread.id) else { return };
+        let first = events.iter().find_map(|e| match &e.payload {
+            EventPayload::TurnStarted { message, .. } => Some(message.clone()),
+            _ => None,
+        });
+        let Some(first) = first else { return };
+        let turns = events.iter().filter(|e| matches!(e.payload, EventPayload::TurnStarted { .. })).count();
+        if turns != 1 || thread.title != title_from_message(&first) {
+            return;
+        }
+        let this = self.clone();
+        let thread = thread.clone();
+        tokio::spawn(async move {
+            match this.generate_title(&thread, &first).await {
+                Ok(Some(title)) => {
+                    if let Ok(Some(mut t)) = this.inner.store.thread_get(thread.id) {
+                        t.title = title;
+                        let _ = this.update_thread(t);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::debug!(thread_id = %thread.id, %e, "title generation skipped"),
+            }
+        });
+    }
+
+    pub async fn generate_title(&self, thread: &Thread, first: &UserMessage) -> Result<Option<String>> {
+        let settings = self.inner.settings.get();
+        let mut kinds = vec![thread.provider.kind];
+        if let Some(k) = settings.title_provider {
+            kinds.insert(0, k);
+        }
+        kinds.push(ProviderKind::ClaudeCode);
+        kinds.push(ProviderKind::Codex);
+        let prompt = format!(
+            "Write a title for a coding session that starts with the request below. Reply with the title only: at most 6 words, sentence case, no quotes, no trailing period.\n\nRequest:\n{}",
+            first.plain_text().chars().take(1500).collect::<String>()
+        );
+        let cwd = PathBuf::from(&thread.cwd);
+        let mut seen = std::collections::HashSet::new();
+        for kind in kinds {
+            if !seen.insert(kind) {
+                continue;
+            }
+            let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            let binary = self.binary_for(kind);
+            match driver.one_shot(&cwd, &prompt, binary.as_ref()).await {
+                Ok(text) => {
+                    let title = clean_title(&text);
+                    if !title.is_empty() {
+                        return Ok(Some(title));
+                    }
+                }
+                Err(kybern_drivers::DriverError::Unsupported(_)) => continue,
+                Err(e) => tracing::debug!(%kind, %e, "title provider failed"),
+            }
+        }
+        Ok(None)
+    }
+
     pub async fn diff(&self, thread_id: ThreadId, turn_id: Option<TurnId>) -> Result<Diff> {
         let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         let repo = Repo::new(&thread.cwd);
@@ -405,6 +482,7 @@ impl Orchestrator {
             .drivers
             .get(thread.provider.kind)
             .ok_or_else(|| anyhow!("provider {} is not available in this build", thread.provider.kind))?;
+        let provider_settings = self.inner.settings.get().providers.get(&thread.provider.kind).cloned().unwrap_or_default();
         let config = SessionConfig {
             cwd: PathBuf::from(&thread.cwd),
             model: thread.model.clone(),
@@ -412,8 +490,8 @@ impl Orchestrator {
             resume_session_id: thread.provider_session_id.clone(),
             fork: rewind.is_some(),
             rewind,
-            binary: None,
-            env: HashMap::new(),
+            binary: provider_settings.binary.map(PathBuf::from),
+            env: provider_settings.env.into_iter().collect(),
         };
         let SpawnedSession { session, events } = driver.spawn(config).await?;
         let live = Arc::new(LiveSession { session, turn: Mutex::new(None), pending: Mutex::new(HashMap::new()) });
@@ -545,7 +623,8 @@ impl Orchestrator {
                 self.checkpoint(&t, turn_id, "after").await;
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms })?;
                 t.status = ThreadStatus::Idle;
-                self.update_thread(t)?;
+                let t = self.update_thread(t)?;
+                self.maybe_generate_title(&t);
             }
             DriverEvent::TurnFailed { error } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
@@ -581,6 +660,13 @@ fn map_message(turn: &mut Option<ActiveTurn>, provider_id: &str) -> MessageId {
         Some(t) => *t.messages.entry(provider_id.to_string()).or_insert_with(Uuid::now_v7),
         None => Uuid::now_v7(),
     }
+}
+
+fn clean_title(text: &str) -> String {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let line = line.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim();
+    let title: String = line.chars().take(80).collect();
+    if title.split_whitespace().count() > 12 { String::new() } else { title }
 }
 
 pub fn title_from_message(message: &UserMessage) -> String {

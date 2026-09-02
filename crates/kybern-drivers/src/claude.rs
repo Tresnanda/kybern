@@ -69,6 +69,26 @@ impl AgentDriver for ClaudeDriver {
         status
     }
 
+    async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
+        let bin = resolve(ProviderKind::ClaudeCode, binary)?;
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            Command::new(&bin)
+                .current_dir(cwd)
+                .args(["-p", "--output-format", "text", "--model", "haiku", "--max-turns", "1", "--no-session-persistence", "--permission-mode", "dontAsk", "--disallowedTools", "*"])
+                .arg(prompt)
+                .env_remove("NODE_OPTIONS")
+                .stdin(std::process::Stdio::null())
+                .output(),
+        )
+        .await
+        .map_err(|_| DriverError::Protocol("claude one-shot timed out".into()))??;
+        if !out.status.success() {
+            return Err(DriverError::Protocol(format!("claude exited with {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim())));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::ClaudeCode, config.binary.as_ref())?;
         let session_id = match (&config.resume_session_id, config.fork) {

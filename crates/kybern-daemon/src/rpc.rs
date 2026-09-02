@@ -120,12 +120,17 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsRegenerateTitle::NAME => {
             let p: ThreadsRegenerateTitleParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             let events = state.store.events_for_thread(p.thread_id).map_err(internal)?;
             let first = events.iter().find_map(|e| match &e.payload {
                 EventPayload::TurnStarted { message, .. } => Some(message.clone()),
                 _ => None,
             });
-            let title = first.map(|m| crate::orchestrator::title_from_message(&m)).unwrap_or_else(|| crate::orchestrator::DEFAULT_TITLE.into());
+            let generated = match &first {
+                Some(m) => state.orchestrator.generate_title(&thread, m).await.map_err(provider_err)?,
+                None => None,
+            };
+            let title = generated.or_else(|| first.map(|m| crate::orchestrator::title_from_message(&m))).unwrap_or_else(|| crate::orchestrator::DEFAULT_TITLE.into());
             let thread = state
                 .orchestrator
                 .update_thread_fields(ThreadsUpdateParams { thread_id: p.thread_id, title: Some(title), pinned: None, permission_mode: None, model: None })
@@ -189,6 +194,22 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: TerminalsCloseParams = parse(params)?;
             ctx.unsubscribe_terminal(p.terminal_id).await;
             ok(Empty {})
+        }
+        SettingsGet::NAME => ok(state.settings.get()),
+        SettingsUpdate::NAME => {
+            let p: SettingsUpdateParams = parse(params)?;
+            ok(state.settings.set(p.settings).map_err(internal)?)
+        }
+        UsageSummary::NAME => {
+            let p: UsageSummaryParams = parse_or_default(params)?;
+            let rows = state.store.usage_summary(p.since, p.group_by).map_err(internal)?;
+            let mut total = UsageRow { key: "total".into(), turns: 0, usage: Usage::default(), cost_usd: 0.0 };
+            for r in &rows {
+                total.turns += r.turns;
+                total.usage.add(&r.usage);
+                total.cost_usd += r.cost_usd;
+            }
+            ok(UsageSummaryResult { rows, total })
         }
         ApprovalsRespond::NAME => {
             let p: ApprovalsRespondParams = parse(params)?;

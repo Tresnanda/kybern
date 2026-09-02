@@ -321,6 +321,47 @@ pub struct TerminalExitedNotification {
 pub const TERMINAL_OUTPUT_NOTIFICATION: &str = "terminal.output";
 pub const TERMINAL_EXITED_NOTIFICATION: &str = "terminal.exited";
 
+// ---- settings ----
+
+method!(SettingsGet, "settings.get", Some(Scope::OrchestrationRead), Empty, Settings);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SettingsUpdateParams {
+    pub settings: Settings,
+}
+method!(SettingsUpdate, "settings.update", Some(Scope::OrchestrationOperate), SettingsUpdateParams, Settings);
+
+// ---- usage ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageGroup {
+    #[default]
+    Provider,
+    Model,
+    Day,
+    Thread,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct UsageSummaryParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub group_by: UsageGroup,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UsageRow {
+    pub key: String,
+    pub turns: u64,
+    pub usage: Usage,
+    pub cost_usd: f64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UsageSummaryResult {
+    pub rows: Vec<UsageRow>,
+    pub total: UsageRow,
+}
+method!(UsageSummary, "usage.summary", Some(Scope::OrchestrationRead), UsageSummaryParams, UsageSummaryResult);
+
 // ---- approvals ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -424,6 +465,9 @@ registry!(
     TerminalsClose,
     TerminalsSubscribe,
     TerminalsUnsubscribe,
+    SettingsGet,
+    SettingsUpdate,
+    UsageSummary,
     ApprovalsRespond,
     ApprovalsList,
     EventsSubscribe,

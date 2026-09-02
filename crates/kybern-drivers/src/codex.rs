@@ -67,6 +67,30 @@ impl AgentDriver for CodexDriver {
         status
     }
 
+    async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
+        let bin = resolve(ProviderKind::Codex, binary)?;
+        let dir = tempfile_dir()?;
+        let last = dir.join("last.txt");
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(90),
+            Command::new(&bin)
+                .current_dir(cwd)
+                .args(["exec", "-s", "read-only", "--skip-git-repo-check", "--output-last-message"])
+                .arg(&last)
+                .arg(prompt)
+                .stdin(std::process::Stdio::null())
+                .output(),
+        )
+        .await
+        .map_err(|_| DriverError::Protocol("codex one-shot timed out".into()))??;
+        if !out.status.success() {
+            return Err(DriverError::Protocol(format!("codex exited with {}", out.status)));
+        }
+        let text = tokio::fs::read_to_string(&last).await.unwrap_or_else(|_| String::from_utf8_lossy(&out.stdout).to_string());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        Ok(text.trim().to_string())
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::Codex, config.binary.as_ref())?;
         let mut cmd = Command::new(&bin);
@@ -529,6 +553,12 @@ impl CodexSession {
             _ => {}
         }
     }
+}
+
+fn tempfile_dir() -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("kybern-codex-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 fn parse_usage(u: &Value) -> Usage {

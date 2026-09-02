@@ -102,6 +102,19 @@ enum Cmd {
     },
     /// Restore the working tree to the state before a turn.
     Revert { thread: String, turn: String },
+    /// Show or edit settings.
+    Settings {
+        #[command(subcommand)]
+        cmd: Option<SettingsCmd>,
+    },
+    /// Token usage and cost.
+    Usage {
+        #[arg(long, value_parser = ["provider", "model", "day", "thread"], default_value = "provider")]
+        by: String,
+        /// Only turns in the last N days.
+        #[arg(long)]
+        days: Option<i64>,
+    },
     /// Terminals owned by the daemon.
     Terminal {
         #[command(subcommand)]
@@ -120,6 +133,14 @@ enum ProjectsCmd {
         name: Option<String>,
     },
     Remove { id: String },
+}
+
+#[derive(Subcommand)]
+enum SettingsCmd {
+    /// Print settings as JSON.
+    Show,
+    /// Replace settings from a JSON file (or stdin with `-`).
+    Set { file: String },
 }
 
 #[derive(Subcommand)]
@@ -283,6 +304,21 @@ async fn main() -> Result<()> {
         Cmd::Revert { thread, turn } => {
             let r = client.call::<ThreadsRevert>(ThreadsRevertParams { thread_id: thread.parse()?, turn_id: turn.parse()? }).await?;
             println!("working tree restored to {}{}", &r.commit[..10], if r.conversation_rewound { " (conversation rewound)" } else { "" });
+        }
+        Cmd::Settings { cmd } => match cmd.unwrap_or(SettingsCmd::Show) {
+            SettingsCmd::Show => println!("{}", serde_json::to_string_pretty(&client.call::<SettingsGet>(Empty {}).await?)?),
+            SettingsCmd::Set { file } => {
+                let text = if file == "-" { std::io::read_to_string(std::io::stdin())? } else { std::fs::read_to_string(&file)? };
+                let settings: Settings = serde_json::from_str(&text)?;
+                let r = client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?;
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            }
+        },
+        Cmd::Usage { by, days } => {
+            let group_by = serde_json::from_value(serde_json::Value::String(by))?;
+            let since = days.map(|d| chrono::Utc::now() - chrono::Duration::days(d));
+            let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
         }
         Cmd::Terminal { cmd } => render::terminal(&client, cmd, json).await?,
         Cmd::Call { method, params } => {

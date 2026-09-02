@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 
 use crate::config::Paths;
 use crate::orchestrator::Orchestrator;
+use crate::settings::SettingsStore;
 use crate::terminal::TerminalManager;
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ pub struct Inner {
     pub events: broadcast::Sender<ThreadEvent>,
     pub orchestrator: Orchestrator,
     pub terminals: TerminalManager,
+    pub settings: SettingsStore,
     pub bootstrap_token: String,
     pub environment_id: String,
     pub started_at: DateTime<Utc>,
@@ -49,7 +51,8 @@ impl AppState {
         };
         let (events, _) = broadcast::channel(8192);
         let drivers = DriverRegistry::with_defaults();
-        let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone());
+        let settings = SettingsStore::load(&paths.settings)?;
+        let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone());
         orchestrator.recover_after_restart().await?;
         Ok(Self {
             inner: Arc::new(Inner {
@@ -59,6 +62,7 @@ impl AppState {
                 events,
                 orchestrator,
                 terminals: TerminalManager::default(),
+                settings,
                 bootstrap_token,
                 environment_id,
                 started_at: Utc::now(),

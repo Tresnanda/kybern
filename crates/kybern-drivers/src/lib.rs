@@ -135,6 +135,10 @@ pub trait AgentDriver: Send + Sync {
     fn supports_fork(&self) -> bool {
         true
     }
+    /// Run a single tool-free prompt and return the model's text. Used for thread titles.
+    async fn one_shot(&self, _cwd: &std::path::Path, _prompt: &str, _binary: Option<&PathBuf>) -> Result<String> {
+        Err(DriverError::Unsupported("one-shot prompts".into()))
+    }
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession>;
 }
 

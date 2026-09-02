@@ -10,6 +10,7 @@ pub struct Paths {
     pub port_file: PathBuf,
     pub worktrees: PathBuf,
     pub assets: PathBuf,
+    pub settings: PathBuf,
 }
 
 impl Paths {
@@ -25,6 +26,7 @@ impl Paths {
             port_file: root.join("daemon.port"),
             worktrees: root.join("worktrees"),
             assets: root.join("assets"),
+            settings: root.join("settings.json"),
             root,
         })
     }

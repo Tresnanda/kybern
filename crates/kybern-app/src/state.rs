@@ -92,9 +92,6 @@ impl Model {
         let st = self.thread_state(id);
         st.thread = Some(r.thread);
         st.blocks = r.transcript.into_iter().map(entry_to_block).collect();
-        for a in &r.pending_approvals {
-            st.blocks.push(TranscriptBlock { id: format!("approval:{}", a.id), turn_id: a.turn_id, kind: BlockKind::Approval { approval: a.clone(), decision: None }, at: a.created_at });
-        }
         st.pending_approvals = r.pending_approvals;
         st.last_seq = last_seq;
         st.loaded = true;
@@ -222,6 +219,9 @@ fn entry_to_block(e: TranscriptEntry) -> TranscriptBlock {
         }
         TranscriptEntry::ToolCall { turn_id, call, output, is_error, complete, at } => {
             TranscriptBlock { id: format!("tool:{}", call.id), turn_id, kind: BlockKind::Tool { call, output_stream: String::new(), output, is_error, complete }, at }
+        }
+        TranscriptEntry::Approval { turn_id, approval, decision } => {
+            TranscriptBlock { id: format!("approval:{}", approval.id), turn_id, at: approval.created_at, kind: BlockKind::Approval { approval, decision } }
         }
         TranscriptEntry::TurnSummary { turn_id, stop_reason, usage, cost_usd, duration_ms, error } => TranscriptBlock {
             id: format!("end:{turn_id}"),

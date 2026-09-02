@@ -113,12 +113,23 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                     error: Some(error.clone()),
                 });
             }
+            EventPayload::ApprovalRequested { approval } => {
+                let Some(turn_id) = turn_id else { continue };
+                out.push(TranscriptEntry::Approval { turn_id, approval: approval.clone(), decision: None });
+            }
+            EventPayload::ApprovalResolved { approval_id, decision } => {
+                if let Some(TranscriptEntry::Approval { decision: d, .. }) = out
+                    .iter_mut()
+                    .rev()
+                    .find(|e| matches!(e, TranscriptEntry::Approval { approval, .. } if approval.id == *approval_id))
+                {
+                    *d = Some(decision.clone());
+                }
+            }
             EventPayload::ThreadCreated { .. }
             | EventPayload::ThreadUpdated { .. }
             | EventPayload::ThreadArchived
             | EventPayload::ProviderSessionBound { .. }
-            | EventPayload::ApprovalRequested { .. }
-            | EventPayload::ApprovalResolved { .. }
             | EventPayload::ProviderNotice { .. }
             | EventPayload::ToolCallOutputDelta { .. }
             | EventPayload::CheckpointUpdated { .. }

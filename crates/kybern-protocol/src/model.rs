@@ -19,7 +19,7 @@ pub type TerminalId = Uuid;
 pub type EventSeq = i64;
 
 /// Coding agent backends the daemon can drive. Each has its own native driver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
     ClaudeCode,
@@ -341,6 +341,12 @@ pub enum TranscriptEntry {
         complete: bool,
         at: DateTime<Utc>,
     },
+    Approval {
+        turn_id: TurnId,
+        approval: ApprovalRequest,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<ApprovalDecision>,
+    },
     TurnSummary {
         turn_id: TurnId,
         stop_reason: StopReason,
@@ -351,6 +357,52 @@ pub enum TranscriptEntry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+}
+
+/// Per-provider configuration in settings.json.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderSettings {
+    /// Absolute path to the executable; omit to look it up on PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Default model for new threads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Extra environment variables for the provider process.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
+/// User settings persisted at `<data_dir>/settings.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct Settings {
+    pub default_provider: ProviderKind,
+    pub default_permission_mode: PermissionMode,
+    /// Global default for new threads; projects can override.
+    pub worktrees_default: bool,
+    /// Generate thread titles with a model after the first turn.
+    pub generate_titles: bool,
+    /// Provider used for titles; falls back to the thread's own provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_provider: Option<ProviderKind>,
+    pub providers: std::collections::BTreeMap<ProviderKind, ProviderSettings>,
+    /// Show OS notifications when a turn ends or needs approval.
+    pub notifications: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            default_provider: ProviderKind::ClaudeCode,
+            default_permission_mode: PermissionMode::Supervised,
+            worktrees_default: false,
+            generate_titles: true,
+            title_provider: None,
+            providers: Default::default(),
+            notifications: true,
+        }
+    }
 }
 
 /// Git snapshots bracketing one turn. `after` is absent while the turn runs.

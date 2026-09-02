@@ -36,6 +36,7 @@ fn main() {
     add::<Scope>(&mut types, "Scope");
     add::<Checkpoint>(&mut types, "Checkpoint");
     add::<Diff>(&mut types, "Diff");
+    add::<Settings>(&mut types, "Settings");
     add::<TerminalOutputNotification>(&mut types, "TerminalOutputNotification");
     add::<TerminalExitedNotification>(&mut types, "TerminalExitedNotification");
 
@@ -64,6 +65,9 @@ fn main() {
     method::<TerminalsClose>(&mut methods);
     method::<TerminalsSubscribe>(&mut methods);
     method::<TerminalsUnsubscribe>(&mut methods);
+    method::<SettingsGet>(&mut methods);
+    method::<SettingsUpdate>(&mut methods);
+    method::<UsageSummary>(&mut methods);
     method::<ApprovalsRespond>(&mut methods);
     method::<ApprovalsList>(&mut methods);
     method::<EventsSubscribe>(&mut methods);
