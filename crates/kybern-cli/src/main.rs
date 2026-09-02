@@ -1,4 +1,3 @@
-mod client;
 mod render;
 
 use std::path::PathBuf;
@@ -8,7 +7,7 @@ use clap::{Parser, Subcommand};
 use kybern_protocol::methods::*;
 use kybern_protocol::*;
 
-use client::{Client, Endpoint};
+use kybern_client::{Client, Endpoint};
 
 #[derive(Parser)]
 #[command(name = "kybern", version, about = "Command-line client for the kybern daemon")]

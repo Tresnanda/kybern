@@ -6,7 +6,9 @@ members = [
   "crates/kybern-drivers",
   "crates/kybern-git",
   "crates/kybern-daemon",
+  "crates/kybern-client",
   "crates/kybern-cli",
+  "crates/kybern-app",
 ]
 
 [workspace.package]
@@ -21,8 +23,16 @@ kybern-protocol = { path = "crates/kybern-protocol" }
 kybern-store = { path = "crates/kybern-store" }
 kybern-drivers = { path = "crates/kybern-drivers" }
 kybern-git = { path = "crates/kybern-git" }
+kybern-client = { path = "crates/kybern-client" }
 
 agent-client-protocol = "=2.0.0"
+# gpui must resolve to the same Zed checkout gpui-component uses (it depends on the
+# unpinned git source), so these stay unpinned too and Cargo.lock pins the rev.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
+gpui_macros = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "d6c10c21a58617b29494f8efeba4895ca384e465", features = ["tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-tsx", "tree-sitter-javascript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-bash", "tree-sitter-markdown", "tree-sitter-diff", "tree-sitter-toml", "tree-sitter-yaml", "tree-sitter-css", "tree-sitter-html", "tree-sitter-swift", "tree-sitter-kotlin", "tree-sitter-java", "tree-sitter-c", "tree-sitter-cpp"] }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "d6c10c21a58617b29494f8efeba4895ca384e465" }
 anyhow = "1.0.104"
 async-trait = "0.1"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
@@ -48,6 +58,16 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
 which = "8"
 insta = { version = "1", features = ["json"] }
+
+[profile.dev.package]
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+taffy = { opt-level = 3 }
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+tree-sitter = { opt-level = 3 }
+markdown = { opt-level = 3 }
 
 [profile.release]
 lto = "thin"

@@ -2,11 +2,13 @@
 
 use std::io::Write;
 
+use futures::StreamExt;
+
 use anyhow::Result;
 use kybern_protocol::methods::*;
 use kybern_protocol::*;
 
-use crate::client::Client;
+use kybern_client::Client;
 
 pub fn info(i: &DaemonInfo) {
     println!("kybernd {}  protocol v{}", i.version, i.protocol_version);
@@ -100,7 +102,7 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
     let mut notes = client.notifications.lock().await;
     let mut stdout = std::io::stdout();
     let mut line_open = false;
-    while let Some(n) = notes.recv().await {
+    while let Some(n) = notes.next().await {
         if n.method != EVENT_NOTIFICATION {
             continue;
         }
@@ -191,7 +193,7 @@ fn prompt_approval(a: &ApprovalRequest) -> Result<ApprovalDecision> {
 
 pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool) -> Result<()> {
     let mut notes = client.notifications.lock().await;
-    while let Some(n) = notes.recv().await {
+    while let Some(n) = notes.next().await {
         if n.method == "events.lagged" {
             eprintln!("(fell behind; some events were dropped)");
             continue;
@@ -277,11 +279,11 @@ async fn stream_terminal(client: &Client, id: TerminalId, limit: Option<std::tim
     let deadline = limit.map(|d| tokio::time::Instant::now() + d);
     loop {
         let next = match deadline {
-            Some(dl) => match tokio::time::timeout_at(dl, notes.recv()).await {
+            Some(dl) => match tokio::time::timeout_at(dl, notes.next()).await {
                 Ok(n) => n,
                 Err(_) => break,
             },
-            None => notes.recv().await,
+            None => notes.next().await,
         };
         let Some(n) = next else { break };
         match n.method.as_str() {

@@ -1,4 +1,7 @@
-//! Minimal async JSON-RPC-over-WebSocket client.
+//! Minimal async JSON-RPC-over-WebSocket client for the kybern daemon.
+//!
+//! Runs on tokio. Notifications are delivered on an unbounded futures channel so
+//! non-tokio executors (GPUI) can consume them.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,6 +14,7 @@ use kybern_protocol::methods::Method;
 use kybern_protocol::*;
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, oneshot};
+use futures::channel::mpsc as fmpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 
@@ -18,7 +22,9 @@ pub struct Client {
     next_id: AtomicI64,
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<RpcResponse>>>>,
     out: mpsc::Sender<String>,
-    pub notifications: Mutex<mpsc::Receiver<RpcNotification>>,
+    pub notifications: Mutex<fmpsc::UnboundedReceiver<RpcNotification>>,
+    /// Set when the socket closes.
+    pub closed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,9 +34,13 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    pub fn data_dir(override_dir: Option<PathBuf>) -> Option<PathBuf> {
+        override_dir.or_else(|| directories::BaseDirs::new().map(|b| b.home_dir().join(".kybern")))
+    }
+
     /// Resolve from flags, env, or the local daemon's files under ~/.kybern.
     pub fn resolve(url: Option<String>, token: Option<String>, data_dir: Option<PathBuf>) -> Result<Self> {
-        let root = data_dir.or_else(|| directories::BaseDirs::new().map(|b| b.home_dir().join(".kybern")));
+        let root = Self::data_dir(data_dir);
         let token = match token.or_else(|| std::env::var("KYBERN_TOKEN").ok()) {
             Some(t) => t,
             None => {
@@ -73,7 +83,9 @@ impl Client {
         });
 
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<RpcResponse>>>> = Arc::new(Mutex::new(HashMap::new()));
-        let (note_tx, note_rx) = mpsc::channel::<RpcNotification>(1024);
+        let (note_tx, note_rx) = fmpsc::unbounded::<RpcNotification>();
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let closed2 = closed.clone();
         let p2 = pending.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
@@ -91,14 +103,18 @@ impl Client {
                         }
                     }
                     Ok(ServerFrame::Notification(n)) => {
-                        let _ = note_tx.send(n).await;
+                        let _ = note_tx.unbounded_send(n);
                     }
-                    Err(e) => eprintln!("bad frame from daemon: {e}"),
+                    Err(e) => tracing::warn!("bad frame from daemon: {e}"),
                 }
+            }
+            closed2.store(true, std::sync::atomic::Ordering::Relaxed);
+            for (_, tx) in p2.lock().await.drain() {
+                let _ = tx.send(RpcResponse::err(RpcId::Number(0), RpcError::internal("connection closed")));
             }
         });
 
-        Ok(Self { next_id: AtomicI64::new(1), pending, out: out_tx, notifications: Mutex::new(note_rx) })
+        Ok(Self { next_id: AtomicI64::new(1), pending, out: out_tx, notifications: Mutex::new(note_rx), closed })
     }
 
     pub async fn call_raw(&self, method: &str, params: Value) -> Result<Value> {
