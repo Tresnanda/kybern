@@ -274,7 +274,7 @@ impl ClaudeSession {
             "result" => self.handle_result(&v).await,
             "rate_limit_event" => {
                 let info = &v["rate_limit_info"];
-                if info.get("status").and_then(|s| s.as_str()).is_some_and(|s| s != "allowed" && s != "ok") {
+                if info.get("status").and_then(|s| s.as_str()).is_some_and(|s| !s.starts_with("allowed") && s != "ok") {
                     self.emit(DriverEvent::Notice {
                         level: NoticeLevel::Warning,
                         text: format!("rate limit: {}", info.get("status").and_then(|s| s.as_str()).unwrap_or("")),
