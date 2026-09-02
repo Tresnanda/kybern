@@ -1,0 +1,258 @@
+mod client;
+mod render;
+
+use std::path::PathBuf;
+
+use anyhow::{Context, Result, anyhow};
+use clap::{Parser, Subcommand};
+use kybern_protocol::methods::*;
+use kybern_protocol::*;
+
+use client::{Client, Endpoint};
+
+#[derive(Parser)]
+#[command(name = "kybern", version, about = "Command-line client for the kybern daemon")]
+struct Cli {
+    /// Daemon WebSocket URL, e.g. ws://127.0.0.1:4173/ws
+    #[arg(long, global = true)]
+    url: Option<String>,
+    /// Bearer token. Defaults to ~/.kybern/daemon.token
+    #[arg(long, global = true)]
+    token: Option<String>,
+    /// Data dir to read token/port from.
+    #[arg(long, global = true)]
+    data_dir: Option<PathBuf>,
+    /// Emit raw JSON instead of formatted output.
+    #[arg(long, global = true)]
+    json: bool,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Show daemon info.
+    Info,
+    /// List providers and their availability.
+    Providers,
+    /// Manage projects.
+    Projects {
+        #[command(subcommand)]
+        cmd: ProjectsCmd,
+    },
+    /// List threads.
+    Threads {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        archived: bool,
+    },
+    /// Create a thread and send the first message, streaming the turn.
+    New {
+        /// Project id, or a path (added if missing).
+        #[arg(long, short)]
+        project: String,
+        #[arg(long, default_value = "claude-code")]
+        provider: String,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, value_parser = parse_mode)]
+        mode: Option<PermissionMode>,
+        #[arg(long)]
+        worktree: bool,
+        /// Do not stream; return the thread id immediately.
+        #[arg(long)]
+        detach: bool,
+        prompt: Vec<String>,
+    },
+    /// Send a message to an existing thread and stream the turn.
+    Send {
+        thread: String,
+        #[arg(long)]
+        detach: bool,
+        prompt: Vec<String>,
+    },
+    /// Print a thread's transcript.
+    Show { thread: String },
+    /// Follow live events for one thread or all threads.
+    Watch {
+        thread: Option<String>,
+        /// Replay from this seq first (0 = full history).
+        #[arg(long)]
+        after: Option<i64>,
+    },
+    /// Interrupt the running turn.
+    Interrupt { thread: String },
+    /// List or answer pending approvals.
+    Approvals {
+        #[command(subcommand)]
+        cmd: Option<ApprovalsCmd>,
+    },
+    /// Archive a thread.
+    Archive { thread: String },
+    /// Print the JSON schema of the protocol (from the daemon's crate, for tooling).
+    Call { method: String, params: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum ProjectsCmd {
+    List,
+    Add {
+        path: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    Remove { id: String },
+}
+
+#[derive(Subcommand)]
+enum ApprovalsCmd {
+    List,
+    Allow { id: String, #[arg(long)] always: bool },
+    Deny { id: String, #[arg(long)] reason: Option<String> },
+}
+
+fn parse_mode(s: &str) -> Result<PermissionMode, String> {
+    serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| format!("unknown mode {s}; use supervised|accept-edits|auto|full-access"))
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
+    let client = Client::connect(&ep).await?;
+    let json = cli.json;
+
+    match cli.cmd {
+        Cmd::Info => {
+            let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&info)?) } else { render::info(&info) }
+        }
+        Cmd::Providers => {
+            let r = client.call::<ProvidersList>(Empty {}).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::providers(&r.providers) }
+        }
+        Cmd::Projects { cmd } => match cmd {
+            ProjectsCmd::List => {
+                let r = client.call::<ProjectsList>(Empty {}).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::projects(&r.projects) }
+            }
+            ProjectsCmd::Add { path, name } => {
+                let p = client.call::<ProjectsAdd>(ProjectsAddParams { path: absolute(&path)?, name }).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  {}  {}", p.id, p.name, p.path) }
+            }
+            ProjectsCmd::Remove { id } => {
+                client.call::<ProjectsRemove>(ProjectsRemoveParams { project_id: id.parse()? }).await?;
+                println!("removed");
+            }
+        },
+        Cmd::Threads { project, archived } => {
+            let project_id = match project {
+                Some(p) => Some(resolve_project(&client, &p, false).await?),
+                None => None,
+            };
+            let r = client.call::<ThreadsList>(ThreadsListParams { project_id, include_archived: archived }).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::threads(&r.threads) }
+        }
+        Cmd::New { project, provider, model, mode, worktree, detach, prompt } => {
+            let project_id = resolve_project(&client, &project, true).await?;
+            let prompt = join_prompt(prompt)?;
+            let sub = if detach { None } else { Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None }).await?) };
+            let thread = client
+                .call::<ThreadsCreate>(ThreadsCreateParams {
+                    project_id,
+                    provider: ProviderInstance::default_for(provider.parse().map_err(|e: String| anyhow!(e))?),
+                    model,
+                    permission_mode: mode,
+                    use_worktree: if worktree { Some(true) } else { None },
+                    title: None,
+                    message: Some(UserMessage::text(prompt)),
+                })
+                .await?;
+            eprintln!("thread {}", thread.id);
+            if let Some(sub) = sub {
+                render::follow_turn(&client, sub.subscription_id, thread.id, json).await?;
+            }
+        }
+        Cmd::Send { thread, detach, prompt } => {
+            let thread_id: ThreadId = thread.parse().context("thread id must be a UUID")?;
+            let prompt = join_prompt(prompt)?;
+            let sub = if detach { None } else { Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread_id), after_seq: None }).await?) };
+            let r = client.call::<ThreadsSend>(ThreadsSendParams { thread_id, message: UserMessage::text(prompt) }).await?;
+            eprintln!("turn {}", r.turn_id);
+            if let Some(sub) = sub {
+                render::follow_turn(&client, sub.subscription_id, thread_id, json).await?;
+            }
+        }
+        Cmd::Show { thread } => {
+            let r = client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.parse()? }).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::transcript(&r) }
+        }
+        Cmd::Watch { thread, after } => {
+            let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
+            let sub = client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after }).await?;
+            render::watch(&client, sub.subscription_id, json).await?;
+        }
+        Cmd::Interrupt { thread } => {
+            client.call::<ThreadsInterrupt>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+            println!("interrupt sent");
+        }
+        Cmd::Approvals { cmd } => match cmd.unwrap_or(ApprovalsCmd::List) {
+            ApprovalsCmd::List => {
+                let r = client.call::<ApprovalsList>(ApprovalsListParams { thread_id: None }).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::approvals(&r.approvals) }
+            }
+            ApprovalsCmd::Allow { id, always } => {
+                let decision = if always { ApprovalDecision::AllowAlways } else { ApprovalDecision::AllowOnce };
+                client.call::<ApprovalsRespond>(ApprovalsRespondParams { approval_id: id.parse()?, decision }).await?;
+                println!("allowed");
+            }
+            ApprovalsCmd::Deny { id, reason } => {
+                client.call::<ApprovalsRespond>(ApprovalsRespondParams { approval_id: id.parse()?, decision: ApprovalDecision::Deny { reason } }).await?;
+                println!("denied");
+            }
+        },
+        Cmd::Archive { thread } => {
+            client.call::<ThreadsArchive>(ThreadsArchiveParams { thread_id: thread.parse()? }).await?;
+            println!("archived");
+        }
+        Cmd::Call { method, params } => {
+            let params = match params {
+                Some(p) => serde_json::from_str(&p)?,
+                None => serde_json::Value::Null,
+            };
+            let v = client.call_raw(&method, params).await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+    }
+    Ok(())
+}
+
+fn absolute(p: &PathBuf) -> Result<String> {
+    Ok(std::fs::canonicalize(p).with_context(|| format!("{} does not exist", p.display()))?.to_string_lossy().to_string())
+}
+
+fn join_prompt(parts: Vec<String>) -> Result<String> {
+    let s = parts.join(" ");
+    if s.trim().is_empty() {
+        return Err(anyhow!("prompt is empty"));
+    }
+    Ok(s)
+}
+
+async fn resolve_project(client: &Client, key: &str, add_if_missing: bool) -> Result<ProjectId> {
+    if let Ok(id) = key.parse::<ProjectId>() {
+        return Ok(id);
+    }
+    let path = absolute(&PathBuf::from(key))?;
+    let list = client.call::<ProjectsList>(Empty {}).await?;
+    if let Some(p) = list.projects.iter().find(|p| p.path == path || p.name == key) {
+        return Ok(p.id);
+    }
+    if add_if_missing {
+        let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None }).await?;
+        eprintln!("added project {} ({})", p.name, p.id);
+        return Ok(p.id);
+    }
+    Err(anyhow!("project {key} not found"))
+}

@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+.DS_Store
+/apps/mobile/node_modules
+/apps/mobile/.expo
+*.snap.new

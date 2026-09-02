@@ -1,0 +1,22 @@
+[package]
+name = "kybern-protocol"
+description = "Wire types for the kybern daemon protocol: JSON-RPC 2.0 over WebSocket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chrono.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[[bin]]
+name = "kybern-schema"
+path = "src/bin/schema.rs"
