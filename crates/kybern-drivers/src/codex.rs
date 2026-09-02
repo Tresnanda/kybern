@@ -58,7 +58,8 @@ impl AgentDriver for CodexDriver {
                 let ok = at_least(&v, MIN_VERSION);
                 status.available = ok;
                 if !ok {
-                    status.unavailable_reason = Some(format!("Codex {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
+                    status.unavailable_reason =
+                        Some(format!("Codex {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
                 }
                 status.version = Some(v);
             }
@@ -186,7 +187,9 @@ fn policy_for(mode: PermissionMode) -> (&'static str, &'static str) {
 fn sandbox_policy_for(mode: PermissionMode, cwd: &std::path::Path) -> Value {
     match mode {
         PermissionMode::FullAccess => json!({ "type": "dangerFullAccess" }),
-        _ => json!({ "type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false }),
+        _ => {
+            json!({ "type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false })
+        }
     }
 }
 
@@ -315,7 +318,15 @@ impl CodexSession {
                 } else {
                     format!("run: {}", command.lines().next().unwrap_or("").chars().take(120).collect::<String>())
                 };
-                self.emit(DriverEvent::PermissionRequest { request_id: key, tool_call_id: item_id, tool_name: "shell".into(), input, summary, suggestions: vec![] }).await;
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id: key,
+                    tool_call_id: item_id,
+                    tool_name: "shell".into(),
+                    input,
+                    summary,
+                    suggestions: vec![],
+                })
+                .await;
             }
             "item/fileChange/requestApproval" => {
                 let mode = self.state.lock().await.mode;
@@ -348,7 +359,12 @@ impl CodexSession {
             "item/tool/requestUserInput" => {
                 // Not mappable to yes/no approvals yet; decline so the turn continues.
                 let _ = self.respond(&id, Err("kybern does not support tool questions yet".into())).await;
-                self.emit(DriverEvent::Notice { level: NoticeLevel::Warning, text: "Codex asked a question kybern cannot relay yet".into(), data: Some(params.clone()) }).await;
+                self.emit(DriverEvent::Notice {
+                    level: NoticeLevel::Warning,
+                    text: "Codex asked a question kybern cannot relay yet".into(),
+                    data: Some(params.clone()),
+                })
+                .await;
             }
             other => {
                 let _ = self.respond(&id, Err(format!("kybern does not support {other}"))).await;
@@ -383,7 +399,12 @@ impl CodexSession {
             }
             "turn/plan/updated" => {
                 let steps = p.get("plan").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0);
-                self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: format!("plan updated ({steps} steps)"), data: Some(p.clone()) }).await;
+                self.emit(DriverEvent::Notice {
+                    level: NoticeLevel::Info,
+                    text: format!("plan updated ({steps} steps)"),
+                    data: Some(p.clone()),
+                })
+                .await;
             }
             "thread/tokenUsage/updated" => {
                 let total = p.pointer("/tokenUsage/total").map(parse_usage).unwrap_or_default();
@@ -406,7 +427,8 @@ impl CodexSession {
                 let status = turn.get("status").and_then(|s| s.as_str()).unwrap_or("completed");
                 let duration_ms = turn.get("durationMs").and_then(|d| d.as_u64()).unwrap_or(0);
                 let usage = self.turn_usage.lock().await.take().unwrap_or_default();
-                let anchors = crate::TurnAnchors { turn_id: turn.get("id").and_then(|i| i.as_str()).map(str::to_string), previous_end: None };
+                let anchors =
+                    crate::TurnAnchors { turn_id: turn.get("id").and_then(|i| i.as_str()).map(str::to_string), previous_end: None };
                 {
                     let mut st = self.state.lock().await;
                     st.turn_id = None;
@@ -415,8 +437,12 @@ impl CodexSession {
                 }
                 self.pending_approvals.lock().await.clear();
                 let ev = match status {
-                    "completed" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: None, duration_ms, anchors },
-                    "interrupted" => DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: None, duration_ms, anchors },
+                    "completed" => {
+                        DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: None, duration_ms, anchors }
+                    }
+                    "interrupted" => {
+                        DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: None, duration_ms, anchors }
+                    }
                     _ => DriverEvent::TurnFailed {
                         error: turn.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("turn failed").to_string(),
                     },
@@ -476,10 +502,19 @@ impl CodexSession {
             }
             "reasoning" => {
                 if completed {
-                    let summary = item.get("summary").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join("\n\n")).unwrap_or_default();
+                    let summary = item
+                        .get("summary")
+                        .and_then(|s| s.as_array())
+                        .map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join("\n\n"))
+                        .unwrap_or_default();
                     if !summary.is_empty() {
                         // Reasoning belongs to the next agent message; surfaced as a notice with data for the UI.
-                        self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "reasoning".into(), data: Some(json!({ "reasoning": summary, "item_id": id })) }).await;
+                        self.emit(DriverEvent::Notice {
+                            level: NoticeLevel::Info,
+                            text: "reasoning".into(),
+                            data: Some(json!({ "reasoning": summary, "item_id": id })),
+                        })
+                        .await;
                     }
                 }
             }
@@ -506,7 +541,13 @@ impl CodexSession {
                 let changes = item.get("changes").cloned().unwrap_or(Value::Array(vec![]));
                 if !completed {
                     self.state.lock().await.file_changes.insert(id.clone(), changes.clone());
-                    self.emit(DriverEvent::ToolStarted(ToolCall { id, name: "apply_patch".into(), input: json!({ "changes": changes }), parent_id: None })).await;
+                    self.emit(DriverEvent::ToolStarted(ToolCall {
+                        id,
+                        name: "apply_patch".into(),
+                        input: json!({ "changes": changes }),
+                        parent_id: None,
+                    }))
+                    .await;
                 } else {
                     let status = item.get("status").and_then(|s| s.as_str()).unwrap_or("");
                     self.emit(DriverEvent::ToolCompleted {
@@ -518,9 +559,19 @@ impl CodexSession {
                 }
             }
             "mcpToolCall" => {
-                let name = format!("mcp:{}/{}", item.get("server").and_then(|s| s.as_str()).unwrap_or(""), item.get("tool").and_then(|s| s.as_str()).unwrap_or(""));
+                let name = format!(
+                    "mcp:{}/{}",
+                    item.get("server").and_then(|s| s.as_str()).unwrap_or(""),
+                    item.get("tool").and_then(|s| s.as_str()).unwrap_or("")
+                );
                 if !completed {
-                    self.emit(DriverEvent::ToolStarted(ToolCall { id, name, input: item.get("arguments").cloned().unwrap_or(Value::Null), parent_id: None })).await;
+                    self.emit(DriverEvent::ToolStarted(ToolCall {
+                        id,
+                        name,
+                        input: item.get("arguments").cloned().unwrap_or(Value::Null),
+                        parent_id: None,
+                    }))
+                    .await;
                 } else {
                     let status = item.get("status").and_then(|s| s.as_str()).unwrap_or("");
                     self.emit(DriverEvent::ToolCompleted {
@@ -533,9 +584,20 @@ impl CodexSession {
             }
             "webSearch" => {
                 if !completed {
-                    self.emit(DriverEvent::ToolStarted(ToolCall { id, name: "web_search".into(), input: json!({ "query": item.get("query"), "action": item.get("action") }), parent_id: None })).await;
+                    self.emit(DriverEvent::ToolStarted(ToolCall {
+                        id,
+                        name: "web_search".into(),
+                        input: json!({ "query": item.get("query"), "action": item.get("action") }),
+                        parent_id: None,
+                    }))
+                    .await;
                 } else {
-                    self.emit(DriverEvent::ToolCompleted { tool_call_id: id, output: json!({ "results": item.get("results") }), is_error: false }).await;
+                    self.emit(DriverEvent::ToolCompleted {
+                        tool_call_id: id,
+                        output: json!({ "results": item.get("results") }),
+                        is_error: false,
+                    })
+                    .await;
                 }
             }
             "imageView" | "imageGeneration" | "dynamicToolCall" => {
@@ -582,7 +644,9 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
                     items.push(json!({ "type": "image", "url": format!("data:{media_type};base64,{data}"), "detail": "auto" }));
                 }
             }
-            ContentPart::Attachment { name, .. } => items.push(json!({ "type": "text", "text": format!("[attached file: {name}]"), "text_elements": [] })),
+            ContentPart::Attachment { name, .. } => {
+                items.push(json!({ "type": "text", "text": format!("[attached file: {name}]"), "text_elements": [] }))
+            }
         }
     }
     items
@@ -594,7 +658,12 @@ impl AgentSession for Handle {
         let s = &self.0;
         let (thread_id, mode, model, cwd) = {
             let st = s.state.lock().await;
-            (st.thread_id.clone().ok_or_else(|| DriverError::Protocol("no codex thread".into()))?, st.mode, st.model.clone(), st.cwd.clone())
+            (
+                st.thread_id.clone().ok_or_else(|| DriverError::Protocol("no codex thread".into()))?,
+                st.mode,
+                st.model.clone(),
+                st.cwd.clone(),
+            )
         };
         let (approval, _) = policy_for(mode);
         let mut params = json!({

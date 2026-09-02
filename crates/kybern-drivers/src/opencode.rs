@@ -59,7 +59,8 @@ impl AgentDriver for OpencodeDriver {
                 let ok = at_least(&v, MIN_VERSION);
                 status.available = ok;
                 if !ok {
-                    status.unavailable_reason = Some(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
+                    status.unavailable_reason =
+                        Some(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
                 }
                 status.version = Some(v);
             }
@@ -167,7 +168,14 @@ impl AgentDriver for OpencodeDriver {
                     Some(mid) => json!({ "messageID": mid }),
                     None => json!({}),
                 };
-                let r = session.http.post(format!("{base}/session/{id}/fork")).query(&[("directory", &dir)]).json(&body).send().await.map_err(net)?;
+                let r = session
+                    .http
+                    .post(format!("{base}/session/{id}/fork"))
+                    .query(&[("directory", &dir)])
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(net)?;
                 let v: Value = r.json().await.map_err(net)?;
                 v.get("id").and_then(|i| i.as_str()).ok_or_else(|| DriverError::Protocol("fork returned no id".into()))?.to_string()
             }
@@ -178,7 +186,10 @@ impl AgentDriver for OpencodeDriver {
                 }
                 let r = session.http.post(format!("{base}/session")).query(&[("directory", &dir)]).json(&body).send().await.map_err(net)?;
                 let v: Value = r.json().await.map_err(net)?;
-                v.get("id").and_then(|i| i.as_str()).ok_or_else(|| DriverError::Protocol(format!("session create failed: {v}")))?.to_string()
+                v.get("id")
+                    .and_then(|i| i.as_str())
+                    .ok_or_else(|| DriverError::Protocol(format!("session create failed: {v}")))?
+                    .to_string()
             }
         };
         session.state.lock().await.session_id = Some(session_id.clone());
@@ -206,13 +217,23 @@ fn ruleset(mode: PermissionMode) -> Value {
     match mode {
         PermissionMode::Supervised => json!([
             rule("*", "ask"),
-            rule("read", "allow"), rule("glob", "allow"), rule("grep", "allow"), rule("list", "allow"),
-            rule("todowrite", "allow"), rule("question", "allow"), rule("skill", "allow"), rule("task", "allow"), rule("lsp", "allow"),
+            rule("read", "allow"),
+            rule("glob", "allow"),
+            rule("grep", "allow"),
+            rule("list", "allow"),
+            rule("todowrite", "allow"),
+            rule("question", "allow"),
+            rule("skill", "allow"),
+            rule("task", "allow"),
+            rule("lsp", "allow"),
         ]),
         PermissionMode::AcceptEdits => json!([
             rule("*", "allow"),
-            rule("bash", "ask"), rule("webfetch", "ask"), rule("websearch", "ask"),
-            rule("external_directory", "ask"), rule("doom_loop", "ask"),
+            rule("bash", "ask"),
+            rule("webfetch", "ask"),
+            rule("websearch", "ask"),
+            rule("external_directory", "ask"),
+            rule("doom_loop", "ask"),
         ]),
         PermissionMode::Auto => json!([rule("*", "allow"), rule("external_directory", "ask"), rule("doom_loop", "ask")]),
         PermissionMode::FullAccess => json!([rule("*", "allow")]),
@@ -286,7 +307,11 @@ impl OpencodeSession {
             // Stream dropped: is the server still alive?
             if let Ok(Some(status)) = self.child.lock().await.try_wait() {
                 let code = status.code();
-                self.emit(DriverEvent::Exited { code, error: code.filter(|c| *c != 0).map(|c| format!("opencode serve exited with code {c}")) }).await;
+                self.emit(DriverEvent::Exited {
+                    code,
+                    error: code.filter(|c| *c != 0).map(|c| format!("opencode serve exited with code {c}")),
+                })
+                .await;
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
@@ -298,11 +323,8 @@ impl OpencodeSession {
         let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let p = &v["properties"];
         let my_session = self.state.lock().await.session_id.clone();
-        let sid = p
-            .get("sessionID")
-            .or_else(|| p.pointer("/part/sessionID"))
-            .or_else(|| p.pointer("/info/sessionID"))
-            .and_then(|s| s.as_str());
+        let sid =
+            p.get("sessionID").or_else(|| p.pointer("/part/sessionID")).or_else(|| p.pointer("/info/sessionID")).and_then(|s| s.as_str());
         if let (Some(mine), Some(theirs)) = (&my_session, sid) {
             if mine != theirs {
                 return;
@@ -329,7 +351,8 @@ impl OpencodeSession {
                     if let Some(err) = info.get("error") {
                         if !err.is_null() {
                             let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("provider error");
-                            self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: msg.to_string(), data: Some(err.clone()) }).await;
+                            self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: msg.to_string(), data: Some(err.clone()) })
+                                .await;
                         }
                     }
                 }
@@ -352,7 +375,15 @@ impl OpencodeSession {
                 if let Some(s) = &my_session {
                     self.state.lock().await.pending.insert(id.clone(), s.clone());
                 }
-                self.emit(DriverEvent::PermissionRequest { request_id: id, tool_call_id, tool_name: permission, input, summary, suggestions }).await;
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id: id,
+                    tool_call_id,
+                    tool_name: permission,
+                    input,
+                    summary,
+                    suggestions,
+                })
+                .await;
             }
             "permission.replied" => {
                 let id = p.get("requestID").and_then(|s| s.as_str()).unwrap_or("").to_string();
@@ -364,7 +395,12 @@ impl OpencodeSession {
                 // Decline questions for now; approvals are yes/no only.
                 let id = p.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string();
                 let _ = self.http.post(format!("{}/question/{id}/reject", self.base)).query(&[("directory", &self.dir)]).send().await;
-                self.emit(DriverEvent::Notice { level: NoticeLevel::Warning, text: "OpenCode asked a question kybern cannot relay yet".into(), data: Some(p.clone()) }).await;
+                self.emit(DriverEvent::Notice {
+                    level: NoticeLevel::Warning,
+                    text: "OpenCode asked a question kybern cannot relay yet".into(),
+                    data: Some(p.clone()),
+                })
+                .await;
             }
             "session.status" => {
                 let status = p.pointer("/status/type").and_then(|s| s.as_str()).unwrap_or("");
@@ -394,7 +430,14 @@ impl OpencodeSession {
                     (std::mem::take(&mut st.turn_usage), st.turn_cost, d, active, anchors)
                 };
                 if active {
-                    self.emit(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms, anchors }).await;
+                    self.emit(DriverEvent::TurnCompleted {
+                        stop_reason: StopReason::Completed,
+                        usage,
+                        cost_usd: Some(cost),
+                        duration_ms,
+                        anchors,
+                    })
+                    .await;
                 }
             }
             "session.error" => {
@@ -410,16 +453,28 @@ impl OpencodeSession {
                 };
                 if name == "MessageAbortedError" {
                     if active {
-                        self.emit(DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage: Usage::default(), cost_usd: None, duration_ms: 0, anchors: crate::TurnAnchors::default() }).await;
+                        self.emit(DriverEvent::TurnCompleted {
+                            stop_reason: StopReason::Interrupted,
+                            usage: Usage::default(),
+                            cost_usd: None,
+                            duration_ms: 0,
+                            anchors: crate::TurnAnchors::default(),
+                        })
+                        .await;
                     }
                 } else if active {
                     self.emit(DriverEvent::TurnFailed { error: format!("{name}: {msg}") }).await;
                 } else {
-                    self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("{name}: {msg}"), data: Some(err.clone()) }).await;
+                    self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("{name}: {msg}"), data: Some(err.clone()) })
+                        .await;
                 }
             }
-            "session.compacted" => self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "context compacted".into(), data: None }).await,
-            "todo.updated" => self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "todo list updated".into(), data: Some(p.clone()) }).await,
+            "session.compacted" => {
+                self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "context compacted".into(), data: None }).await
+            }
+            "todo.updated" => {
+                self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "todo list updated".into(), data: Some(p.clone()) }).await
+            }
             _ => {}
         }
     }
@@ -429,7 +484,8 @@ impl OpencodeSession {
         let kind = part.get("type").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let message_id = part.get("messageID").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let mut st = self.state.lock().await;
-        let info = st.parts.entry(id.clone()).or_insert_with(|| PartInfo { kind: kind.clone(), message_id: message_id.clone(), started: false });
+        let info =
+            st.parts.entry(id.clone()).or_insert_with(|| PartInfo { kind: kind.clone(), message_id: message_id.clone(), started: false });
         match kind.as_str() {
             "text" => {
                 let text = part.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
@@ -472,7 +528,8 @@ impl OpencodeSession {
             "step-finish" => {
                 if let Some(t) = part.get("tokens") {
                     st.turn_usage.input_tokens += t.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
-                    st.turn_usage.output_tokens += t.get("output").and_then(|v| v.as_u64()).unwrap_or(0) + t.get("reasoning").and_then(|v| v.as_u64()).unwrap_or(0);
+                    st.turn_usage.output_tokens +=
+                        t.get("output").and_then(|v| v.as_u64()).unwrap_or(0) + t.get("reasoning").and_then(|v| v.as_u64()).unwrap_or(0);
                     st.turn_usage.cache_read_tokens += t.pointer("/cache/read").and_then(|v| v.as_u64()).unwrap_or(0);
                     st.turn_usage.cache_write_tokens += t.pointer("/cache/write").and_then(|v| v.as_u64()).unwrap_or(0);
                 }
@@ -499,7 +556,9 @@ fn parts(message: &UserMessage) -> Vec<Value> {
         match part {
             ContentPart::Text { text } => out.push(json!({ "type": "text", "text": text })),
             ContentPart::FileMention { path } => out.push(json!({ "type": "text", "text": format!("@{path}") })),
-            ContentPart::Image { media_type, data } => out.push(json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" })),
+            ContentPart::Image { media_type, data } => out.push(
+                json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
+            ),
             ContentPart::Attachment { name, .. } => out.push(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
         }
     }

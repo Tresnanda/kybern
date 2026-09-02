@@ -1,7 +1,7 @@
 //! Title bar and the projects/threads sidebar.
 
-use gpui::*;
 use gpui::prelude::FluentBuilder as _;
+use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, TitleBar, h_flex, v_flex};
@@ -79,14 +79,7 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
                 .items_center()
                 .justify_between()
                 .group("project-row")
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(muted)
-                        .truncate()
-                        .child(p.name.clone()),
-                )
+                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(muted).truncate().child(p.name.clone()))
                 .child(
                     Button::new(("new-thread", project_id.as_u128() as u64))
                         .ghost()
@@ -103,12 +96,20 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
             let id = t.id;
             let selected = ws.model.selected_thread == Some(id);
             let color = status_color(t.status, cx);
-            let row = thread_row(("thread", id.as_u128() as u64), &t.title, color, selected, cx.theme().accent, cx.theme().accent_foreground, if t.pinned { Some(IconName::Star) } else { None })
-                .on_click(cx.listener(move |this, _, _, cx| this.select_thread(id, cx)))
-                .context_menu(move |menu: PopupMenu, _, _| {
-                    menu.menu("Archive thread", Box::new(crate::app::ArchiveThread))
-                        .menu("Create pull request", Box::new(crate::app::CreatePullRequest))
-                });
+            let row = thread_row(
+                ("thread", id.as_u128() as u64),
+                &t.title,
+                color,
+                selected,
+                cx.theme().accent,
+                cx.theme().accent_foreground,
+                if t.pinned { Some(IconName::Star) } else { None },
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.select_thread(id, cx)))
+            .context_menu(move |menu: PopupMenu, _, _| {
+                menu.menu("Archive thread", Box::new(crate::app::ArchiveThread))
+                    .menu("Create pull request", Box::new(crate::app::CreatePullRequest))
+            });
             group = group.child(row);
         }
         groups.push(group.into_any_element());
@@ -121,23 +122,18 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
         .bg(sidebar_bg)
         .border_r_1()
         .border_color(cx.theme().sidebar_border)
-        .child(
-            div().id("sidebar-scroll").flex_1().min_h_0().overflow_y_scroll().py_2().px_2().child(
-                v_flex()
-                    .gap_4()
-                    .children(groups)
-                    .when(empty, |el| {
-                        el.child(
-                            v_flex()
-                                .px_2()
-                                .pt_6()
-                                .gap_2()
-                                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("No projects yet"))
-                                .child(div().text_xs().text_color(muted).child("A project is a folder an agent works in.")),
-                        )
-                    }),
-            ),
-        )
+        .child(div().id("sidebar-scroll").flex_1().min_h_0().overflow_y_scroll().py_2().px_2().child(
+            v_flex().gap_4().children(groups).when(empty, |el| {
+                el.child(
+                    v_flex()
+                        .px_2()
+                        .pt_6()
+                        .gap_2()
+                        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("No projects yet"))
+                        .child(div().text_xs().text_color(muted).child("A project is a folder an agent works in.")),
+                )
+            }),
+        ))
         .child(
             h_flex().p_2().gap_1().child(
                 Button::new("add-project")
@@ -151,7 +147,15 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
         .into_any_element()
 }
 
-fn thread_row(id: impl Into<ElementId>, title: &str, status: Option<Hsla>, selected: bool, accent: Hsla, accent_fg: Hsla, suffix: Option<IconName>) -> Stateful<Div> {
+fn thread_row(
+    id: impl Into<ElementId>,
+    title: &str,
+    status: Option<Hsla>,
+    selected: bool,
+    accent: Hsla,
+    accent_fg: Hsla,
+    suffix: Option<IconName>,
+) -> Stateful<Div> {
     h_flex()
         .id(id)
         .h(px(28.))

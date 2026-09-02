@@ -36,12 +36,7 @@ impl Scope {
     ];
 
     /// Scopes granted to an ordinary paired client (phone, second desktop).
-    pub const CLIENT: [Scope; 4] = [
-        Scope::OrchestrationRead,
-        Scope::OrchestrationOperate,
-        Scope::TerminalOperate,
-        Scope::ReviewWrite,
-    ];
+    pub const CLIENT: [Scope; 4] = [Scope::OrchestrationRead, Scope::OrchestrationOperate, Scope::TerminalOperate, Scope::ReviewWrite];
 
     pub fn as_str(self) -> &'static str {
         match self {

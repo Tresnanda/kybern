@@ -1,8 +1,8 @@
 mod access;
 mod auth;
+mod config;
 mod github;
 mod http;
-mod config;
 mod orchestrator;
 mod rpc;
 mod settings;

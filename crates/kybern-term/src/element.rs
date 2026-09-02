@@ -225,7 +225,13 @@ impl Element for TerminalElement {
         None
     }
 
-    fn request_layout(&mut self, global_id: Option<&GlobalElementId>, inspector_id: Option<&InspectorElementId>, window: &mut Window, cx: &mut App) -> (LayoutId, ()) {
+    fn request_layout(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
         let layout_id = self.interactivity.request_layout(global_id, inspector_id, window, cx, |mut style, window, cx| {
             style.size.width = relative(1.).into();
             style.size.height = relative(1.).into();
@@ -234,7 +240,15 @@ impl Element for TerminalElement {
         (layout_id, ())
     }
 
-    fn prepaint(&mut self, global_id: Option<&GlobalElementId>, inspector_id: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), window: &mut Window, cx: &mut App) -> Layout {
+    fn prepaint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Layout {
         let base_font = self.base_font();
         let font_size = self.font_size;
         let line_height_factor = self.line_height_factor;
@@ -339,7 +353,9 @@ impl Element for TerminalElement {
                 }
 
                 match runs.last_mut() {
-                    Some(last) if !wide && !last.wide && last.row == row && last.col + last.cells == col && same_style(&last.style, &style) => {
+                    Some(last)
+                        if !wide && !last.wide && last.row == row && last.col + last.cells == col && same_style(&last.style, &style) =>
+                    {
                         last.style.len += text.len();
                         last.text.push_str(&text);
                         last.cells += 1;
@@ -355,9 +371,19 @@ impl Element for TerminalElement {
             let cursor = {
                 let cur = content.cursor;
                 let row = cur.point.line.0 + display_offset;
-                if mode.contains(TermMode::SHOW_CURSOR) && !matches!(cur.shape, CursorShape::Hidden) && row >= 0 && (row as usize) < rows_usize {
+                if mode.contains(TermMode::SHOW_CURSOR)
+                    && !matches!(cur.shape, CursorShape::Hidden)
+                    && row >= 0
+                    && (row as usize) < rows_usize
+                {
                     let cell = &state.term().grid()[cur.point];
-                    Some(CursorLayout { row: row as usize, col: cur.point.column.0, wide: cell.flags.contains(Flags::WIDE_CHAR), shape: cur.shape, ch: cell.c })
+                    Some(CursorLayout {
+                        row: row as usize,
+                        col: cur.point.column.0,
+                        wide: cell.flags.contains(Flags::WIDE_CHAR),
+                        shape: cur.shape,
+                        ch: cell.c,
+                    })
                 } else {
                     None
                 }
@@ -367,7 +393,16 @@ impl Element for TerminalElement {
         })
     }
 
-    fn paint(&mut self, global_id: Option<&GlobalElementId>, inspector_id: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), layout: &mut Layout, window: &mut Window, cx: &mut App) {
+    fn paint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        layout: &mut Layout,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         self.register_listeners(layout.line_height, layout.alt_screen);
 
         let palette = self.palette.clone();
@@ -392,7 +427,8 @@ impl Element for TerminalElement {
 
                 for run in &layout.runs {
                     let force_width = if run.wide { None } else { Some(layout.cell_width) };
-                    let line = window.text_system().shape_line(run.text.clone().into(), font_size, std::slice::from_ref(&run.style), force_width);
+                    let line =
+                        window.text_system().shape_line(run.text.clone().into(), font_size, std::slice::from_ref(&run.style), force_width);
                     let _ = line.paint(layout.cell_origin(run.row, run.col), layout.line_height, TextAlign::Left, None, window, cx);
                 }
 
@@ -402,7 +438,14 @@ impl Element for TerminalElement {
                         (CursorShape::Block, true) => {
                             window.paint_quad(fill(cursor_bounds, color));
                             if cursor.ch != ' ' {
-                                let style = TextRun { len: cursor.ch.len_utf8(), font: base_font.clone(), color: palette.background, background_color: None, underline: None, strikethrough: None };
+                                let style = TextRun {
+                                    len: cursor.ch.len_utf8(),
+                                    font: base_font.clone(),
+                                    color: palette.background,
+                                    background_color: None,
+                                    underline: None,
+                                    strikethrough: None,
+                                };
                                 let line = window.text_system().shape_line(cursor.ch.to_string().into(), font_size, &[style], None);
                                 let _ = line.paint(cursor_bounds.origin, layout.line_height, TextAlign::Left, None, window, cx);
                             }
@@ -412,7 +455,10 @@ impl Element for TerminalElement {
                         }
                         (CursorShape::Underline, _) => {
                             let h = px(2.);
-                            let b = Bounds::new(point(cursor_bounds.origin.x, cursor_bounds.origin.y + cursor_bounds.size.height - h), size(cursor_bounds.size.width, h));
+                            let b = Bounds::new(
+                                point(cursor_bounds.origin.x, cursor_bounds.origin.y + cursor_bounds.size.height - h),
+                                size(cursor_bounds.size.width, h),
+                            );
                             window.paint_quad(fill(b, color));
                         }
                         (CursorShape::Beam, _) => {
@@ -470,7 +516,13 @@ impl InputHandler for TermInputHandler {
         None
     }
 
-    fn text_for_range(&mut self, _range_utf16: Range<usize>, _adjusted_range: &mut Option<Range<usize>>, _window: &mut Window, _cx: &mut App) -> Option<String> {
+    fn text_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        _adjusted_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<String> {
         None
     }
 
@@ -478,7 +530,15 @@ impl InputHandler for TermInputHandler {
         self.send(text.as_bytes().to_vec(), window, cx);
     }
 
-    fn replace_and_mark_text_in_range(&mut self, _range_utf16: Option<Range<usize>>, _new_text: &str, _new_selected_range: Option<Range<usize>>, _window: &mut Window, _cx: &mut App) {}
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _range_utf16: Option<Range<usize>>,
+        _new_text: &str,
+        _new_selected_range: Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+    }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut App) {}
 

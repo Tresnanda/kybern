@@ -2,8 +2,8 @@
 
 use std::rc::Rc;
 
-use gpui::*;
 use gpui::prelude::FluentBuilder as _;
+use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::message_scroller::MessageScroller;
 use gpui_component::text::TextView;
@@ -15,7 +15,8 @@ use crate::state::{BlockKind, TranscriptBlock, tool_display_name, tool_summary};
 use crate::views::{format_duration, format_tokens};
 
 pub fn render_pane(ws: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) -> AnyElement {
-    let blocks: Rc<Vec<TranscriptBlock>> = Rc::new(ws.model.selected_thread.and_then(|id| ws.model.transcripts.get(&id)).map(|t| t.blocks.clone()).unwrap_or_default());
+    let blocks: Rc<Vec<TranscriptBlock>> =
+        Rc::new(ws.model.selected_thread.and_then(|id| ws.model.transcripts.get(&id)).map(|t| t.blocks.clone()).unwrap_or_default());
     let expanded = Rc::new(ws.expanded_tools.clone());
     let view = cx.entity();
     let has_thread = ws.model.selected_thread.is_some();
@@ -84,11 +85,26 @@ fn render_block(b: &TranscriptBlock, expanded: bool, view: &Entity<Workspace>, _
                     .gap_2()
                     .when(!thinking.is_empty(), |el| {
                         el.child(
-                            h_flex().gap_1().items_center().text_xs().text_color(muted).child(Icon::new(IconName::Bot).size_3()).child(if *complete && !text.is_empty() { "Thought" } else { "Thinking" }),
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(Icon::new(IconName::Bot).size_3())
+                                .child(if *complete && !text.is_empty() { "Thought" } else { "Thinking" }),
                         )
                     })
-                    .when(!text.is_empty(), |el| el.child(div().text_sm().line_height(rems(1.6)).child(TextView::markdown(eid("assistant", &id), text.clone()).selectable(true))))
-                    .when(text.is_empty() && thinking.is_empty() && !*complete, |el| el.child(div().text_sm().text_color(muted).child("…"))),
+                    .when(!text.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .text_sm()
+                                .line_height(rems(1.6))
+                                .child(TextView::markdown(eid("assistant", &id), text.clone()).selectable(true)),
+                        )
+                    })
+                    .when(text.is_empty() && thinking.is_empty() && !*complete, |el| {
+                        el.child(div().text_sm().text_color(muted).child("…"))
+                    }),
             )
         }
         BlockKind::Tool { call, output_stream, output, is_error, complete } => {
@@ -125,29 +141,38 @@ fn render_block(b: &TranscriptBlock, expanded: bool, view: &Entity<Workspace>, _
                 None
             };
             row.pb_2().child(
-                v_flex().child(
-                    h_flex()
-                        .id(eid("tool", &block_id))
-                        .gap_2()
-                        .items_center()
-                        .cursor_pointer()
-                        .rounded(px(4.))
-                        .on_click({
-                            let view = view.clone();
-                            move |_, _, cx| {
-                                let id = block_id.clone();
-                                view.update(cx, |ws, cx| {
-                                    if !ws.expanded_tools.remove(&id) {
-                                        ws.expanded_tools.insert(id);
-                                    }
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .child(icon)
-                        .child(div().text_xs().text_color(color).child(verb))
-                        .child(div().text_xs().font_family(cx.theme().mono_font_family.clone()).text_color(cx.theme().foreground).truncate().child(summary)),
-                ).children(detail),
+                v_flex()
+                    .child(
+                        h_flex()
+                            .id(eid("tool", &block_id))
+                            .gap_2()
+                            .items_center()
+                            .cursor_pointer()
+                            .rounded(px(4.))
+                            .on_click({
+                                let view = view.clone();
+                                move |_, _, cx| {
+                                    let id = block_id.clone();
+                                    view.update(cx, |ws, cx| {
+                                        if !ws.expanded_tools.remove(&id) {
+                                            ws.expanded_tools.insert(id);
+                                        }
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .child(icon)
+                            .child(div().text_xs().text_color(color).child(verb))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .text_color(cx.theme().foreground)
+                                    .truncate()
+                                    .child(summary),
+                            ),
+                    )
+                    .children(detail),
             )
         }
         BlockKind::Approval { approval, decision } => row.child(approval_card(approval, decision.as_ref(), view, cx)),
@@ -157,7 +182,9 @@ fn render_block(b: &TranscriptBlock, expanded: bool, view: &Entity<Workspace>, _
                 NoticeLevel::Warning => cx.theme().warning,
                 NoticeLevel::Info => muted,
             };
-            row.pb_2().child(h_flex().gap_2().items_center().text_xs().text_color(color).child(Icon::new(IconName::Info).size_3()).child(text.clone()))
+            row.pb_2().child(
+                h_flex().gap_2().items_center().text_xs().text_color(color).child(Icon::new(IconName::Info).size_3()).child(text.clone()),
+            )
         }
         BlockKind::TurnEnd { stop_reason, usage, cost_usd, duration_ms, error } => {
             let turn_id = b.turn_id;
@@ -206,7 +233,13 @@ fn render_block(b: &TranscriptBlock, expanded: bool, view: &Entity<Workspace>, _
             )
         }
         BlockKind::Reverted { commit } => row.pb_2().child(
-            h_flex().gap_2().items_center().text_xs().text_color(muted).child(Icon::new(IconName::Undo2).size_3()).child(format!("Reverted to {}", &commit[..commit.len().min(10)])),
+            h_flex()
+                .gap_2()
+                .items_center()
+                .text_xs()
+                .text_color(muted)
+                .child(Icon::new(IconName::Undo2).size_3())
+                .child(format!("Reverted to {}", &commit[..commit.len().min(10)])),
         ),
     }
 }
@@ -256,15 +289,39 @@ fn approval_card(a: &ApprovalRequest, decision: Option<&ApprovalDecision>, view:
         .border_1()
         .border_color(if pending { cx.theme().warning.opacity(0.5) } else { cx.theme().border })
         .bg(cx.theme().background)
-        .child(h_flex().gap_2().items_center().child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title)).child(div().text_xs().text_color(cx.theme().muted_foreground).child(a.summary.clone())))
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(a.summary.clone())),
+        )
         .child(mono_block(&input.chars().take(2000).collect::<String>(), cx))
         .child(match decided {
             Some(label) => h_flex().text_xs().text_color(cx.theme().muted_foreground).child(label).into_any_element(),
             None => h_flex()
                 .gap_2()
-                .child(Button::new(("allow", id.as_u128() as u64)).primary().small().label("Allow").on_click(respond(view.clone(), ApprovalDecision::AllowOnce)))
-                .child(Button::new(("always", id.as_u128() as u64)).outline().small().label("Always allow").on_click(respond(view.clone(), ApprovalDecision::AllowAlways)))
-                .child(Button::new(("deny", id.as_u128() as u64)).ghost().small().label("Deny").on_click(respond(view.clone(), ApprovalDecision::Deny { reason: None })))
+                .child(
+                    Button::new(("allow", id.as_u128() as u64))
+                        .primary()
+                        .small()
+                        .label("Allow")
+                        .on_click(respond(view.clone(), ApprovalDecision::AllowOnce)),
+                )
+                .child(
+                    Button::new(("always", id.as_u128() as u64))
+                        .outline()
+                        .small()
+                        .label("Always allow")
+                        .on_click(respond(view.clone(), ApprovalDecision::AllowAlways)),
+                )
+                .child(
+                    Button::new(("deny", id.as_u128() as u64))
+                        .ghost()
+                        .small()
+                        .label("Deny")
+                        .on_click(respond(view.clone(), ApprovalDecision::Deny { reason: None })),
+                )
                 .into_any_element(),
         })
 }

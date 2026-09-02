@@ -4,7 +4,10 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::{get, post}};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use chrono::Utc;
 use kybern_protocol::methods::{AssetInfo, PairRequest, PairResponse};
 use uuid::Uuid;
@@ -68,7 +71,14 @@ async fn get_asset(State(state): State<AppState>, headers: HeaderMap, Path(id): 
     }
     let Ok(Some(info)) = state.store.asset_get(id) else { return (StatusCode::NOT_FOUND, "no such asset").into_response() };
     match tokio::fs::read(state.paths.assets.join(id.to_string())).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, info.media_type), (header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", info.name.replace('"', "")))], bytes).into_response(),
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, info.media_type),
+                (header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", info.name.replace('"', ""))),
+            ],
+            bytes,
+        )
+            .into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "asset file missing").into_response(),
     }
 }

@@ -10,7 +10,9 @@ use gpui::*;
 use gpui_component::{Root, TitleBar};
 
 fn main() {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
 
     gpui_platform::application().with_assets(gpui_component_assets::Assets).run(move |cx| {
         gpui_component::init(cx);

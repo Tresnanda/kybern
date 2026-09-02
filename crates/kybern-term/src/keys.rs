@@ -123,9 +123,8 @@ pub fn keystroke_to_bytes(ks: &Keystroke, app_cursor: bool) -> Option<Vec<u8>> {
 
     // Alt/option as meta: ESC + the key (or the composed character).
     if m.alt && !m.control {
-        let text = ks.key_char.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-            if m.shift { key.to_uppercase() } else { key.to_string() }
-        });
+        let text =
+            ks.key_char.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| if m.shift { key.to_uppercase() } else { key.to_string() });
         if text.chars().count() == 1 {
             let mut out = vec![0x1b];
             out.extend_from_slice(text.as_bytes());

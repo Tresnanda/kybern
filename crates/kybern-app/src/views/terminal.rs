@@ -4,8 +4,8 @@
 //! and reports the grid size that fits the pane so we can resize the PTY.
 
 use base64::Engine;
-use gpui::*;
 use gpui::prelude::FluentBuilder as _;
+use gpui::*;
 use gpui_component::{ActiveTheme as _, v_flex};
 use kybern_protocol::methods::*;
 use kybern_protocol::*;
@@ -95,7 +95,12 @@ pub fn send_bytes(ws: &mut Workspace, thread_id: ThreadId, bytes: Vec<u8>, cx: &
     let Some(id) = ws.terminals.get(&thread_id).and_then(|t| t.id) else { return };
     let d = ws.daemon.clone();
     cx.spawn(async move |_, _| {
-        let _ = d.call::<TerminalsInput>(TerminalsInputParams { terminal_id: id, data: base64::engine::general_purpose::STANDARD.encode(&bytes) }).await;
+        let _ = d
+            .call::<TerminalsInput>(TerminalsInputParams {
+                terminal_id: id,
+                data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            })
+            .await;
     })
     .detach();
 }
@@ -149,15 +154,31 @@ pub fn handle_notification(ws: &mut Workspace, n: &RpcNotification, cx: &mut Con
 pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspace>) -> AnyElement {
     let muted = cx.theme().muted_foreground;
     let Some(thread_id) = ws.model.selected_thread else {
-        return v_flex().size_full().items_center().justify_center().child(div().text_sm().text_color(muted).child("Select a thread to open its terminal.")).into_any_element();
+        return v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(div().text_sm().text_color(muted).child("Select a thread to open its terminal."))
+            .into_any_element();
     };
     // Idempotent: covers switching threads while the tab is open.
     ensure_terminal(ws, cx);
     let Some(t) = ws.terminals.get(&thread_id) else {
-        return v_flex().size_full().items_center().justify_center().child(div().text_sm().text_color(muted).child("Opening a terminal…")).into_any_element();
+        return v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(div().text_sm().text_color(muted).child("Opening a terminal…"))
+            .into_any_element();
     };
     if let Some(err) = &t.error {
-        return v_flex().size_full().items_center().justify_center().p_4().child(div().text_sm().text_color(muted).child(err.clone())).into_any_element();
+        return v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .p_4()
+            .child(div().text_sm().text_color(muted).child(err.clone()))
+            .into_any_element();
     }
 
     let theme = cx.theme();

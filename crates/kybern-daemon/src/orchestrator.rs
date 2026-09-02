@@ -9,8 +9,8 @@ use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use kybern_drivers::registry::DriverRegistry;
 use kybern_drivers::{AgentSession, DriverEvent, RewindPoint, SessionConfig, SpawnedSession, TurnAnchors};
-use kybern_protocol::*;
 use kybern_git::{Repo, checkpoint_ref};
+use kybern_protocol::*;
 use kybern_store::{Store, TurnUsageRow};
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
@@ -53,8 +53,24 @@ struct ActiveTurn {
 pub const DEFAULT_TITLE: &str = "New thread";
 
 impl Orchestrator {
-    pub fn new(store: Store, drivers: DriverRegistry, events: broadcast::Sender<ThreadEvent>, paths: Paths, settings: SettingsStore) -> Self {
-        Self { inner: Arc::new(Inner { store, drivers, events, paths, settings, sessions: Mutex::new(HashMap::new()), pending_rewinds: Mutex::new(HashMap::new()) }) }
+    pub fn new(
+        store: Store,
+        drivers: DriverRegistry,
+        events: broadcast::Sender<ThreadEvent>,
+        paths: Paths,
+        settings: SettingsStore,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                store,
+                drivers,
+                events,
+                paths,
+                settings,
+                sessions: Mutex::new(HashMap::new()),
+                pending_rewinds: Mutex::new(HashMap::new()),
+            }),
+        }
     }
 
     pub fn settings(&self) -> Settings {
@@ -69,16 +85,10 @@ impl Orchestrator {
     /// Threads persisted as running belong to a dead daemon; close their turns.
     pub async fn recover_after_restart(&self) -> Result<()> {
         for mut t in self.inner.store.threads_running()? {
-            let last_turn = self
-                .inner
-                .store
-                .events_for_thread(t.id)?
-                .iter()
-                .rev()
-                .find_map(|e| match e.payload {
-                    EventPayload::TurnStarted { .. } => e.turn_id,
-                    _ => None,
-                });
+            let last_turn = self.inner.store.events_for_thread(t.id)?.iter().rev().find_map(|e| match e.payload {
+                EventPayload::TurnStarted { .. } => e.turn_id,
+                _ => None,
+            });
             for a in self.inner.store.approvals_pending(Some(t.id))? {
                 let decision = ApprovalDecision::Deny { reason: Some("daemon restarted".into()) };
                 self.inner.store.approval_resolve(a.id, &decision)?;
@@ -288,14 +298,8 @@ impl Orchestrator {
         if resolved {
             return Err(anyhow!("approval already resolved"));
         }
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&approval.thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("thread has no live session"))?;
+        let live =
+            self.inner.sessions.lock().await.get(&approval.thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
         let request_id = live.pending.lock().await.remove(&approval_id).ok_or_else(|| anyhow!("approval no longer pending"))?;
         live.session.respond_permission(&request_id, &decision).await?;
         self.inner.store.approval_resolve(approval_id, &decision)?;
@@ -326,7 +330,15 @@ impl Orchestrator {
         };
         let _ = repo.update_ref(&checkpoint_ref(&thread.id.to_string(), &turn_id.to_string(), which), &commit).await;
         let checkpoint = match which {
-            "before" => Checkpoint { thread_id: thread.id, turn_id, before: commit, after: None, provider_turn_id: None, provider_turn_end: None, created_at: Utc::now() },
+            "before" => Checkpoint {
+                thread_id: thread.id,
+                turn_id,
+                before: commit,
+                after: None,
+                provider_turn_id: None,
+                provider_turn_end: None,
+                created_at: Utc::now(),
+            },
             _ => match self.inner.store.checkpoint_get(turn_id) {
                 Ok(Some(mut c)) => {
                     c.after = Some(commit);
@@ -472,7 +484,10 @@ impl Orchestrator {
             if let ContentPart::Attachment { asset_id, media_type, .. } = part {
                 if media_type.starts_with("image/") {
                     if let Ok(bytes) = std::fs::read(self.inner.paths.assets.join(asset_id.to_string())) {
-                        *part = ContentPart::Image { media_type: media_type.clone(), data: base64::engine::general_purpose::STANDARD.encode(bytes) };
+                        *part = ContentPart::Image {
+                            media_type: media_type.clone(),
+                            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                        };
                     }
                 }
             }
@@ -495,7 +510,13 @@ impl Orchestrator {
                 (c.before, to)
             }
             None => {
-                let first = self.inner.store.checkpoints_for_thread(thread_id)?.into_iter().next().ok_or_else(|| anyhow!("thread has no checkpoints yet"))?;
+                let first = self
+                    .inner
+                    .store
+                    .checkpoints_for_thread(thread_id)?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow!("thread has no checkpoints yet"))?;
                 (first.before, repo.snapshot("kybern diff (now)").await?)
             }
         };
@@ -587,7 +608,8 @@ impl Orchestrator {
         self.inner.sessions.lock().await.remove(&thread_id);
         let turn = live.turn.lock().await.take();
         if let Some(turn) = turn.filter(|t| !t.completed) {
-            let _ = self.emit(thread_id, Some(turn.id), EventPayload::TurnFailed { error: "provider exited before finishing the turn".into() });
+            let _ =
+                self.emit(thread_id, Some(turn.id), EventPayload::TurnFailed { error: "provider exited before finishing the turn".into() });
             if let Ok(Some(mut t)) = self.inner.store.thread_get(thread_id) {
                 t.status = ThreadStatus::Failed;
                 let _ = self.update_thread(t);
@@ -636,7 +658,10 @@ impl Orchestrator {
                 let Some(turn_id) = turn_id else {
                     tracing::warn!("permission request outside a turn; denying");
                     drop(turn_guard);
-                    let _ = live.session.respond_permission(&request_id, &ApprovalDecision::Deny { reason: Some("no active turn".into()) }).await;
+                    let _ = live
+                        .session
+                        .respond_permission(&request_id, &ApprovalDecision::Deny { reason: Some("no active turn".into()) })
+                        .await;
                     return Ok(());
                 };
                 let approval = ApprovalRequest {
@@ -716,11 +741,15 @@ impl Orchestrator {
             }
             DriverEvent::Exited { code, error } => {
                 if let Some(error) = error {
-                    self.emit(thread_id, turn_id, EventPayload::ProviderNotice {
-                        level: NoticeLevel::Error,
-                        text: format!("provider exited{}: {error}", code.map(|c| format!(" with code {c}")).unwrap_or_default()),
-                        data: None,
-                    })?;
+                    self.emit(
+                        thread_id,
+                        turn_id,
+                        EventPayload::ProviderNotice {
+                            level: NoticeLevel::Error,
+                            text: format!("provider exited{}: {error}", code.map(|c| format!(" with code {c}")).unwrap_or_default()),
+                            data: None,
+                        },
+                    )?;
                 }
             }
         }

@@ -130,10 +130,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 Some(m) => state.orchestrator.generate_title(&thread, m).await.map_err(provider_err)?,
                 None => None,
             };
-            let title = generated.or_else(|| first.map(|m| crate::orchestrator::title_from_message(&m))).unwrap_or_else(|| crate::orchestrator::DEFAULT_TITLE.into());
+            let title = generated
+                .or_else(|| first.map(|m| crate::orchestrator::title_from_message(&m)))
+                .unwrap_or_else(|| crate::orchestrator::DEFAULT_TITLE.into());
             let thread = state
                 .orchestrator
-                .update_thread_fields(ThreadsUpdateParams { thread_id: p.thread_id, title: Some(title), pinned: None, permission_mode: None, model: None })
+                .update_thread_fields(ThreadsUpdateParams {
+                    thread_id: p.thread_id,
+                    title: Some(title),
+                    pinned: None,
+                    permission_mode: None,
+                    model: None,
+                })
                 .map_err(bad)?;
             ok(thread)
         }
@@ -273,7 +281,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         PrList::NAME => {
             let p: PrListParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
-            ok(PrListResult { pull_requests: crate::github::pr_list(std::path::Path::new(&project.path), &p.state, p.limit).await.map_err(bad)? })
+            ok(PrListResult {
+                pull_requests: crate::github::pr_list(std::path::Path::new(&project.path), &p.state, p.limit).await.map_err(bad)?,
+            })
         }
         ApprovalsRespond::NAME => {
             let p: ApprovalsRespondParams = parse(params)?;

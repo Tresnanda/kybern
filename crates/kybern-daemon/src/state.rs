@@ -7,10 +7,10 @@ use kybern_protocol::ThreadEvent;
 use kybern_store::Store;
 use tokio::sync::broadcast;
 
+use crate::access::Pairing;
 use crate::config::Paths;
 use crate::orchestrator::Orchestrator;
 use crate::settings::SettingsStore;
-use crate::access::Pairing;
 use crate::terminal::TerminalManager;
 
 #[derive(Clone)]

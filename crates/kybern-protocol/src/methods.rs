@@ -3,8 +3,8 @@
 //! Adding a method means adding a struct pair here and an entry in `METHODS`.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::auth::Scope;
 use crate::event::ThreadEvent;

@@ -125,14 +125,24 @@ impl Model {
                 let id = message_id.to_string();
                 match st.blocks.iter_mut().rev().find(|b| b.id == id) {
                     Some(TranscriptBlock { kind: BlockKind::Assistant { text, .. }, .. }) => text.push_str(&delta),
-                    _ => st.blocks.push(TranscriptBlock { id, turn_id, kind: BlockKind::Assistant { text: delta, thinking: String::new(), complete: false }, at }),
+                    _ => st.blocks.push(TranscriptBlock {
+                        id,
+                        turn_id,
+                        kind: BlockKind::Assistant { text: delta, thinking: String::new(), complete: false },
+                        at,
+                    }),
                 }
             }
             EventPayload::AssistantThinkingDelta { message_id, delta } => {
                 let id = message_id.to_string();
                 match st.blocks.iter_mut().rev().find(|b| b.id == id) {
                     Some(TranscriptBlock { kind: BlockKind::Assistant { thinking, .. }, .. }) => thinking.push_str(&delta),
-                    _ => st.blocks.push(TranscriptBlock { id, turn_id, kind: BlockKind::Assistant { text: String::new(), thinking: delta, complete: false }, at }),
+                    _ => st.blocks.push(TranscriptBlock {
+                        id,
+                        turn_id,
+                        kind: BlockKind::Assistant { text: String::new(), thinking: delta, complete: false },
+                        at,
+                    }),
                 }
             }
             EventPayload::AssistantMessageCompleted { message_id, text, thinking } => {
@@ -145,21 +155,35 @@ impl Model {
                         }
                         *complete = true;
                     }
-                    _ => st.blocks.push(TranscriptBlock { id, turn_id, kind: BlockKind::Assistant { text, thinking: thinking.unwrap_or_default(), complete: true }, at }),
+                    _ => st.blocks.push(TranscriptBlock {
+                        id,
+                        turn_id,
+                        kind: BlockKind::Assistant { text, thinking: thinking.unwrap_or_default(), complete: true },
+                        at,
+                    }),
                 }
             }
             EventPayload::ToolCallStarted { call } => {
-                st.blocks.push(TranscriptBlock { id: format!("tool:{}", call.id), turn_id, kind: BlockKind::Tool { call, output_stream: String::new(), output: None, is_error: false, complete: false }, at });
+                st.blocks.push(TranscriptBlock {
+                    id: format!("tool:{}", call.id),
+                    turn_id,
+                    kind: BlockKind::Tool { call, output_stream: String::new(), output: None, is_error: false, complete: false },
+                    at,
+                });
             }
             EventPayload::ToolCallOutputDelta { tool_call_id, delta } => {
                 let id = format!("tool:{tool_call_id}");
-                if let Some(TranscriptBlock { kind: BlockKind::Tool { output_stream, .. }, .. }) = st.blocks.iter_mut().rev().find(|b| b.id == id) {
+                if let Some(TranscriptBlock { kind: BlockKind::Tool { output_stream, .. }, .. }) =
+                    st.blocks.iter_mut().rev().find(|b| b.id == id)
+                {
                     output_stream.push_str(&delta);
                 }
             }
             EventPayload::ToolCallCompleted { tool_call_id, output, is_error } => {
                 let id = format!("tool:{tool_call_id}");
-                if let Some(TranscriptBlock { kind: BlockKind::Tool { output: o, is_error: e, complete, .. }, .. }) = st.blocks.iter_mut().rev().find(|b| b.id == id) {
+                if let Some(TranscriptBlock { kind: BlockKind::Tool { output: o, is_error: e, complete, .. }, .. }) =
+                    st.blocks.iter_mut().rev().find(|b| b.id == id)
+                {
                     *o = Some(output);
                     *e = is_error;
                     *complete = true;
@@ -167,32 +191,53 @@ impl Model {
             }
             EventPayload::ApprovalRequested { approval } => {
                 st.pending_approvals.push(approval.clone());
-                st.blocks.push(TranscriptBlock { id: format!("approval:{}", approval.id), turn_id, kind: BlockKind::Approval { approval, decision: None }, at });
+                st.blocks.push(TranscriptBlock {
+                    id: format!("approval:{}", approval.id),
+                    turn_id,
+                    kind: BlockKind::Approval { approval, decision: None },
+                    at,
+                });
             }
             EventPayload::ApprovalResolved { approval_id, decision } => {
                 st.pending_approvals.retain(|a| a.id != approval_id);
                 let id = format!("approval:{approval_id}");
-                if let Some(TranscriptBlock { kind: BlockKind::Approval { decision: d, .. }, .. }) = st.blocks.iter_mut().rev().find(|b| b.id == id) {
+                if let Some(TranscriptBlock { kind: BlockKind::Approval { decision: d, .. }, .. }) =
+                    st.blocks.iter_mut().rev().find(|b| b.id == id)
+                {
                     *d = Some(decision);
                 }
             }
             EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms } => {
                 finish_turn(st, turn_id);
-                st.blocks.push(TranscriptBlock { id: format!("end:{turn_id}"), turn_id, kind: BlockKind::TurnEnd { stop_reason, usage, cost_usd, duration_ms, error: None }, at });
+                st.blocks.push(TranscriptBlock {
+                    id: format!("end:{turn_id}"),
+                    turn_id,
+                    kind: BlockKind::TurnEnd { stop_reason, usage, cost_usd, duration_ms, error: None },
+                    at,
+                });
             }
             EventPayload::TurnFailed { error } => {
                 finish_turn(st, turn_id);
-                st.blocks.push(TranscriptBlock { id: format!("end:{turn_id}"), turn_id, kind: BlockKind::TurnEnd { stop_reason: StopReason::Error, usage: Usage::default(), cost_usd: None, duration_ms: 0, error: Some(error) }, at });
+                st.blocks.push(TranscriptBlock {
+                    id: format!("end:{turn_id}"),
+                    turn_id,
+                    kind: BlockKind::TurnEnd {
+                        stop_reason: StopReason::Error,
+                        usage: Usage::default(),
+                        cost_usd: None,
+                        duration_ms: 0,
+                        error: Some(error),
+                    },
+                    at,
+                });
             }
             EventPayload::ProviderNotice { level, text, .. } => {
                 st.blocks.push(TranscriptBlock { id: format!("notice:{}", ev.seq), turn_id, kind: BlockKind::Notice { level, text }, at });
             }
-            EventPayload::CheckpointUpdated { checkpoint } => {
-                match st.checkpoints.iter_mut().find(|c| c.turn_id == checkpoint.turn_id) {
-                    Some(c) => *c = checkpoint,
-                    None => st.checkpoints.push(checkpoint),
-                }
-            }
+            EventPayload::CheckpointUpdated { checkpoint } => match st.checkpoints.iter_mut().find(|c| c.turn_id == checkpoint.turn_id) {
+                Some(c) => *c = checkpoint,
+                None => st.checkpoints.push(checkpoint),
+            },
             EventPayload::WorkspaceReverted { commit, .. } => {
                 st.blocks.push(TranscriptBlock { id: format!("revert:{}", ev.seq), turn_id, kind: BlockKind::Reverted { commit }, at });
             }
@@ -213,16 +258,27 @@ fn finish_turn(st: &mut ThreadState, turn: TurnId) {
 
 fn entry_to_block(e: TranscriptEntry) -> TranscriptBlock {
     match e {
-        TranscriptEntry::User { id, turn_id, message, at } => TranscriptBlock { id: id.to_string(), turn_id, kind: BlockKind::User(message), at },
-        TranscriptEntry::Assistant { id, turn_id, text, thinking, at, complete } => {
-            TranscriptBlock { id: id.to_string(), turn_id, kind: BlockKind::Assistant { text, thinking: thinking.unwrap_or_default(), complete }, at }
+        TranscriptEntry::User { id, turn_id, message, at } => {
+            TranscriptBlock { id: id.to_string(), turn_id, kind: BlockKind::User(message), at }
         }
-        TranscriptEntry::ToolCall { turn_id, call, output, is_error, complete, at } => {
-            TranscriptBlock { id: format!("tool:{}", call.id), turn_id, kind: BlockKind::Tool { call, output_stream: String::new(), output, is_error, complete }, at }
-        }
-        TranscriptEntry::Approval { turn_id, approval, decision } => {
-            TranscriptBlock { id: format!("approval:{}", approval.id), turn_id, at: approval.created_at, kind: BlockKind::Approval { approval, decision } }
-        }
+        TranscriptEntry::Assistant { id, turn_id, text, thinking, at, complete } => TranscriptBlock {
+            id: id.to_string(),
+            turn_id,
+            kind: BlockKind::Assistant { text, thinking: thinking.unwrap_or_default(), complete },
+            at,
+        },
+        TranscriptEntry::ToolCall { turn_id, call, output, is_error, complete, at } => TranscriptBlock {
+            id: format!("tool:{}", call.id),
+            turn_id,
+            kind: BlockKind::Tool { call, output_stream: String::new(), output, is_error, complete },
+            at,
+        },
+        TranscriptEntry::Approval { turn_id, approval, decision } => TranscriptBlock {
+            id: format!("approval:{}", approval.id),
+            turn_id,
+            at: approval.created_at,
+            kind: BlockKind::Approval { approval, decision },
+        },
         TranscriptEntry::TurnSummary { turn_id, stop_reason, usage, cost_usd, duration_ms, error } => TranscriptBlock {
             id: format!("end:{turn_id}"),
             turn_id,
@@ -237,7 +293,9 @@ pub fn tool_summary(call: &ToolCall) -> String {
     let short = |key: &str| call.input.get(key).and_then(|v| v.as_str()).map(|s| s.lines().next().unwrap_or("").to_string());
     match call.name.as_str() {
         "Bash" | "bash" | "shell" | "execute" => short("command").unwrap_or_default(),
-        "Write" | "Edit" | "MultiEdit" | "Read" | "write" | "edit" | "read" => short("file_path").or_else(|| short("path")).map(|p| shorten_path(&p)).unwrap_or_default(),
+        "Write" | "Edit" | "MultiEdit" | "Read" | "write" | "edit" | "read" => {
+            short("file_path").or_else(|| short("path")).map(|p| shorten_path(&p)).unwrap_or_default()
+        }
         "apply_patch" => call
             .input
             .get("changes")

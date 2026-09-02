@@ -12,17 +12,19 @@ use std::sync::Arc;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock, ImageContent, Implementation, InitializeRequest,
-    LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionModeRequest, StopReason as AcpStop, TextContent, ToolCallContent,
+    LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    StopReason as AcpStop, TextContent, ToolCallContent,
 };
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, JsonRpcRequest, JsonRpcResponse, on_receive_notification, on_receive_request};
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use agent_client_protocol::{
+    Agent, ByteStreams, Client, ConnectionTo, JsonRpcRequest, JsonRpcResponse, on_receive_notification, on_receive_request,
+};
 use async_trait::async_trait;
 use kybern_protocol::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::binary::{resolve, version_of};
 use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, Result, SessionConfig, SpawnedSession};
@@ -110,7 +112,11 @@ impl AgentDriver for CursorDriver {
         let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
         let (bound_tx, bound_rx) = oneshot::channel::<Result<String>>();
 
-        let shared = Arc::new(Shared { events: events_tx.clone(), pending: Mutex::new(std::collections::HashMap::new()), mode: config.permission_mode });
+        let shared = Arc::new(Shared {
+            events: events_tx.clone(),
+            pending: Mutex::new(std::collections::HashMap::new()),
+            mode: config.permission_mode,
+        });
         let worker_shared = shared.clone();
         let cfg = config.clone();
         tokio::spawn(async move {
@@ -442,7 +448,10 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
 #[async_trait]
 impl AgentSession for Handle {
     async fn send_message(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
-        self.commands.send(SessionCommand::Prompt { blocks: blocks(message) }).await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))
+        self.commands
+            .send(SessionCommand::Prompt { blocks: blocks(message) })
+            .await
+            .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))
     }
 
     async fn interrupt(&self) -> Result<()> {
@@ -451,13 +460,19 @@ impl AgentSession for Handle {
 
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         let (tx, rx) = oneshot::channel();
-        self.commands.send(SessionCommand::SetMode(mode, tx)).await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?;
+        self.commands
+            .send(SessionCommand::SetMode(mode, tx))
+            .await
+            .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?;
         rx.await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
         let (tx, rx) = oneshot::channel();
-        self.commands.send(SessionCommand::SetModel(model.to_string(), tx)).await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?;
+        self.commands
+            .send(SessionCommand::SetModel(model.to_string(), tx))
+            .await
+            .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?;
         rx.await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?
     }
 

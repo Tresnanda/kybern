@@ -85,11 +85,7 @@ impl Serialize for JsonRpcVersion {
 impl<'de> Deserialize<'de> for JsonRpcVersion {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let v = String::deserialize(d)?;
-        if v == "2.0" {
-            Ok(JsonRpcVersion)
-        } else {
-            Err(serde::de::Error::custom(format!("unsupported jsonrpc version {v}")))
-        }
+        if v == "2.0" { Ok(JsonRpcVersion) } else { Err(serde::de::Error::custom(format!("unsupported jsonrpc version {v}"))) }
     }
 }
 

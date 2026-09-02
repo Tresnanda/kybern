@@ -54,12 +54,7 @@ impl NdjsonChild {
             }
         });
 
-        Ok(Self {
-            child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
-            lines: Mutex::new(line_rx),
-            stderr: Mutex::new(err_rx),
-        })
+        Ok(Self { child: Mutex::new(child), stdin: Mutex::new(stdin), lines: Mutex::new(line_rx), stderr: Mutex::new(err_rx) })
     }
 
     pub async fn write(&self, value: &Value) -> Result<()> {

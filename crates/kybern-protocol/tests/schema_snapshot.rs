@@ -45,7 +45,10 @@ fn wire_examples_roundtrip() {
         thread_id: uuid::Uuid::nil(),
         turn_id: Some(uuid::Uuid::nil()),
         at: chrono::DateTime::parse_from_rfc3339("2026-09-02T00:00:00Z").unwrap().into(),
-        payload: EventPayload::ApprovalResolved { approval_id: uuid::Uuid::nil(), decision: ApprovalDecision::Deny { reason: Some("no".into()) } },
+        payload: EventPayload::ApprovalResolved {
+            approval_id: uuid::Uuid::nil(),
+            decision: ApprovalDecision::Deny { reason: Some("no".into()) },
+        },
     };
     let json = serde_json::to_value(&ev).unwrap();
     assert_eq!(json["kind"], "approval_resolved");

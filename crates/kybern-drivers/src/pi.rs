@@ -95,7 +95,8 @@ impl AgentDriver for PiDriver {
                 let ok = at_least(&v, min);
                 status.available = ok;
                 if !ok {
-                    status.unavailable_reason = Some(format!("{} {v} is older than the required {}.{}.{}", kind.display_name(), min.0, min.1, min.2));
+                    status.unavailable_reason =
+                        Some(format!("{} {v} is older than the required {}.{}.{}", kind.display_name(), min.0, min.1, min.2));
                 }
                 status.version = Some(v);
             }
@@ -380,14 +381,21 @@ impl PiSession {
                         st.turn_cost += u.pointer("/cost/total").and_then(|x| x.as_f64()).unwrap_or(0.0);
                     }
                     match msg.get("stopReason").and_then(|s| s.as_str()) {
-                        Some("error") => st.turn_error = Some(msg.get("errorMessage").and_then(|e| e.as_str()).unwrap_or("model error").to_string()),
+                        Some("error") => {
+                            st.turn_error = Some(msg.get("errorMessage").and_then(|e| e.as_str()).unwrap_or("model error").to_string())
+                        }
                         Some("aborted") => st.aborted = true,
                         _ => {}
                     }
                     (id, text, thinking)
                 };
                 if !text.is_empty() || !thinking.is_empty() {
-                    self.emit(DriverEvent::MessageCompleted { message_id, text, thinking: if thinking.is_empty() { None } else { Some(thinking) } }).await;
+                    self.emit(DriverEvent::MessageCompleted {
+                        message_id,
+                        text,
+                        thinking: if thinking.is_empty() { None } else { Some(thinking) },
+                    })
+                    .await;
                 }
             }
             "tool_execution_start" => {
@@ -428,9 +436,16 @@ impl PiSession {
                 })
                 .await;
             }
-            "compaction_start" | "auto_compaction_start" => self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "compacting context".into(), data: None }).await,
+            "compaction_start" | "auto_compaction_start" => {
+                self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "compacting context".into(), data: None }).await
+            }
             "extension_error" => {
-                self.emit(DriverEvent::Notice { level: NoticeLevel::Warning, text: format!("extension error: {}", v.get("error").and_then(|e| e.as_str()).unwrap_or("")), data: None }).await;
+                self.emit(DriverEvent::Notice {
+                    level: NoticeLevel::Warning,
+                    text: format!("extension error: {}", v.get("error").and_then(|e| e.as_str()).unwrap_or("")),
+                    data: None,
+                })
+                .await;
             }
             "model_changed" => {
                 let model = v.get("model").and_then(|m| m.as_str()).map(str::to_string);
@@ -457,16 +472,23 @@ impl PiSession {
             Flavor::Pi => "get_fork_messages",
             Flavor::Omp => "get_branch_messages",
         };
-        let anchor = self
-            .call(list_cmd, json!({}))
-            .await
-            .ok()
-            .and_then(|d| d.get("messages").and_then(|m| m.as_array()).and_then(|a| a.last()).and_then(|m| m.get("entryId")).and_then(|e| e.as_str()).map(str::to_string));
+        let anchor = self.call(list_cmd, json!({})).await.ok().and_then(|d| {
+            d.get("messages")
+                .and_then(|m| m.as_array())
+                .and_then(|a| a.last())
+                .and_then(|m| m.get("entryId"))
+                .and_then(|e| e.as_str())
+                .map(str::to_string)
+        });
         let anchors = crate::TurnAnchors { turn_id: anchor, previous_end: None };
         let ev = match (error, aborted) {
             (Some(e), _) => DriverEvent::TurnFailed { error: e },
-            (None, true) => DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: Some(cost), duration_ms, anchors },
-            (None, false) => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms, anchors },
+            (None, true) => {
+                DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: Some(cost), duration_ms, anchors }
+            }
+            (None, false) => {
+                DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms, anchors }
+            }
         };
         self.emit(ev).await;
     }
@@ -490,7 +512,15 @@ impl PiSession {
                     None => format!("{tool_name}: {}", input.values().filter_map(|v| v.as_str()).next().unwrap_or("")),
                 };
                 self.pending_approvals.lock().await.insert(id.clone(), tool_name.clone());
-                self.emit(DriverEvent::PermissionRequest { request_id: id, tool_call_id: None, tool_name, input: Value::Object(input), summary, suggestions: vec![] }).await;
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id: id,
+                    tool_call_id: None,
+                    tool_name,
+                    input: Value::Object(input),
+                    summary,
+                    suggestions: vec![],
+                })
+                .await;
             }
             "select" | "confirm" | "input" | "editor" => {
                 // Not an approval; cancel so the agent continues without blocking.
@@ -502,7 +532,12 @@ impl PiSession {
                     Some("warning") => NoticeLevel::Warning,
                     _ => NoticeLevel::Info,
                 };
-                self.emit(DriverEvent::Notice { level, text: v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string(), data: None }).await;
+                self.emit(DriverEvent::Notice {
+                    level,
+                    text: v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+                    data: None,
+                })
+                .await;
             }
             _ => {}
         }

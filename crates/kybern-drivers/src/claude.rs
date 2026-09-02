@@ -60,7 +60,8 @@ impl AgentDriver for ClaudeDriver {
                 let ok = at_least(&v, MIN_VERSION);
                 status.available = ok;
                 if !ok {
-                    status.unavailable_reason = Some(format!("Claude Code {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
+                    status.unavailable_reason =
+                        Some(format!("Claude Code {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
                 }
                 status.version = Some(v);
             }
@@ -75,7 +76,20 @@ impl AgentDriver for ClaudeDriver {
             std::time::Duration::from_secs(60),
             Command::new(&bin)
                 .current_dir(cwd)
-                .args(["-p", "--output-format", "text", "--model", "haiku", "--max-turns", "1", "--no-session-persistence", "--permission-mode", "dontAsk", "--disallowedTools", "*"])
+                .args([
+                    "-p",
+                    "--output-format",
+                    "text",
+                    "--model",
+                    "haiku",
+                    "--max-turns",
+                    "1",
+                    "--no-session-persistence",
+                    "--permission-mode",
+                    "dontAsk",
+                    "--disallowedTools",
+                    "*",
+                ])
                 .arg(prompt)
                 .env_remove("NODE_OPTIONS")
                 .stdin(std::process::Stdio::null())
@@ -84,7 +98,11 @@ impl AgentDriver for ClaudeDriver {
         .await
         .map_err(|_| DriverError::Protocol("claude one-shot timed out".into()))??;
         if !out.status.success() {
-            return Err(DriverError::Protocol(format!("claude exited with {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim())));
+            return Err(DriverError::Protocol(format!(
+                "claude exited with {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
@@ -374,7 +392,12 @@ impl ClaudeSession {
                     Some("warning") => NoticeLevel::Warning,
                     _ => NoticeLevel::Info,
                 };
-                self.emit(DriverEvent::Notice { level, text: v.get("content").and_then(|s| s.as_str()).unwrap_or("").to_string(), data: None }).await;
+                self.emit(DriverEvent::Notice {
+                    level,
+                    text: v.get("content").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    data: None,
+                })
+                .await;
             }
             "task_started" => {
                 self.emit(DriverEvent::Notice {

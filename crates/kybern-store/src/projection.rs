@@ -75,10 +75,8 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 });
             }
             EventPayload::ToolCallCompleted { tool_call_id, output, is_error } => {
-                if let Some(TranscriptEntry::ToolCall { output: o, is_error: e, complete, .. }) = out
-                    .iter_mut()
-                    .rev()
-                    .find(|e| matches!(e, TranscriptEntry::ToolCall { call, .. } if &call.id == tool_call_id))
+                if let Some(TranscriptEntry::ToolCall { output: o, is_error: e, complete, .. }) =
+                    out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::ToolCall { call, .. } if &call.id == tool_call_id))
                 {
                     *o = Some(output.clone());
                     *e = *is_error;
@@ -100,10 +98,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             EventPayload::TurnFailed { error } => {
                 let Some(turn_id) = turn_id else { continue };
                 mark_turn_complete(&mut out, turn_id);
-                let duration_ms = turn_started_at
-                    .get(&turn_id)
-                    .map(|s| (ev.at - *s).num_milliseconds().max(0) as u64)
-                    .unwrap_or(0);
+                let duration_ms = turn_started_at.get(&turn_id).map(|s| (ev.at - *s).num_milliseconds().max(0) as u64).unwrap_or(0);
                 out.push(TranscriptEntry::TurnSummary {
                     turn_id,
                     stop_reason: StopReason::Error,
@@ -118,10 +113,8 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 out.push(TranscriptEntry::Approval { turn_id, approval: approval.clone(), decision: None });
             }
             EventPayload::ApprovalResolved { approval_id, decision } => {
-                if let Some(TranscriptEntry::Approval { decision: d, .. }) = out
-                    .iter_mut()
-                    .rev()
-                    .find(|e| matches!(e, TranscriptEntry::Approval { approval, .. } if approval.id == *approval_id))
+                if let Some(TranscriptEntry::Approval { decision: d, .. }) =
+                    out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::Approval { approval, .. } if approval.id == *approval_id))
                 {
                     *d = Some(decision.clone());
                 }

@@ -31,14 +31,8 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [ProviderKind; 6] = [
-        ProviderKind::ClaudeCode,
-        ProviderKind::Codex,
-        ProviderKind::Opencode,
-        ProviderKind::Pi,
-        ProviderKind::Omp,
-        ProviderKind::Cursor,
-    ];
+    pub const ALL: [ProviderKind; 6] =
+        [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Opencode, ProviderKind::Pi, ProviderKind::Omp, ProviderKind::Cursor];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -84,10 +78,7 @@ impl std::fmt::Display for ProviderKind {
 impl std::str::FromStr for ProviderKind {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        ProviderKind::ALL
-            .into_iter()
-            .find(|p| p.as_str() == s)
-            .ok_or_else(|| format!("unknown provider: {s}"))
+        ProviderKind::ALL.into_iter().find(|p| p.as_str() == s).ok_or_else(|| format!("unknown provider: {s}"))
     }
 }
 
@@ -141,12 +132,8 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
-    pub const ALL: [PermissionMode; 4] = [
-        PermissionMode::Supervised,
-        PermissionMode::AcceptEdits,
-        PermissionMode::Auto,
-        PermissionMode::FullAccess,
-    ];
+    pub const ALL: [PermissionMode; 4] =
+        [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto, PermissionMode::FullAccess];
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -207,13 +194,25 @@ pub struct Thread {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     /// Inline image. `data` is base64 of the raw bytes.
-    Image { media_type: String, data: String },
+    Image {
+        media_type: String,
+        data: String,
+    },
     /// Uploaded attachment served by the daemon's HTTP asset route.
-    Attachment { asset_id: AssetId, name: String, media_type: String, size: u64 },
+    Attachment {
+        asset_id: AssetId,
+        name: String,
+        media_type: String,
+        size: u64,
+    },
     /// `@path` mention resolved relative to the thread cwd.
-    FileMention { path: String },
+    FileMention {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -322,7 +321,12 @@ pub enum StopReason {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum TranscriptEntry {
-    User { id: MessageId, turn_id: TurnId, message: UserMessage, at: DateTime<Utc> },
+    User {
+        id: MessageId,
+        turn_id: TurnId,
+        message: UserMessage,
+        at: DateTime<Utc>,
+    },
     Assistant {
         id: MessageId,
         turn_id: TurnId,

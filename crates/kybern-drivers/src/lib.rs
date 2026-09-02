@@ -9,9 +9,9 @@ pub mod binary;
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod ndjson;
 pub mod opencode;
 pub mod pi;
-pub mod ndjson;
 pub mod registry;
 
 use std::collections::HashMap;
@@ -81,15 +81,35 @@ pub struct RewindPoint {
 #[derive(Debug, Clone)]
 pub enum DriverEvent {
     /// Provider reported its session id and effective model.
-    SessionBound { session_id: String, model: Option<String> },
-    TextDelta { message_id: String, delta: String },
-    ThinkingDelta { message_id: String, delta: String },
+    SessionBound {
+        session_id: String,
+        model: Option<String>,
+    },
+    TextDelta {
+        message_id: String,
+        delta: String,
+    },
+    ThinkingDelta {
+        message_id: String,
+        delta: String,
+    },
     /// Full text of an assistant message once the provider finalizes it.
-    MessageCompleted { message_id: String, text: String, thinking: Option<String> },
+    MessageCompleted {
+        message_id: String,
+        text: String,
+        thinking: Option<String>,
+    },
     ToolStarted(ToolCall),
     /// Incremental output from a running tool (command stdout, patch progress).
-    ToolOutputDelta { tool_call_id: String, delta: String },
-    ToolCompleted { tool_call_id: String, output: Value, is_error: bool },
+    ToolOutputDelta {
+        tool_call_id: String,
+        delta: String,
+    },
+    ToolCompleted {
+        tool_call_id: String,
+        output: Value,
+        is_error: bool,
+    },
     /// The provider is blocked waiting for `respond_permission`.
     PermissionRequest {
         request_id: String,
@@ -100,12 +120,29 @@ pub enum DriverEvent {
         suggestions: Vec<Value>,
     },
     /// The provider withdrew a pending permission request (tool was cancelled).
-    PermissionWithdrawn { request_id: String },
-    TurnCompleted { stop_reason: StopReason, usage: Usage, cost_usd: Option<f64>, duration_ms: u64, anchors: TurnAnchors },
-    TurnFailed { error: String },
-    Notice { level: NoticeLevel, text: String, data: Option<Value> },
+    PermissionWithdrawn {
+        request_id: String,
+    },
+    TurnCompleted {
+        stop_reason: StopReason,
+        usage: Usage,
+        cost_usd: Option<f64>,
+        duration_ms: u64,
+        anchors: TurnAnchors,
+    },
+    TurnFailed {
+        error: String,
+    },
+    Notice {
+        level: NoticeLevel,
+        text: String,
+        data: Option<Value>,
+    },
     /// The provider process ended. No further events follow.
-    Exited { code: Option<i32>, error: Option<String> },
+    Exited {
+        code: Option<i32>,
+        error: Option<String>,
+    },
 }
 
 #[async_trait]
@@ -144,12 +181,14 @@ pub trait AgentDriver: Send + Sync {
 
 /// One-line human summary of a tool call, for approval cards and notifications.
 pub fn summarize_tool_call(name: &str, input: &Value) -> String {
-    let short = |key: &str| input.get(key).and_then(|v| v.as_str()).map(|s| s.lines().next().unwrap_or("").chars().take(120).collect::<String>());
+    let short =
+        |key: &str| input.get(key).and_then(|v| v.as_str()).map(|s| s.lines().next().unwrap_or("").chars().take(120).collect::<String>());
     match name {
         "Bash" | "bash" | "shell" | "execute" => short("command").map(|c| format!("run: {c}")).unwrap_or_else(|| name.to_string()),
-        "Edit" | "Write" | "MultiEdit" | "edit" | "write" | "apply_patch" => {
-            short("file_path").or_else(|| short("path")).map(|p| format!("{}: {p}", name.to_lowercase())).unwrap_or_else(|| name.to_string())
-        }
+        "Edit" | "Write" | "MultiEdit" | "edit" | "write" | "apply_patch" => short("file_path")
+            .or_else(|| short("path"))
+            .map(|p| format!("{}: {p}", name.to_lowercase()))
+            .unwrap_or_else(|| name.to_string()),
         "Read" | "read" => short("file_path").or_else(|| short("path")).map(|p| format!("read: {p}")).unwrap_or_else(|| name.to_string()),
         "WebFetch" | "webfetch" => short("url").map(|u| format!("fetch: {u}")).unwrap_or_else(|| name.to_string()),
         _ => name.to_string(),

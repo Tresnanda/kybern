@@ -36,7 +36,14 @@ pub struct TerminalManager {
 }
 
 impl TerminalManager {
-    pub fn create(&self, thread_id: Option<ThreadId>, cwd: String, cols: u16, rows: u16, command: Option<Vec<String>>) -> Result<Arc<Terminal>> {
+    pub fn create(
+        &self,
+        thread_id: Option<ThreadId>,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+        command: Option<Vec<String>>,
+    ) -> Result<Arc<Terminal>> {
         let pty = native_pty_system();
         let pair = pty.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).context("openpty")?;
 
@@ -129,11 +136,8 @@ impl TerminalManager {
 
     pub fn list(&self, thread_id: Option<ThreadId>) -> Vec<TerminalInfo> {
         let map = self.terminals.lock().unwrap();
-        let mut out: Vec<TerminalInfo> = map
-            .values()
-            .map(|t| t.info.lock().unwrap().clone())
-            .filter(|i| thread_id.is_none_or(|th| i.thread_id == Some(th)))
-            .collect();
+        let mut out: Vec<TerminalInfo> =
+            map.values().map(|t| t.info.lock().unwrap().clone()).filter(|i| thread_id.is_none_or(|th| i.thread_id == Some(th))).collect();
         out.sort_by_key(|i| i.created_at);
         out
     }

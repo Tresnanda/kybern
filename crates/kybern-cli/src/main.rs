@@ -155,7 +155,9 @@ enum ProjectsCmd {
         #[arg(long)]
         name: Option<String>,
     },
-    Remove { id: String },
+    Remove {
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -206,9 +208,14 @@ enum TerminalCmd {
         cwd: Option<String>,
     },
     /// Send a line of input to a terminal.
-    Send { terminal: String, input: Vec<String> },
+    Send {
+        terminal: String,
+        input: Vec<String>,
+    },
     /// Stream a terminal's output to stdout (replays scrollback first). Ctrl-C to stop.
-    Attach { terminal: String },
+    Attach {
+        terminal: String,
+    },
     /// Create a terminal, run one command, print its output for a few seconds, close it.
     Run {
         #[arg(long)]
@@ -219,18 +226,29 @@ enum TerminalCmd {
         seconds: u64,
         command: Vec<String>,
     },
-    Close { terminal: String },
+    Close {
+        terminal: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum ApprovalsCmd {
     List,
-    Allow { id: String, #[arg(long)] always: bool },
-    Deny { id: String, #[arg(long)] reason: Option<String> },
+    Allow {
+        id: String,
+        #[arg(long)]
+        always: bool,
+    },
+    Deny {
+        id: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 fn parse_mode(s: &str) -> Result<PermissionMode, String> {
-    serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| format!("unknown mode {s}; use supervised|accept-edits|auto|full-access"))
+    serde_json::from_value(serde_json::Value::String(s.to_string()))
+        .map_err(|_| format!("unknown mode {s}; use supervised|accept-edits|auto|full-access"))
 }
 
 #[tokio::main]
@@ -274,7 +292,11 @@ async fn main() -> Result<()> {
         Cmd::New { project, provider, model, mode, worktree, detach, prompt } => {
             let project_id = resolve_project(&client, &project, true).await?;
             let prompt = join_prompt(prompt)?;
-            let sub = if detach { None } else { Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None }).await?) };
+            let sub = if detach {
+                None
+            } else {
+                Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None }).await?)
+            };
             let thread = client
                 .call::<ThreadsCreate>(ThreadsCreateParams {
                     project_id,
@@ -294,7 +316,11 @@ async fn main() -> Result<()> {
         Cmd::Send { thread, detach, prompt } => {
             let thread_id: ThreadId = thread.parse().context("thread id must be a UUID")?;
             let prompt = join_prompt(prompt)?;
-            let sub = if detach { None } else { Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread_id), after_seq: None }).await?) };
+            let sub = if detach {
+                None
+            } else {
+                Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread_id), after_seq: None }).await?)
+            };
             let r = client.call::<ThreadsSend>(ThreadsSendParams { thread_id, message: UserMessage::text(prompt) }).await?;
             eprintln!("turn {}", r.turn_id);
             if let Some(sub) = sub {
@@ -325,7 +351,12 @@ async fn main() -> Result<()> {
                 println!("allowed");
             }
             ApprovalsCmd::Deny { id, reason } => {
-                client.call::<ApprovalsRespond>(ApprovalsRespondParams { approval_id: id.parse()?, decision: ApprovalDecision::Deny { reason } }).await?;
+                client
+                    .call::<ApprovalsRespond>(ApprovalsRespondParams {
+                        approval_id: id.parse()?,
+                        decision: ApprovalDecision::Deny { reason },
+                    })
+                    .await?;
                 println!("denied");
             }
         },
@@ -335,15 +366,27 @@ async fn main() -> Result<()> {
         }
         Cmd::Checkpoints { thread } => {
             let r = client.call::<ThreadsCheckpoints>(ThreadsCheckpointsParams { thread_id: thread.parse()? }).await?;
-            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?)
+            } else {
                 for c in r.checkpoints {
-                    println!("{}  {} → {}  {}", c.turn_id, &c.before[..10], c.after.as_deref().map(|a| &a[..10]).unwrap_or("(running)"), c.created_at.to_rfc3339());
+                    println!(
+                        "{}  {} → {}  {}",
+                        c.turn_id,
+                        &c.before[..10],
+                        c.after.as_deref().map(|a| &a[..10]).unwrap_or("(running)"),
+                        c.created_at.to_rfc3339()
+                    );
                 }
             }
         }
         Cmd::Diff { thread, turn, stat } => {
-            let d = client.call::<ThreadsDiff>(ThreadsDiffParams { thread_id: thread.parse()?, turn_id: turn.map(|t| t.parse()).transpose()? }).await?;
-            if json { println!("{}", serde_json::to_string_pretty(&d)?) } else {
+            let d = client
+                .call::<ThreadsDiff>(ThreadsDiffParams { thread_id: thread.parse()?, turn_id: turn.map(|t| t.parse()).transpose()? })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&d)?)
+            } else {
                 for f in &d.files {
                     println!("{:<10} +{:<5} -{:<5} {}", format!("{:?}", f.status).to_lowercase(), f.additions, f.deletions, f.path);
                 }
@@ -400,7 +443,9 @@ async fn main() -> Result<()> {
         }
         Cmd::Pr { cmd } => match cmd {
             PrCmd::Create { thread, title, body, base, draft } => {
-                let r = client.call::<PrCreate>(PrCreateParams { thread_id: thread.parse()?, title, body, base, draft, commit_first: true }).await?;
+                let r = client
+                    .call::<PrCreate>(PrCreateParams { thread_id: thread.parse()?, title, body, base, draft, commit_first: true })
+                    .await?;
                 println!("#{}  {}\n{}", r.number, r.title, r.url);
             }
             PrCmd::List { project, state } => {

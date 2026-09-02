@@ -1,7 +1,7 @@
 //! Usage dialog: tokens and cost by provider.
 
-use gpui::*;
 use gpui::prelude::FluentBuilder as _;
+use gpui::*;
 use gpui_component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 
 use crate::app::Workspace;
@@ -36,12 +36,14 @@ pub fn open(ws: &mut Workspace, _view: Entity<Workspace>, window: &mut Window, c
                 .child(div().w(px(80.)).text_right().child(format_tokens(r.usage.cache_read_tokens + r.usage.cache_write_tokens)))
                 .child(div().w(px(80.)).text_right().child(format!("${:.2}", r.cost_usd)))
         });
-        dialog
-            .title("Usage")
-            .w(px(640.))
-            .overlay(true)
-            .overlay_closable(true)
-            .close_button(true)
-            .child(v_flex().gap_2().child(header).children(rows).child(div().pt_3().text_xs().text_color(muted).child("Costs come from the providers where they report one. Cursor and Oh My Pi report none.")))
+        dialog.title("Usage").w(px(640.)).overlay(true).overlay_closable(true).close_button(true).child(
+            v_flex().gap_2().child(header).children(rows).child(
+                div()
+                    .pt_3()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("Costs come from the providers where they report one. Cursor and Oh My Pi report none."),
+            ),
+        )
     });
 }

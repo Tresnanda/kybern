@@ -84,8 +84,14 @@ fn assert_completed_with_text(kind: ProviderKind, events: &[DriverEvent]) {
             _ => None,
         })
         .collect();
-    assert!(text.to_lowercase().contains("pong") || deltas.to_lowercase().contains("pong"), "{kind}: expected pong in output, got text={text:?} deltas={deltas:?}");
-    assert!(events.iter().any(|e| matches!(e, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })), "{kind}: turn did not complete: {events:?}");
+    assert!(
+        text.to_lowercase().contains("pong") || deltas.to_lowercase().contains("pong"),
+        "{kind}: expected pong in output, got text={text:?} deltas={deltas:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })),
+        "{kind}: turn did not complete: {events:?}"
+    );
 }
 
 #[tokio::test]

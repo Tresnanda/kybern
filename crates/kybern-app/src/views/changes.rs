@@ -50,10 +50,20 @@ fn render_changes(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Wor
         } else {
             "No changes yet."
         };
-        return v_flex().size_full().items_center().justify_center().child(div().text_sm().text_color(muted).child(text)).into_any_element();
+        return v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(div().text_sm().text_color(muted).child(text))
+            .into_any_element();
     };
     if diff.files.is_empty() {
-        return v_flex().size_full().items_center().justify_center().child(div().text_sm().text_color(muted).child("No changes yet.")).into_any_element();
+        return v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(div().text_sm().text_color(muted).child("No changes yet."))
+            .into_any_element();
     }
     let mono = cx.theme().mono_font_family.clone();
     let files = diff.files.iter().map(|f| {
@@ -75,6 +85,13 @@ fn render_changes(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Wor
     v_flex()
         .size_full()
         .child(div().id("files").max_h(px(200.)).overflow_y_scroll().py_1().children(files))
-        .child(div().flex_1().min_h_0().border_t_1().border_color(cx.theme().border).child(Editor::new(&ws.diff_editor).readonly(true).bordered(false).appearance(false).text_xs().size_full()))
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(Editor::new(&ws.diff_editor).readonly(true).bordered(false).appearance(false).text_xs().size_full()),
+        )
         .into_any_element()
 }

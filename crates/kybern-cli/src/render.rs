@@ -217,7 +217,10 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
         if json {
             println!("{}", serde_json::to_string(&en.event)?);
         } else {
-            let kind = serde_json::to_value(&en.event.payload).ok().and_then(|v| v.get("kind").and_then(|k| k.as_str().map(str::to_string))).unwrap_or_default();
+            let kind = serde_json::to_value(&en.event.payload)
+                .ok()
+                .and_then(|v| v.get("kind").and_then(|k| k.as_str().map(str::to_string)))
+                .unwrap_or_default();
             let short = match &en.event.payload {
                 EventPayload::AssistantTextDelta { delta, .. } => delta.replace('\n', "⏎"),
                 EventPayload::ToolCallStarted { call } => call.name.clone(),
@@ -231,7 +234,6 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
     }
     Ok(())
 }
-
 
 pub fn usage(r: &UsageSummaryResult) {
     println!("{:<28} {:>6} {:>10} {:>10} {:>10} {:>9}", "", "turns", "input", "output", "cache", "cost");
@@ -249,13 +251,15 @@ pub fn usage(r: &UsageSummaryResult) {
 }
 
 pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) -> Result<()> {
-    use base64::Engine;
     use crate::TerminalCommand as T;
+    use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD;
     match cmd {
         T::List => {
             let r = client.call::<TerminalsList>(TerminalsListParams { thread_id: None }).await?;
-            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?)
+            } else {
                 for t in r.terminals {
                     println!("{}  {:<6} {}x{:<4} {}  {}", t.id, if t.alive { "alive" } else { "exited" }, t.cols, t.rows, t.title, t.cwd);
                 }
@@ -263,14 +267,22 @@ pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) 
         }
         T::Create { thread, cwd } => {
             let info = client
-                .call::<TerminalsCreate>(TerminalsCreateParams { thread_id: thread.map(|t| t.parse()).transpose()?, cwd, cols: 120, rows: 32, command: None })
+                .call::<TerminalsCreate>(TerminalsCreateParams {
+                    thread_id: thread.map(|t| t.parse()).transpose()?,
+                    cwd,
+                    cols: 120,
+                    rows: 32,
+                    command: None,
+                })
                 .await?;
             println!("{}", info.id);
         }
         T::Send { terminal, input } => {
             let mut line = input.join(" ");
             line.push('\n');
-            client.call::<TerminalsInput>(TerminalsInputParams { terminal_id: terminal.parse()?, data: b64.encode(line.as_bytes()) }).await?;
+            client
+                .call::<TerminalsInput>(TerminalsInputParams { terminal_id: terminal.parse()?, data: b64.encode(line.as_bytes()) })
+                .await?;
         }
         T::Attach { terminal } => {
             let id: TerminalId = terminal.parse()?;
@@ -279,7 +291,13 @@ pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) 
         }
         T::Run { thread, cwd, seconds, command } => {
             let info = client
-                .call::<TerminalsCreate>(TerminalsCreateParams { thread_id: thread.map(|t| t.parse()).transpose()?, cwd, cols: 120, rows: 32, command: None })
+                .call::<TerminalsCreate>(TerminalsCreateParams {
+                    thread_id: thread.map(|t| t.parse()).transpose()?,
+                    cwd,
+                    cols: 120,
+                    rows: 32,
+                    command: None,
+                })
                 .await?;
             client.call::<TerminalsSubscribe>(TerminalsSubscribeParams { terminal_id: info.id, replay: true }).await?;
             let mut line = command.join(" ");

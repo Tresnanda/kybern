@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use gpui::*;
 use gpui::prelude::FluentBuilder as _;
+use gpui::*;
 use gpui_component::input::{EditorState, InputEvent, InputState, TextareaState};
 use gpui_component::message_scroller::MessageScrollerState;
 use gpui_component::notification::Notification;
@@ -131,17 +131,16 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(daemon: Arc<Daemon>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Theme::sync_system_appearance(Some(window), cx);
-        let saved_theme = kybern_client::Endpoint::data_dir(None).and_then(|d| std::fs::read_to_string(d.join("theme")).ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let saved_theme = kybern_client::Endpoint::data_dir(None)
+            .and_then(|d| std::fs::read_to_string(d.join("theme")).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         Theme::global_mut(cx).font_size = px(13.);
         Theme::global_mut(cx).radius = px(6.);
         Theme::sync_base(cx);
 
         let composer = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .auto_grow(1, 8)
-                .submit_on_enter(true)
-                .placeholder("Message the agent")
-                .soft_wrap(true)
+            TextareaState::new(window, cx).auto_grow(1, 8).submit_on_enter(true).placeholder("Message the agent").soft_wrap(true)
         });
         let terminal_input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command and press Enter"));
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
@@ -531,7 +530,15 @@ impl Workspace {
         if let Some(thread_id) = self.model.selected_thread {
             let d = self.daemon.clone();
             cx.spawn(async move |this, cx| {
-                let r = d.call::<ThreadsUpdate>(ThreadsUpdateParams { thread_id, title: None, pinned: None, permission_mode: Some(mode), model: None }).await;
+                let r = d
+                    .call::<ThreadsUpdate>(ThreadsUpdateParams {
+                        thread_id,
+                        title: None,
+                        pinned: None,
+                        permission_mode: Some(mode),
+                        model: None,
+                    })
+                    .await;
                 if let Err(e) = r {
                     this.update(cx, |ws, cx| ws.toast_error(format!("Mode not changed. {e}"), cx)).ok();
                 }
@@ -542,7 +549,8 @@ impl Workspace {
     }
 
     pub fn add_project(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Add project".into()) });
+        let rx =
+            cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Add project".into()) });
         let d = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else { return };
@@ -614,7 +622,9 @@ impl Workspace {
             alert
                 .title("Archive this thread?")
                 .description(format!("“{title}” will be hidden from the sidebar. Its files and history stay on disk."))
-                .button_props(gpui_component::dialog::DialogButtonProps::default().ok_text("Archive thread").cancel_text("Cancel").show_cancel(true))
+                .button_props(
+                    gpui_component::dialog::DialogButtonProps::default().ok_text("Archive thread").cancel_text("Cancel").show_cancel(true),
+                )
                 .on_ok(move |_, _, cx| {
                     view.update(cx, |ws, cx| ws.archive_thread(id, cx));
                     true
@@ -641,7 +651,8 @@ impl Workspace {
                 let themes = theme_names(cx);
                 let mut group = gpui_component::command::CommandGroup::new().label("Theme");
                 for t in &themes {
-                    group = group.item(gpui_component::command::CommandItem::new().label(t.clone()).action(Box::new(SelectTheme(t.clone()))));
+                    group =
+                        group.item(gpui_component::command::CommandItem::new().label(t.clone()).action(Box::new(SelectTheme(t.clone()))));
                 }
                 cmd = cmd.group(group);
                 let view = view.clone();

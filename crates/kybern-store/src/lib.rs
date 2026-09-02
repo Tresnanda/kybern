@@ -74,10 +74,7 @@ impl Store {
     // ---- meta ----
 
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
-                .optional()?)
-        })
+        self.with(|c| Ok(c.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?))
     }
 
     pub fn meta_set(&self, key: &str, value: &str) -> Result<()> {
@@ -105,19 +102,15 @@ impl Store {
     pub fn token_lookup(&self, hash: &str) -> Result<Option<TokenRecord>> {
         self.with(|c| {
             let row = c
-                .query_row(
-                    "SELECT id, label, scopes, created_at, revoked FROM tokens WHERE hash = ?1",
-                    [hash],
-                    |r| {
-                        Ok((
-                            r.get::<_, String>(0)?,
-                            r.get::<_, String>(1)?,
-                            r.get::<_, String>(2)?,
-                            r.get::<_, String>(3)?,
-                            r.get::<_, bool>(4)?,
-                        ))
-                    },
-                )
+                .query_row("SELECT id, label, scopes, created_at, revoked FROM tokens WHERE hash = ?1", [hash], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, bool>(4)?,
+                    ))
+                })
                 .optional()?;
             match row {
                 None => Ok(None),
@@ -134,10 +127,7 @@ impl Store {
 
     pub fn token_touch(&self, id: Uuid) -> Result<()> {
         self.with(|c| {
-            c.execute(
-                "UPDATE tokens SET last_used_at = ?1 WHERE id = ?2",
-                params![Utc::now().to_rfc3339(), id.to_string()],
-            )?;
+            c.execute("UPDATE tokens SET last_used_at = ?1 WHERE id = ?2", params![Utc::now().to_rfc3339(), id.to_string()])?;
             Ok(())
         })
     }
@@ -230,14 +220,7 @@ impl Store {
         self.with(|c| {
             c.execute(
                 "UPDATE projects SET name = ?2, path = ?3, is_git = ?4, worktrees_default = ?5, updated_at = ?6 WHERE id = ?1",
-                params![
-                    p.id.to_string(),
-                    p.name,
-                    p.path,
-                    p.is_git,
-                    p.worktrees_default,
-                    p.updated_at.to_rfc3339()
-                ],
+                params![p.id.to_string(), p.name, p.path, p.is_git, p.worktrees_default, p.updated_at.to_rfc3339()],
             )?;
             Ok(())
         })
@@ -274,9 +257,8 @@ impl Store {
 
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
-            let mut st = c.prepare(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at FROM projects ORDER BY name",
-            )?;
+            let mut st =
+                c.prepare("SELECT id, name, path, is_git, worktrees_default, created_at, updated_at FROM projects ORDER BY name")?;
             let rows = st.query_map([], row_to_project)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
@@ -319,14 +301,7 @@ impl Store {
     }
 
     pub fn thread_get(&self, id: ThreadId) -> Result<Option<Thread>> {
-        self.with(|c| {
-            Ok(c.query_row(
-                &format!("{THREAD_SELECT} WHERE id = ?1"),
-                [id.to_string()],
-                row_to_thread,
-            )
-            .optional()?)
-        })
+        self.with(|c| Ok(c.query_row(&format!("{THREAD_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread).optional()?))
     }
 
     pub fn threads_list(&self, project_id: Option<ProjectId>, include_archived: bool) -> Result<Vec<Thread>> {
@@ -366,20 +341,10 @@ impl Store {
     pub fn event_append(&self, thread_id: ThreadId, turn_id: Option<TurnId>, payload: EventPayload) -> Result<ThreadEvent> {
         self.with(|c| {
             let at = Utc::now();
-            let kind = serde_json::to_value(&payload)?
-                .get("kind")
-                .and_then(|k| k.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+            let kind = serde_json::to_value(&payload)?.get("kind").and_then(|k| k.as_str()).unwrap_or("unknown").to_string();
             c.execute(
                 "INSERT INTO events(thread_id, turn_id, at, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    thread_id.to_string(),
-                    turn_id.map(|t| t.to_string()),
-                    at.to_rfc3339(),
-                    kind,
-                    serde_json::to_string(&payload)?,
-                ],
+                params![thread_id.to_string(), turn_id.map(|t| t.to_string()), at.to_rfc3339(), kind, serde_json::to_string(&payload)?,],
             )?;
             let seq = c.last_insert_rowid();
             c.execute(
@@ -398,7 +363,9 @@ impl Store {
     pub fn events_after(&self, thread_id: Option<ThreadId>, after: EventSeq, limit: u32) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
             let sql = match thread_id {
-                Some(_) => "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE seq > ?1 AND thread_id = ?2 ORDER BY seq LIMIT ?3",
+                Some(_) => {
+                    "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE seq > ?1 AND thread_id = ?2 ORDER BY seq LIMIT ?3"
+                }
                 None => "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?3",
             };
             let mut st = c.prepare(sql)?;
@@ -476,7 +443,15 @@ impl Store {
                  ON CONFLICT(turn_id) DO UPDATE SET after_commit = excluded.after_commit,
                     provider_turn_id = COALESCE(excluded.provider_turn_id, checkpoints.provider_turn_id),
                     provider_turn_end = COALESCE(excluded.provider_turn_end, checkpoints.provider_turn_end)",
-                params![c.turn_id.to_string(), c.thread_id.to_string(), c.before, c.after, c.created_at.to_rfc3339(), c.provider_turn_id, c.provider_turn_end],
+                params![
+                    c.turn_id.to_string(),
+                    c.thread_id.to_string(),
+                    c.before,
+                    c.after,
+                    c.created_at.to_rfc3339(),
+                    c.provider_turn_id,
+                    c.provider_turn_end
+                ],
             )?;
             Ok(())
         })
@@ -599,10 +574,7 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         id: parse_uuid(r.get::<_, String>(0)?)?,
         project_id: parse_uuid(r.get::<_, String>(1)?)?,
         title: r.get(2)?,
-        provider: ProviderInstance {
-            kind: kind.parse().map_err(|e: String| other(std::io::Error::other(e)))?,
-            instance: r.get(4)?,
-        },
+        provider: ProviderInstance { kind: kind.parse().map_err(|e: String| other(std::io::Error::other(e)))?, instance: r.get(4)? },
         model: r.get(5)?,
         permission_mode: serde_json::from_value(serde_json::Value::String(mode)).map_err(other)?,
         status: serde_json::from_value(serde_json::Value::String(status)).map_err(other)?,
@@ -693,7 +665,8 @@ mod tests {
         let e = s.event_append(t.id, None, EventPayload::ThreadCreated { thread: t.clone() }).unwrap();
         assert_eq!(e.seq, 1);
         let turn = Uuid::now_v7();
-        s.event_append(t.id, Some(turn), EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("hi") }).unwrap();
+        s.event_append(t.id, Some(turn), EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("hi") })
+            .unwrap();
         let evs = s.events_after(Some(t.id), 0, 10).unwrap();
         assert_eq!(evs.len(), 2);
         assert_eq!(s.thread_get(t.id).unwrap().unwrap().last_seq, 2);
