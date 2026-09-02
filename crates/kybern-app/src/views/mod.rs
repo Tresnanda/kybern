@@ -3,6 +3,7 @@ pub mod composer;
 pub mod sidebar;
 pub mod terminal;
 pub mod transcript;
+pub mod usage;
 
 use gpui::*;
 use gpui_component::ActiveTheme as _;

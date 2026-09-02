@@ -2,6 +2,7 @@
 
 mod app;
 mod daemon;
+mod keymap;
 mod state;
 mod views;
 
@@ -14,7 +15,8 @@ fn main() {
     gpui_platform::application().with_assets(gpui_component_assets::Assets).run(move |cx| {
         gpui_component::init(cx);
         cx.set_app_identity("dev.kybern.app", "kybern");
-        app::init_keybindings(cx);
+        app::init_actions(cx);
+        keymap::install(cx, kybern_client::Endpoint::data_dir(None).as_deref());
         // Do not steal focus on launch; the user asked for the app, the window appears where they are.
         if std::env::var_os("KYBERN_NO_ACTIVATE").is_none() {
             cx.activate(true);

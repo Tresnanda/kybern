@@ -20,20 +20,47 @@ use crate::daemon::{Daemon, as_thread_event};
 use crate::state::{Connection, Model};
 use crate::views;
 
-actions!(kybern, [NewThread, SendMessage, Interrupt, ToggleRightPanel, ToggleSidebar, FocusComposer, Quit]);
+actions!(
+    kybern,
+    [
+        NewThread,
+        SendMessage,
+        Interrupt,
+        ToggleRightPanel,
+        ToggleSidebar,
+        FocusComposer,
+        OpenPalette,
+        OpenTerminal,
+        OpenChanges,
+        OpenSettings,
+        OpenUsage,
+        ArchiveThread,
+        SelectPreviousThread,
+        SelectNextThread,
+        AddProject,
+        CreatePullRequest,
+        Quit
+    ]
+);
 
-pub fn init_keybindings(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("cmd-n", NewThread, None),
-        KeyBinding::new("cmd-.", Interrupt, None),
-        KeyBinding::new("cmd-shift-e", ToggleRightPanel, None),
-        KeyBinding::new("cmd-b", ToggleSidebar, None),
-        KeyBinding::new("cmd-l", FocusComposer, None),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-q", Quit, None),
-    ]);
+pub fn init_actions(cx: &mut App) {
     cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 }
+
+/// Commands shown in the palette. Order is display order.
+pub const COMMANDS: &[(&str, &str, fn() -> Box<dyn Action>)] = &[
+    ("New thread", "Start a thread in the selected project", || Box::new(NewThread)),
+    ("Add project", "Choose a folder to work in", || Box::new(AddProject)),
+    ("Stop the current turn", "Interrupt the agent", || Box::new(Interrupt)),
+    ("Archive thread", "Hide the selected thread", || Box::new(ArchiveThread)),
+    ("Create pull request", "Commit, push and open a PR with gh", || Box::new(CreatePullRequest)),
+    ("Show changes", "Open the Changes tab", || Box::new(OpenChanges)),
+    ("Show terminal", "Open the Terminal tab", || Box::new(OpenTerminal)),
+    ("Toggle sidebar", "", || Box::new(ToggleSidebar)),
+    ("Toggle right panel", "", || Box::new(ToggleRightPanel)),
+    ("Usage", "Tokens and cost by provider", || Box::new(OpenUsage)),
+    ("Settings", "Open settings.json and keybindings.json", || Box::new(OpenSettings)),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RightTab {
@@ -67,7 +94,11 @@ pub struct Workspace {
     /// Tool blocks the user expanded.
     pub expanded_tools: std::collections::HashSet<String>,
     pub sending: bool,
+    pub palette: Entity<gpui_component::command::CommandState>,
+    pub usage: Option<UsageSummaryResult>,
     pub pending_toast: Option<String>,
+    pub pending_system_notice: Option<(ThreadId, String, String)>,
+    pub pending_toast_info: Option<String>,
     pub diff_dirty: bool,
     _subscriptions: Vec<Subscription>,
     _pump: Option<Task<()>>,
@@ -89,6 +120,7 @@ impl Workspace {
         });
         let terminal_input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command and press Enter"));
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let palette = cx.new(|cx| gpui_component::command::CommandState::new(window, cx));
         let diff_editor = cx.new(|cx| EditorState::new(window, cx).language("diff").line_number(false).soft_wrap(false).folding(false));
 
         let mut subs = Vec::new();
@@ -134,7 +166,11 @@ impl Workspace {
             terminal_input,
             expanded_tools: Default::default(),
             sending: false,
+            palette,
+            usage: None,
             pending_toast: None,
+            pending_system_notice: None,
+            pending_toast_info: None,
             diff_dirty: false,
             _subscriptions: subs,
             _pump: None,
@@ -268,16 +304,16 @@ impl Workspace {
         }
     }
 
+    /// OS notification when a thread needs attention and the window is not active.
     fn notify_background(&mut self, thread_id: ThreadId, is_approval: bool, _was: Option<ThreadStatus>, cx: &mut Context<Self>) {
         let Some(t) = self.model.threads.get(&thread_id) else { return };
+        if cx.active_window().is_some() {
+            return;
+        }
         let title = t.title.clone();
-        let body = if is_approval { "Needs approval" } else { "Finished" };
-        cx.defer(move |cx| {
-            let tag = SharedString::from(format!("{thread_id}"));
-            let _ = tag;
-            let _ = cx;
-            let _ = (title, body);
-        });
+        let body = if is_approval { "Needs your approval" } else { "Finished the turn" };
+        self.pending_system_notice = Some((thread_id, title, body.to_string()));
+        cx.notify();
     }
 
     fn resync(&mut self, cx: &mut Context<Self>) {
@@ -524,6 +560,127 @@ impl Workspace {
         .detach();
     }
 
+    pub fn select_relative(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let Some(project) = self.model.selected_project else { return };
+        let ids: Vec<ThreadId> = self.model.threads_for_project(project).into_iter().map(|t| t.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let ix = self.model.selected_thread.and_then(|s| ids.iter().position(|i| *i == s)).map(|i| i as i32).unwrap_or(-1);
+        let next = (ix + delta).rem_euclid(ids.len() as i32) as usize;
+        self.select_thread(ids[next], cx);
+    }
+
+    pub fn confirm_archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.model.selected_thread else { return };
+        let title = self.model.threads.get(&id).map(|t| t.title.clone()).unwrap_or_default();
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .title("Archive this thread?")
+                .description(format!("“{title}” will be hidden from the sidebar. Its files and history stay on disk."))
+                .button_props(gpui_component::dialog::DialogButtonProps::default().ok_text("Archive thread").cancel_text("Cancel").show_cancel(true))
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |ws, cx| ws.archive_thread(id, cx));
+                    true
+                })
+                .keyboard(true)
+        });
+    }
+
+    pub fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let palette = self.palette.clone();
+        let view = cx.entity();
+        palette.update(cx, |s, cx| s.set_query("", window, cx));
+        window.open_dialog(cx, move |dialog, _, _| {
+            let palette = palette.clone();
+            let view = view.clone();
+            dialog.close_button(false).p_0().w(px(560.)).overlay(true).content(move |content, window, cx| {
+                let palette2 = palette.clone();
+                window.defer(cx, move |window, cx| palette2.read(cx).focus_handle(cx).focus(window, cx));
+                let mut cmd = gpui_component::command::Command::new(&palette).placeholder("Type a command").bordered(false).max_h(px(420.));
+                for (label, desc, make) in COMMANDS {
+                    let _ = desc;
+                    cmd = cmd.item(gpui_component::command::CommandItem::new().label(*label).action(make()));
+                }
+                let view = view.clone();
+                content.child(cmd.on_confirm(move |ix, window, cx| {
+                    if let Some((_, _, make)) = COMMANDS.get(ix.row) {
+                        window.close_dialog(cx);
+                        let action = make();
+                        let view = view.clone();
+                        window.defer(cx, move |window, cx| {
+                            view.update(cx, |ws, cx| {
+                                ws.focus.focus(window, cx);
+                                cx.notify();
+                            });
+                            window.dispatch_action(action, cx);
+                        });
+                    }
+                }))
+            })
+        });
+    }
+
+    pub fn open_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = kybern_client::Endpoint::data_dir(None) else { return };
+        cx.reveal_path(&dir.join("settings.json"));
+    }
+
+    pub fn open_usage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let d = self.daemon.clone();
+        let view = cx.entity();
+        cx.spawn_in(window, async move |this, cx| {
+            let r = d.call::<UsageSummary>(UsageSummaryParams { since: None, group_by: UsageGroup::Provider }).await;
+            this.update_in(cx, |ws, window, cx| {
+                match r {
+                    Ok(u) => {
+                        ws.usage = Some(u);
+                        views::usage::open(ws, view.clone(), window, cx);
+                    }
+                    Err(e) => ws.toast_error(format!("Unable to load usage. {e}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn create_pull_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread_id) = self.model.selected_thread else { return };
+        let d = self.daemon.clone();
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let d = d.clone();
+            let view = view.clone();
+            alert
+                .title("Create a pull request?")
+                .description("Uncommitted changes are committed with a generated message, the branch is pushed, and a pull request opens with a generated title and description.")
+                .button_props(gpui_component::dialog::DialogButtonProps::default().ok_text("Create pull request").cancel_text("Cancel").show_cancel(true))
+                .on_ok(move |_, _, cx| {
+                    let d = d.clone();
+                    let view = view.clone();
+                    cx.spawn(async move |cx| {
+                        let r = d.call::<PrCreate>(PrCreateParams { thread_id, title: None, body: None, base: None, draft: false, commit_first: true }).await;
+                        let _ = view.update(cx, |ws, cx| {
+                            match r {
+                                Ok(pr) => {
+                                    ws.pending_toast_info = Some(format!("Opened #{}: {}", pr.number, pr.title));
+                                    cx.open_url(&pr.url);
+                                }
+                                Err(e) => ws.toast_error(format!("Unable to create the pull request. {e}"), cx),
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                    true
+                })
+        });
+    }
+
     pub fn toast_error(&mut self, text: String, cx: &mut Context<Self>) {
         self.pending_toast = Some(text);
         cx.notify();
@@ -546,6 +703,18 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(text) = self.pending_toast.take() {
             window.push_notification(Notification::error(text).autohide(true), cx);
+        }
+        if let Some(text) = self.pending_toast_info.take() {
+            window.push_notification(Notification::success(text).autohide(true), cx);
+        }
+        if let Some((thread_id, title, body)) = self.pending_system_notice.take() {
+            let view = cx.entity();
+            window.push_notification(
+                Notification::info(body).title(title).in_app_and_system().on_click(move |_, _, cx| {
+                    view.update(cx, |ws, cx| ws.select_thread(thread_id, cx));
+                }),
+                cx,
+            );
         }
         if self.diff_dirty {
             self.diff_dirty = false;
@@ -590,6 +759,25 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {
                 this.composer.update(cx, |s, cx| s.focus(window, cx));
             }))
+            .on_action(cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenTerminal, _, cx| {
+                this.show_right = true;
+                this.right_tab = RightTab::Terminal;
+                views::terminal::ensure_terminal(this, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &OpenChanges, _, cx| {
+                this.show_right = true;
+                this.right_tab = RightTab::Changes;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &OpenUsage, window, cx| this.open_usage(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings(cx)))
+            .on_action(cx.listener(|this, _: &AddProject, _, cx| this.add_project(cx)))
+            .on_action(cx.listener(|this, _: &ArchiveThread, window, cx| this.confirm_archive(window, cx)))
+            .on_action(cx.listener(|this, _: &CreatePullRequest, window, cx| this.create_pull_request(window, cx)))
+            .on_action(cx.listener(|this, _: &SelectPreviousThread, _, cx| this.select_relative(-1, cx)))
+            .on_action(cx.listener(|this, _: &SelectNextThread, _, cx| this.select_relative(1, cx)))
             .size_full()
             .relative()
             .bg(cx.theme().background)

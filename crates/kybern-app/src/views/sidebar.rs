@@ -106,7 +106,8 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
             let row = thread_row(("thread", id.as_u128() as u64), &t.title, color, selected, cx.theme().accent, cx.theme().accent_foreground, if t.pinned { Some(IconName::Star) } else { None })
                 .on_click(cx.listener(move |this, _, _, cx| this.select_thread(id, cx)))
                 .context_menu(move |menu: PopupMenu, _, _| {
-                    menu.item(gpui_component::menu::PopupMenuItem::new("Archive").on_click(move |_, _, _| {}))
+                    menu.menu("Archive thread", Box::new(crate::app::ArchiveThread))
+                        .menu("Create pull request", Box::new(crate::app::CreatePullRequest))
                 });
             group = group.child(row);
         }
