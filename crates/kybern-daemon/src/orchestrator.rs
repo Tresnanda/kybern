@@ -10,6 +10,7 @@ use chrono::Utc;
 use kybern_drivers::registry::DriverRegistry;
 use kybern_drivers::{AgentSession, DriverEvent, SessionConfig, SpawnedSession};
 use kybern_protocol::*;
+use kybern_git::{Repo, checkpoint_ref};
 use kybern_store::{Store, TurnUsageRow};
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
@@ -176,16 +177,7 @@ impl Orchestrator {
         let branch = format!("kybern/{short}");
         let dir = self.inner.paths.worktrees.join(&project.name).join(short);
         std::fs::create_dir_all(dir.parent().unwrap())?;
-        let out = tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(&project.path)
-            .args(["worktree", "add", "-b", &branch])
-            .arg(&dir)
-            .output()
-            .await?;
-        if !out.status.success() {
-            return Err(anyhow!("git worktree add failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
-        }
+        Repo::new(&project.path).worktree_add(&dir, &branch).await?;
         Ok(WorktreeInfo { path: dir.to_string_lossy().to_string(), branch })
     }
 
@@ -255,6 +247,7 @@ impl Orchestrator {
         thread.status = ThreadStatus::Running;
         let thread = self.update_thread(thread)?;
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+        self.checkpoint(&thread, turn_id, "before").await;
 
         if let Err(e) = live.session.send_message(&message).await {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -301,6 +294,78 @@ impl Orchestrator {
             }
         }
         Ok(())
+    }
+
+    /// Snapshot the working tree for a turn. Silently skipped for non-git projects.
+    async fn checkpoint(&self, thread: &Thread, turn_id: TurnId, which: &str) {
+        let repo = Repo::new(&thread.cwd);
+        if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
+            return;
+        }
+        let commit = match repo.snapshot(&format!("kybern checkpoint {which} for turn {turn_id}")).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(thread_id = %thread.id, %e, "checkpoint failed");
+                return;
+            }
+        };
+        let _ = repo.update_ref(&checkpoint_ref(&thread.id.to_string(), &turn_id.to_string(), which), &commit).await;
+        let checkpoint = match which {
+            "before" => Checkpoint { thread_id: thread.id, turn_id, before: commit, after: None, created_at: Utc::now() },
+            _ => match self.inner.store.checkpoint_get(turn_id) {
+                Ok(Some(mut c)) => {
+                    c.after = Some(commit);
+                    c
+                }
+                _ => return,
+            },
+        };
+        if let Err(e) = self.inner.store.checkpoint_upsert(&checkpoint) {
+            tracing::warn!(%e, "store checkpoint");
+            return;
+        }
+        let _ = self.emit(thread.id, Some(turn_id), EventPayload::CheckpointUpdated { checkpoint });
+    }
+
+    pub async fn diff(&self, thread_id: ThreadId, turn_id: Option<TurnId>) -> Result<Diff> {
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        let repo = Repo::new(&thread.cwd);
+        if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
+            return Err(anyhow!("project is not a git repository"));
+        }
+        let (from, to) = match turn_id {
+            Some(turn) => {
+                let c = self.inner.store.checkpoint_get(turn)?.ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
+                let to = match c.after {
+                    Some(a) => a,
+                    None => repo.snapshot("kybern diff (in progress)").await?,
+                };
+                (c.before, to)
+            }
+            None => {
+                let first = self.inner.store.checkpoints_for_thread(thread_id)?.into_iter().next().ok_or_else(|| anyhow!("thread has no checkpoints yet"))?;
+                (first.before, repo.snapshot("kybern diff (now)").await?)
+            }
+        };
+        repo.diff(&from, &to).await
+    }
+
+    /// Reset the working tree to the snapshot taken before `turn_id`.
+    pub async fn revert(&self, thread_id: ThreadId, turn_id: TurnId) -> Result<(String, bool)> {
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            return Err(anyhow!("thread is busy; interrupt it first"));
+        }
+        let c = self.inner.store.checkpoint_get(turn_id)?.ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
+        let repo = Repo::new(&thread.cwd);
+        repo.restore(&c.before).await?;
+        self.emit(thread_id, Some(turn_id), EventPayload::WorkspaceReverted { to_turn_id: turn_id, commit: c.before.clone() })?;
+        // Conversation rewind: close the live session so the next turn resumes from the
+        // provider's persisted history. Forking to a specific point lands per driver.
+        if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
+            let _ = live.session.close().await;
+        }
+        Ok((c.before, false))
     }
 
     async fn ensure_session(&self, thread: &Thread) -> Result<Arc<LiveSession>> {
@@ -438,6 +503,7 @@ impl Orchestrator {
                     duration_ms,
                     at: Utc::now(),
                 })?;
+                self.checkpoint(&t, turn_id, "after").await;
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms })?;
                 t.status = ThreadStatus::Idle;
                 self.update_thread(t)?;
@@ -448,8 +514,9 @@ impl Orchestrator {
                 let turn_id = turn.id;
                 *turn_guard = None;
                 drop(turn_guard);
-                self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error })?;
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
+                self.checkpoint(&t, turn_id, "after").await;
+                self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error })?;
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
             }

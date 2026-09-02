@@ -351,3 +351,48 @@ pub enum TranscriptEntry {
         error: Option<String>,
     },
 }
+
+/// Git snapshots bracketing one turn. `after` is absent while the turn runs.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Checkpoint {
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+    /// Commit hash of the working tree before the turn started.
+    pub before: String,
+    /// Commit hash after the turn ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    TypeChanged,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FileChange {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_path: Option<String>,
+    pub status: FileStatus,
+    pub additions: u32,
+    pub deletions: u32,
+    pub binary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Diff {
+    pub from: String,
+    pub to: String,
+    pub files: Vec<FileChange>,
+    /// Unified diff text (`git diff --no-color`), empty when nothing changed.
+    pub patch: String,
+}

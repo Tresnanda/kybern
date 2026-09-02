@@ -1,0 +1,18 @@
+[package]
+name = "kybern-git"
+description = "Git operations for kybern: snapshots, checkpoints, diffs, worktrees"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kybern-protocol.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

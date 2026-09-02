@@ -45,6 +45,10 @@ pub enum EventPayload {
     TurnFailed { error: String },
     /// Provider emitted an informational notice (compaction, status, warnings).
     ProviderNotice { level: NoticeLevel, text: String, data: Option<Value> },
+    /// A git checkpoint was taken or completed for this turn.
+    CheckpointUpdated { checkpoint: Checkpoint },
+    /// The working tree was reset to the state before `turn_id`.
+    WorkspaceReverted { to_turn_id: TurnId, commit: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -34,6 +34,8 @@ fn main() {
     add::<ApprovalRequest>(&mut types, "ApprovalRequest");
     add::<ProviderStatus>(&mut types, "ProviderStatus");
     add::<Scope>(&mut types, "Scope");
+    add::<Checkpoint>(&mut types, "Checkpoint");
+    add::<Diff>(&mut types, "Diff");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -50,6 +52,9 @@ fn main() {
     method::<ThreadsSend>(&mut methods);
     method::<ThreadsInterrupt>(&mut methods);
     method::<ThreadsRegenerateTitle>(&mut methods);
+    method::<ThreadsCheckpoints>(&mut methods);
+    method::<ThreadsDiff>(&mut methods);
+    method::<ThreadsRevert>(&mut methods);
     method::<ApprovalsRespond>(&mut methods);
     method::<ApprovalsList>(&mut methods);
     method::<EventsSubscribe>(&mut methods);

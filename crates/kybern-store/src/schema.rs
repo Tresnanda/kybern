@@ -87,6 +87,17 @@ const MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL
     );
     ",
+    // v2: git checkpoints per turn
+    "
+    CREATE TABLE checkpoints (
+        turn_id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        before_commit TEXT NOT NULL,
+        after_commit TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX checkpoints_thread ON checkpoints(thread_id, created_at);
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

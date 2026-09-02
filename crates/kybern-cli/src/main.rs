@@ -90,6 +90,19 @@ enum Cmd {
     },
     /// Archive a thread.
     Archive { thread: String },
+    /// List git checkpoints for a thread.
+    Checkpoints { thread: String },
+    /// Show the diff for a thread (whole thread) or one turn.
+    Diff {
+        thread: String,
+        #[arg(long)]
+        turn: Option<String>,
+        /// Only list files, no patch.
+        #[arg(long)]
+        stat: bool,
+    },
+    /// Restore the working tree to the state before a turn.
+    Revert { thread: String, turn: String },
     /// Print the JSON schema of the protocol (from the daemon's crate, for tooling).
     Call { method: String, params: Option<String> },
 }
@@ -215,6 +228,29 @@ async fn main() -> Result<()> {
         Cmd::Archive { thread } => {
             client.call::<ThreadsArchive>(ThreadsArchiveParams { thread_id: thread.parse()? }).await?;
             println!("archived");
+        }
+        Cmd::Checkpoints { thread } => {
+            let r = client.call::<ThreadsCheckpoints>(ThreadsCheckpointsParams { thread_id: thread.parse()? }).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else {
+                for c in r.checkpoints {
+                    println!("{}  {} → {}  {}", c.turn_id, &c.before[..10], c.after.as_deref().map(|a| &a[..10]).unwrap_or("(running)"), c.created_at.to_rfc3339());
+                }
+            }
+        }
+        Cmd::Diff { thread, turn, stat } => {
+            let d = client.call::<ThreadsDiff>(ThreadsDiffParams { thread_id: thread.parse()?, turn_id: turn.map(|t| t.parse()).transpose()? }).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&d)?) } else {
+                for f in &d.files {
+                    println!("{:<10} +{:<5} -{:<5} {}", format!("{:?}", f.status).to_lowercase(), f.additions, f.deletions, f.path);
+                }
+                if !stat && !d.patch.is_empty() {
+                    println!("\n{}", d.patch);
+                }
+            }
+        }
+        Cmd::Revert { thread, turn } => {
+            let r = client.call::<ThreadsRevert>(ThreadsRevertParams { thread_id: thread.parse()?, turn_id: turn.parse()? }).await?;
+            println!("working tree restored to {}{}", &r.commit[..10], if r.conversation_rewound { " (conversation rewound)" } else { "" });
         }
         Cmd::Call { method, params } => {
             let params = match params {

@@ -4,6 +4,7 @@ members = [
   "crates/kybern-protocol",
   "crates/kybern-store",
   "crates/kybern-drivers",
+  "crates/kybern-git",
   "crates/kybern-daemon",
   "crates/kybern-cli",
 ]
@@ -19,6 +20,7 @@ rust-version = "1.88"
 kybern-protocol = { path = "crates/kybern-protocol" }
 kybern-store = { path = "crates/kybern-store" }
 kybern-drivers = { path = "crates/kybern-drivers" }
+kybern-git = { path = "crates/kybern-git" }
 
 anyhow = "1.0.104"
 async-trait = "0.1"

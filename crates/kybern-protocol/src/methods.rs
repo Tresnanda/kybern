@@ -181,6 +181,42 @@ pub struct ThreadsRegenerateTitleParams {
 }
 method!(ThreadsRegenerateTitle, "threads.regenerateTitle", Some(Scope::OrchestrationOperate), ThreadsRegenerateTitleParams, Thread);
 
+// ---- checkpoints ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsCheckpointsParams {
+    pub thread_id: ThreadId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsCheckpointsResult {
+    pub checkpoints: Vec<Checkpoint>,
+}
+method!(ThreadsCheckpoints, "threads.checkpoints", Some(Scope::OrchestrationRead), ThreadsCheckpointsParams, ThreadsCheckpointsResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsDiffParams {
+    pub thread_id: ThreadId,
+    /// Diff of one turn (its before → after, or before → now while running).
+    /// Omit for the whole thread: first checkpoint → current working tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
+}
+method!(ThreadsDiff, "threads.diff", Some(Scope::OrchestrationRead), ThreadsDiffParams, Diff);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsRevertParams {
+    pub thread_id: ThreadId,
+    /// Restore the working tree to the state before this turn.
+    pub turn_id: TurnId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsRevertResult {
+    pub commit: String,
+    /// Whether the provider conversation was also rewound. False when the driver cannot fork yet.
+    pub conversation_rewound: bool,
+}
+method!(ThreadsRevert, "threads.revert", Some(Scope::OrchestrationOperate), ThreadsRevertParams, ThreadsRevertResult);
+
 // ---- approvals ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -274,6 +310,9 @@ registry!(
     ThreadsSend,
     ThreadsInterrupt,
     ThreadsRegenerateTitle,
+    ThreadsCheckpoints,
+    ThreadsDiff,
+    ThreadsRevert,
     ApprovalsRespond,
     ApprovalsList,
     EventsSubscribe,

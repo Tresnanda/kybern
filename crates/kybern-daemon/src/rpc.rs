@@ -132,6 +132,19 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .map_err(bad)?;
             ok(thread)
         }
+        ThreadsCheckpoints::NAME => {
+            let p: ThreadsCheckpointsParams = parse(params)?;
+            ok(ThreadsCheckpointsResult { checkpoints: state.store.checkpoints_for_thread(p.thread_id).map_err(internal)? })
+        }
+        ThreadsDiff::NAME => {
+            let p: ThreadsDiffParams = parse(params)?;
+            ok(state.orchestrator.diff(p.thread_id, p.turn_id).await.map_err(bad)?)
+        }
+        ThreadsRevert::NAME => {
+            let p: ThreadsRevertParams = parse(params)?;
+            let (commit, conversation_rewound) = state.orchestrator.revert(p.thread_id, p.turn_id).await.map_err(bad)?;
+            ok(ThreadsRevertResult { commit, conversation_rewound })
+        }
         ApprovalsRespond::NAME => {
             let p: ApprovalsRespondParams = parse(params)?;
             state.orchestrator.respond_approval(p.approval_id, p.decision).await.map_err(bad)?;

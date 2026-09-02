@@ -15,6 +15,7 @@ path = "src/main.rs"
 kybern-protocol.workspace = true
 kybern-store.workspace = true
 kybern-drivers.workspace = true
+kybern-git.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true

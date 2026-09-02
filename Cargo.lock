@@ -815,6 +815,7 @@ dependencies = [
  "directories",
  "futures",
  "kybern-drivers",
+ "kybern-git",
  "kybern-protocol",
  "kybern-store",
  "rand 0.10.2",
@@ -847,6 +848,18 @@ dependencies = [
  "tracing",
  "uuid",
  "which",
+]
+
+[[package]]
+name = "kybern-git"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "kybern-protocol",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -119,7 +119,9 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             | EventPayload::ProviderSessionBound { .. }
             | EventPayload::ApprovalRequested { .. }
             | EventPayload::ApprovalResolved { .. }
-            | EventPayload::ProviderNotice { .. } => {}
+            | EventPayload::ProviderNotice { .. }
+            | EventPayload::CheckpointUpdated { .. }
+            | EventPayload::WorkspaceReverted { .. } => {}
         }
     }
     out
