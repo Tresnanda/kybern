@@ -122,8 +122,10 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
         let req = RpcRequest::new(RpcId::Number(id), method, params);
+        tracing::debug!(id, method, "rpc ->");
         self.out.send(serde_json::to_string(&req)?).await.map_err(|_| anyhow!("connection closed"))?;
         let resp = rx.await.map_err(|_| anyhow!("connection closed before response"))?;
+        tracing::debug!(id, method, ok = resp.error.is_none(), "rpc <-");
         match (resp.result, resp.error) {
             (Some(v), _) => Ok(v),
             (None, Some(e)) => Err(anyhow!("{} (code {})", e.message, e.code)),

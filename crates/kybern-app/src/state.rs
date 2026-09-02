@@ -246,8 +246,14 @@ pub fn tool_summary(call: &ToolCall) -> String {
             .unwrap_or_default(),
         "WebFetch" | "webfetch" => short("url").unwrap_or_default(),
         "Grep" | "grep" | "Glob" | "glob" => short("pattern").unwrap_or_default(),
-        _ => short("title").or_else(|| short("query")).unwrap_or_default(),
+        _ => short("title")
+            .or_else(|| short("query"))
+            .or_else(|| call.input.pointer("/raw/command").and_then(|v| v.as_str()).map(|s| s.lines().next().unwrap_or("").to_string()))
+            .or_else(|| short("command"))
+            .unwrap_or_default(),
     }
+    .trim_matches('`')
+    .to_string()
 }
 
 pub fn shorten_path(p: &str) -> String {
