@@ -17,6 +17,7 @@ fn main() {
         cx.set_app_identity("dev.kybern.app", "kybern");
         app::init_actions(cx);
         keymap::install(cx, kybern_client::Endpoint::data_dir(None).as_deref());
+        app::init_themes(cx, kybern_client::Endpoint::data_dir(None).as_deref());
         // Do not steal focus on launch; the user asked for the app, the window appears where they are.
         if std::env::var_os("KYBERN_NO_ACTIVATE").is_none() {
             cx.activate(true);

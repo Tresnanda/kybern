@@ -29,7 +29,7 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
     let supported_modes: Vec<PermissionMode> = providers.iter().find(|(k, _, _)| *k == provider).map(|(_, _, m)| m.clone()).unwrap_or_else(|| PermissionMode::ALL.to_vec());
     let has_text = !ws.composer.read(cx).value().trim().is_empty();
     let project_is_git = ws.model.selected_project.and_then(|p| ws.model.projects.get(&p)).is_some_and(|p| p.is_git);
-    let can_send = has_text && !ws.sending && ws.model.selected_project.is_some();
+    let can_send = (has_text || !ws.attachments.is_empty()) && !ws.sending && ws.model.selected_project.is_some();
 
     let border = cx.theme().border;
     let bg = cx.theme().background;
@@ -78,6 +78,14 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
             menu
         });
 
+    let attach_button = Button::new("attach")
+        .ghost()
+        .xsmall()
+        .icon(IconName::File)
+        .tooltip("Attach an image")
+        .on_click(cx.listener(|this, _, _, cx| this.attach_image(cx)));
+    let attachments: Vec<(uuid::Uuid, String)> = ws.attachments.iter().map(|a| (a.id, a.name.clone())).collect();
+
     let worktree_button = Button::new("worktree")
         .ghost()
         .xsmall()
@@ -123,6 +131,30 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
                 .border_color(border)
                 .bg(bg)
                 .shadow_sm()
+                .when(!attachments.is_empty(), |el| {
+                    el.child(
+                        h_flex().px_3().pt_3().gap_2().flex_wrap().children(attachments.into_iter().map(|(id, name)| {
+                            h_flex()
+                                .gap_1()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(6.))
+                                .bg(cx.theme().muted)
+                                .text_xs()
+                                .child(name)
+                                .child(
+                                    Button::new(ElementId::Name(format!("rm:{id}").into()))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.attachments.retain(|a| a.id != id);
+                                            cx.notify();
+                                        })),
+                                )
+                        })),
+                    )
+                })
                 .child(div().px_3().pt_3().pb_1().child(Textarea::new(&ws.composer).appearance(false).bordered(false)))
                 .child(
                     h_flex()
@@ -130,7 +162,7 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
                         .pb_2()
                         .items_center()
                         .justify_between()
-                        .child(h_flex().gap_1().child(provider_button).child(mode_button).child(worktree_button))
+                        .child(h_flex().gap_1().child(provider_button).child(mode_button).child(worktree_button).child(attach_button))
                         .child(h_flex().gap_2().items_center().when(running, |el| el.child(div().text_xs().text_color(muted).child("Working"))).child(primary)),
                 ),
         )

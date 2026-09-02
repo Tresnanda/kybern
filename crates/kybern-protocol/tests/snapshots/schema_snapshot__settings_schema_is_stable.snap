@@ -1,0 +1,137 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(Settings)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Settings",
+  "description": "User settings persisted at `<data_dir>/settings.json`.",
+  "type": "object",
+  "properties": {
+    "default_permission_mode": {
+      "$ref": "#/$defs/PermissionMode",
+      "default": "supervised"
+    },
+    "default_provider": {
+      "$ref": "#/$defs/ProviderKind",
+      "default": "claude-code"
+    },
+    "generate_titles": {
+      "description": "Generate thread titles with a model after the first turn.",
+      "type": "boolean",
+      "default": true
+    },
+    "notifications": {
+      "description": "Show OS notifications when a turn ends or needs approval.",
+      "type": "boolean",
+      "default": true
+    },
+    "providers": {
+      "type": "object",
+      "properties": {
+        "claude-code": {
+          "$ref": "#/$defs/ProviderSettings"
+        },
+        "codex": {
+          "$ref": "#/$defs/ProviderSettings"
+        },
+        "cursor": {
+          "$ref": "#/$defs/ProviderSettings"
+        },
+        "omp": {
+          "$ref": "#/$defs/ProviderSettings"
+        },
+        "opencode": {
+          "$ref": "#/$defs/ProviderSettings"
+        },
+        "pi": {
+          "$ref": "#/$defs/ProviderSettings"
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "title_provider": {
+      "description": "Provider used for titles; falls back to the thread's own provider.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "worktrees_default": {
+      "description": "Global default for new threads; projects can override.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "$defs": {
+    "PermissionMode": {
+      "description": "The four permission modes, mirroring T3 Code.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "ProviderSettings": {
+      "description": "Per-provider configuration in settings.json.",
+      "type": "object",
+      "properties": {
+        "binary": {
+          "description": "Absolute path to the executable; omit to look it up on PATH.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "description": "Extra environment variables for the provider process.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "model": {
+          "description": "Default model for new threads.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

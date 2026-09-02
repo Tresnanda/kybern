@@ -57,7 +57,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
 which = "8"
-insta = { version = "1", features = ["json"] }
+insta = { version = "1", features = ["json", "yaml"] }
 
 [profile.dev.package]
 gpui = { opt-level = 3 }

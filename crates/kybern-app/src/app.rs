@@ -39,9 +39,22 @@ actions!(
         SelectNextThread,
         AddProject,
         CreatePullRequest,
+        AttachImage,
         Quit
     ]
 );
+
+/// Switch to a named theme from the registry (built-in or from `<data_dir>/themes`).
+#[derive(Action, Clone, PartialEq, Eq, serde::Deserialize)]
+#[action(namespace = kybern, no_json)]
+pub struct SelectTheme(pub SharedString);
+
+/// Load JSON themes shipped with gpui-component's format from the data dir and keep watching it.
+pub fn init_themes(cx: &mut App, data_dir: Option<&std::path::Path>) {
+    let Some(dir) = data_dir.map(|d| d.join("themes")) else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    gpui_component::ThemeRegistry::watch_dir(dir, cx, |_cx| {});
+}
 
 pub fn init_actions(cx: &mut App) {
     cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
@@ -60,7 +73,15 @@ pub const COMMANDS: &[(&str, &str, fn() -> Box<dyn Action>)] = &[
     ("Toggle right panel", "", || Box::new(ToggleRightPanel)),
     ("Usage", "Tokens and cost by provider", || Box::new(OpenUsage)),
     ("Settings", "Open settings.json and keybindings.json", || Box::new(OpenSettings)),
+    ("Attach image", "Add an image to the next message", || Box::new(AttachImage)),
 ];
+
+pub fn theme_names(cx: &App) -> Vec<SharedString> {
+    let reg = gpui_component::ThemeRegistry::global(cx);
+    let mut names: Vec<SharedString> = reg.themes().keys().cloned().collect();
+    names.sort();
+    names
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RightTab {
@@ -99,6 +120,9 @@ pub struct Workspace {
     pub pending_toast: Option<String>,
     pub pending_system_notice: Option<(ThreadId, String, String)>,
     pub pending_toast_info: Option<String>,
+    pub theme_override: Option<String>,
+    /// Uploaded files waiting to go with the next message.
+    pub attachments: Vec<AssetInfo>,
     pub diff_dirty: bool,
     _subscriptions: Vec<Subscription>,
     _pump: Option<Task<()>>,
@@ -107,6 +131,7 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(daemon: Arc<Daemon>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Theme::sync_system_appearance(Some(window), cx);
+        let saved_theme = kybern_client::Endpoint::data_dir(None).and_then(|d| std::fs::read_to_string(d.join("theme")).ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         Theme::global_mut(cx).font_size = px(13.);
         Theme::global_mut(cx).radius = px(6.);
         Theme::sync_base(cx);
@@ -147,6 +172,7 @@ impl Workspace {
         }));
         subs.push(cx.observe(&scroller, |_, _, cx| cx.notify()));
 
+        let theme_override = saved_theme.clone();
         let mut this = Self {
             daemon,
             model: Model::default(),
@@ -171,10 +197,15 @@ impl Workspace {
             pending_toast: None,
             pending_system_notice: None,
             pending_toast_info: None,
+            theme_override,
+            attachments: Vec::new(),
             diff_dirty: false,
             _subscriptions: subs,
             _pump: None,
         };
+        if let Some(name) = saved_theme {
+            this.apply_theme(name.into(), window, cx);
+        }
         this.start(cx);
         this
     }
@@ -417,7 +448,10 @@ impl Workspace {
     // ---- actions ----
 
     pub fn send_text(&mut self, text: String, cx: &mut Context<Self>) {
-        let message = UserMessage::text(text);
+        let mut message = UserMessage::text(text);
+        for a in self.attachments.drain(..) {
+            message.parts.push(ContentPart::Attachment { asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size });
+        }
         let d = self.daemon.clone();
         match self.model.selected_thread {
             Some(thread_id) => {
@@ -604,11 +638,21 @@ impl Workspace {
                     let _ = desc;
                     cmd = cmd.item(gpui_component::command::CommandItem::new().label(*label).action(make()));
                 }
+                let themes = theme_names(cx);
+                let mut group = gpui_component::command::CommandGroup::new().label("Theme");
+                for t in &themes {
+                    group = group.item(gpui_component::command::CommandItem::new().label(t.clone()).action(Box::new(SelectTheme(t.clone()))));
+                }
+                cmd = cmd.group(group);
                 let view = view.clone();
                 content.child(cmd.on_confirm(move |ix, window, cx| {
-                    if let Some((_, _, make)) = COMMANDS.get(ix.row) {
+                    let action: Option<Box<dyn Action>> = if ix.section == 0 {
+                        COMMANDS.get(ix.row).map(|(_, _, make)| make())
+                    } else {
+                        themes.get(ix.row).map(|t| Box::new(SelectTheme(t.clone())) as Box<dyn Action>)
+                    };
+                    if let Some(action) = action {
                         window.close_dialog(cx);
-                        let action = make();
                         let view = view.clone();
                         window.defer(cx, move |window, cx| {
                             view.update(cx, |ws, cx| {
@@ -679,6 +723,47 @@ impl Workspace {
                     true
                 })
         });
+    }
+
+    pub fn apply_theme(&mut self, name: SharedString, window: &mut Window, cx: &mut Context<Self>) {
+        let config = gpui_component::ThemeRegistry::global(cx).themes().get(&name).cloned();
+        match config {
+            Some(config) => {
+                let mode = config.mode;
+                Theme::global_mut(cx).apply_config(&config);
+                Theme::change(mode, Some(window), cx);
+                self.theme_override = Some(name.to_string());
+                if let Some(dir) = kybern_client::Endpoint::data_dir(None) {
+                    let _ = std::fs::write(dir.join("theme"), name.as_ref());
+                }
+            }
+            None => self.toast_error(format!("Theme “{name}” is not available."), cx),
+        }
+        cx.notify();
+    }
+
+    /// Pick an image file, upload it to the daemon, and queue it for the next message.
+    pub fn attach_image(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
+        let d = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else { return };
+            for path in paths {
+                match crate::daemon::upload(&d, &path).await {
+                    Ok(info) => {
+                        this.update(cx, |ws, cx| {
+                            ws.attachments.push(info);
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                    Err(e) => {
+                        this.update(cx, |ws, cx| ws.toast_error(format!("Unable to attach {}. {e}", path.display()), cx)).ok();
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     pub fn toast_error(&mut self, text: String, cx: &mut Context<Self>) {
@@ -776,6 +861,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &AddProject, _, cx| this.add_project(cx)))
             .on_action(cx.listener(|this, _: &ArchiveThread, window, cx| this.confirm_archive(window, cx)))
             .on_action(cx.listener(|this, _: &CreatePullRequest, window, cx| this.create_pull_request(window, cx)))
+            .on_action(cx.listener(|this, theme: &SelectTheme, window, cx| this.apply_theme(theme.0.clone(), window, cx)))
+            .on_action(cx.listener(|this, _: &AttachImage, _, cx| this.attach_image(cx)))
             .on_action(cx.listener(|this, _: &SelectPreviousThread, _, cx| this.select_relative(-1, cx)))
             .on_action(cx.listener(|this, _: &SelectNextThread, _, cx| this.select_relative(1, cx)))
             .size_full()

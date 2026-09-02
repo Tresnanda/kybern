@@ -1,0 +1,888 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ThreadEvent)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreadEvent",
+  "type": "object",
+  "properties": {
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "seq": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "thread_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "turn_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "thread_created"
+        },
+        "thread": {
+          "$ref": "#/$defs/Thread"
+        }
+      },
+      "required": [
+        "kind",
+        "thread"
+      ]
+    },
+    {
+      "description": "Title, model, permission mode, pin, status or session changed.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "thread_updated"
+        },
+        "thread": {
+          "$ref": "#/$defs/Thread"
+        }
+      },
+      "required": [
+        "kind",
+        "thread"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "thread_archived"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "turn_started"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        },
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "message"
+      ]
+    },
+    {
+      "description": "Provider assigned or confirmed its own session id.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "provider_session_bound"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "session_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "assistant_text_delta"
+        },
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "delta"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "assistant_thinking_delta"
+        },
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "delta"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "assistant_message_completed"
+        },
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "text": {
+          "type": "string"
+        },
+        "thinking": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "text"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolCall"
+        },
+        "kind": {
+          "type": "string",
+          "const": "tool_call_started"
+        }
+      },
+      "required": [
+        "kind",
+        "call"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "tool_call_output_delta"
+        },
+        "tool_call_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tool_call_id",
+        "delta"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "is_error": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string",
+          "const": "tool_call_completed"
+        },
+        "output": true,
+        "tool_call_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tool_call_id",
+        "output",
+        "is_error"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalRequest"
+        },
+        "kind": {
+          "type": "string",
+          "const": "approval_requested"
+        }
+      },
+      "required": [
+        "kind",
+        "approval"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        },
+        "kind": {
+          "type": "string",
+          "const": "approval_resolved"
+        }
+      },
+      "required": [
+        "kind",
+        "approval_id",
+        "decision"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "const": "turn_completed"
+        },
+        "stop_reason": {
+          "$ref": "#/$defs/StopReason"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        }
+      },
+      "required": [
+        "kind",
+        "stop_reason",
+        "usage",
+        "duration_ms"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "turn_failed"
+        }
+      },
+      "required": [
+        "kind",
+        "error"
+      ]
+    },
+    {
+      "description": "Provider emitted an informational notice (compaction, status, warnings).",
+      "type": "object",
+      "properties": {
+        "data": true,
+        "kind": {
+          "type": "string",
+          "const": "provider_notice"
+        },
+        "level": {
+          "$ref": "#/$defs/NoticeLevel"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "level",
+        "text"
+      ]
+    },
+    {
+      "description": "A git checkpoint was taken or completed for this turn.",
+      "type": "object",
+      "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Checkpoint"
+        },
+        "kind": {
+          "type": "string",
+          "const": "checkpoint_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "checkpoint"
+      ]
+    },
+    {
+      "description": "The working tree was reset to the state before `turn_id`.",
+      "type": "object",
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "workspace_reverted"
+        },
+        "to_turn_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "kind",
+        "to_turn_id",
+        "commit"
+      ]
+    }
+  ],
+  "required": [
+    "seq",
+    "thread_id",
+    "at"
+  ],
+  "$defs": {
+    "ApprovalDecision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_once"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Allow and, where the provider supports it, remember for the session.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_always"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "deny"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ]
+    },
+    "ApprovalRequest": {
+      "description": "A pending or resolved request for the user to approve a tool call.",
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "input": {
+          "description": "Provider-native input, rendered by the client (command, file path, diff, ...)."
+        },
+        "suggestions": {
+          "description": "Provider-suggested \"always allow\" rules the client may offer.",
+          "type": "array",
+          "default": [],
+          "items": true
+        },
+        "summary": {
+          "description": "Human-readable one-line summary, e.g. `bash: git status`.",
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "tool_call_id": {
+          "description": "Provider's tool-call id, when the provider exposes one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "turn_id",
+        "tool_name",
+        "input",
+        "summary",
+        "created_at"
+      ]
+    },
+    "Checkpoint": {
+      "description": "Git snapshots bracketing one turn. `after` is absent while the turn runs.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "description": "Commit hash after the turn ended.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "before": {
+          "description": "Commit hash of the working tree before the turn started.",
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "provider_turn_end": {
+          "description": "Provider-side id of the last entry of this turn, for conversation rewind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_turn_id": {
+          "description": "Provider-side id of this turn, for conversation rewind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id",
+        "before",
+        "created_at"
+      ]
+    },
+    "ContentPart": {
+      "description": "One piece of a user message.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Inline image. `data` is base64 of the raw bytes.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ]
+        },
+        {
+          "description": "Uploaded attachment served by the daemon's HTTP asset route.",
+          "type": "object",
+          "properties": {
+            "asset_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "attachment"
+            }
+          },
+          "required": [
+            "type",
+            "asset_id",
+            "name",
+            "media_type",
+            "size"
+          ]
+        },
+        {
+          "description": "`@path` mention resolved relative to the thread cwd.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "file_mention"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ]
+        }
+      ]
+    },
+    "NoticeLevel": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "PermissionMode": {
+      "description": "The four permission modes, mirroring T3 Code.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "instance": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "StopReason": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "interrupted",
+        "max_turns",
+        "error"
+      ]
+    },
+    "Thread": {
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "cwd": {
+          "description": "Working directory the agent runs in: the worktree path or the project path.",
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "last_seq": {
+          "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "provider_session_id": {
+          "description": "The provider's own session id once bound, used for resume and fork.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ThreadStatus"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "title",
+        "provider",
+        "permission_mode",
+        "status",
+        "cwd",
+        "pinned",
+        "created_at",
+        "updated_at",
+        "last_seq"
+      ]
+    },
+    "ThreadStatus": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "running",
+        "awaiting-approval",
+        "failed",
+        "archived"
+      ]
+    },
+    "ToolCall": {
+      "description": "A tool invocation as shown in the transcript.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "input": true,
+        "name": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "input"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "cache_read_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ]
+    },
+    "UserMessage": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
+        }
+      },
+      "required": [
+        "parts"
+      ]
+    },
+    "WorktreeInfo": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "branch"
+      ]
+    }
+  }
+}

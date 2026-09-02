@@ -146,6 +146,43 @@ fn wait_for_token() -> Result<Endpoint> {
     Err(anyhow!("kybernd did not write its token in time"))
 }
 
+/// Upload a local file to the daemon's asset store.
+pub async fn upload(d: &Daemon, path: &std::path::Path) -> Result<kybern_protocol::methods::AssetInfo> {
+    let bytes = std::fs::read(path)?;
+    let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "attachment".into());
+    let media_type = match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("heic") => "image/heic",
+        Some("pdf") => "application/pdf",
+        Some("txt") | Some("md") => "text/plain",
+        _ => "application/octet-stream",
+    }
+    .to_string();
+    let http_base = d.endpoint.url.replace("ws://", "http://").replace("wss://", "https://").trim_end_matches("/ws").to_string();
+    let token = d.endpoint.token.clone();
+    let handle = d.rt.handle().clone();
+    handle
+        .spawn(async move {
+            let client = reqwest::Client::new();
+            let r = client
+                .post(format!("{http_base}/assets"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", media_type)
+                .header("x-kybern-filename", name)
+                .body(bytes)
+                .send()
+                .await?;
+            if !r.status().is_success() {
+                anyhow::bail!("{}", r.text().await.unwrap_or_default());
+            }
+            Ok::<_, anyhow::Error>(r.json::<kybern_protocol::methods::AssetInfo>().await?)
+        })
+        .await?
+}
+
 /// Drain notifications on the GPUI executor, invoking `f` for each.
 pub async fn pump(mut rx: UnboundedReceiver<RpcNotification>, mut f: impl FnMut(RpcNotification)) {
     while let Some(n) = rx.next().await {

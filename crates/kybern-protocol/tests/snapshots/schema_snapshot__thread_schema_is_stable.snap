@@ -1,0 +1,167 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(Thread)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Thread",
+  "type": "object",
+  "properties": {
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cwd": {
+      "description": "Working directory the agent runs in: the worktree path or the project path.",
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "last_seq": {
+      "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permission_mode": {
+      "$ref": "#/$defs/PermissionMode"
+    },
+    "pinned": {
+      "type": "boolean"
+    },
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderInstance"
+    },
+    "provider_session_id": {
+      "description": "The provider's own session id once bound, used for resume and fork.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/$defs/ThreadStatus"
+    },
+    "title": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "worktree": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorktreeInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "project_id",
+    "title",
+    "provider",
+    "permission_mode",
+    "status",
+    "cwd",
+    "pinned",
+    "created_at",
+    "updated_at",
+    "last_seq"
+  ],
+  "$defs": {
+    "PermissionMode": {
+      "description": "The four permission modes, mirroring T3 Code.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "instance": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "ThreadStatus": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "running",
+        "awaiting-approval",
+        "failed",
+        "archived"
+      ]
+    },
+    "WorktreeInfo": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "branch"
+      ]
+    }
+  }
+}
