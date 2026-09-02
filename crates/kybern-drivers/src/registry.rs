@@ -15,6 +15,7 @@ impl DriverRegistry {
         let mut r = Self::default();
         r.register(Arc::new(crate::claude::ClaudeDriver));
         r.register(Arc::new(crate::codex::CodexDriver));
+        r.register(Arc::new(crate::opencode::OpencodeDriver));
         r
     }
 

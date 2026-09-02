@@ -8,6 +8,7 @@
 pub mod binary;
 pub mod claude;
 pub mod codex;
+pub mod opencode;
 pub mod ndjson;
 pub mod registry;
 
