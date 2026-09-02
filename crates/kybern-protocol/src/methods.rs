@@ -362,6 +362,163 @@ pub struct UsageSummaryResult {
 }
 method!(UsageSummary, "usage.summary", Some(Scope::OrchestrationRead), UsageSummaryParams, UsageSummaryResult);
 
+// ---- access (pairing and tokens) ----
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PairingCreateParams {
+    /// Label for the token that pairing will mint, e.g. "iPhone".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PairingCreateResult {
+    /// Six-digit code the other device enters.
+    pub code: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    /// Endpoints the daemon is reachable at (loopback first, then LAN addresses).
+    pub endpoints: Vec<String>,
+}
+method!(PairingCreate, "access.pairing.create", Some(Scope::AccessWrite), PairingCreateParams, PairingCreateResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TokenInfo {
+    pub id: uuid::Uuid,
+    pub label: String,
+    pub scopes: Vec<Scope>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub revoked: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TokensListResult {
+    pub tokens: Vec<TokenInfo>,
+}
+method!(TokensList, "access.tokens.list", Some(Scope::AccessRead), Empty, TokensListResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TokensRevokeParams {
+    pub token_id: uuid::Uuid,
+}
+method!(TokensRevoke, "access.tokens.revoke", Some(Scope::AccessWrite), TokensRevokeParams, Empty);
+
+/// Body of `POST /pair` (unauthenticated) and its response.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PairRequest {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PairResponse {
+    pub token: String,
+    pub scopes: Vec<Scope>,
+    pub environment_id: String,
+}
+
+// ---- assets ----
+
+/// Response of `POST /assets` (multipart or raw body with `X-Kybern-Filename`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AssetInfo {
+    pub id: AssetId,
+    pub name: String,
+    pub media_type: String,
+    pub size: u64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+// ---- git and GitHub ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GitStatusParams {
+    pub thread_id: ThreadId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GitStatus {
+    pub is_git: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub dirty_files: u32,
+    pub ahead: u32,
+    pub behind: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+    /// Open pull request for this branch, if `gh` knows one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<PullRequest>,
+}
+method!(GitStatusMethod, "git.status", Some(Scope::OrchestrationRead), GitStatusParams, GitStatus);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GitCommitParams {
+    pub thread_id: ThreadId,
+    /// Omit to generate a message from the diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GitCommitResult {
+    pub commit: String,
+    pub message: String,
+}
+method!(GitCommit, "git.commit", Some(Scope::OrchestrationOperate), GitCommitParams, GitCommitResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PullRequest {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub head: String,
+    pub base: String,
+    pub is_draft: bool,
+    pub author: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrCreateParams {
+    pub thread_id: ThreadId,
+    /// Omit either to generate from the thread's diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub draft: bool,
+    /// Commit uncommitted changes first (message generated when needed).
+    #[serde(default = "default_true_pr")]
+    pub commit_first: bool,
+}
+fn default_true_pr() -> bool {
+    true
+}
+method!(PrCreate, "github.pr.create", Some(Scope::OrchestrationOperate), PrCreateParams, PullRequest);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrListParams {
+    pub project_id: ProjectId,
+    #[serde(default = "default_pr_state")]
+    pub state: String,
+    #[serde(default = "default_pr_limit")]
+    pub limit: u32,
+}
+fn default_pr_state() -> String {
+    "open".into()
+}
+fn default_pr_limit() -> u32 {
+    30
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrListResult {
+    pub pull_requests: Vec<PullRequest>,
+}
+method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, PrListResult);
+
 // ---- approvals ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -468,6 +625,13 @@ registry!(
     SettingsGet,
     SettingsUpdate,
     UsageSummary,
+    PairingCreate,
+    TokensList,
+    TokensRevoke,
+    GitStatusMethod,
+    GitCommit,
+    PrCreate,
+    PrList,
     ApprovalsRespond,
     ApprovalsList,
     EventsSubscribe,

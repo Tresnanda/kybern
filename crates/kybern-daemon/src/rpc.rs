@@ -211,6 +211,70 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             ok(UsageSummaryResult { rows, total })
         }
+        PairingCreate::NAME => {
+            let p: PairingCreateParams = parse_or_default(params)?;
+            let (code, expires_at) = state.pairing.create(p.label);
+            let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
+            ok(PairingCreateResult { code, expires_at, endpoints: crate::access::advertised_endpoints(port) })
+        }
+        TokensList::NAME => ok(TokensListResult { tokens: state.store.tokens_list().map_err(internal)? }),
+        TokensRevoke::NAME => {
+            let p: TokensRevokeParams = parse(params)?;
+            if p.token_id == ctx.principal.token_id {
+                return Err(RpcError::invalid_params("a token cannot revoke itself"));
+            }
+            state.store.token_revoke(p.token_id).map_err(internal)?;
+            ok(Empty {})
+        }
+        GitStatusMethod::NAME => {
+            let p: GitStatusParams = parse(params)?;
+            let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::github::status(std::path::Path::new(&t.cwd)).await.map_err(internal)?)
+        }
+        GitCommit::NAME => {
+            let p: GitCommitParams = parse(params)?;
+            let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let cwd = std::path::PathBuf::from(&t.cwd);
+            if !crate::github::has_changes(&cwd).await {
+                return Err(RpcError::invalid_params("nothing to commit"));
+            }
+            let message = match p.message {
+                Some(m) => m,
+                None => state.orchestrator.generate_commit_message(&t).await.map_err(provider_err)?,
+            };
+            let commit = crate::github::commit_all(&cwd, &message).await.map_err(bad)?;
+            ok(GitCommitResult { commit, message })
+        }
+        PrCreate::NAME => {
+            let p: PrCreateParams = parse(params)?;
+            let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let cwd = std::path::PathBuf::from(&t.cwd);
+            if !crate::github::gh_available().await {
+                return Err(RpcError::new(codes::PROVIDER_UNAVAILABLE, "GitHub CLI (gh) is not installed or not logged in"));
+            }
+            if p.commit_first && crate::github::has_changes(&cwd).await {
+                let message = state.orchestrator.generate_commit_message(&t).await.map_err(provider_err)?;
+                crate::github::commit_all(&cwd, &message).await.map_err(bad)?;
+            }
+            let base = match p.base {
+                Some(b) => b,
+                None => crate::github::default_base(&cwd).await,
+            };
+            crate::github::push_current(&cwd).await.map_err(bad)?;
+            let (title, body) = match (p.title, p.body) {
+                (Some(t), Some(b)) => (t, b),
+                (title, body) => {
+                    let (gt, gb) = state.orchestrator.generate_pr_text(&t, &base).await.map_err(provider_err)?;
+                    (title.unwrap_or(gt), body.unwrap_or(gb))
+                }
+            };
+            ok(crate::github::pr_create(&cwd, &title, &body, &base, p.draft).await.map_err(bad)?)
+        }
+        PrList::NAME => {
+            let p: PrListParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(PrListResult { pull_requests: crate::github::pr_list(std::path::Path::new(&project.path), &p.state, p.limit).await.map_err(bad)? })
+        }
         ApprovalsRespond::NAME => {
             let p: ApprovalsRespondParams = parse(params)?;
             state.orchestrator.respond_approval(p.approval_id, p.decision).await.map_err(bad)?;

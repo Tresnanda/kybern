@@ -1,4 +1,7 @@
+mod access;
 mod auth;
+mod github;
+mod http;
 mod config;
 mod orchestrator;
 mod rpc;
@@ -49,14 +52,16 @@ async fn main() -> Result<()> {
     }
 
     let app = Router::new()
-        .route("/health", get(|| async { "ok" }))
+        .merge(http::routes())
         .route("/ws", get(ws::upgrade))
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state.clone());
 
     let addr: SocketAddr = format!("{}:{}", args.bind, args.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, data_dir = %paths.root.display(), "kybernd listening");
     std::fs::write(&paths.port_file, addr.port().to_string())?;
+    state.port.store(addr.port(), std::sync::atomic::Ordering::Relaxed);
 
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;

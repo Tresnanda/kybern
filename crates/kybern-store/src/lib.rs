@@ -142,6 +142,65 @@ impl Store {
         })
     }
 
+    pub fn tokens_list(&self) -> Result<Vec<methods::TokenInfo>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT id, label, scopes, created_at, last_used_at, revoked FROM tokens ORDER BY created_at")?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, bool>(5)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for r in rows {
+                let (id, label, scopes, created, last, revoked) = r?;
+                out.push(methods::TokenInfo {
+                    id: id.parse()?,
+                    label,
+                    scopes: serde_json::from_str(&scopes)?,
+                    created_at: created.parse()?,
+                    last_used_at: last.map(|l| l.parse()).transpose()?,
+                    revoked,
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    pub fn token_revoke(&self, id: Uuid) -> Result<()> {
+        self.with(|c| {
+            c.execute("UPDATE tokens SET revoked = 1 WHERE id = ?1", [id.to_string()])?;
+            Ok(())
+        })
+    }
+
+    pub fn asset_insert(&self, a: &methods::AssetInfo) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO assets(id, name, media_type, size, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![a.id.to_string(), a.name, a.media_type, a.size as i64, a.created_at.to_rfc3339()],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn asset_get(&self, id: AssetId) -> Result<Option<methods::AssetInfo>> {
+        self.with(|c| {
+            Ok(c.query_row("SELECT id, name, media_type, size, created_at FROM assets WHERE id = ?1", [id.to_string()], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
+            })
+            .optional()?
+            .map(|(id, name, media_type, size, created)| -> Result<methods::AssetInfo> {
+                Ok(methods::AssetInfo { id: id.parse()?, name, media_type, size: size as u64, created_at: created.parse()? })
+            })
+            .transpose()?)
+        })
+    }
+
     pub fn token_count(&self) -> Result<u64> {
         self.with(|c| Ok(c.query_row("SELECT COUNT(*) FROM tokens WHERE revoked = 0", [], |r| r.get::<_, i64>(0))? as u64))
     }

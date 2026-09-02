@@ -10,6 +10,7 @@ use tokio::sync::broadcast;
 use crate::config::Paths;
 use crate::orchestrator::Orchestrator;
 use crate::settings::SettingsStore;
+use crate::access::Pairing;
 use crate::terminal::TerminalManager;
 
 #[derive(Clone)]
@@ -25,6 +26,8 @@ pub struct Inner {
     pub orchestrator: Orchestrator,
     pub terminals: TerminalManager,
     pub settings: SettingsStore,
+    pub pairing: Pairing,
+    pub port: std::sync::atomic::AtomicU16,
     pub bootstrap_token: String,
     pub environment_id: String,
     pub started_at: DateTime<Utc>,
@@ -63,6 +66,8 @@ impl AppState {
                 orchestrator,
                 terminals: TerminalManager::default(),
                 settings,
+                pairing: Pairing::default(),
+                port: std::sync::atomic::AtomicU16::new(0),
                 bootstrap_token,
                 environment_id,
                 started_at: Utc::now(),

@@ -103,6 +103,16 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE checkpoints ADD COLUMN provider_turn_id TEXT;
     ALTER TABLE checkpoints ADD COLUMN provider_turn_end TEXT;
     ",
+    // v4: uploaded assets
+    "
+    CREATE TABLE assets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

@@ -237,7 +237,8 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub async fn send(&self, thread_id: ThreadId, message: UserMessage) -> Result<(TurnId, MessageId)> {
+    pub async fn send(&self, thread_id: ThreadId, mut message: UserMessage) -> Result<(TurnId, MessageId)> {
+        self.resolve_attachments(&mut message);
         let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             return Err(anyhow!("thread is busy"));
@@ -404,6 +405,78 @@ impl Orchestrator {
             }
         }
         Ok(None)
+    }
+
+    /// Ask a model for a short prompt answer using the thread's provider, falling back to others.
+    async fn one_shot_any(&self, thread: &Thread, prompt: &str) -> Result<String> {
+        let mut kinds = vec![thread.provider.kind, ProviderKind::ClaudeCode, ProviderKind::Codex];
+        kinds.dedup();
+        let cwd = PathBuf::from(&thread.cwd);
+        let mut last: Option<anyhow::Error> = None;
+        for kind in kinds {
+            let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            match driver.one_shot(&cwd, prompt, self.binary_for(kind).as_ref()).await {
+                Ok(t) if !t.trim().is_empty() => return Ok(t),
+                Ok(_) => {}
+                Err(kybern_drivers::DriverError::Unsupported(_)) => {}
+                Err(e) => last = Some(e.into()),
+            }
+        }
+        Err(last.unwrap_or_else(|| anyhow!("no provider can generate text right now")))
+    }
+
+    pub async fn generate_commit_message(&self, thread: &Thread) -> Result<String> {
+        let repo = Repo::new(&thread.cwd);
+        let snapshot = repo.snapshot("kybern commit message").await?;
+        let head = repo.head().await.unwrap_or_default();
+        let diff = if head.is_empty() { String::new() } else { repo.diff(&head, &snapshot).await?.patch };
+        let prompt = format!(
+            "Write a git commit message for the diff below. First line: imperative, under 60 characters. Then a blank line and one to three short sentences explaining why. Reply with the message only.\n\n{}",
+            diff.chars().take(20000).collect::<String>()
+        );
+        let text = self.one_shot_any(thread, &prompt).await?;
+        Ok(text.trim().trim_matches('`').trim().to_string())
+    }
+
+    pub async fn generate_pr_text(&self, thread: &Thread, base: &str) -> Result<(String, String)> {
+        let diff = crate::github::diff_against_base(std::path::Path::new(&thread.cwd), base).await.unwrap_or_default();
+        let prompt = format!(
+            "Write a pull request title and description for the diff below. Format exactly as:\nTITLE: <under 70 characters>\nBODY:\n<markdown with a short summary and a bullet list of changes>\n\nThread request: {}\n\nDiff:\n{}",
+            thread.title,
+            diff.chars().take(24000).collect::<String>()
+        );
+        let text = self.one_shot_any(thread, &prompt).await?;
+        let mut title = thread.title.clone();
+        let mut body = String::new();
+        let mut in_body = false;
+        for line in text.lines() {
+            if let Some(t) = line.strip_prefix("TITLE:") {
+                title = t.trim().to_string();
+            } else if line.trim_start().starts_with("BODY:") {
+                in_body = true;
+            } else if in_body {
+                body.push_str(line);
+                body.push('\n');
+            }
+        }
+        if body.trim().is_empty() {
+            body = text;
+        }
+        Ok((title, body.trim().to_string()))
+    }
+
+    /// Turn uploaded image attachments into inline images so drivers can send them.
+    fn resolve_attachments(&self, message: &mut UserMessage) {
+        use base64::Engine;
+        for part in message.parts.iter_mut() {
+            if let ContentPart::Attachment { asset_id, media_type, .. } = part {
+                if media_type.starts_with("image/") {
+                    if let Ok(bytes) = std::fs::read(self.inner.paths.assets.join(asset_id.to_string())) {
+                        *part = ContentPart::Image { media_type: media_type.clone(), data: base64::engine::general_purpose::STANDARD.encode(bytes) };
+                    }
+                }
+            }
+        }
     }
 
     pub async fn diff(&self, thread_id: ThreadId, turn_id: Option<TurnId>) -> Result<Diff> {

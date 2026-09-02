@@ -115,6 +115,29 @@ enum Cmd {
         #[arg(long)]
         days: Option<i64>,
     },
+    /// Pair another device: prints a one-time code and the endpoints to use.
+    Pair {
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// List or revoke access tokens.
+    Tokens {
+        #[command(subcommand)]
+        cmd: Option<TokensCmd>,
+    },
+    /// Git status for a thread's working directory.
+    Git { thread: String },
+    /// Commit everything in a thread's working directory.
+    Commit {
+        thread: String,
+        #[arg(long, short)]
+        message: Option<String>,
+    },
+    /// Pull requests via the GitHub CLI.
+    Pr {
+        #[command(subcommand)]
+        cmd: PrCmd,
+    },
     /// Terminals owned by the daemon.
     Terminal {
         #[command(subcommand)]
@@ -133,6 +156,34 @@ enum ProjectsCmd {
         name: Option<String>,
     },
     Remove { id: String },
+}
+
+#[derive(Subcommand)]
+enum TokensCmd {
+    List,
+    Revoke { id: String },
+}
+
+#[derive(Subcommand)]
+enum PrCmd {
+    /// Create a pull request from a thread's branch (commits and pushes first).
+    Create {
+        thread: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long)]
+        draft: bool,
+    },
+    /// List pull requests for a project.
+    List {
+        project: String,
+        #[arg(long, default_value = "open")]
+        state: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -320,6 +371,46 @@ async fn main() -> Result<()> {
             let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
         }
+        Cmd::Pair { label } => {
+            let r = client.call::<PairingCreate>(PairingCreateParams { label }).await?;
+            println!("Pairing code: {}   (expires {})", r.code, r.expires_at.format("%H:%M"));
+            for e in r.endpoints {
+                println!("  {e}");
+            }
+        }
+        Cmd::Tokens { cmd } => match cmd.unwrap_or(TokensCmd::List) {
+            TokensCmd::List => {
+                let r = client.call::<TokensList>(Empty {}).await?;
+                for t in r.tokens {
+                    println!("{}  {:<20} {}{}", t.id, t.label, t.created_at.format("%Y-%m-%d"), if t.revoked { "  (revoked)" } else { "" });
+                }
+            }
+            TokensCmd::Revoke { id } => {
+                client.call::<TokensRevoke>(TokensRevokeParams { token_id: id.parse()? }).await?;
+                println!("revoked");
+            }
+        },
+        Cmd::Git { thread } => {
+            let r = client.call::<GitStatusMethod>(GitStatusParams { thread_id: thread.parse()? }).await?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+        }
+        Cmd::Commit { thread, message } => {
+            let r = client.call::<GitCommit>(GitCommitParams { thread_id: thread.parse()?, message }).await?;
+            println!("{}  {}", &r.commit[..10], r.message.lines().next().unwrap_or(""));
+        }
+        Cmd::Pr { cmd } => match cmd {
+            PrCmd::Create { thread, title, body, base, draft } => {
+                let r = client.call::<PrCreate>(PrCreateParams { thread_id: thread.parse()?, title, body, base, draft, commit_first: true }).await?;
+                println!("#{}  {}\n{}", r.number, r.title, r.url);
+            }
+            PrCmd::List { project, state } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let r = client.call::<PrList>(PrListParams { project_id, state, limit: 30 }).await?;
+                for pr in r.pull_requests {
+                    println!("#{:<5} {:<8} {}  {}", pr.number, pr.state.to_lowercase(), pr.title, pr.url);
+                }
+            }
+        },
         Cmd::Terminal { cmd } => render::terminal(&client, cmd, json).await?,
         Cmd::Call { method, params } => {
             let params = match params {

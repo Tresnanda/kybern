@@ -37,6 +37,10 @@ fn main() {
     add::<Checkpoint>(&mut types, "Checkpoint");
     add::<Diff>(&mut types, "Diff");
     add::<Settings>(&mut types, "Settings");
+    add::<PairRequest>(&mut types, "PairRequest");
+    add::<PairResponse>(&mut types, "PairResponse");
+    add::<AssetInfo>(&mut types, "AssetInfo");
+    add::<PullRequest>(&mut types, "PullRequest");
     add::<TerminalOutputNotification>(&mut types, "TerminalOutputNotification");
     add::<TerminalExitedNotification>(&mut types, "TerminalExitedNotification");
 
@@ -68,6 +72,13 @@ fn main() {
     method::<SettingsGet>(&mut methods);
     method::<SettingsUpdate>(&mut methods);
     method::<UsageSummary>(&mut methods);
+    method::<PairingCreate>(&mut methods);
+    method::<TokensList>(&mut methods);
+    method::<TokensRevoke>(&mut methods);
+    method::<GitStatusMethod>(&mut methods);
+    method::<GitCommit>(&mut methods);
+    method::<PrCreate>(&mut methods);
+    method::<PrList>(&mut methods);
     method::<ApprovalsRespond>(&mut methods);
     method::<ApprovalsList>(&mut methods);
     method::<EventsSubscribe>(&mut methods);
