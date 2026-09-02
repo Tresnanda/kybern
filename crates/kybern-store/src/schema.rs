@@ -98,6 +98,11 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX checkpoints_thread ON checkpoints(thread_id, created_at);
     ",
+    // v3: provider anchors for conversation rewind
+    "
+    ALTER TABLE checkpoints ADD COLUMN provider_turn_id TEXT;
+    ALTER TABLE checkpoints ADD COLUMN provider_turn_end TEXT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

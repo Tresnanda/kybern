@@ -86,6 +86,10 @@ impl AgentDriver for ClaudeDriver {
             }
             (Some(id), true) => {
                 cmd.arg(format!("--resume={id}")).arg("--fork-session").arg(format!("--session-id={session_id}"));
+                // Rewind: keep the transcript through the last assistant entry of the turn before the cut.
+                if let Some(end) = config.rewind.as_ref().and_then(|r| r.keep_through.as_ref()).and_then(|a| a.previous_end.clone()) {
+                    cmd.arg(format!("--resume-session-at={end}"));
+                }
             }
             (None, _) => {
                 cmd.arg(format!("--session-id={session_id}"));
@@ -143,6 +147,10 @@ struct TurnState {
     current_message: Option<String>,
     last_total_cost: f64,
     last_bound: Option<(String, Option<String>)>,
+    /// uuid of the most recent assistant frame this turn (the rewind anchor).
+    last_assistant_uuid: Option<String>,
+    /// Our uuid for the current turn's user message.
+    current_user_uuid: Option<String>,
 }
 
 struct ClaudeSession {
@@ -398,6 +406,11 @@ impl ClaudeSession {
 
     async fn handle_assistant(&self, v: &Value) {
         let parent = v.get("parent_tool_use_id").and_then(|p| p.as_str()).map(str::to_string);
+        if parent.is_none() {
+            if let Some(u) = v.get("uuid").and_then(|u| u.as_str()) {
+                self.state.lock().await.last_assistant_uuid = Some(u.to_string());
+            }
+        }
         let msg = &v["message"];
         let message_id = msg.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
         if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
@@ -460,14 +473,15 @@ impl ClaudeSession {
         let usage = v.get("usage").map(parse_usage).unwrap_or_default();
         let duration_ms = v.get("duration_ms").and_then(|d| d.as_u64()).unwrap_or(0);
         let total_cost = v.get("total_cost_usd").and_then(|c| c.as_f64()).unwrap_or(0.0);
-        let cost_usd = {
+        let (cost_usd, anchors) = {
             let mut st = self.state.lock().await;
             let delta = (total_cost - st.last_total_cost).max(0.0);
             st.last_total_cost = total_cost;
             st.text.clear();
             st.thinking.clear();
             st.current_message = None;
-            Some(delta)
+            let anchors = crate::TurnAnchors { turn_id: st.current_user_uuid.take(), previous_end: st.last_assistant_uuid.take() };
+            (Some(delta), anchors)
         };
         let terminal = v.get("terminal_reason").and_then(|t| t.as_str()).unwrap_or("");
         let errors = v
@@ -476,10 +490,10 @@ impl ClaudeSession {
             .map(|a| a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join("; "))
             .unwrap_or_default();
         let ev = match subtype {
-            "success" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd, duration_ms },
-            "error_max_turns" => DriverEvent::TurnCompleted { stop_reason: StopReason::MaxTurns, usage, cost_usd, duration_ms },
+            "success" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd, duration_ms, anchors },
+            "error_max_turns" => DriverEvent::TurnCompleted { stop_reason: StopReason::MaxTurns, usage, cost_usd, duration_ms, anchors },
             _ if terminal == "aborted_streaming" || terminal == "aborted" => {
-                DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd, duration_ms }
+                DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd, duration_ms, anchors }
             }
             _ => DriverEvent::TurnFailed { error: if errors.is_empty() { format!("claude: {subtype}") } else { errors } },
         };
@@ -517,12 +531,14 @@ fn content_blocks(message: &UserMessage) -> Vec<Value> {
 
 #[async_trait]
 impl AgentSession for SessionHandle {
-    async fn send_message(&self, message: &UserMessage) -> Result<()> {
+    async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let session_id = self.0.session_id.lock().await.clone();
+        self.0.state.lock().await.current_user_uuid = Some(message_id.to_string());
         self.0
             .child
             .write(&json!({
                 "type": "user",
+                "uuid": message_id,
                 "session_id": session_id,
                 "message": { "role": "user", "content": content_blocks(message) },
                 "parent_tool_use_id": null,

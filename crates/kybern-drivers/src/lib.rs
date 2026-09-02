@@ -50,9 +50,29 @@ pub struct SessionConfig {
     pub resume_session_id: Option<String>,
     /// When resuming, fork into a new provider session (used by rewind).
     pub fork: bool,
+    /// When forking, drop everything after this point in the provider conversation.
+    pub rewind: Option<RewindPoint>,
     /// Absolute path to the provider binary; `None` means look up on PATH.
     pub binary: Option<PathBuf>,
     pub env: HashMap<String, String>,
+}
+
+/// Provider-side identifiers of a turn boundary, recorded when the turn completed.
+#[derive(Debug, Clone, Default)]
+pub struct TurnAnchors {
+    /// Provider id of the turn being dropped (Codex turn id, OpenCode user message id, Claude user uuid).
+    pub turn_id: Option<String>,
+    /// Provider id of the last entry of the previous turn (Claude: last assistant uuid).
+    pub previous_end: Option<String>,
+}
+
+/// Where to cut the conversation when forking for a rewind.
+#[derive(Debug, Clone)]
+pub struct RewindPoint {
+    /// Anchors of the first turn to drop.
+    pub drop_from: TurnAnchors,
+    /// Anchors of the last turn to keep, if any.
+    pub keep_through: Option<TurnAnchors>,
 }
 
 /// Normalized stream of what a provider is doing. Ordered per session.
@@ -79,7 +99,7 @@ pub enum DriverEvent {
     },
     /// The provider withdrew a pending permission request (tool was cancelled).
     PermissionWithdrawn { request_id: String },
-    TurnCompleted { stop_reason: StopReason, usage: Usage, cost_usd: Option<f64>, duration_ms: u64 },
+    TurnCompleted { stop_reason: StopReason, usage: Usage, cost_usd: Option<f64>, duration_ms: u64, anchors: TurnAnchors },
     TurnFailed { error: String },
     Notice { level: NoticeLevel, text: String, data: Option<Value> },
     /// The provider process ended. No further events follow.
@@ -88,8 +108,9 @@ pub enum DriverEvent {
 
 #[async_trait]
 pub trait AgentSession: Send + Sync {
-    /// Queue a user turn. Providers that cannot accept input mid-turn return `THREAD_BUSY`-style errors.
-    async fn send_message(&self, message: &UserMessage) -> Result<()>;
+    /// Queue a user turn. `message_id` is kybern's id for the message; drivers that
+    /// accept a client-chosen id use it so rewinds can reference the turn.
+    async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()>;
     async fn interrupt(&self) -> Result<()>;
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()>;
     async fn set_model(&self, model: &str) -> Result<()>;
@@ -108,6 +129,10 @@ pub trait AgentDriver: Send + Sync {
     fn kind(&self) -> ProviderKind;
     /// Look for the binary, read its version, report capabilities.
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus;
+    /// Whether `spawn` with `fork: true` can drop turns from the conversation.
+    fn supports_fork(&self) -> bool {
+        true
+    }
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession>;
 }
 

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use kybern_drivers::registry::DriverRegistry;
-use kybern_drivers::{AgentSession, DriverEvent, SessionConfig, SpawnedSession};
+use kybern_drivers::{AgentSession, DriverEvent, RewindPoint, SessionConfig, SpawnedSession, TurnAnchors};
 use kybern_protocol::*;
 use kybern_git::{Repo, checkpoint_ref};
 use kybern_store::{Store, TurnUsageRow};
@@ -28,6 +28,8 @@ struct Inner {
     events: broadcast::Sender<ThreadEvent>,
     paths: Paths,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
+    /// Threads whose next session must fork the provider conversation at this point.
+    pending_rewinds: Mutex<HashMap<ThreadId, RewindPoint>>,
 }
 
 struct LiveSession {
@@ -50,7 +52,7 @@ pub const DEFAULT_TITLE: &str = "New thread";
 
 impl Orchestrator {
     pub fn new(store: Store, drivers: DriverRegistry, events: broadcast::Sender<ThreadEvent>, paths: Paths) -> Self {
-        Self { inner: Arc::new(Inner { store, drivers, events, paths, sessions: Mutex::new(HashMap::new()) }) }
+        Self { inner: Arc::new(Inner { store, drivers, events, paths, sessions: Mutex::new(HashMap::new()), pending_rewinds: Mutex::new(HashMap::new()) }) }
     }
 
     /// Threads persisted as running belong to a dead daemon; close their turns.
@@ -249,7 +251,7 @@ impl Orchestrator {
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
         self.checkpoint(&thread, turn_id, "before").await;
 
-        if let Err(e) = live.session.send_message(&message).await {
+        if let Err(e) = live.session.send_message(&message_id.to_string(), &message).await {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
             let mut t = thread;
             t.status = ThreadStatus::Failed;
@@ -311,7 +313,7 @@ impl Orchestrator {
         };
         let _ = repo.update_ref(&checkpoint_ref(&thread.id.to_string(), &turn_id.to_string(), which), &commit).await;
         let checkpoint = match which {
-            "before" => Checkpoint { thread_id: thread.id, turn_id, before: commit, after: None, created_at: Utc::now() },
+            "before" => Checkpoint { thread_id: thread.id, turn_id, before: commit, after: None, provider_turn_id: None, provider_turn_end: None, created_at: Utc::now() },
             _ => match self.inner.store.checkpoint_get(turn_id) {
                 Ok(Some(mut c)) => {
                     c.after = Some(commit);
@@ -356,22 +358,48 @@ impl Orchestrator {
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             return Err(anyhow!("thread is busy; interrupt it first"));
         }
-        let c = self.inner.store.checkpoint_get(turn_id)?.ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
+        let all = self.inner.store.checkpoints_for_thread(thread_id)?;
+        let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
+        let c = all[idx].clone();
         let repo = Repo::new(&thread.cwd);
         repo.restore(&c.before).await?;
         self.emit(thread_id, Some(turn_id), EventPayload::WorkspaceReverted { to_turn_id: turn_id, commit: c.before.clone() })?;
-        // Conversation rewind: close the live session so the next turn resumes from the
-        // provider's persisted history. Forking to a specific point lands per driver.
+
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
             let _ = live.session.close().await;
         }
-        Ok((c.before, false))
+
+        // Conversation rewind: the next session forks the provider conversation, keeping
+        // turns before `turn_id`. If this is the first turn, start over with a fresh session.
+        let driver_supports_fork = self.inner.drivers.get(thread.provider.kind).is_some_and(|d| d.supports_fork());
+        let anchors = |c: &Checkpoint| TurnAnchors { turn_id: c.provider_turn_id.clone(), previous_end: c.provider_turn_end.clone() };
+        let mut t = thread.clone();
+        let conversation_rewound = if idx == 0 || thread.provider_session_id.is_none() {
+            t.provider_session_id = None;
+            true
+        } else if driver_supports_fork && (c.provider_turn_id.is_some() || all[idx - 1].provider_turn_end.is_some()) {
+            let point = RewindPoint { drop_from: anchors(&c), keep_through: Some(anchors(&all[idx - 1])) };
+            self.inner.pending_rewinds.lock().await.insert(thread_id, point);
+            true
+        } else {
+            false
+        };
+        // Drop the checkpoints and events' effect of turns from `turn_id` on: keep the log
+        // (history is append-only) but mark the thread so the transcript shows the cut.
+        t.status = ThreadStatus::Idle;
+        self.update_thread(t)?;
+        Ok((c.before, conversation_rewound))
     }
 
     async fn ensure_session(&self, thread: &Thread) -> Result<Arc<LiveSession>> {
         if let Some(live) = self.inner.sessions.lock().await.get(&thread.id).cloned() {
             return Ok(live);
         }
+        let rewind = self.inner.pending_rewinds.lock().await.remove(&thread.id);
+        self.spawn_session(thread, rewind).await
+    }
+
+    async fn spawn_session(&self, thread: &Thread, rewind: Option<RewindPoint>) -> Result<Arc<LiveSession>> {
         let driver = self
             .inner
             .drivers
@@ -382,7 +410,8 @@ impl Orchestrator {
             model: thread.model.clone(),
             permission_mode: thread.permission_mode,
             resume_session_id: thread.provider_session_id.clone(),
-            fork: false,
+            fork: rewind.is_some(),
+            rewind,
             binary: None,
             env: HashMap::new(),
         };
@@ -488,8 +517,15 @@ impl Orchestrator {
                     self.emit(thread_id, turn_id, EventPayload::ApprovalResolved { approval_id, decision })?;
                 }
             }
-            DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms } => {
+            DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
+                if anchors.turn_id.is_some() || anchors.previous_end.is_some() {
+                    if let Ok(Some(mut c)) = self.inner.store.checkpoint_get(turn.id) {
+                        c.provider_turn_id = anchors.turn_id.clone();
+                        c.provider_turn_end = anchors.previous_end.clone();
+                        let _ = self.inner.store.checkpoint_upsert(&c);
+                    }
+                }
                 turn.completed = true;
                 let duration_ms = if duration_ms == 0 { turn.started.elapsed().as_millis() as u64 } else { duration_ms };
                 let turn_id = turn.id;

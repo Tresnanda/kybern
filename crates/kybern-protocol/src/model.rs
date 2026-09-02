@@ -362,6 +362,12 @@ pub struct Checkpoint {
     /// Commit hash after the turn ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
+    /// Provider-side id of this turn, for conversation rewind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_turn_id: Option<String>,
+    /// Provider-side id of the last entry of this turn, for conversation rewind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_turn_end: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

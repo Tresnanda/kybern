@@ -122,6 +122,9 @@ impl AgentDriver for CodexDriver {
             }
             (Some(id), true) => {
                 params["threadId"] = Value::String(id.clone());
+                if let Some(turn) = config.rewind.as_ref().and_then(|r| r.drop_from.turn_id.clone()) {
+                    params["beforeTurnId"] = Value::String(turn);
+                }
                 ("thread/fork", params)
             }
             (None, _) => ("thread/start", params),
@@ -379,6 +382,7 @@ impl CodexSession {
                 let status = turn.get("status").and_then(|s| s.as_str()).unwrap_or("completed");
                 let duration_ms = turn.get("durationMs").and_then(|d| d.as_u64()).unwrap_or(0);
                 let usage = self.turn_usage.lock().await.take().unwrap_or_default();
+                let anchors = crate::TurnAnchors { turn_id: turn.get("id").and_then(|i| i.as_str()).map(str::to_string), previous_end: None };
                 {
                     let mut st = self.state.lock().await;
                     st.turn_id = None;
@@ -387,8 +391,8 @@ impl CodexSession {
                 }
                 self.pending_approvals.lock().await.clear();
                 let ev = match status {
-                    "completed" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: None, duration_ms },
-                    "interrupted" => DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: None, duration_ms },
+                    "completed" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: None, duration_ms, anchors },
+                    "interrupted" => DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: None, duration_ms, anchors },
                     _ => DriverEvent::TurnFailed {
                         error: turn.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("turn failed").to_string(),
                     },
@@ -556,7 +560,7 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
 
 #[async_trait]
 impl AgentSession for Handle {
-    async fn send_message(&self, message: &UserMessage) -> Result<()> {
+    async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
         let (thread_id, mode, model, cwd) = {
             let st = s.state.lock().await;
@@ -565,6 +569,7 @@ impl AgentSession for Handle {
         let (approval, _) = policy_for(mode);
         let mut params = json!({
             "threadId": thread_id,
+            "clientUserMessageId": message_id,
             "input": input_items(message),
             "approvalPolicy": approval,
             "sandboxPolicy": sandbox_policy_for(mode, &cwd),

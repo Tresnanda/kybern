@@ -412,9 +412,12 @@ impl Store {
     pub fn checkpoint_upsert(&self, c: &Checkpoint) -> Result<()> {
         self.with(|conn| {
             conn.execute(
-                "INSERT INTO checkpoints(turn_id, thread_id, before_commit, after_commit, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(turn_id) DO UPDATE SET after_commit = excluded.after_commit",
-                params![c.turn_id.to_string(), c.thread_id.to_string(), c.before, c.after, c.created_at.to_rfc3339()],
+                "INSERT INTO checkpoints(turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(turn_id) DO UPDATE SET after_commit = excluded.after_commit,
+                    provider_turn_id = COALESCE(excluded.provider_turn_id, checkpoints.provider_turn_id),
+                    provider_turn_end = COALESCE(excluded.provider_turn_end, checkpoints.provider_turn_end)",
+                params![c.turn_id.to_string(), c.thread_id.to_string(), c.before, c.after, c.created_at.to_rfc3339(), c.provider_turn_id, c.provider_turn_end],
             )?;
             Ok(())
         })
@@ -424,7 +427,7 @@ impl Store {
         self.with(|conn| {
             Ok(conn
                 .query_row(
-                    "SELECT turn_id, thread_id, before_commit, after_commit, created_at FROM checkpoints WHERE turn_id = ?1",
+                    "SELECT turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end FROM checkpoints WHERE turn_id = ?1",
                     [turn_id.to_string()],
                     row_to_checkpoint,
                 )
@@ -435,7 +438,7 @@ impl Store {
     pub fn checkpoints_for_thread(&self, thread_id: ThreadId) -> Result<Vec<Checkpoint>> {
         self.with(|conn| {
             let mut st = conn.prepare(
-                "SELECT turn_id, thread_id, before_commit, after_commit, created_at FROM checkpoints WHERE thread_id = ?1 ORDER BY created_at",
+                "SELECT turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end FROM checkpoints WHERE thread_id = ?1 ORDER BY created_at",
             )?;
             Ok(st.query_map([thread_id.to_string()], row_to_checkpoint)?.collect::<Result<Vec<_>, _>>()?)
         })
@@ -533,6 +536,8 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
         before: r.get(2)?,
         after: r.get(3)?,
         created_at: parse_time(r.get::<_, String>(4)?)?,
+        provider_turn_id: r.get(5)?,
+        provider_turn_end: r.get(6)?,
     })
 }
 

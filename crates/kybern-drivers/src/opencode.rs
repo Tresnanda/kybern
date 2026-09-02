@@ -147,6 +147,7 @@ impl AgentDriver for OpencodeDriver {
                 turn_started: None,
                 active: false,
                 pending: HashMap::new(),
+                current_message_id: None,
             }),
         });
 
@@ -161,7 +162,12 @@ impl AgentDriver for OpencodeDriver {
                 id.clone()
             }
             (Some(id), true) => {
-                let r = session.http.post(format!("{base}/session/{id}/fork")).query(&[("directory", &dir)]).json(&json!({})).send().await.map_err(net)?;
+                // Fork keeps messages before `messageID`; the id of the first dropped turn's user message.
+                let body = match config.rewind.as_ref().and_then(|r| r.drop_from.turn_id.clone()) {
+                    Some(mid) => json!({ "messageID": mid }),
+                    None => json!({}),
+                };
+                let r = session.http.post(format!("{base}/session/{id}/fork")).query(&[("directory", &dir)]).json(&body).send().await.map_err(net)?;
                 let v: Value = r.json().await.map_err(net)?;
                 v.get("id").and_then(|i| i.as_str()).ok_or_else(|| DriverError::Protocol("fork returned no id".into()))?.to_string()
             }
@@ -230,6 +236,8 @@ struct State {
     active: bool,
     /// permission id -> session id
     pending: HashMap<String, String>,
+    /// Client-chosen OpenCode message id of the current turn's user message.
+    current_message_id: Option<String>,
 }
 
 struct OpencodeSession {
@@ -377,15 +385,16 @@ impl OpencodeSession {
                 }
             }
             "session.idle" => {
-                let (usage, cost, duration_ms, active) = {
+                let (usage, cost, duration_ms, active, anchors) = {
                     let mut st = self.state.lock().await;
                     let active = st.active;
                     st.active = false;
                     let d = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-                    (std::mem::take(&mut st.turn_usage), st.turn_cost, d, active)
+                    let anchors = crate::TurnAnchors { turn_id: st.current_message_id.take(), previous_end: None };
+                    (std::mem::take(&mut st.turn_usage), st.turn_cost, d, active, anchors)
                 };
                 if active {
-                    self.emit(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms }).await;
+                    self.emit(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms, anchors }).await;
                 }
             }
             "session.error" => {
@@ -401,7 +410,7 @@ impl OpencodeSession {
                 };
                 if name == "MessageAbortedError" {
                     if active {
-                        self.emit(DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage: Usage::default(), cost_usd: None, duration_ms: 0 }).await;
+                        self.emit(DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage: Usage::default(), cost_usd: None, duration_ms: 0, anchors: crate::TurnAnchors::default() }).await;
                     }
                 } else if active {
                     self.emit(DriverEvent::TurnFailed { error: format!("{name}: {msg}") }).await;
@@ -499,13 +508,15 @@ fn parts(message: &UserMessage) -> Vec<Value> {
 
 #[async_trait]
 impl AgentSession for Handle {
-    async fn send_message(&self, message: &UserMessage) -> Result<()> {
+    async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
         let (session_id, model) = {
             let st = s.state.lock().await;
             (st.session_id.clone().ok_or_else(|| DriverError::Protocol("no opencode session".into()))?, st.model.clone())
         };
-        let mut body = json!({ "parts": parts(message) });
+        // OpenCode ids must start with "msg"; derive a stable one from ours.
+        let oc_message_id = format!("msg_{}", message_id.replace('-', ""));
+        let mut body = json!({ "parts": parts(message), "messageID": oc_message_id });
         if let Some((provider, model)) = model.as_deref().and_then(split_model) {
             body["model"] = json!({ "providerID": provider, "modelID": model });
         }
@@ -515,6 +526,7 @@ impl AgentSession for Handle {
             st.turn_started = Some(std::time::Instant::now());
             st.turn_usage = Usage::default();
             st.turn_cost = 0.0;
+            st.current_message_id = Some(oc_message_id);
         }
         s.post(&format!("/session/{session_id}/prompt_async"), body).await.map(|_| ())
     }
