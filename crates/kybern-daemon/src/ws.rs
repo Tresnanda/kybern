@@ -54,6 +54,7 @@ pub struct ConnectionCtx {
     pub id: Uuid,
     pub principal: Principal,
     subs: Mutex<HashMap<SubscriptionId, Subscription>>,
+    terminal_subs: Mutex<HashMap<TerminalId, tokio::task::JoinHandle<()>>>,
     out: mpsc::Sender<ServerFrame>,
 }
 
@@ -66,6 +67,55 @@ impl ConnectionCtx {
 
     pub async fn unsubscribe(&self, id: SubscriptionId) {
         self.subs.lock().await.remove(&id);
+    }
+
+    /// Forward a terminal's output to this connection until it exits or is unsubscribed.
+    pub async fn subscribe_terminal(&self, terminal: Arc<crate::terminal::Terminal>, replay: bool) {
+        use base64::Engine;
+        let id = terminal.info().id;
+        self.unsubscribe_terminal(id).await;
+        let mut rx = terminal.events.subscribe();
+        let out = self.out.clone();
+        if replay {
+            let data = terminal.scrollback();
+            if !data.is_empty() {
+                let params = serde_json::to_value(kybern_protocol::methods::TerminalOutputNotification { terminal_id: id, data: base64::engine::general_purpose::STANDARD.encode(&data) }).unwrap_or(Value::Null);
+                let _ = out.send(ServerFrame::Notification(RpcNotification::new(kybern_protocol::methods::TERMINAL_OUTPUT_NOTIFICATION, params))).await;
+            }
+            if !terminal.info().alive {
+                let params = serde_json::to_value(kybern_protocol::methods::TerminalExitedNotification { terminal_id: id, exit_code: terminal.info().exit_code }).unwrap_or(Value::Null);
+                let _ = out.send(ServerFrame::Notification(RpcNotification::new(kybern_protocol::methods::TERMINAL_EXITED_NOTIFICATION, params))).await;
+                return;
+            }
+        }
+        let handle = tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(ev) => match &*ev {
+                        crate::terminal::TerminalEvent::Output(bytes) => {
+                            let params = serde_json::to_value(kybern_protocol::methods::TerminalOutputNotification { terminal_id: id, data: base64::engine::general_purpose::STANDARD.encode(bytes) }).unwrap_or(Value::Null);
+                            if out.send(ServerFrame::Notification(RpcNotification::new(kybern_protocol::methods::TERMINAL_OUTPUT_NOTIFICATION, params))).await.is_err() {
+                                break;
+                            }
+                        }
+                        crate::terminal::TerminalEvent::Exited(code) => {
+                            let params = serde_json::to_value(kybern_protocol::methods::TerminalExitedNotification { terminal_id: id, exit_code: *code }).unwrap_or(Value::Null);
+                            let _ = out.send(ServerFrame::Notification(RpcNotification::new(kybern_protocol::methods::TERMINAL_EXITED_NOTIFICATION, params))).await;
+                            break;
+                        }
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+        self.terminal_subs.lock().await.insert(id, handle);
+    }
+
+    pub async fn unsubscribe_terminal(&self, id: TerminalId) {
+        if let Some(h) = self.terminal_subs.lock().await.remove(&id) {
+            h.abort();
+        }
     }
 
     pub async fn replay(
@@ -116,7 +166,7 @@ impl ConnectionCtx {
 async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<ServerFrame>(1024);
-    let ctx = Arc::new(ConnectionCtx { id: Uuid::now_v7(), principal, subs: Mutex::new(HashMap::new()), out: out_tx });
+    let ctx = Arc::new(ConnectionCtx { id: Uuid::now_v7(), principal, subs: Mutex::new(HashMap::new()), terminal_subs: Mutex::new(HashMap::new()), out: out_tx });
     let mut live = state.events.subscribe();
     tracing::info!(conn = %ctx.id, label = %ctx.principal.label, "client connected");
 
@@ -159,6 +209,9 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                 }
             }
         }
+    }
+    for (_, h) in ctx.terminal_subs.lock().await.drain() {
+        h.abort();
     }
     drop(ctx);
     writer.abort();

@@ -13,6 +13,7 @@ pub type MessageId = Uuid;
 pub type ApprovalId = Uuid;
 pub type SubscriptionId = Uuid;
 pub type AssetId = Uuid;
+pub type TerminalId = Uuid;
 
 /// Monotonic per-daemon event sequence number. Clients resume from the last one they saw.
 pub type EventSeq = i64;

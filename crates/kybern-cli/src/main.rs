@@ -103,7 +103,12 @@ enum Cmd {
     },
     /// Restore the working tree to the state before a turn.
     Revert { thread: String, turn: String },
-    /// Print the JSON schema of the protocol (from the daemon's crate, for tooling).
+    /// Terminals owned by the daemon.
+    Terminal {
+        #[command(subcommand)]
+        cmd: TerminalCmd,
+    },
+    /// Call any RPC method with raw JSON params.
     Call { method: String, params: Option<String> },
 }
 
@@ -116,6 +121,34 @@ enum ProjectsCmd {
         name: Option<String>,
     },
     Remove { id: String },
+}
+
+#[derive(Subcommand)]
+enum TerminalCmd {
+    /// List terminals.
+    List,
+    /// Create a terminal in a thread's directory (or --cwd) and print its id.
+    Create {
+        #[arg(long)]
+        thread: Option<String>,
+        #[arg(long)]
+        cwd: Option<String>,
+    },
+    /// Send a line of input to a terminal.
+    Send { terminal: String, input: Vec<String> },
+    /// Stream a terminal's output to stdout (replays scrollback first). Ctrl-C to stop.
+    Attach { terminal: String },
+    /// Create a terminal, run one command, print its output for a few seconds, close it.
+    Run {
+        #[arg(long)]
+        thread: Option<String>,
+        #[arg(long)]
+        cwd: Option<String>,
+        #[arg(long, default_value_t = 3)]
+        seconds: u64,
+        command: Vec<String>,
+    },
+    Close { terminal: String },
 }
 
 #[derive(Subcommand)]
@@ -252,6 +285,7 @@ async fn main() -> Result<()> {
             let r = client.call::<ThreadsRevert>(ThreadsRevertParams { thread_id: thread.parse()?, turn_id: turn.parse()? }).await?;
             println!("working tree restored to {}{}", &r.commit[..10], if r.conversation_rewound { " (conversation rewound)" } else { "" });
         }
+        Cmd::Terminal { cmd } => render::terminal(&client, cmd, json).await?,
         Cmd::Call { method, params } => {
             let params = match params {
                 Some(p) => serde_json::from_str(&p)?,
@@ -263,6 +297,8 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) use TerminalCmd as TerminalCommand;
 
 fn absolute(p: &PathBuf) -> Result<String> {
     Ok(std::fs::canonicalize(p).with_context(|| format!("{} does not exist", p.display()))?.to_string_lossy().to_string())

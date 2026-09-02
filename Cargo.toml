@@ -22,6 +22,7 @@ kybern-store = { path = "crates/kybern-store" }
 kybern-drivers = { path = "crates/kybern-drivers" }
 kybern-git = { path = "crates/kybern-git" }
 
+agent-client-protocol = "=2.0.0"
 anyhow = "1.0.104"
 async-trait = "0.1"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
@@ -30,6 +31,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive", "env"] }
 directories = "6.0.0"
 futures = "0.3.34"
+portable-pty = "0.9.0"
 rand = "0.10.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream", "query"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "serde_json"] }
@@ -40,7 +42,7 @@ sha2 = "0.11.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-tungstenite = "0.30.0"
-tokio-util = { version = "0.7.19", features = ["codec"] }
+tokio-util = { version = "0.7.19", features = ["codec", "compat"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }

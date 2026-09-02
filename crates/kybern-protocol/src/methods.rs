@@ -217,6 +217,110 @@ pub struct ThreadsRevertResult {
 }
 method!(ThreadsRevert, "threads.revert", Some(Scope::OrchestrationOperate), ThreadsRevertParams, ThreadsRevertResult);
 
+// ---- terminals ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalInfo {
+    pub id: TerminalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    pub cwd: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub title: String,
+    pub alive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalsCreateParams {
+    /// Run in this thread's working directory (worktree or project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    /// Explicit working directory; overrides the thread's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default = "default_cols")]
+    pub cols: u16,
+    #[serde(default = "default_rows")]
+    pub rows: u16,
+    /// Program to run. Defaults to the user's shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+}
+fn default_cols() -> u16 {
+    120
+}
+fn default_rows() -> u16 {
+    32
+}
+method!(TerminalsCreate, "terminals.create", Some(Scope::TerminalOperate), TerminalsCreateParams, TerminalInfo);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalsListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalsListResult {
+    pub terminals: Vec<TerminalInfo>,
+}
+method!(TerminalsList, "terminals.list", Some(Scope::TerminalOperate), TerminalsListParams, TerminalsListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalsInputParams {
+    pub terminal_id: TerminalId,
+    /// Raw bytes, base64.
+    pub data: String,
+}
+method!(TerminalsInput, "terminals.input", Some(Scope::TerminalOperate), TerminalsInputParams, Empty);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalsResizeParams {
+    pub terminal_id: TerminalId,
+    pub cols: u16,
+    pub rows: u16,
+}
+method!(TerminalsResize, "terminals.resize", Some(Scope::TerminalOperate), TerminalsResizeParams, Empty);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalsCloseParams {
+    pub terminal_id: TerminalId,
+}
+method!(TerminalsClose, "terminals.close", Some(Scope::TerminalOperate), TerminalsCloseParams, Empty);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalsSubscribeParams {
+    pub terminal_id: TerminalId,
+    /// Send the retained scrollback (up to the daemon's cap) before live output.
+    #[serde(default = "default_true")]
+    pub replay: bool,
+}
+fn default_true() -> bool {
+    true
+}
+method!(TerminalsSubscribe, "terminals.subscribe", Some(Scope::TerminalOperate), TerminalsSubscribeParams, Empty);
+method!(TerminalsUnsubscribe, "terminals.unsubscribe", Some(Scope::TerminalOperate), TerminalsCloseParams, Empty);
+
+/// Params of the `terminal.output` notification.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalOutputNotification {
+    pub terminal_id: TerminalId,
+    /// Raw bytes, base64.
+    pub data: String,
+}
+/// Params of the `terminal.exited` notification.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalExitedNotification {
+    pub terminal_id: TerminalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+pub const TERMINAL_OUTPUT_NOTIFICATION: &str = "terminal.output";
+pub const TERMINAL_EXITED_NOTIFICATION: &str = "terminal.exited";
+
 // ---- approvals ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -313,6 +417,13 @@ registry!(
     ThreadsCheckpoints,
     ThreadsDiff,
     ThreadsRevert,
+    TerminalsCreate,
+    TerminalsList,
+    TerminalsInput,
+    TerminalsResize,
+    TerminalsClose,
+    TerminalsSubscribe,
+    TerminalsUnsubscribe,
     ApprovalsRespond,
     ApprovalsList,
     EventsSubscribe,

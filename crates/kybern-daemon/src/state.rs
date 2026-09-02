@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 
 use crate::config::Paths;
 use crate::orchestrator::Orchestrator;
+use crate::terminal::TerminalManager;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,6 +22,7 @@ pub struct Inner {
     pub drivers: DriverRegistry,
     pub events: broadcast::Sender<ThreadEvent>,
     pub orchestrator: Orchestrator,
+    pub terminals: TerminalManager,
     pub bootstrap_token: String,
     pub environment_id: String,
     pub started_at: DateTime<Utc>,
@@ -56,6 +58,7 @@ impl AppState {
                 drivers,
                 events,
                 orchestrator,
+                terminals: TerminalManager::default(),
                 bootstrap_token,
                 environment_id,
                 started_at: Utc::now(),

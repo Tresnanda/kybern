@@ -8,7 +8,9 @@
 pub mod binary;
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 pub mod opencode;
+pub mod pi;
 pub mod ndjson;
 pub mod registry;
 

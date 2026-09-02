@@ -220,3 +220,90 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
     }
     Ok(())
 }
+
+
+pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) -> Result<()> {
+    use base64::Engine;
+    use crate::TerminalCommand as T;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    match cmd {
+        T::List => {
+            let r = client.call::<TerminalsList>(TerminalsListParams { thread_id: None }).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else {
+                for t in r.terminals {
+                    println!("{}  {:<6} {}x{:<4} {}  {}", t.id, if t.alive { "alive" } else { "exited" }, t.cols, t.rows, t.title, t.cwd);
+                }
+            }
+        }
+        T::Create { thread, cwd } => {
+            let info = client
+                .call::<TerminalsCreate>(TerminalsCreateParams { thread_id: thread.map(|t| t.parse()).transpose()?, cwd, cols: 120, rows: 32, command: None })
+                .await?;
+            println!("{}", info.id);
+        }
+        T::Send { terminal, input } => {
+            let mut line = input.join(" ");
+            line.push('\n');
+            client.call::<TerminalsInput>(TerminalsInputParams { terminal_id: terminal.parse()?, data: b64.encode(line.as_bytes()) }).await?;
+        }
+        T::Attach { terminal } => {
+            let id: TerminalId = terminal.parse()?;
+            client.call::<TerminalsSubscribe>(TerminalsSubscribeParams { terminal_id: id, replay: true }).await?;
+            stream_terminal(client, id, None).await?;
+        }
+        T::Run { thread, cwd, seconds, command } => {
+            let info = client
+                .call::<TerminalsCreate>(TerminalsCreateParams { thread_id: thread.map(|t| t.parse()).transpose()?, cwd, cols: 120, rows: 32, command: None })
+                .await?;
+            client.call::<TerminalsSubscribe>(TerminalsSubscribeParams { terminal_id: info.id, replay: true }).await?;
+            let mut line = command.join(" ");
+            line.push('\n');
+            client.call::<TerminalsInput>(TerminalsInputParams { terminal_id: info.id, data: b64.encode(line.as_bytes()) }).await?;
+            stream_terminal(client, info.id, Some(std::time::Duration::from_secs(seconds))).await?;
+            let _ = client.call::<TerminalsClose>(TerminalsCloseParams { terminal_id: info.id }).await;
+        }
+        T::Close { terminal } => {
+            client.call::<TerminalsClose>(TerminalsCloseParams { terminal_id: terminal.parse()? }).await?;
+            println!("closed");
+        }
+    }
+    Ok(())
+}
+
+async fn stream_terminal(client: &Client, id: TerminalId, limit: Option<std::time::Duration>) -> Result<()> {
+    use base64::Engine;
+    let mut notes = client.notifications.lock().await;
+    let mut stdout = std::io::stdout();
+    let deadline = limit.map(|d| tokio::time::Instant::now() + d);
+    loop {
+        let next = match deadline {
+            Some(dl) => match tokio::time::timeout_at(dl, notes.recv()).await {
+                Ok(n) => n,
+                Err(_) => break,
+            },
+            None => notes.recv().await,
+        };
+        let Some(n) = next else { break };
+        match n.method.as_str() {
+            m if m == TERMINAL_OUTPUT_NOTIFICATION => {
+                let Ok(p) = serde_json::from_value::<TerminalOutputNotification>(n.params) else { continue };
+                if p.terminal_id != id {
+                    continue;
+                }
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&p.data) {
+                    stdout.write_all(&bytes)?;
+                    stdout.flush()?;
+                }
+            }
+            m if m == TERMINAL_EXITED_NOTIFICATION => {
+                let Ok(p) = serde_json::from_value::<TerminalExitedNotification>(n.params) else { continue };
+                if p.terminal_id == id {
+                    eprintln!("\n[terminal exited{}]", p.exit_code.map(|c| format!(" with code {c}")).unwrap_or_default());
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}

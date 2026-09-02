@@ -145,6 +145,51 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let (commit, conversation_rewound) = state.orchestrator.revert(p.thread_id, p.turn_id).await.map_err(bad)?;
             ok(ThreadsRevertResult { commit, conversation_rewound })
         }
+        TerminalsCreate::NAME => {
+            let p: TerminalsCreateParams = parse(params)?;
+            let cwd = match (p.cwd, p.thread_id) {
+                (Some(c), _) => c,
+                (None, Some(t)) => state.store.thread_get(t).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?.cwd,
+                (None, None) => return Err(RpcError::invalid_params("thread_id or cwd is required")),
+            };
+            let t = state.terminals.create(p.thread_id, cwd, p.cols, p.rows, p.command).map_err(internal)?;
+            ok(t.info())
+        }
+        TerminalsList::NAME => {
+            let p: TerminalsListParams = parse_or_default(params)?;
+            ok(TerminalsListResult { terminals: state.terminals.list(p.thread_id) })
+        }
+        TerminalsInput::NAME => {
+            use base64::Engine;
+            let p: TerminalsInputParams = parse(params)?;
+            let t = state.terminals.get(p.terminal_id).ok_or_else(|| RpcError::not_found("terminal"))?;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(&p.data).map_err(RpcError::invalid_params)?;
+            t.write(&bytes).map_err(internal)?;
+            ok(Empty {})
+        }
+        TerminalsResize::NAME => {
+            let p: TerminalsResizeParams = parse(params)?;
+            let t = state.terminals.get(p.terminal_id).ok_or_else(|| RpcError::not_found("terminal"))?;
+            t.resize(p.cols, p.rows).map_err(internal)?;
+            ok(Empty {})
+        }
+        TerminalsClose::NAME => {
+            let p: TerminalsCloseParams = parse(params)?;
+            ctx.unsubscribe_terminal(p.terminal_id).await;
+            state.terminals.close(p.terminal_id).map_err(bad)?;
+            ok(Empty {})
+        }
+        TerminalsSubscribe::NAME => {
+            let p: TerminalsSubscribeParams = parse(params)?;
+            let t = state.terminals.get(p.terminal_id).ok_or_else(|| RpcError::not_found("terminal"))?;
+            ctx.subscribe_terminal(t, p.replay).await;
+            ok(Empty {})
+        }
+        TerminalsUnsubscribe::NAME => {
+            let p: TerminalsCloseParams = parse(params)?;
+            ctx.unsubscribe_terminal(p.terminal_id).await;
+            ok(Empty {})
+        }
         ApprovalsRespond::NAME => {
             let p: ApprovalsRespondParams = parse(params)?;
             state.orchestrator.respond_approval(p.approval_id, p.decision).await.map_err(bad)?;

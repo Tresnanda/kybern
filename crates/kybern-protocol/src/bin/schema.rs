@@ -36,6 +36,8 @@ fn main() {
     add::<Scope>(&mut types, "Scope");
     add::<Checkpoint>(&mut types, "Checkpoint");
     add::<Diff>(&mut types, "Diff");
+    add::<TerminalOutputNotification>(&mut types, "TerminalOutputNotification");
+    add::<TerminalExitedNotification>(&mut types, "TerminalExitedNotification");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -55,6 +57,13 @@ fn main() {
     method::<ThreadsCheckpoints>(&mut methods);
     method::<ThreadsDiff>(&mut methods);
     method::<ThreadsRevert>(&mut methods);
+    method::<TerminalsCreate>(&mut methods);
+    method::<TerminalsList>(&mut methods);
+    method::<TerminalsInput>(&mut methods);
+    method::<TerminalsResize>(&mut methods);
+    method::<TerminalsClose>(&mut methods);
+    method::<TerminalsSubscribe>(&mut methods);
+    method::<TerminalsUnsubscribe>(&mut methods);
     method::<ApprovalsRespond>(&mut methods);
     method::<ApprovalsList>(&mut methods);
     method::<EventsSubscribe>(&mut methods);

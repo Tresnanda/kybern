@@ -3,6 +3,7 @@ mod config;
 mod orchestrator;
 mod rpc;
 mod state;
+mod terminal;
 mod ws;
 
 use std::net::SocketAddr;
@@ -62,6 +63,7 @@ async fn main() -> Result<()> {
     };
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
     state.orchestrator.shutdown().await;
+    state.terminals.shutdown().await;
     let _ = std::fs::remove_file(&paths.port_file);
     Ok(())
 }
