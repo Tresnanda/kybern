@@ -1,0 +1,44 @@
+# Config for `dist` (cargo-dist): https://axodotdev.github.io/cargo-dist/
+#
+# Builds and publishes the daemon (`kybernd`) and the CLI (`kybern`).
+# The GPUI desktop app is not distributed through dist; it is bundled by
+# scripts/bundle-macos.sh and uploaded by .github/workflows/macos-app.yml,
+# which dist runs as a post-announce job.
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# Default every package to "do not distribute"; the crates that ship (kybern-daemon,
+# kybern-cli) opt back in with `dist = true` in their own crates/<name>/dist.toml.
+# (The `packages = [...]` allow-list is not honoured by dist 0.32 for Cargo workspaces.)
+dist = false
+# The installers to generate for each app
+installers = ["shell", "powershell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-pc-windows-msvc",
+]
+# Host release artifacts on GitHub Releases
+hosting = ["github"]
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Whether to install an updater program
+install-updater = false
+# Build the macOS .app + DMG after the GitHub Release exists and upload it there
+post-announce-jobs = ["./macos-app"]
+github-custom-job-permissions = { "macos-app" = { contents = "write" } }
+
+# Pin the actions dist uses to commits rather than floating tags.
+[dist.github-action-commits]
+"actions/checkout" = "3d3c42e5aac5ba805825da76410c181273ba90b1"          # v7.0.1
+"actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"   # v7.0.1
+"actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8.0.1

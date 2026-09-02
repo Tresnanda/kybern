@@ -1,0 +1,51 @@
+# Builds the macOS app bundle + DMG and attaches it to the GitHub Release.
+#
+# This is a reusable workflow that dist (cargo-dist) calls as a post-announce job
+# from release.yml (see `post-announce-jobs` in dist-workspace.toml), so it runs
+# after the release for the tag has been created and the CLI/daemon artifacts
+# are uploaded. The DMG is ad-hoc signed only (no Apple Developer ID).
+name: macOS app
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: bundle (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            os: macos-15
+          - arch: x86_64
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    env:
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build kybern.app and DMG
+        run: scripts/bundle-macos.sh
+      - name: Upload DMG to the release
+        run: |
+          tag="$(echo "$PLAN" | jq -r '.announcement_tag')"
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then tag="${GITHUB_REF_NAME}"; fi
+          gh release upload "$tag" dist/kybern-*.dmg --clobber
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kybern-app-${{ matrix.arch }}-apple-darwin
+          path: dist/*.dmg
+          if-no-files-found: error
