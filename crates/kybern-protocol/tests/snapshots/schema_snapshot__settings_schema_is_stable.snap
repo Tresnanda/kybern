@@ -8,23 +8,34 @@ expression: schema_for!(Settings)
   "description": "User settings persisted at `<data_dir>/settings.json`.",
   "type": "object",
   "properties": {
+    "default_provider": {
+      "$ref": "#/$defs/ProviderKind",
+      "default": "claude-code"
+    },
     "default_permission_mode": {
       "$ref": "#/$defs/PermissionMode",
       "default": "supervised"
     },
-    "default_provider": {
-      "$ref": "#/$defs/ProviderKind",
-      "default": "claude-code"
+    "worktrees_default": {
+      "description": "Global default for new threads; projects can override.",
+      "type": "boolean",
+      "default": false
     },
     "generate_titles": {
       "description": "Generate thread titles with a model after the first turn.",
       "type": "boolean",
       "default": true
     },
-    "notifications": {
-      "description": "Show OS notifications when a turn ends or needs approval.",
-      "type": "boolean",
-      "default": true
+    "title_provider": {
+      "description": "Provider used for titles; falls back to the thread's own provider.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "providers": {
       "type": "object",
@@ -51,24 +62,25 @@ expression: schema_for!(Settings)
       "additionalProperties": false,
       "default": {}
     },
-    "title_provider": {
-      "description": "Provider used for titles; falls back to the thread's own provider.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ProviderKind"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "worktrees_default": {
-      "description": "Global default for new threads; projects can override.",
+    "notifications": {
+      "description": "Show OS notifications when a turn ends or needs approval.",
       "type": "boolean",
-      "default": false
+      "default": true
     }
   },
   "$defs": {
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
     "PermissionMode": {
       "description": "The four permission modes, mirroring T3 Code.",
       "oneOf": [
@@ -94,18 +106,6 @@ expression: schema_for!(Settings)
         }
       ]
     },
-    "ProviderKind": {
-      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
-      "type": "string",
-      "enum": [
-        "claude-code",
-        "codex",
-        "opencode",
-        "pi",
-        "omp",
-        "cursor"
-      ]
-    },
     "ProviderSettings": {
       "description": "Per-provider configuration in settings.json.",
       "type": "object",
@@ -117,19 +117,19 @@ expression: schema_for!(Settings)
             "null"
           ]
         },
-        "env": {
-          "description": "Extra environment variables for the provider process.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "model": {
           "description": "Default model for new threads.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "env": {
+          "description": "Extra environment variables for the provider process.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     }

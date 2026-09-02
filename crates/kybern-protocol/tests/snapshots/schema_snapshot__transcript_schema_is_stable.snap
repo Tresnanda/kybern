@@ -10,24 +10,24 @@ expression: schema_for!(TranscriptEntry)
     {
       "type": "object",
       "properties": {
-        "at": {
-          "type": "string",
-          "format": "date-time"
-        },
         "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "turn_id": {
           "type": "string",
           "format": "uuid"
         },
         "message": {
           "$ref": "#/$defs/UserMessage"
         },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
         "role": {
           "type": "string",
           "const": "user"
-        },
-        "turn_id": {
-          "type": "string",
-          "format": "uuid"
         }
       },
       "required": [
@@ -41,20 +41,13 @@ expression: schema_for!(TranscriptEntry)
     {
       "type": "object",
       "properties": {
-        "at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "complete": {
-          "type": "boolean"
-        },
         "id": {
           "type": "string",
           "format": "uuid"
         },
-        "role": {
+        "turn_id": {
           "type": "string",
-          "const": "assistant"
+          "format": "uuid"
         },
         "text": {
           "type": "string"
@@ -65,9 +58,16 @@ expression: schema_for!(TranscriptEntry)
             "null"
           ]
         },
-        "turn_id": {
+        "at": {
           "type": "string",
-          "format": "uuid"
+          "format": "date-time"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "role": {
+          "type": "string",
+          "const": "assistant"
         }
       },
       "required": [
@@ -82,27 +82,27 @@ expression: schema_for!(TranscriptEntry)
     {
       "type": "object",
       "properties": {
-        "at": {
+        "turn_id": {
           "type": "string",
-          "format": "date-time"
+          "format": "uuid"
         },
         "call": {
           "$ref": "#/$defs/ToolCall"
         },
-        "complete": {
-          "type": "boolean"
-        },
+        "output": true,
         "is_error": {
           "type": "boolean"
         },
-        "output": true,
+        "complete": {
+          "type": "boolean"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
         "role": {
           "type": "string",
           "const": "tool_call"
-        },
-        "turn_id": {
-          "type": "string",
-          "format": "uuid"
         }
       },
       "required": [
@@ -117,6 +117,10 @@ expression: schema_for!(TranscriptEntry)
     {
       "type": "object",
       "properties": {
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
         "approval": {
           "$ref": "#/$defs/ApprovalRequest"
         },
@@ -133,10 +137,6 @@ expression: schema_for!(TranscriptEntry)
         "role": {
           "type": "string",
           "const": "approval"
-        },
-        "turn_id": {
-          "type": "string",
-          "format": "uuid"
         }
       },
       "required": [
@@ -148,6 +148,16 @@ expression: schema_for!(TranscriptEntry)
     {
       "type": "object",
       "properties": {
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "stop_reason": {
+          "$ref": "#/$defs/StopReason"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
         "cost_usd": {
           "type": [
             "number",
@@ -169,16 +179,6 @@ expression: schema_for!(TranscriptEntry)
         "role": {
           "type": "string",
           "const": "turn_summary"
-        },
-        "stop_reason": {
-          "$ref": "#/$defs/StopReason"
-        },
-        "turn_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "usage": {
-          "$ref": "#/$defs/Usage"
         }
       },
       "required": [
@@ -191,105 +191,18 @@ expression: schema_for!(TranscriptEntry)
     }
   ],
   "$defs": {
-    "ApprovalDecision": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "decision": {
-              "type": "string",
-              "const": "allow_once"
-            }
-          },
-          "required": [
-            "decision"
-          ]
-        },
-        {
-          "description": "Allow and, where the provider supports it, remember for the session.",
-          "type": "object",
-          "properties": {
-            "decision": {
-              "type": "string",
-              "const": "allow_always"
-            }
-          },
-          "required": [
-            "decision"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "decision": {
-              "type": "string",
-              "const": "deny"
-            },
-            "reason": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "decision"
-          ]
-        }
-      ]
-    },
-    "ApprovalRequest": {
-      "description": "A pending or resolved request for the user to approve a tool call.",
+    "UserMessage": {
       "type": "object",
       "properties": {
-        "created_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "input": {
-          "description": "Provider-native input, rendered by the client (command, file path, diff, ...)."
-        },
-        "suggestions": {
-          "description": "Provider-suggested \"always allow\" rules the client may offer.",
+        "parts": {
           "type": "array",
-          "default": [],
-          "items": true
-        },
-        "summary": {
-          "description": "Human-readable one-line summary, e.g. `bash: git status`.",
-          "type": "string"
-        },
-        "thread_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "tool_call_id": {
-          "description": "Provider's tool-call id, when the provider exposes one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tool_name": {
-          "type": "string"
-        },
-        "turn_id": {
-          "type": "string",
-          "format": "uuid"
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
         }
       },
       "required": [
-        "id",
-        "thread_id",
-        "turn_id",
-        "tool_name",
-        "input",
-        "summary",
-        "created_at"
+        "parts"
       ]
     },
     "ContentPart": {
@@ -315,10 +228,10 @@ expression: schema_for!(TranscriptEntry)
           "description": "Inline image. `data` is base64 of the raw bytes.",
           "type": "object",
           "properties": {
-            "data": {
+            "media_type": {
               "type": "string"
             },
-            "media_type": {
+            "data": {
               "type": "string"
             },
             "type": {
@@ -340,10 +253,10 @@ expression: schema_for!(TranscriptEntry)
               "type": "string",
               "format": "uuid"
             },
-            "media_type": {
+            "name": {
               "type": "string"
             },
-            "name": {
+            "media_type": {
               "type": "string"
             },
             "size": {
@@ -383,15 +296,6 @@ expression: schema_for!(TranscriptEntry)
         }
       ]
     },
-    "StopReason": {
-      "type": "string",
-      "enum": [
-        "completed",
-        "interrupted",
-        "max_turns",
-        "error"
-      ]
-    },
     "ToolCall": {
       "description": "A tool invocation as shown in the transcript.",
       "type": "object",
@@ -399,10 +303,10 @@ expression: schema_for!(TranscriptEntry)
         "id": {
           "type": "string"
         },
-        "input": true,
         "name": {
           "type": "string"
         },
+        "input": true,
         "parent_id": {
           "type": [
             "string",
@@ -416,21 +320,119 @@ expression: schema_for!(TranscriptEntry)
         "input"
       ]
     },
+    "ApprovalRequest": {
+      "description": "A pending or resolved request for the user to approve a tool call.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "tool_call_id": {
+          "description": "Provider's tool-call id, when the provider exposes one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "input": {
+          "description": "Provider-native input, rendered by the client (command, file path, diff, ...)."
+        },
+        "summary": {
+          "description": "Human-readable one-line summary, e.g. `bash: git status`.",
+          "type": "string"
+        },
+        "suggestions": {
+          "description": "Provider-suggested \"always allow\" rules the client may offer.",
+          "type": "array",
+          "items": true,
+          "default": []
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "turn_id",
+        "tool_name",
+        "input",
+        "summary",
+        "created_at"
+      ]
+    },
+    "ApprovalDecision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_once"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Allow and, where the provider supports it, remember for the session.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_always"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision": {
+              "type": "string",
+              "const": "deny"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ]
+    },
+    "StopReason": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "interrupted",
+        "max_turns",
+        "error"
+      ]
+    },
     "Usage": {
       "type": "object",
       "properties": {
-        "cache_read_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
-        },
-        "cache_write_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
-        },
         "input_tokens": {
           "type": "integer",
           "format": "uint64",
@@ -440,25 +442,23 @@ expression: schema_for!(TranscriptEntry)
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
         }
       },
       "required": [
         "input_tokens",
         "output_tokens"
-      ]
-    },
-    "UserMessage": {
-      "type": "object",
-      "properties": {
-        "parts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ContentPart"
-          }
-        }
-      },
-      "required": [
-        "parts"
       ]
     }
   }

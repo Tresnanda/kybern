@@ -7,22 +7,19 @@ expression: schema_for!(Thread)
   "title": "Thread",
   "type": "object",
   "properties": {
-    "created_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "cwd": {
-      "description": "Working directory the agent runs in: the worktree path or the project path.",
-      "type": "string"
-    },
     "id": {
       "type": "string",
       "format": "uuid"
     },
-    "last_seq": {
-      "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
-      "type": "integer",
-      "format": "int64"
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "title": {
+      "type": "string"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderInstance"
     },
     "model": {
       "type": [
@@ -33,32 +30,8 @@ expression: schema_for!(Thread)
     "permission_mode": {
       "$ref": "#/$defs/PermissionMode"
     },
-    "pinned": {
-      "type": "boolean"
-    },
-    "project_id": {
-      "type": "string",
-      "format": "uuid"
-    },
-    "provider": {
-      "$ref": "#/$defs/ProviderInstance"
-    },
-    "provider_session_id": {
-      "description": "The provider's own session id once bound, used for resume and fork.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "status": {
       "$ref": "#/$defs/ThreadStatus"
-    },
-    "title": {
-      "type": "string"
-    },
-    "updated_at": {
-      "type": "string",
-      "format": "date-time"
     },
     "worktree": {
       "anyOf": [
@@ -69,6 +42,33 @@ expression: schema_for!(Thread)
           "type": "null"
         }
       ]
+    },
+    "cwd": {
+      "description": "Working directory the agent runs in: the worktree path or the project path.",
+      "type": "string"
+    },
+    "provider_session_id": {
+      "description": "The provider's own session id once bound, used for resume and fork.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pinned": {
+      "type": "boolean"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seq": {
+      "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
+      "type": "integer",
+      "format": "int64"
     }
   },
   "required": [
@@ -85,6 +85,34 @@ expression: schema_for!(Thread)
     "last_seq"
   ],
   "$defs": {
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
     "PermissionMode": {
       "description": "The four permission modes, mirroring T3 Code.",
       "oneOf": [
@@ -110,34 +138,6 @@ expression: schema_for!(Thread)
         }
       ]
     },
-    "ProviderInstance": {
-      "description": "A configured account/instance of a provider. `default` is created implicitly.",
-      "type": "object",
-      "properties": {
-        "instance": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ProviderKind"
-        }
-      },
-      "required": [
-        "kind",
-        "instance"
-      ]
-    },
-    "ProviderKind": {
-      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
-      "type": "string",
-      "enum": [
-        "claude-code",
-        "codex",
-        "opencode",
-        "pi",
-        "omp",
-        "cursor"
-      ]
-    },
     "ThreadStatus": {
       "type": "string",
       "enum": [
@@ -151,10 +151,10 @@ expression: schema_for!(Thread)
     "WorktreeInfo": {
       "type": "object",
       "properties": {
-        "branch": {
+        "path": {
           "type": "string"
         },
-        "path": {
+        "branch": {
           "type": "string"
         }
       },

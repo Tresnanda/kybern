@@ -7,10 +7,6 @@ expression: schema_for!(ThreadEvent)
   "title": "ThreadEvent",
   "type": "object",
   "properties": {
-    "at": {
-      "type": "string",
-      "format": "date-time"
-    },
     "seq": {
       "type": "integer",
       "format": "int64"
@@ -25,18 +21,27 @@ expression: schema_for!(ThreadEvent)
         "null"
       ],
       "format": "uuid"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
     }
   },
+  "required": [
+    "seq",
+    "thread_id",
+    "at"
+  ],
   "oneOf": [
     {
       "type": "object",
       "properties": {
+        "thread": {
+          "$ref": "#/$defs/Thread"
+        },
         "kind": {
           "type": "string",
           "const": "thread_created"
-        },
-        "thread": {
-          "$ref": "#/$defs/Thread"
         }
       },
       "required": [
@@ -48,12 +53,12 @@ expression: schema_for!(ThreadEvent)
       "description": "Title, model, permission mode, pin, status or session changed.",
       "type": "object",
       "properties": {
+        "thread": {
+          "$ref": "#/$defs/Thread"
+        },
         "kind": {
           "type": "string",
           "const": "thread_updated"
-        },
-        "thread": {
-          "$ref": "#/$defs/Thread"
         }
       },
       "required": [
@@ -76,16 +81,16 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
-        "kind": {
+        "message_id": {
           "type": "string",
-          "const": "turn_started"
+          "format": "uuid"
         },
         "message": {
           "$ref": "#/$defs/UserMessage"
         },
-        "message_id": {
+        "kind": {
           "type": "string",
-          "format": "uuid"
+          "const": "turn_started"
         }
       },
       "required": [
@@ -98,9 +103,8 @@ expression: schema_for!(ThreadEvent)
       "description": "Provider assigned or confirmed its own session id.",
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "provider_session_bound"
+        "session_id": {
+          "type": "string"
         },
         "model": {
           "type": [
@@ -108,8 +112,9 @@ expression: schema_for!(ThreadEvent)
             "null"
           ]
         },
-        "session_id": {
-          "type": "string"
+        "kind": {
+          "type": "string",
+          "const": "provider_session_bound"
         }
       },
       "required": [
@@ -120,16 +125,16 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
         "delta": {
           "type": "string"
         },
         "kind": {
           "type": "string",
           "const": "assistant_text_delta"
-        },
-        "message_id": {
-          "type": "string",
-          "format": "uuid"
         }
       },
       "required": [
@@ -141,16 +146,16 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
         "delta": {
           "type": "string"
         },
         "kind": {
           "type": "string",
           "const": "assistant_thinking_delta"
-        },
-        "message_id": {
-          "type": "string",
-          "format": "uuid"
         }
       },
       "required": [
@@ -162,10 +167,6 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "assistant_message_completed"
-        },
         "message_id": {
           "type": "string",
           "format": "uuid"
@@ -178,6 +179,10 @@ expression: schema_for!(ThreadEvent)
             "string",
             "null"
           ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "assistant_message_completed"
         }
       },
       "required": [
@@ -205,15 +210,15 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "tool_call_id": {
+          "type": "string"
+        },
         "delta": {
           "type": "string"
         },
         "kind": {
           "type": "string",
           "const": "tool_call_output_delta"
-        },
-        "tool_call_id": {
-          "type": "string"
         }
       },
       "required": [
@@ -225,16 +230,16 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "tool_call_id": {
+          "type": "string"
+        },
+        "output": true,
         "is_error": {
           "type": "boolean"
         },
         "kind": {
           "type": "string",
           "const": "tool_call_completed"
-        },
-        "output": true,
-        "tool_call_id": {
-          "type": "string"
         }
       },
       "required": [
@@ -284,6 +289,12 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "stop_reason": {
+          "$ref": "#/$defs/StopReason"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
         "cost_usd": {
           "type": [
             "number",
@@ -299,12 +310,6 @@ expression: schema_for!(ThreadEvent)
         "kind": {
           "type": "string",
           "const": "turn_completed"
-        },
-        "stop_reason": {
-          "$ref": "#/$defs/StopReason"
-        },
-        "usage": {
-          "$ref": "#/$defs/Usage"
         }
       },
       "required": [
@@ -334,16 +339,16 @@ expression: schema_for!(ThreadEvent)
       "description": "Provider emitted an informational notice (compaction, status, warnings).",
       "type": "object",
       "properties": {
-        "data": true,
-        "kind": {
-          "type": "string",
-          "const": "provider_notice"
-        },
         "level": {
           "$ref": "#/$defs/NoticeLevel"
         },
         "text": {
           "type": "string"
+        },
+        "data": true,
+        "kind": {
+          "type": "string",
+          "const": "provider_notice"
         }
       },
       "required": [
@@ -373,16 +378,16 @@ expression: schema_for!(ThreadEvent)
       "description": "The working tree was reset to the state before `turn_id`.",
       "type": "object",
       "properties": {
+        "to_turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
         "commit": {
           "type": "string"
         },
         "kind": {
           "type": "string",
           "const": "workspace_reverted"
-        },
-        "to_turn_id": {
-          "type": "string",
-          "format": "uuid"
         }
       },
       "required": [
@@ -392,160 +397,178 @@ expression: schema_for!(ThreadEvent)
       ]
     }
   ],
-  "required": [
-    "seq",
-    "thread_id",
-    "at"
-  ],
   "$defs": {
-    "ApprovalDecision": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "decision": {
-              "type": "string",
-              "const": "allow_once"
-            }
-          },
-          "required": [
-            "decision"
-          ]
-        },
-        {
-          "description": "Allow and, where the provider supports it, remember for the session.",
-          "type": "object",
-          "properties": {
-            "decision": {
-              "type": "string",
-              "const": "allow_always"
-            }
-          },
-          "required": [
-            "decision"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "decision": {
-              "type": "string",
-              "const": "deny"
-            },
-            "reason": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "decision"
-          ]
-        }
-      ]
-    },
-    "ApprovalRequest": {
-      "description": "A pending or resolved request for the user to approve a tool call.",
+    "Thread": {
       "type": "object",
       "properties": {
-        "created_at": {
-          "type": "string",
-          "format": "date-time"
-        },
         "id": {
           "type": "string",
           "format": "uuid"
         },
-        "input": {
-          "description": "Provider-native input, rendered by the client (command, file path, diff, ...)."
-        },
-        "suggestions": {
-          "description": "Provider-suggested \"always allow\" rules the client may offer.",
-          "type": "array",
-          "default": [],
-          "items": true
-        },
-        "summary": {
-          "description": "Human-readable one-line summary, e.g. `bash: git status`.",
-          "type": "string"
-        },
-        "thread_id": {
+        "project_id": {
           "type": "string",
           "format": "uuid"
         },
-        "tool_call_id": {
-          "description": "Provider's tool-call id, when the provider exposes one.",
+        "title": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "model": {
           "type": [
             "string",
             "null"
           ]
         },
-        "tool_name": {
+        "permission_mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "status": {
+          "$ref": "#/$defs/ThreadStatus"
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "description": "Working directory the agent runs in: the worktree path or the project path.",
           "type": "string"
         },
-        "turn_id": {
-          "type": "string",
-          "format": "uuid"
-        }
-      },
-      "required": [
-        "id",
-        "thread_id",
-        "turn_id",
-        "tool_name",
-        "input",
-        "summary",
-        "created_at"
-      ]
-    },
-    "Checkpoint": {
-      "description": "Git snapshots bracketing one turn. `after` is absent while the turn runs.",
-      "type": "object",
-      "properties": {
-        "after": {
-          "description": "Commit hash after the turn ended.",
+        "provider_session_id": {
+          "description": "The provider's own session id once bound, used for resume and fork.",
           "type": [
             "string",
             "null"
           ]
         },
-        "before": {
-          "description": "Commit hash of the working tree before the turn started.",
-          "type": "string"
+        "pinned": {
+          "type": "boolean"
         },
         "created_at": {
           "type": "string",
           "format": "date-time"
         },
-        "provider_turn_end": {
-          "description": "Provider-side id of the last entry of this turn, for conversation rewind.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "provider_turn_id": {
-          "description": "Provider-side id of this turn, for conversation rewind.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "thread_id": {
+        "updated_at": {
           "type": "string",
-          "format": "uuid"
+          "format": "date-time"
         },
-        "turn_id": {
-          "type": "string",
-          "format": "uuid"
+        "last_seq": {
+          "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
+          "type": "integer",
+          "format": "int64"
         }
       },
       "required": [
-        "thread_id",
-        "turn_id",
-        "before",
-        "created_at"
+        "id",
+        "project_id",
+        "title",
+        "provider",
+        "permission_mode",
+        "status",
+        "cwd",
+        "pinned",
+        "created_at",
+        "updated_at",
+        "last_seq"
+      ]
+    },
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "PermissionMode": {
+      "description": "The four permission modes, mirroring T3 Code.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "ThreadStatus": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "running",
+        "awaiting-approval",
+        "failed",
+        "archived"
+      ]
+    },
+    "WorktreeInfo": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "branch"
+      ]
+    },
+    "UserMessage": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
+        }
+      },
+      "required": [
+        "parts"
       ]
     },
     "ContentPart": {
@@ -571,10 +594,10 @@ expression: schema_for!(ThreadEvent)
           "description": "Inline image. `data` is base64 of the raw bytes.",
           "type": "object",
           "properties": {
-            "data": {
+            "media_type": {
               "type": "string"
             },
-            "media_type": {
+            "data": {
               "type": "string"
             },
             "type": {
@@ -596,10 +619,10 @@ expression: schema_for!(ThreadEvent)
               "type": "string",
               "format": "uuid"
             },
-            "media_type": {
+            "name": {
               "type": "string"
             },
-            "name": {
+            "media_type": {
               "type": "string"
             },
             "size": {
@@ -639,167 +662,6 @@ expression: schema_for!(ThreadEvent)
         }
       ]
     },
-    "NoticeLevel": {
-      "type": "string",
-      "enum": [
-        "info",
-        "warning",
-        "error"
-      ]
-    },
-    "PermissionMode": {
-      "description": "The four permission modes, mirroring T3 Code.",
-      "oneOf": [
-        {
-          "description": "Every tool call that mutates or executes asks for approval.",
-          "type": "string",
-          "const": "supervised"
-        },
-        {
-          "description": "File edits proceed; shell and network still ask.",
-          "type": "string",
-          "const": "accept-edits"
-        },
-        {
-          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
-          "type": "string",
-          "const": "auto"
-        },
-        {
-          "description": "Nothing asks. Sandboxing is the provider's problem.",
-          "type": "string",
-          "const": "full-access"
-        }
-      ]
-    },
-    "ProviderInstance": {
-      "description": "A configured account/instance of a provider. `default` is created implicitly.",
-      "type": "object",
-      "properties": {
-        "instance": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ProviderKind"
-        }
-      },
-      "required": [
-        "kind",
-        "instance"
-      ]
-    },
-    "ProviderKind": {
-      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
-      "type": "string",
-      "enum": [
-        "claude-code",
-        "codex",
-        "opencode",
-        "pi",
-        "omp",
-        "cursor"
-      ]
-    },
-    "StopReason": {
-      "type": "string",
-      "enum": [
-        "completed",
-        "interrupted",
-        "max_turns",
-        "error"
-      ]
-    },
-    "Thread": {
-      "type": "object",
-      "properties": {
-        "created_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "cwd": {
-          "description": "Working directory the agent runs in: the worktree path or the project path.",
-          "type": "string"
-        },
-        "id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "last_seq": {
-          "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
-          "type": "integer",
-          "format": "int64"
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "permission_mode": {
-          "$ref": "#/$defs/PermissionMode"
-        },
-        "pinned": {
-          "type": "boolean"
-        },
-        "project_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "provider": {
-          "$ref": "#/$defs/ProviderInstance"
-        },
-        "provider_session_id": {
-          "description": "The provider's own session id once bound, used for resume and fork.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/$defs/ThreadStatus"
-        },
-        "title": {
-          "type": "string"
-        },
-        "updated_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "worktree": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WorktreeInfo"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "project_id",
-        "title",
-        "provider",
-        "permission_mode",
-        "status",
-        "cwd",
-        "pinned",
-        "created_at",
-        "updated_at",
-        "last_seq"
-      ]
-    },
-    "ThreadStatus": {
-      "type": "string",
-      "enum": [
-        "idle",
-        "running",
-        "awaiting-approval",
-        "failed",
-        "archived"
-      ]
-    },
     "ToolCall": {
       "description": "A tool invocation as shown in the transcript.",
       "type": "object",
@@ -807,10 +669,10 @@ expression: schema_for!(ThreadEvent)
         "id": {
           "type": "string"
         },
-        "input": true,
         "name": {
           "type": "string"
         },
+        "input": true,
         "parent_id": {
           "type": [
             "string",
@@ -824,21 +686,119 @@ expression: schema_for!(ThreadEvent)
         "input"
       ]
     },
+    "ApprovalRequest": {
+      "description": "A pending or resolved request for the user to approve a tool call.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "tool_call_id": {
+          "description": "Provider's tool-call id, when the provider exposes one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "input": {
+          "description": "Provider-native input, rendered by the client (command, file path, diff, ...)."
+        },
+        "summary": {
+          "description": "Human-readable one-line summary, e.g. `bash: git status`.",
+          "type": "string"
+        },
+        "suggestions": {
+          "description": "Provider-suggested \"always allow\" rules the client may offer.",
+          "type": "array",
+          "items": true,
+          "default": []
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "turn_id",
+        "tool_name",
+        "input",
+        "summary",
+        "created_at"
+      ]
+    },
+    "ApprovalDecision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_once"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Allow and, where the provider supports it, remember for the session.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_always"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision": {
+              "type": "string",
+              "const": "deny"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ]
+    },
+    "StopReason": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "interrupted",
+        "max_turns",
+        "error"
+      ]
+    },
     "Usage": {
       "type": "object",
       "properties": {
-        "cache_read_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
-        },
-        "cache_write_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
-        },
         "input_tokens": {
           "type": "integer",
           "format": "uint64",
@@ -848,6 +808,18 @@ expression: schema_for!(ThreadEvent)
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
         }
       },
       "required": [
@@ -855,33 +827,61 @@ expression: schema_for!(ThreadEvent)
         "output_tokens"
       ]
     },
-    "UserMessage": {
-      "type": "object",
-      "properties": {
-        "parts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ContentPart"
-          }
-        }
-      },
-      "required": [
-        "parts"
+    "NoticeLevel": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
       ]
     },
-    "WorktreeInfo": {
+    "Checkpoint": {
+      "description": "Git snapshots bracketing one turn. `after` is absent while the turn runs.",
       "type": "object",
       "properties": {
-        "branch": {
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "before": {
+          "description": "Commit hash of the working tree before the turn started.",
           "type": "string"
         },
-        "path": {
-          "type": "string"
+        "after": {
+          "description": "Commit hash after the turn ended.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_turn_id": {
+          "description": "Provider-side id of this turn, for conversation rewind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_turn_end": {
+          "description": "Provider-side id of the last entry of this turn, for conversation rewind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "required": [
-        "path",
-        "branch"
+        "thread_id",
+        "turn_id",
+        "before",
+        "created_at"
       ]
     }
   }
