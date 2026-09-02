@@ -9,6 +9,7 @@ members = [
   "crates/kybern-client",
   "crates/kybern-cli",
   "crates/kybern-app",
+  "crates/kybern-term",
 ]
 
 [workspace.package]
@@ -24,8 +25,10 @@ kybern-store = { path = "crates/kybern-store" }
 kybern-drivers = { path = "crates/kybern-drivers" }
 kybern-git = { path = "crates/kybern-git" }
 kybern-client = { path = "crates/kybern-client" }
+kybern-term = { path = "crates/kybern-term" }
 
 agent-client-protocol = "=2.0.0"
+alacritty_terminal = "0.26"
 # gpui must resolve to the same Zed checkout gpui-component uses (it depends on the
 # unpinned git source), so these stay unpinned too and Cargo.lock pins the rev.
 gpui = { git = "https://github.com/zed-industries/zed" }
