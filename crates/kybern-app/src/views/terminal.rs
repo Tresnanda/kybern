@@ -1,33 +1,63 @@
-//! Terminal tab. First version: raw output with ANSI stripped, in a mono
-//! scroller, plus a single-line input. A real VT renderer replaces this.
+//! Terminal tab. The daemon owns the PTY; this view keeps a `kybern_term`
+//! VT state per thread, feeds it the bytes that arrive over the socket, and
+//! renders it with `TerminalElement`, which sends keystrokes back as bytes
+//! and reports the grid size that fits the pane so we can resize the PTY.
 
 use base64::Engine;
 use gpui::*;
 use gpui::prelude::FluentBuilder as _;
-use gpui_component::input::Input;
-use gpui_component::{ActiveTheme as _, Sizable as _, v_flex};
+use gpui_component::{ActiveTheme as _, v_flex};
 use kybern_protocol::methods::*;
 use kybern_protocol::*;
+use kybern_term::{Palette, TerminalElement, TerminalState};
 
 use crate::app::Workspace;
 
+/// Size used for the PTY until the pane has been measured.
+const INITIAL_COLS: u16 = 100;
+const INITIAL_ROWS: u16 = 30;
+
 pub struct TerminalView {
     pub id: Option<TerminalId>,
-    pub text: String,
+    pub state: Entity<TerminalState>,
+    pub focus: FocusHandle,
+    /// Grid size the daemon currently has (or will get on create).
+    pub size: (u16, u16),
+    pub error: Option<String>,
     pub exited: Option<Option<i32>>,
     pub creating: bool,
 }
 
+impl TerminalView {
+    fn new(cx: &mut Context<Workspace>) -> Self {
+        Self {
+            id: None,
+            state: cx.new(|_| TerminalState::new(INITIAL_COLS, INITIAL_ROWS)),
+            focus: cx.focus_handle(),
+            size: (INITIAL_COLS, INITIAL_ROWS),
+            error: None,
+            exited: None,
+            creating: false,
+        }
+    }
+}
+
 pub fn ensure_terminal(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let Some(thread_id) = ws.model.selected_thread else { return };
-    let entry = ws.terminals.entry(thread_id).or_insert(TerminalView { id: None, text: String::new(), exited: None, creating: false });
+    if !ws.terminals.contains_key(&thread_id) {
+        let view = TerminalView::new(cx);
+        ws.terminals.insert(thread_id, view);
+    }
+    let entry = ws.terminals.get_mut(&thread_id).expect("inserted above");
     if entry.id.is_some() || entry.creating {
         return;
     }
     entry.creating = true;
+    entry.error = None;
+    let (cols, rows) = entry.size;
     let d = ws.daemon.clone();
     cx.spawn(async move |this, cx| {
-        let r = d.call::<TerminalsCreate>(TerminalsCreateParams { thread_id: Some(thread_id), cwd: None, cols: 100, rows: 30, command: None }).await;
+        let r = d.call::<TerminalsCreate>(TerminalsCreateParams { thread_id: Some(thread_id), cwd: None, cols, rows, command: None }).await;
         let id = match &r {
             Ok(info) => Some(info.id),
             Err(_) => None,
@@ -39,8 +69,15 @@ pub fn ensure_terminal(ws: &mut Workspace, cx: &mut Context<Workspace>) {
             if let Some(t) = ws.terminals.get_mut(&thread_id) {
                 t.creating = false;
                 match r {
-                    Ok(info) => t.id = Some(info.id),
-                    Err(e) => t.text = format!("Unable to open a terminal. {e}"),
+                    Ok(info) => {
+                        t.id = Some(info.id);
+                        // The pane may have been measured while we were creating.
+                        let (cols, rows) = t.state.read(cx).size().into_tuple();
+                        if (cols, rows) != t.size {
+                            resize(ws, thread_id, cols, rows, cx);
+                        }
+                    }
+                    Err(e) => t.error = Some(format!("Unable to open a terminal. {e}")),
                 }
             }
             cx.notify();
@@ -50,14 +87,39 @@ pub fn ensure_terminal(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     .detach();
 }
 
-pub fn send_line(ws: &mut Workspace, line: String, cx: &mut Context<Workspace>) {
-    let Some(thread_id) = ws.model.selected_thread else { return };
+/// Write raw bytes to the selected thread's PTY.
+pub fn send_bytes(ws: &mut Workspace, thread_id: ThreadId, bytes: Vec<u8>, cx: &mut Context<Workspace>) {
+    if bytes.is_empty() {
+        return;
+    }
     let Some(id) = ws.terminals.get(&thread_id).and_then(|t| t.id) else { return };
-    let mut data = line;
-    data.push('\n');
     let d = ws.daemon.clone();
     cx.spawn(async move |_, _| {
-        let _ = d.call::<TerminalsInput>(TerminalsInputParams { terminal_id: id, data: base64::engine::general_purpose::STANDARD.encode(data.as_bytes()) }).await;
+        let _ = d.call::<TerminalsInput>(TerminalsInputParams { terminal_id: id, data: base64::engine::general_purpose::STANDARD.encode(&bytes) }).await;
+    })
+    .detach();
+}
+
+/// Type a line followed by Enter into the selected thread's terminal.
+pub fn send_line(ws: &mut Workspace, line: String, cx: &mut Context<Workspace>) {
+    let Some(thread_id) = ws.model.selected_thread else { return };
+    let mut data = line.into_bytes();
+    data.push(b'\r');
+    send_bytes(ws, thread_id, data, cx);
+}
+
+/// Tell the daemon the grid size the pane fits. No-op until the terminal
+/// exists; creation picks up the latest size from the VT state.
+pub fn resize(ws: &mut Workspace, thread_id: ThreadId, cols: u16, rows: u16, cx: &mut Context<Workspace>) {
+    let Some(t) = ws.terminals.get_mut(&thread_id) else { return };
+    let Some(id) = t.id else { return };
+    if t.size == (cols, rows) {
+        return;
+    }
+    t.size = (cols, rows);
+    let d = ws.daemon.clone();
+    cx.spawn(async move |_, _| {
+        let _ = d.call::<TerminalsResize>(TerminalsResizeParams { terminal_id: id, cols, rows }).await;
     })
     .detach();
 }
@@ -65,14 +127,15 @@ pub fn send_line(ws: &mut Workspace, line: String, cx: &mut Context<Workspace>) 
 pub fn handle_notification(ws: &mut Workspace, n: &RpcNotification, cx: &mut Context<Workspace>) {
     if n.method == TERMINAL_OUTPUT_NOTIFICATION {
         let Ok(p) = serde_json::from_value::<TerminalOutputNotification>(n.params.clone()) else { return };
-        let Some(t) = ws.terminals.values_mut().find(|t| t.id == Some(p.terminal_id)) else { return };
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&p.data) {
-            t.text.push_str(&strip_ansi(&String::from_utf8_lossy(&bytes)));
-            if t.text.len() > 200_000 {
-                let cut = t.text.len() - 150_000;
-                t.text.drain(..cut);
-            }
-        }
+        let Some((thread_id, t)) = ws.terminals.iter().find(|(_, t)| t.id == Some(p.terminal_id)) else { return };
+        let thread_id = *thread_id;
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&p.data) else { return };
+        let reply = t.state.update(cx, |s, _| {
+            s.feed(&bytes);
+            s.take_pending_output()
+        });
+        // Replies to queries (device attributes, cursor position) go back to the process.
+        send_bytes(ws, thread_id, reply, cx);
         cx.notify();
     } else if n.method == TERMINAL_EXITED_NOTIFICATION {
         let Ok(p) = serde_json::from_value::<TerminalExitedNotification>(n.params.clone()) else { return };
@@ -88,60 +151,58 @@ pub fn render(ws: &mut Workspace, _window: &mut Window, cx: &mut Context<Workspa
     let Some(thread_id) = ws.model.selected_thread else {
         return v_flex().size_full().items_center().justify_center().child(div().text_sm().text_color(muted).child("Select a thread to open its terminal.")).into_any_element();
     };
-    let (text, exited) = ws.terminals.get(&thread_id).map(|t| (t.text.clone(), t.exited)).unwrap_or_default();
-    let mono = cx.theme().mono_font_family.clone();
+    // Idempotent: covers switching threads while the tab is open.
+    ensure_terminal(ws, cx);
+    let Some(t) = ws.terminals.get(&thread_id) else {
+        return v_flex().size_full().items_center().justify_center().child(div().text_sm().text_color(muted).child("Opening a terminal…")).into_any_element();
+    };
+    if let Some(err) = &t.error {
+        return v_flex().size_full().items_center().justify_center().p_4().child(div().text_sm().text_color(muted).child(err.clone())).into_any_element();
+    }
+
+    let theme = cx.theme();
+    let palette = Palette::for_theme(theme.is_dark(), theme.background, theme.foreground);
+    let mono = theme.mono_font_family.clone();
+    let mono_size = theme.mono_font_size;
+    let border = theme.border;
+    let exited = t.exited;
+
+    let ws_for_input = cx.entity().downgrade();
+    let ws_for_resize = cx.entity().downgrade();
+    let element = TerminalElement::new(t.state.clone(), t.focus.clone())
+        .font(mono, mono_size)
+        .palette(palette)
+        .on_input(move |bytes, _window, cx| {
+            ws_for_input.update(cx, |ws, cx| send_bytes(ws, thread_id, bytes, cx)).ok();
+        })
+        .on_resize(move |cols, rows, _window, cx| {
+            ws_for_resize.update(cx, |ws, cx| resize(ws, thread_id, cols, rows, cx)).ok();
+        });
+
     v_flex()
         .size_full()
-        .child(
-            div()
-                .id("term-out")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .p_3()
-                .text_xs()
-                .font_family(mono)
-                .whitespace_normal()
-                .child(text)
-                .when_some(exited, |el, code| el.child(div().text_color(muted).child(format!("[process exited{}]", code.map(|c| format!(" with code {c}")).unwrap_or_default())))),
-        )
-        .child(div().p_2().border_t_1().border_color(cx.theme().border).child(Input::new(&ws.terminal_input).appearance(true).small()))
+        .child(div().flex_1().min_h_0().w_full().child(element))
+        .when_some(exited, |el, code| {
+            el.child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .border_t_1()
+                    .border_color(border)
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("Process exited{}.", code.map(|c| format!(" with code {c}")).unwrap_or_default())),
+            )
+        })
         .into_any_element()
 }
 
-/// Remove CSI/OSC escape sequences and carriage-return noise.
-pub fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{1b}' => match chars.next() {
-                Some('[') => {
-                    while let Some(&n) = chars.peek() {
-                        chars.next();
-                        if ('@'..='~').contains(&n) {
-                            break;
-                        }
-                    }
-                }
-                Some(']') => {
-                    while let Some(n) = chars.next() {
-                        if n == '\u{7}' {
-                            break;
-                        }
-                        if n == '\u{1b}' {
-                            chars.next();
-                            break;
-                        }
-                    }
-                }
-                Some(_) => {}
-                None => {}
-            },
-            '\r' => {}
-            '\u{7}' => {}
-            _ => out.push(c),
-        }
+trait SizeTuple {
+    fn into_tuple(self) -> (u16, u16);
+}
+
+impl SizeTuple for kybern_term::TermSize {
+    fn into_tuple(self) -> (u16, u16) {
+        (self.cols, self.rows)
     }
-    out
 }

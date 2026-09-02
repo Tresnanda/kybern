@@ -15,6 +15,7 @@ path = "src/main.rs"
 kybern-protocol.workspace = true
 kybern-client.workspace = true
 reqwest.workspace = true
+kybern-term.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true

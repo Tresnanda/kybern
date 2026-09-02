@@ -185,7 +185,7 @@ impl Workspace {
             diff_editor,
             diff: None,
             diff_loading: false,
-            right_tab: RightTab::Changes,
+            right_tab: if std::env::var("KYBERN_RIGHT_TAB").as_deref() == Ok("terminal") { RightTab::Terminal } else { RightTab::Changes },
             show_right: true,
             show_sidebar: true,
             terminals: HashMap::new(),
