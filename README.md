@@ -123,11 +123,25 @@ Approvals show up inline in `new` and `send`; answer with `y`, `a` (always) or `
 
 ## Status
 
-Milestone 1: daemon, protocol, store, Claude Code driver, CLI. Working end to end
-including resume across daemon restarts.
+What works today, all verified end to end on macOS:
 
-Next: remaining drivers, git checkpoints and rewind, terminals, the GPUI desktop
-app, then the Expo mobile client.
+- **Daemon**: WebSocket JSON-RPC with scoped tokens, SQLite event log with
+  replay, per-turn git checkpoints, turn and thread diffs, workspace revert
+  and conversation rewind, server-owned terminals, pairing codes for other
+  devices, attachment uploads, settings and keybindings files.
+- **Agents**: Claude Code, Codex, OpenCode, Oh My Pi, and Cursor drive
+  through their native protocols with streaming, tool calls, approvals,
+  resume, and model switching. pi is wired but untested here.
+- **Desktop**: GPUI app with projects and threads, a streaming transcript,
+  approval cards, a composer with provider, mode, worktree and attachment
+  controls, a diff viewer, a terminal, a command palette, themes, usage, OS
+  notifications, and pull request creation through `gh`.
+- **CLI**: everything the daemon does, usable from scripts.
+- **Mobile**: Expo client scaffold in `apps/mobile` (connect, threads,
+  transcript, approvals, composer). Not yet run on a device.
+
+See `docs/architecture.md` for how the pieces fit and `docs/design.md` for
+the desktop design rules.
 
 ## License
 
