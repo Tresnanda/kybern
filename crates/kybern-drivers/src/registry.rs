@@ -14,6 +14,7 @@ impl DriverRegistry {
     pub fn with_defaults() -> Self {
         let mut r = Self::default();
         r.register(Arc::new(crate::claude::ClaudeDriver));
+        r.register(Arc::new(crate::codex::CodexDriver));
         r
     }
 

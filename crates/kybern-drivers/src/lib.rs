@@ -7,6 +7,7 @@
 
 pub mod binary;
 pub mod claude;
+pub mod codex;
 pub mod ndjson;
 pub mod registry;
 
@@ -63,6 +64,8 @@ pub enum DriverEvent {
     /// Full text of an assistant message once the provider finalizes it.
     MessageCompleted { message_id: String, text: String, thinking: Option<String> },
     ToolStarted(ToolCall),
+    /// Incremental output from a running tool (command stdout, patch progress).
+    ToolOutputDelta { tool_call_id: String, delta: String },
     ToolCompleted { tool_call_id: String, output: Value, is_error: bool },
     /// The provider is blocked waiting for `respond_permission`.
     PermissionRequest {

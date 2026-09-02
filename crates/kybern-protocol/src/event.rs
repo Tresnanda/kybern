@@ -33,6 +33,7 @@ pub enum EventPayload {
     AssistantThinkingDelta { message_id: MessageId, delta: String },
     AssistantMessageCompleted { message_id: MessageId, text: String, thinking: Option<String> },
     ToolCallStarted { call: ToolCall },
+    ToolCallOutputDelta { tool_call_id: String, delta: String },
     ToolCallCompleted { tool_call_id: String, output: Value, is_error: bool },
     ApprovalRequested { approval: ApprovalRequest },
     ApprovalResolved { approval_id: ApprovalId, decision: ApprovalDecision },

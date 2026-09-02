@@ -120,6 +120,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             | EventPayload::ApprovalRequested { .. }
             | EventPayload::ApprovalResolved { .. }
             | EventPayload::ProviderNotice { .. }
+            | EventPayload::ToolCallOutputDelta { .. }
             | EventPayload::CheckpointUpdated { .. }
             | EventPayload::WorkspaceReverted { .. } => {}
         }

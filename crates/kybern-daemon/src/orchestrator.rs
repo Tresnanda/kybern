@@ -446,6 +446,9 @@ impl Orchestrator {
             DriverEvent::ToolStarted(call) => {
                 self.emit(thread_id, turn_id, EventPayload::ToolCallStarted { call })?;
             }
+            DriverEvent::ToolOutputDelta { tool_call_id, delta } => {
+                self.emit(thread_id, turn_id, EventPayload::ToolCallOutputDelta { tool_call_id, delta })?;
+            }
             DriverEvent::ToolCompleted { tool_call_id, output, is_error } => {
                 self.emit(thread_id, turn_id, EventPayload::ToolCallCompleted { tool_call_id, output, is_error })?;
             }
