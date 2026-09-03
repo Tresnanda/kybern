@@ -150,12 +150,10 @@ const SURFACE_UNDER_BASE_ALPHA: Record<ThemeVariant, number> = {
   dark: 0.16,
   light: 0.04,
 };
-/** Mix of seed surface kept when the macOS shell is translucent. Higher = heavier sidebar. */
 const SIDEBAR_TRANSLUCENT_MIX: Record<ThemeVariant, number> = {
   dark: 0.86,
   light: 0.8,
 };
-/** Dark thread/settings pane lift toward white. 0 keeps the seed surface. */
 const CONTENT_SURFACE_LIFT: Record<ThemeVariant, number> = {
   dark: 0.08,
   light: 0,
@@ -757,7 +755,6 @@ export function buildThemeCssVariables(
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
-    // Sidebar keeps the unlifted seed (heavier mix when translucent); thread/settings use the lifted content surface.
     "--app-sidebar-surface":
       material === "translucent"
         ? `color-mix(in srgb, ${seedSurface} ${Math.round(SIDEBAR_TRANSLUCENT_MIX[variant] * 100)}%, transparent)`
