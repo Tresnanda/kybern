@@ -284,8 +284,22 @@ impl Orchestrator {
         let thread = self.update_thread(thread)?;
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
 
-        // Persist and broadcast the user's intent before starting a potentially
-        // slow harness process. Clients can navigate and render immediately.
+        // The user's intent is persisted and broadcast, so the call returns now
+        // and clients navigate and render immediately. Spawning the harness,
+        // taking the checkpoint and delivering the message can take a second or
+        // more; that runs in the background and reports failures as events.
+        let this = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = this.start_turn(thread, turn_id, message_id, message).await {
+                tracing::warn!(turn_id = %turn_id, error = %e, "failed to start turn");
+            }
+        });
+        Ok((turn_id, message_id))
+    }
+
+    /// Bring up the session, snapshot the tree and hand the message to the agent.
+    /// Failures mark the thread failed and are surfaced as `TurnFailed`.
+    async fn start_turn(&self, thread: Thread, turn_id: TurnId, message_id: MessageId, message: UserMessage) -> Result<()> {
         let live = match self.ensure_session(&thread).await {
             Ok(live) => live,
             Err(error) => {
@@ -310,7 +324,7 @@ impl Orchestrator {
             *live.turn.lock().await = None;
             return Err(e.into());
         }
-        Ok((turn_id, message_id))
+        Ok(())
     }
 
     pub async fn interrupt(&self, thread_id: ThreadId) -> Result<()> {
