@@ -1018,9 +1018,7 @@ impl Orchestrator {
                     }
                 }
                 let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
-                if !matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Codex)
-                    && let Some(task) = generic_runtime_task(&call)
-                {
+                if let Some(task) = generic_runtime_task_for_provider(provider, &call) {
                     self.persist_runtime_task_start(thread_id, live, turn_id, task).await?;
                 }
             }
@@ -1034,13 +1032,13 @@ impl Orchestrator {
                     EventPayload::ToolCallCompleted { tool_call_id: tool_call_id.clone(), output: output.clone(), is_error },
                 )?;
                 let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
-                if !matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Codex) {
+                if matches!(provider, ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Cursor) {
                     let task_id = live
                         .tasks
                         .lock()
                         .await
                         .values()
-                        .find(|task| task.tool_call_id.as_deref() == Some(&tool_call_id))
+                        .find(|task| task.tool_call_id.as_deref() == Some(&tool_call_id) && task.provider_thread_id.is_none())
                         .map(|task| task.id.clone());
                     if let Some(task_id) = task_id {
                         let detached = output_indicates_running(&output);
@@ -1266,6 +1264,21 @@ fn generic_runtime_task(call: &ToolCall) -> Option<DriverRuntimeTask> {
     })
 }
 
+fn generic_runtime_task_for_provider(provider: ProviderKind, call: &ToolCall) -> Option<DriverRuntimeTask> {
+    let task = generic_runtime_task(call)?;
+    match provider {
+        // These harnesses expose first-class lifecycle channels. Mixing a
+        // guessed tool row with the native identity duplicates batched/nested
+        // children and can finish them at the wrong edge.
+        ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Omp => None,
+        ProviderKind::Opencode if task.kind == RuntimeTaskKind::Agent => None,
+        // pi and Cursor currently expose only tool-scoped observation through
+        // the protocols Kybern drives. OpenCode still uses the conservative
+        // path for background process/monitor tools.
+        ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Cursor => Some(task),
+    }
+}
+
 fn json_bool(value: &serde_json::Value, keys: &[&str]) -> bool {
     keys.iter().any(|key| value.get(*key).and_then(serde_json::Value::as_bool) == Some(true))
         || ["raw", "args", "input"].iter().any(|key| value.get(*key).is_some_and(|nested| json_bool(nested, keys)))
@@ -1323,8 +1336,8 @@ pub fn title_from_message(message: &UserMessage) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{generic_runtime_task, output_indicates_running};
-    use kybern_protocol::{RuntimeTaskKind, ToolCall};
+    use super::{generic_runtime_task, generic_runtime_task_for_provider, output_indicates_running};
+    use kybern_protocol::{ProviderKind, RuntimeTaskKind, ToolCall};
     use serde_json::json;
 
     #[test]
@@ -1372,5 +1385,18 @@ mod tests {
         assert!(output_indicates_running(&json!({ "status": "in_progress" })));
         assert!(output_indicates_running(&json!("Process ID 42 is running in background")));
         assert!(!output_indicates_running(&json!({ "status": "completed" })));
+    }
+
+    #[test]
+    fn runtime_fallback_matrix_preserves_native_harness_channels() {
+        let agent =
+            ToolCall { id: "agent-1".into(), name: "task".into(), input: json!({ "description": "Inspect parity" }), parent_id: None };
+
+        assert!(generic_runtime_task_for_provider(ProviderKind::ClaudeCode, &agent).is_none());
+        assert!(generic_runtime_task_for_provider(ProviderKind::Codex, &agent).is_none());
+        assert!(generic_runtime_task_for_provider(ProviderKind::Opencode, &agent).is_none());
+        assert!(generic_runtime_task_for_provider(ProviderKind::Omp, &agent).is_none());
+        assert!(generic_runtime_task_for_provider(ProviderKind::Pi, &agent).is_some());
+        assert!(generic_runtime_task_for_provider(ProviderKind::Cursor, &agent).is_some());
     }
 }

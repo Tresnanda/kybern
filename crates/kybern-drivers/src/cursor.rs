@@ -7,6 +7,7 @@
 //! with `session/load`, which replays history as notifications we ignore.
 
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -23,14 +24,104 @@ use async_trait::async_trait;
 use kybern_protocol::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::binary::{resolve, version_of};
-use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, Result, SessionConfig, SpawnedSession};
+use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, ProbeContext, Result, SessionConfig, SpawnedSession};
 
 #[derive(Default)]
 pub struct CursorDriver;
+
+const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn parse_cursor_models(output: &[u8]) -> Vec<ProviderModel> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let (id, label) = line.trim().split_once(" - ")?;
+            if id.is_empty() || label.is_empty() {
+                return None;
+            }
+            let is_default = label.ends_with(" (default)");
+            let display_name = label.strip_suffix(" (default)").unwrap_or(label).to_string();
+            Some(ProviderModel { id: id.to_string(), display_name, provider: None, efforts: Vec::new(), default_effort: None, is_default })
+        })
+        .collect()
+}
+
+async fn cursor_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
+    let mut command = Command::new(bin);
+    command.args(["models"]).stdin(Stdio::null()).kill_on_drop(true).env("NO_COLOR", "1");
+    if let Some(cwd) = &context.cwd {
+        command.current_dir(cwd);
+    }
+    for (key, value) in &context.env {
+        command.env(key, value);
+    }
+    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) if output.status.success() => parse_cursor_models(&output.stdout),
+        _ => Vec::new(),
+    }
+}
+
+impl CursorDriver {
+    async fn probe_inner(&self, context: &ProbeContext) -> ProviderStatus {
+        let mut status = ProviderStatus {
+            kind: ProviderKind::Cursor,
+            display_name: ProviderKind::Cursor.display_name().into(),
+            available: false,
+            binary_path: None,
+            version: None,
+            unavailable_reason: None,
+            // Cursor's ACP mode decides approvals itself; we map modes onto agent/plan/ask.
+            supported_permission_modes: vec![PermissionMode::Supervised, PermissionMode::Auto, PermissionMode::FullAccess],
+            supports_fork: false,
+            supports_model_switch: true,
+            supports_effort_switch: false,
+            supported_efforts: vec![],
+            models: vec![],
+            instances: vec!["default".into()],
+        };
+        let bin = match resolve(ProviderKind::Cursor, context.binary.as_ref()) {
+            Ok(bin) => bin,
+            Err(error) => {
+                status.unavailable_reason = Some(format!("{error}. Install with: curl https://cursor.com/install -fsS | bash"));
+                return status;
+            }
+        };
+        status.binary_path = Some(bin.display().to_string());
+        match version_of(&bin, &["--version"]).await {
+            Some(version) => {
+                status.available = true;
+                status.version = Some(version);
+                status.models = cursor_models(&bin, context).await;
+            }
+            None => status.unavailable_reason = Some("could not run `agent --version`".into()),
+        }
+        status
+    }
+}
+
+#[cfg(test)]
+mod model_catalog_tests {
+    use super::parse_cursor_models;
+
+    #[test]
+    fn parses_cursor_account_models_and_default() {
+        let models = parse_cursor_models(
+            b"Available models\n\nauto - Auto (default)\ngpt-5.4-high - GPT-5.4 1M High\n\nTip: use --model <id> to switch.\n",
+        );
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "auto");
+        assert_eq!(models[0].display_name, "Auto");
+        assert!(models[0].is_default);
+        assert_eq!(models[1].id, "gpt-5.4-high");
+        assert!(!models[1].is_default);
+    }
+}
 
 /// Cursor extension: the agent asks the user a question.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
@@ -75,38 +166,11 @@ impl AgentDriver for CursorDriver {
     }
 
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
-        let mut status = ProviderStatus {
-            kind: ProviderKind::Cursor,
-            display_name: ProviderKind::Cursor.display_name().into(),
-            available: false,
-            binary_path: None,
-            version: None,
-            unavailable_reason: None,
-            // Cursor's ACP mode decides approvals itself; we map modes onto agent/plan/ask.
-            supported_permission_modes: vec![PermissionMode::Supervised, PermissionMode::Auto, PermissionMode::FullAccess],
-            supports_fork: false,
-            supports_model_switch: true,
-            supports_effort_switch: false,
-            supported_efforts: vec![],
-            models: vec![],
-            instances: vec!["default".into()],
-        };
-        let bin = match resolve(ProviderKind::Cursor, binary) {
-            Ok(b) => b,
-            Err(e) => {
-                status.unavailable_reason = Some(format!("{e}. Install with: curl https://cursor.com/install -fsS | bash"));
-                return status;
-            }
-        };
-        status.binary_path = Some(bin.display().to_string());
-        match version_of(&bin, &["--version"]).await {
-            Some(v) => {
-                status.available = true;
-                status.version = Some(v);
-            }
-            None => status.unavailable_reason = Some("could not run `agent --version`".into()),
-        }
-        status
+        self.probe_inner(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }).await
+    }
+
+    async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        self.probe_inner(context).await
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
@@ -173,7 +237,7 @@ async fn run_connection(
     bound: oneshot::Sender<Result<String>>,
 ) -> Result<()> {
     // Spawn ourselves so the process cwd is the project (Cursor reads .cursor/mcp.json from it).
-    let mut cmd = tokio::process::Command::new(&bin);
+    let mut cmd = Command::new(&bin);
     cmd.arg("acp")
         .current_dir(&config.cwd)
         .stdin(std::process::Stdio::piped())

@@ -21,7 +21,9 @@ use uuid::Uuid;
 
 use crate::binary::{at_least, resolve, version_of};
 use crate::ndjson::NdjsonChild;
-use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, Result, SessionConfig, SpawnedSession};
+use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, ProbeContext, Result, SessionConfig, SpawnedSession};
+
+const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flavor {
@@ -52,19 +54,119 @@ impl PiDriver {
             Flavor::Omp => (18, 0, 0),
         }
     }
+
+    async fn probe_inner(&self, context: &ProbeContext) -> ProviderStatus {
+        let kind = self.kind();
+        let mut status = ProviderStatus {
+            kind,
+            display_name: kind.display_name().into(),
+            available: false,
+            binary_path: None,
+            version: None,
+            unavailable_reason: None,
+            supported_permission_modes: match self.flavor {
+                Flavor::Pi => vec![PermissionMode::FullAccess],
+                Flavor::Omp => PermissionMode::ALL.to_vec(),
+            },
+            supports_fork: true,
+            supports_model_switch: true,
+            supports_effort_switch: self.flavor == Flavor::Omp,
+            supported_efforts: vec![],
+            models: vec![],
+            instances: vec!["default".into()],
+        };
+        let bin = match resolve(kind, context.binary.as_ref()) {
+            Ok(b) => b,
+            Err(e) => {
+                let hint = match self.flavor {
+                    Flavor::Pi => "npm install -g @earendil-works/pi-coding-agent",
+                    Flavor::Omp => "npm install -g @oh-my-pi/pi-coding-agent",
+                };
+                status.unavailable_reason = Some(format!("{e}. Install with: {hint}"));
+                return status;
+            }
+        };
+        status.binary_path = Some(bin.display().to_string());
+        match version_of(&bin, &["--version"]).await {
+            Some(v) => {
+                let min = Self::min_version(self.flavor);
+                let ok = at_least(&v, min);
+                status.available = ok;
+                if !ok {
+                    status.unavailable_reason =
+                        Some(format!("{} {v} is older than the required {}.{}.{}", kind.display_name(), min.0, min.1, min.2));
+                }
+                status.version = Some(v);
+                if ok {
+                    status.models = match self.flavor {
+                        Flavor::Pi => pi_models(&bin, context).await,
+                        Flavor::Omp => omp_models(&bin, context).await,
+                    };
+                    for model in &status.models {
+                        for effort in &model.efforts {
+                            if !status.supported_efforts.contains(effort) {
+                                status.supported_efforts.push(effort.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            None => status.unavailable_reason = Some(format!("could not run `{} --version`", kind.default_binary())),
+        }
+        status
+    }
 }
 
-async fn omp_models(bin: &std::path::Path) -> Vec<ProviderModel> {
-    let output = match tokio::time::timeout(
-        std::time::Duration::from_secs(4),
-        Command::new(bin).args(["models", "--json"]).stdin(std::process::Stdio::null()).output(),
-    )
-    .await
-    {
-        Ok(Ok(output)) if output.status.success() => output,
-        _ => return Vec::new(),
-    };
-    let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else { return Vec::new() };
+async fn model_command_output(bin: &std::path::Path, args: &[&str], context: &ProbeContext) -> Option<Vec<u8>> {
+    let mut command = Command::new(bin);
+    command.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    if let Some(cwd) = &context.cwd {
+        command.current_dir(cwd);
+    }
+    for (key, value) in &context.env {
+        command.env(key, value);
+    }
+    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) if output.status.success() => Some(output.stdout),
+        _ => None,
+    }
+}
+
+fn parse_pi_models(output: &[u8]) -> Vec<ProviderModel> {
+    let mut models = String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let columns = line.split_whitespace().collect::<Vec<_>>();
+            if columns.len() < 6
+                || (columns[0].eq_ignore_ascii_case("provider") && columns[1].eq_ignore_ascii_case("model"))
+                || !matches!(columns[columns.len() - 2], "yes" | "no")
+                || !matches!(columns[columns.len() - 1], "yes" | "no")
+            {
+                return None;
+            }
+            let provider = columns[0].to_string();
+            let model = columns[1].to_string();
+            Some(ProviderModel {
+                id: format!("{provider}/{model}"),
+                display_name: model,
+                provider: Some(provider),
+                efforts: Vec::new(),
+                default_effort: None,
+                is_default: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)));
+    models
+}
+
+async fn pi_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
+    model_command_output(bin, &["--list-models"], context).await.map_or_else(Vec::new, |output| parse_pi_models(&output))
+}
+
+async fn omp_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
+    let Some(output) = model_command_output(bin, &["models", "ls", "--json"], context).await else { return Vec::new() };
+    let Ok(value) = serde_json::from_slice::<Value>(&output) else { return Vec::new() };
     let Some(items) = value.get("models").and_then(Value::as_array) else { return Vec::new() };
     let mut models: Vec<ProviderModel> = items
         .iter()
@@ -94,61 +196,11 @@ impl AgentDriver for PiDriver {
     }
 
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
-        let kind = self.kind();
-        let mut status = ProviderStatus {
-            kind,
-            display_name: kind.display_name().into(),
-            available: false,
-            binary_path: None,
-            version: None,
-            unavailable_reason: None,
-            supported_permission_modes: match self.flavor {
-                Flavor::Pi => vec![PermissionMode::FullAccess],
-                Flavor::Omp => PermissionMode::ALL.to_vec(),
-            },
-            supports_fork: true,
-            supports_model_switch: true,
-            supports_effort_switch: self.flavor == Flavor::Omp,
-            supported_efforts: vec![],
-            models: vec![],
-            instances: vec!["default".into()],
-        };
-        let bin = match resolve(kind, binary) {
-            Ok(b) => b,
-            Err(e) => {
-                let hint = match self.flavor {
-                    Flavor::Pi => "npm install -g @earendil-works/pi-coding-agent",
-                    Flavor::Omp => "npm install -g @oh-my-pi/pi-coding-agent",
-                };
-                status.unavailable_reason = Some(format!("{e}. Install with: {hint}"));
-                return status;
-            }
-        };
-        status.binary_path = Some(bin.display().to_string());
-        match version_of(&bin, &["--version"]).await {
-            Some(v) => {
-                let min = Self::min_version(self.flavor);
-                let ok = at_least(&v, min);
-                status.available = ok;
-                if !ok {
-                    status.unavailable_reason =
-                        Some(format!("{} {v} is older than the required {}.{}.{}", kind.display_name(), min.0, min.1, min.2));
-                }
-                status.version = Some(v);
-                if ok && self.flavor == Flavor::Omp {
-                    status.models = omp_models(&bin).await;
-                    for model in &status.models {
-                        for effort in &model.efforts {
-                            if !status.supported_efforts.contains(effort) {
-                                status.supported_efforts.push(effort.clone());
-                            }
-                        }
-                    }
-                }
-            }
-            None => status.unavailable_reason = Some(format!("could not run `{} --version`", kind.default_binary())),
-        }
-        status
+        self.probe_inner(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }).await
+    }
+
+    async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        self.probe_inner(context).await
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
@@ -211,6 +263,12 @@ impl AgentDriver for PiDriver {
             // Wait for `ready`, then negotiate chunked framing so big frames survive.
             let _ = tokio::time::timeout(std::time::Duration::from_secs(30), ready_rx).await;
             let _ = session.call("negotiate_protocol", json!({ "protocolVersion": 2 })).await;
+            // OMP keeps subagents on a dedicated observability channel. Progress
+            // includes lifecycle, current tool, usage, and detached state without
+            // leaking child prose into the parent transcript.
+            if let Err(error) = session.call("set_subagent_subscription", json!({ "level": "progress" })).await {
+                tracing::debug!(%error, "OMP subagent subscription unavailable");
+            }
         }
 
         // Rewind: fork the persisted session at the first dropped user message.
@@ -450,6 +508,11 @@ impl PiSession {
                 }
             }
             "tool_execution_start" => {
+                if self.flavor == Flavor::Omp
+                    && let Some(task) = omp_background_process(&v)
+                {
+                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                }
                 self.emit(DriverEvent::ToolStarted(ToolCall {
                     id: v.get("toolCallId").and_then(|i| i.as_str()).unwrap_or("").to_string(),
                     name: v.get("toolName").and_then(|n| n.as_str()).unwrap_or("tool").to_string(),
@@ -458,7 +521,19 @@ impl PiSession {
                 }))
                 .await;
             }
+            "tool_execution_update" => {
+                if self.flavor == Flavor::Omp
+                    && let Some(task) = omp_background_process(&v)
+                {
+                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                }
+            }
             "tool_execution_end" => {
+                if self.flavor == Flavor::Omp
+                    && let Some(task) = omp_background_process(&v)
+                {
+                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                }
                 let content = v.pointer("/result/content").cloned().unwrap_or(Value::Null);
                 self.emit(DriverEvent::ToolCompleted {
                     tool_call_id: v.get("toolCallId").and_then(|i| i.as_str()).unwrap_or("").to_string(),
@@ -466,6 +541,11 @@ impl PiSession {
                     is_error: v.get("isError").and_then(|e| e.as_bool()).unwrap_or(false),
                 })
                 .await;
+            }
+            "subagent_lifecycle" | "subagent_progress" if self.flavor == Flavor::Omp => {
+                if let Some(task) = omp_subagent_task(&v) {
+                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                }
             }
             "agent_end" => {
                 // pi finishes with `agent_settled`; omp has no such frame and marks the last `agent_end`.
@@ -599,6 +679,130 @@ impl PiSession {
     }
 }
 
+fn omp_runtime_status(status: &str) -> RuntimeTaskStatus {
+    match status {
+        "pending" => RuntimeTaskStatus::Pending,
+        "completed" => RuntimeTaskStatus::Completed,
+        "failed" | "error" => RuntimeTaskStatus::Failed,
+        "aborted" | "cancelled" | "canceled" | "stopped" => RuntimeTaskStatus::Stopped,
+        "waiting" | "idle" | "parked" => RuntimeTaskStatus::Waiting,
+        _ => RuntimeTaskStatus::Running,
+    }
+}
+
+fn first_line(value: &str) -> String {
+    value.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or(value).chars().take(120).collect()
+}
+
+/// Normalize OMP's dedicated RPC subagent frames. `RuntimeTaskStarted` is used
+/// as an upsert carrier for both snapshots and progress; the daemon preserves
+/// the original start time and emits the appropriate durable update event.
+fn omp_subagent_task(frame: &Value) -> Option<DriverRuntimeTask> {
+    let payload = frame.get("payload")?;
+    let progress = payload.get("progress");
+    let id = progress.and_then(|value| value.get("id")).or_else(|| payload.get("id")).and_then(Value::as_str)?.to_string();
+    let agent =
+        payload.get("agent").or_else(|| progress.and_then(|value| value.get("agent"))).and_then(Value::as_str).unwrap_or("subagent");
+    let status = progress
+        .and_then(|value| value.get("status"))
+        .or_else(|| payload.get("status"))
+        .and_then(Value::as_str)
+        .map(omp_runtime_status)
+        .unwrap_or(RuntimeTaskStatus::Running);
+    let title = payload
+        .get("task")
+        .or_else(|| progress.and_then(|value| value.get("task")))
+        .or_else(|| payload.get("description"))
+        .or_else(|| progress.and_then(|value| value.get("description")))
+        .or_else(|| payload.get("assignment"))
+        .and_then(Value::as_str)
+        .map(first_line)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("{agent} subagent"));
+    let detail = progress
+        .and_then(|value| value.get("lastIntent"))
+        .or_else(|| payload.get("assignment"))
+        .and_then(Value::as_str)
+        .map(first_line)
+        .filter(|value| !value.is_empty());
+    let last_tool_name = progress.and_then(|value| value.get("currentTool")).and_then(Value::as_str).map(str::to_string);
+    let stats = RuntimeTaskStats {
+        token_count: progress.and_then(|value| value.get("tokens")).and_then(Value::as_u64),
+        tool_uses: progress.and_then(|value| value.get("toolCount")).and_then(Value::as_u64),
+        duration_ms: progress.and_then(|value| value.get("durationMs")).and_then(Value::as_u64),
+        cpu_percent: None,
+        rss_kb: None,
+    };
+    let model = progress.and_then(|value| value.get("resolvedModel")).and_then(Value::as_str).map(str::to_string);
+
+    Some(DriverRuntimeTask {
+        id: format!("omp-agent:{id}"),
+        kind: RuntimeTaskKind::Agent,
+        status,
+        title,
+        detail,
+        provider_type: Some(format!("subagent:{agent}")),
+        parent_id: None,
+        tool_call_id: payload.get("parentToolCallId").and_then(Value::as_str).map(str::to_string),
+        provider_thread_id: Some(id),
+        model,
+        effort: None,
+        backgrounded: payload.get("detached").and_then(Value::as_bool).unwrap_or(false),
+        last_tool_name,
+        usage: None,
+        stats,
+        // OMP exposes observation and transcripts over RPC, but targeted
+        // cancellation/backgrounding remains a model-facing `hub` operation.
+        capabilities: RuntimeTaskCapabilities::default(),
+    })
+}
+
+fn omp_background_process(frame: &Value) -> Option<DriverRuntimeTask> {
+    if frame.get("toolName").and_then(Value::as_str)? != "bash" {
+        return None;
+    }
+    let args = frame.get("args").unwrap_or(&Value::Null);
+    let async_details = frame
+        .pointer("/partialResult/details/async")
+        .or_else(|| frame.pointer("/result/details/async"))
+        .or_else(|| frame.pointer("/details/async"));
+    let explicitly_async = args.get("async").and_then(Value::as_bool) == Some(true);
+    if async_details.is_none() && !explicitly_async {
+        return None;
+    }
+    let tool_call_id = frame.get("toolCallId").and_then(Value::as_str)?.to_string();
+    let async_state = async_details.and_then(|value| value.get("state")).and_then(Value::as_str).unwrap_or("running");
+    let status = omp_runtime_status(async_state);
+    let command = args.get("command").and_then(Value::as_str).map(first_line).filter(|value| !value.is_empty());
+    let detail_root = frame.pointer("/partialResult/details").or_else(|| frame.pointer("/result/details")).or_else(|| frame.get("details"));
+    let stats = RuntimeTaskStats {
+        token_count: None,
+        tool_uses: None,
+        duration_ms: detail_root.and_then(|value| value.get("durationMs").or_else(|| value.get("elapsedMs"))).and_then(Value::as_u64),
+        cpu_percent: None,
+        rss_kb: None,
+    };
+
+    Some(DriverRuntimeTask {
+        id: format!("tool:{tool_call_id}"),
+        kind: RuntimeTaskKind::Process,
+        status,
+        title: command.unwrap_or_else(|| "Background process".into()),
+        detail: None,
+        provider_type: Some("bash".into()),
+        parent_id: None,
+        tool_call_id: Some(tool_call_id),
+        provider_thread_id: async_details.and_then(|value| value.get("jobId")).and_then(Value::as_str).map(str::to_string),
+        model: None,
+        effort: None,
+        backgrounded: true,
+        last_tool_name: None,
+        usage: None,
+        stats,
+        capabilities: RuntimeTaskCapabilities::default(),
+    })
+}
+
 fn images(message: &UserMessage) -> Vec<Value> {
     message
         .parts
@@ -703,6 +907,108 @@ impl AgentSession for Handle {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn omp_model_discovery_budget_covers_a_cold_registry_refresh() {
+        assert!(MODEL_DISCOVERY_TIMEOUT >= Duration::from_secs(10));
+    }
+
+    #[test]
+    fn parses_plain_pi_model_table() {
+        let models = parse_pi_models(
+            b"provider   model                 context  max-out  thinking  images\n\
+              anthropic  claude-sonnet-4-5   200K     64K      yes       yes\n\
+              openai     gpt-5.4              1M       128K     yes       no\n",
+        );
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "anthropic/claude-sonnet-4-5");
+        assert_eq!(models[0].provider.as_deref(), Some("anthropic"));
+        assert_eq!(models[1].id, "openai/gpt-5.4");
+    }
+
+    #[test]
+    fn maps_omp_native_subagent_lifecycle_and_progress() {
+        let started = omp_subagent_task(&json!({
+            "type": "subagent_lifecycle",
+            "payload": {
+                "id": "QuietRiver",
+                "index": 0,
+                "agent": "scout",
+                "agentSource": "bundled",
+                "description": "Inspect provider parity",
+                "status": "started",
+                "sessionFile": "/tmp/QuietRiver.jsonl",
+                "parentToolCallId": "tool-task-1",
+                "detached": true
+            }
+        }))
+        .expect("native OMP task");
+        assert_eq!(started.id, "omp-agent:QuietRiver");
+        assert_eq!(started.kind, RuntimeTaskKind::Agent);
+        assert_eq!(started.status, RuntimeTaskStatus::Running);
+        assert_eq!(started.title, "Inspect provider parity");
+        assert_eq!(started.tool_call_id.as_deref(), Some("tool-task-1"));
+        assert_eq!(started.provider_thread_id.as_deref(), Some("QuietRiver"));
+        assert!(started.backgrounded);
+        assert!(!started.capabilities.stop);
+
+        let progress = omp_subagent_task(&json!({
+            "type": "subagent_progress",
+            "payload": {
+                "index": 0,
+                "agent": "scout",
+                "agentSource": "bundled",
+                "task": "Inspect every registered provider",
+                "parentToolCallId": "tool-task-1",
+                "detached": true,
+                "progress": {
+                    "id": "QuietRiver",
+                    "index": 0,
+                    "agent": "scout",
+                    "agentSource": "bundled",
+                    "status": "running",
+                    "task": "Inspect every registered provider",
+                    "currentTool": "grep",
+                    "toolCount": 7,
+                    "tokens": 1234,
+                    "durationMs": 2500,
+                    "recentTools": [],
+                    "recentOutput": [],
+                    "cost": 0.0
+                }
+            }
+        }))
+        .expect("native OMP progress");
+        assert_eq!(progress.id, started.id);
+        assert_eq!(progress.title, "Inspect every registered provider");
+        assert_eq!(progress.last_tool_name.as_deref(), Some("grep"));
+        assert_eq!(progress.stats.tool_uses, Some(7));
+        assert_eq!(progress.stats.token_count, Some(1234));
+        assert_eq!(progress.stats.duration_ms, Some(2500));
+    }
+
+    #[test]
+    fn maps_omp_managed_background_bash_updates() {
+        let task = omp_background_process(&json!({
+            "type": "tool_execution_update",
+            "toolCallId": "tool-bash-1",
+            "toolName": "bash",
+            "args": { "command": "pnpm dev" },
+            "partialResult": {
+                "details": {
+                    "async": { "state": "running", "jobId": "job-42", "type": "bash" }
+                }
+            }
+        }))
+        .expect("managed background process");
+        assert_eq!(task.id, "tool:tool-bash-1");
+        assert_eq!(task.kind, RuntimeTaskKind::Process);
+        assert_eq!(task.status, RuntimeTaskStatus::Running);
+        assert_eq!(task.title, "pnpm dev");
+        assert_eq!(task.provider_thread_id.as_deref(), Some("job-42"));
+        assert!(task.backgrounded);
+    }
 
     #[test]
     fn pi_and_omp_use_their_native_skill_command_prefix() {

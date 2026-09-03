@@ -107,6 +107,12 @@ export async function loadThread(id: ThreadId): Promise<void> {
   void loadCheckpoints(id)
 }
 
+export async function refreshProviders(projectId?: ProjectId) {
+  const result = await rpc().call("providers.list", projectId ? { project_id: projectId } : {})
+  useStore.getState().set({ providers: result.providers })
+  return result.providers
+}
+
 async function loadCheckpoints(id: ThreadId) {
   try {
     const r = await rpc().call("threads.checkpoints", { thread_id: id })

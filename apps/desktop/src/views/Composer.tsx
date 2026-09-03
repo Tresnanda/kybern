@@ -38,10 +38,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/toolt
 import { buildStructuredTextParts } from "@/lib/composerTokens"
 import { PROVIDER_LABEL, basename } from "@/lib/format"
 import { CentralIcon } from "@/lib/synara/central-icons"
-import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
+import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
-import { errorText, listSkills, searchFiles, uploadFile } from "@/state/rpc"
+import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
 
 export interface ComposerHandle {
   focus: () => void
@@ -210,6 +210,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [fileResult, setFileResult] = useState<{ query: string; files: string[] }>({ query: "", files: [] })
   const [skillCatalog, setSkillCatalog] = useState<{ key: string; skills: SkillInfo[] }>({ key: "", skills: [] })
@@ -482,11 +483,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const models = status?.models ?? []
   const current =
     models.find((m) => (model ? m.id === model : m.is_default)) ??
-    (model ? models.find((m) => m.id.startsWith(model) || model.startsWith(m.id)) : models[0])
+    (model ? models.find((m) => m.id.startsWith(model) || model.startsWith(m.id)) : undefined)
   const modelLabel = current?.display_name ?? (model ? prettyModel(model) : null)
   const efforts = current?.efforts?.length ? current.efforts : (status?.supported_efforts ?? [])
   const effortLabel = effort ?? current?.default_effort ?? null
   const canPickModel = !!onModelChange && (models.length > 0 || efforts.length > 0)
+  const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch && models.length === 0
   const canPickProvider = !!onProviderChange
   const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
   const menuLoading = mention ? fileResult.query !== mention.query : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
@@ -501,6 +503,25 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       : skill
         ? "No matching skills"
         : "No matching commands or skills"
+
+  const reloadModels = async () => {
+    if (!provider || modelCatalogLoading) return
+    setModelCatalogLoading(true)
+    try {
+      const refreshed = await refreshProviders(projectId)
+      const count = refreshed.find((item) => item.kind === provider.kind)?.models?.length ?? 0
+      if (count === 0) {
+        const description = provider.kind === "omp"
+          ? "Run omp models ls --json and check the provider login, then reload models."
+          : "Check the provider login, then reload models."
+        toast.error("Models are still unavailable", { description })
+      }
+    } catch (error) {
+      toast.error("Unable to reload models", { description: errorText(error) })
+    } finally {
+      setModelCatalogLoading(false)
+    }
+  }
 
   return (
     <ComposerColumnFrame className={className}>
@@ -734,7 +755,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       <TooltipTrigger
                         render={
                           <MenuTrigger
-                            disabled={!canPickModel && !canPickProvider}
+                            disabled={!canPickModel && !canReloadModels && !canPickProvider}
                             render={
                               <Button
                                 size="sm"
@@ -752,7 +773,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           {modelLabel && effortLabel && (
                             <span className={cn("shrink-0 capitalize leading-none", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>{effortLabel}</span>
                           )}
-                          {(canPickModel || canPickProvider) && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
+                          {(canPickModel || canReloadModels || canPickProvider) && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
                         </span>
                       </TooltipTrigger>
                       <TooltipPopup side="top" sideOffset={6} variant="picker">
@@ -760,8 +781,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       </TooltipPopup>
                     </Tooltip>
                     <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
-                      {efforts.length > 0 && canPickModel && (
+                      {canReloadModels && (
                         <MenuGroup>
+                          <MenuGroupLabel>Model</MenuGroupLabel>
+                          <MenuItem onClick={() => void reloadModels()} disabled={modelCatalogLoading}>
+                            {modelCatalogLoading ? <Spinner size={12} /> : <RefreshCwIcon className="size-3" />}
+                            <span>{modelCatalogLoading ? "Loading models…" : "Reload models"}</span>
+                          </MenuItem>
+                        </MenuGroup>
+                      )}
+                      {efforts.length > 0 && canPickModel && (
+                        <MenuGroup className={canReloadModels ? "mt-1" : undefined}>
                           <MenuGroupLabel>Effort</MenuGroupLabel>
                           <MenuRadioGroup value={effortLabel ?? ""} onValueChange={(v) => onModelChange?.(current?.id ?? model ?? undefined, v as string)}>
                             {efforts.map((e) => (
@@ -797,7 +827,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       )}
                       {canPickProvider && (
                         <>
-                          {(models.length > 0 || efforts.length > 0) && <MenuSeparator />}
+                          {(models.length > 0 || efforts.length > 0 || canReloadModels) && <MenuSeparator />}
                           <MenuGroup>
                             <MenuGroupLabel>Agent</MenuGroupLabel>
                             <MenuRadioGroup value={provider.kind} onValueChange={(v) => onProviderChange?.({ kind: v as ProviderStatus["kind"], instance: "default" })}>

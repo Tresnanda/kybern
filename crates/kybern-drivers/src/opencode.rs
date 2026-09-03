@@ -20,22 +20,31 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::binary::{at_least, resolve, version_of};
-use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, Result, SessionConfig, SpawnedSession, summarize_tool_call};
+use crate::{
+    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, ProbeContext, Result, SessionConfig,
+    SpawnedSession, summarize_tool_call,
+};
 
 const MIN_VERSION: (u64, u64, u64) = (1, 10, 0);
 const MAX_SKILL_DISCOVERY_BYTES: usize = 8 * 1024 * 1024;
+const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Default)]
 pub struct OpencodeDriver;
 
-async fn opencode_models(bin: &std::path::Path) -> Vec<ProviderModel> {
-    let output =
-        match tokio::time::timeout(std::time::Duration::from_secs(4), Command::new(bin).args(["models"]).stdin(Stdio::null()).output())
-            .await
-        {
-            Ok(Ok(output)) if output.status.success() => output,
-            _ => return Vec::new(),
-        };
+async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
+    let mut command = Command::new(bin);
+    command.args(["models"]).stdin(Stdio::null()).kill_on_drop(true);
+    if let Some(cwd) = &context.cwd {
+        command.current_dir(cwd);
+    }
+    for (key, value) in &context.env {
+        command.env(key, value);
+    }
+    let output = match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
     let mut models: Vec<ProviderModel> = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
@@ -56,6 +65,50 @@ async fn opencode_models(bin: &std::path::Path) -> Vec<ProviderModel> {
         .collect();
     models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)));
     models
+}
+
+impl OpencodeDriver {
+    async fn probe_inner(&self, context: &ProbeContext) -> ProviderStatus {
+        let mut status = ProviderStatus {
+            kind: ProviderKind::Opencode,
+            display_name: ProviderKind::Opencode.display_name().into(),
+            available: false,
+            binary_path: None,
+            version: None,
+            unavailable_reason: None,
+            supported_permission_modes: PermissionMode::ALL.to_vec(),
+            supports_fork: true,
+            supports_model_switch: true,
+            supports_effort_switch: false,
+            supported_efforts: vec![],
+            models: vec![],
+            instances: vec!["default".into()],
+        };
+        let bin = match resolve(ProviderKind::Opencode, context.binary.as_ref()) {
+            Ok(b) => b,
+            Err(e) => {
+                status.unavailable_reason = Some(format!("{e}. Install with: npm install -g opencode-ai"));
+                return status;
+            }
+        };
+        status.binary_path = Some(bin.display().to_string());
+        match version_of(&bin, &["--version"]).await {
+            Some(v) => {
+                let ok = at_least(&v, MIN_VERSION);
+                status.available = ok;
+                if !ok {
+                    status.unavailable_reason =
+                        Some(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
+                }
+                status.version = Some(v);
+                if ok {
+                    status.models = opencode_models(&bin, context).await;
+                }
+            }
+            None => status.unavailable_reason = Some("could not run `opencode --version`".into()),
+        }
+        status
+    }
 }
 
 /// Ask OpenCode for the effective skill catalog in this project. The CLI
@@ -114,45 +167,11 @@ impl AgentDriver for OpencodeDriver {
     }
 
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
-        let mut status = ProviderStatus {
-            kind: ProviderKind::Opencode,
-            display_name: ProviderKind::Opencode.display_name().into(),
-            available: false,
-            binary_path: None,
-            version: None,
-            unavailable_reason: None,
-            supported_permission_modes: PermissionMode::ALL.to_vec(),
-            supports_fork: true,
-            supports_model_switch: true,
-            supports_effort_switch: false,
-            supported_efforts: vec![],
-            models: vec![],
-            instances: vec!["default".into()],
-        };
-        let bin = match resolve(ProviderKind::Opencode, binary) {
-            Ok(b) => b,
-            Err(e) => {
-                status.unavailable_reason = Some(format!("{e}. Install with: npm install -g opencode-ai"));
-                return status;
-            }
-        };
-        status.binary_path = Some(bin.display().to_string());
-        match version_of(&bin, &["--version"]).await {
-            Some(v) => {
-                let ok = at_least(&v, MIN_VERSION);
-                status.available = ok;
-                if !ok {
-                    status.unavailable_reason =
-                        Some(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
-                }
-                status.version = Some(v);
-                if ok {
-                    status.models = opencode_models(&bin).await;
-                }
-            }
-            None => status.unavailable_reason = Some("could not run `opencode --version`".into()),
-        }
-        status
+        self.probe_inner(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }).await
+    }
+
+    async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        self.probe_inner(context).await
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
@@ -235,6 +254,7 @@ impl AgentDriver for OpencodeDriver {
                 active: false,
                 pending: HashMap::new(),
                 current_message_id: None,
+                children: HashMap::new(),
             }),
         });
 
@@ -332,6 +352,111 @@ struct PartInfo {
     started: bool,
 }
 
+#[derive(Default)]
+struct ChildRuntime {
+    task_id: String,
+    seen_tool_parts: HashSet<String>,
+    stats: RuntimeTaskStats,
+    stop_requested: bool,
+    terminal: bool,
+}
+
+fn opencode_child_status(status: &str, backgrounded: bool) -> RuntimeTaskStatus {
+    match status {
+        "error" | "failed" => RuntimeTaskStatus::Failed,
+        "cancelled" | "canceled" | "aborted" | "stopped" => RuntimeTaskStatus::Stopped,
+        // A background task's parent tool returns immediately. The child
+        // session's own idle/error event is the authoritative terminal edge.
+        "completed" if !backgrounded => RuntimeTaskStatus::Completed,
+        "pending" => RuntimeTaskStatus::Pending,
+        _ => RuntimeTaskStatus::Running,
+    }
+}
+
+fn opencode_model(metadata: &Value) -> Option<String> {
+    let model = metadata.get("model")?;
+    let provider = model.get("providerID").and_then(Value::as_str)?;
+    let id = model.get("modelID").and_then(Value::as_str)?;
+    Some(format!("{provider}/{id}"))
+}
+
+/// OpenCode's native `task` tool publishes the child session id in part
+/// metadata. The SSE stream then carries that child's status and tool events.
+fn opencode_child_task(part: &Value, parent_id: Option<String>) -> Option<(String, DriverRuntimeTask)> {
+    if part.get("type").and_then(Value::as_str) != Some("tool") || part.get("tool").and_then(Value::as_str) != Some("task") {
+        return None;
+    }
+    let state = part.get("state")?;
+    let metadata = state.get("metadata")?;
+    let child_id = metadata.get("sessionId").and_then(Value::as_str)?.to_string();
+    let input = state.get("input").unwrap_or(&Value::Null);
+    let backgrounded =
+        metadata.get("background").and_then(Value::as_bool) == Some(true) || input.get("background").and_then(Value::as_bool) == Some(true);
+    let raw_status = state.get("status").and_then(Value::as_str).unwrap_or("running");
+    let title = state
+        .get("title")
+        .or_else(|| input.get("description"))
+        .or_else(|| input.get("prompt"))
+        .and_then(Value::as_str)
+        .map(|value| value.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or(value).chars().take(120).collect())
+        .filter(|value: &String| !value.is_empty())
+        .unwrap_or_else(|| "Subagent".into());
+    let provider_type =
+        input.get("subagent_type").and_then(Value::as_str).map(|value| format!("task:{value}")).or_else(|| Some("task".into()));
+    let status = opencode_child_status(raw_status, backgrounded);
+    let task = DriverRuntimeTask {
+        id: format!("opencode:{child_id}"),
+        kind: RuntimeTaskKind::Agent,
+        status,
+        title,
+        detail: None,
+        provider_type,
+        parent_id,
+        tool_call_id: part.get("callID").and_then(Value::as_str).map(str::to_string),
+        provider_thread_id: Some(child_id.clone()),
+        model: opencode_model(metadata),
+        effort: None,
+        backgrounded,
+        last_tool_name: None,
+        usage: None,
+        stats: RuntimeTaskStats::default(),
+        capabilities: RuntimeTaskCapabilities { stop: status.is_active(), background: false },
+    };
+    Some((child_id, task))
+}
+
+fn opencode_child_session(info: &Value, parent_id: Option<String>) -> Option<(String, DriverRuntimeTask)> {
+    let child_id = info.get("id").and_then(Value::as_str)?.to_string();
+    let provider_type = info.get("agent").and_then(Value::as_str).map(|value| format!("task:{value}"));
+    let title = info
+        .get("title")
+        .and_then(Value::as_str)
+        .map(|value| value.rsplit_once(" (@").map_or(value, |(description, _)| description).trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Subagent".into());
+    Some((
+        child_id.clone(),
+        DriverRuntimeTask {
+            id: format!("opencode:{child_id}"),
+            kind: RuntimeTaskKind::Agent,
+            status: RuntimeTaskStatus::Running,
+            title,
+            detail: None,
+            provider_type,
+            parent_id,
+            tool_call_id: None,
+            provider_thread_id: Some(child_id),
+            model: None,
+            effort: None,
+            backgrounded: false,
+            last_tool_name: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities { stop: true, background: false },
+        },
+    ))
+}
+
 struct State {
     session_id: Option<String>,
     model: Option<String>,
@@ -345,6 +470,9 @@ struct State {
     pending: HashMap<String, String>,
     /// Client-chosen OpenCode message id of the current turn's user message.
     current_message_id: Option<String>,
+    /// Provider child session id -> runtime bookkeeping. Child output stays out
+    /// of the parent transcript; only compact lifecycle/progress is projected.
+    children: HashMap<String, ChildRuntime>,
 }
 
 struct OpencodeSession {
@@ -361,6 +489,67 @@ struct Handle(Arc<OpencodeSession>);
 impl OpencodeSession {
     async fn emit(&self, ev: DriverEvent) {
         let _ = self.events.send(ev).await;
+    }
+
+    async fn observe_child(&self, child_id: String, task: DriverRuntimeTask) {
+        let task_id = task.id.clone();
+        let mut state = self.state.lock().await;
+        state.children.entry(child_id).or_default().task_id = task_id;
+        drop(state);
+        self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+    }
+
+    async fn update_child(
+        &self,
+        child_id: &str,
+        status: Option<RuntimeTaskStatus>,
+        detail: Option<String>,
+        last_tool_name: Option<String>,
+        stats: Option<RuntimeTaskStats>,
+        terminal: bool,
+    ) {
+        let task_id = {
+            let mut state = self.state.lock().await;
+            let Some(child) = state.children.get_mut(child_id) else { return };
+            if child.terminal {
+                return;
+            }
+            child.terminal = terminal;
+            child.task_id.clone()
+        };
+        let update = DriverRuntimeTaskUpdate {
+            id: task_id,
+            status,
+            detail,
+            backgrounded: None,
+            last_tool_name,
+            usage: None,
+            stats,
+            capabilities: terminal.then(RuntimeTaskCapabilities::default),
+        };
+        self.emit(if terminal { DriverEvent::RuntimeTaskCompleted(update) } else { DriverEvent::RuntimeTaskUpdated(update) }).await;
+    }
+
+    async fn stop_child(&self, session_id: &str) -> Result<()> {
+        {
+            let mut state = self.state.lock().await;
+            let child = state
+                .children
+                .get_mut(session_id)
+                .ok_or_else(|| DriverError::Unsupported("OpenCode child session is no longer active".into()))?;
+            if child.terminal {
+                return Err(DriverError::Unsupported("OpenCode child session is no longer active".into()));
+            }
+            child.stop_requested = true;
+        }
+        if let Err(error) = self.post(&format!("/session/{session_id}/abort"), json!({})).await {
+            if let Some(child) = self.state.lock().await.children.get_mut(session_id) {
+                child.stop_requested = false;
+            }
+            return Err(error);
+        }
+        self.update_child(session_id, Some(RuntimeTaskStatus::Stopped), Some("Stopped by user".into()), None, None, true).await;
+        Ok(())
     }
 
     async fn event_loop(self: Arc<Self>) {
@@ -409,8 +598,36 @@ impl OpencodeSession {
         let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let p = &v["properties"];
         let my_session = self.state.lock().await.session_id.clone();
+
+        if ty == "session.created" {
+            let info = &p["info"];
+            let parent_session_id = info.get("parentID").and_then(Value::as_str);
+            let parent_task_id = {
+                let state = self.state.lock().await;
+                match (my_session.as_deref(), parent_session_id) {
+                    (Some(root), Some(parent)) if root == parent => Some(None),
+                    (_, Some(parent)) => state.children.get(parent).map(|child| Some(child.task_id.clone())),
+                    _ => None,
+                }
+            };
+            if let Some(parent_task_id) = parent_task_id
+                && let Some((child_id, task)) = opencode_child_session(info, parent_task_id)
+            {
+                self.observe_child(child_id, task).await;
+            }
+            return;
+        }
+
         let sid =
             p.get("sessionID").or_else(|| p.pointer("/part/sessionID")).or_else(|| p.pointer("/info/sessionID")).and_then(|s| s.as_str());
+        let child_task_id = match sid {
+            Some(session_id) => self.state.lock().await.children.get(session_id).map(|child| child.task_id.clone()),
+            None => None,
+        };
+        if let (Some(session_id), Some(task_id)) = (sid, child_task_id) {
+            self.handle_child_event(session_id, &task_id, ty, p).await;
+            return;
+        }
         if let (Some(mine), Some(theirs)) = (&my_session, sid)
             && mine != theirs
         {
@@ -563,7 +780,87 @@ impl OpencodeSession {
         }
     }
 
+    async fn handle_child_event(&self, session_id: &str, task_id: &str, ty: &str, properties: &Value) {
+        match ty {
+            "message.part.updated" => self.handle_child_part(session_id, task_id, &properties["part"]).await,
+            "session.status" => {
+                let status = properties.pointer("/status/type").and_then(Value::as_str).unwrap_or("");
+                match status {
+                    "busy" => self.update_child(session_id, Some(RuntimeTaskStatus::Running), None, None, None, false).await,
+                    "retry" => {
+                        let detail = properties.pointer("/status/message").and_then(Value::as_str).map(str::to_string);
+                        self.update_child(session_id, Some(RuntimeTaskStatus::Waiting), detail, None, None, false).await;
+                    }
+                    _ => {}
+                }
+            }
+            "session.idle" => {
+                let stop_requested = self.state.lock().await.children.get(session_id).is_some_and(|child| child.stop_requested);
+                let status = if stop_requested { RuntimeTaskStatus::Stopped } else { RuntimeTaskStatus::Completed };
+                self.update_child(session_id, Some(status), None, None, None, true).await;
+            }
+            "session.error" => {
+                let error = &properties["error"];
+                let name = error.get("name").and_then(Value::as_str).unwrap_or("error");
+                let detail = error.pointer("/data/message").and_then(Value::as_str).map(str::to_string);
+                let stop_requested = self.state.lock().await.children.get(session_id).is_some_and(|child| child.stop_requested);
+                let status =
+                    if stop_requested || name == "MessageAbortedError" { RuntimeTaskStatus::Stopped } else { RuntimeTaskStatus::Failed };
+                self.update_child(session_id, Some(status), detail, None, None, true).await;
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_child_part(&self, session_id: &str, owner_task_id: &str, part: &Value) {
+        if let Some((child_id, task)) = opencode_child_task(part, Some(owner_task_id.to_string())) {
+            self.observe_child(child_id, task).await;
+        }
+
+        match part.get("type").and_then(Value::as_str).unwrap_or("") {
+            "tool" => {
+                let status = part.pointer("/state/status").and_then(Value::as_str).unwrap_or("");
+                if !matches!(status, "running" | "completed" | "error") {
+                    return;
+                }
+                let part_id = part.get("id").and_then(Value::as_str).unwrap_or("");
+                let tool = part.get("tool").and_then(Value::as_str).unwrap_or("tool").to_string();
+                let stats = {
+                    let mut state = self.state.lock().await;
+                    let Some(child) = state.children.get_mut(session_id) else { return };
+                    if !part_id.is_empty() && child.seen_tool_parts.insert(part_id.to_string()) {
+                        child.stats.tool_uses = Some(child.stats.tool_uses.unwrap_or(0) + 1);
+                    }
+                    child.stats.clone()
+                };
+                self.update_child(session_id, Some(RuntimeTaskStatus::Running), None, Some(tool), Some(stats), false).await;
+            }
+            "step-finish" => {
+                let step_tokens = part
+                    .get("tokens")
+                    .map(|tokens| {
+                        tokens.get("input").and_then(Value::as_u64).unwrap_or(0)
+                            + tokens.get("output").and_then(Value::as_u64).unwrap_or(0)
+                            + tokens.get("reasoning").and_then(Value::as_u64).unwrap_or(0)
+                            + tokens.pointer("/cache/write").and_then(Value::as_u64).unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+                let stats = {
+                    let mut state = self.state.lock().await;
+                    let Some(child) = state.children.get_mut(session_id) else { return };
+                    child.stats.token_count = Some(child.stats.token_count.unwrap_or(0) + step_tokens);
+                    child.stats.clone()
+                };
+                self.update_child(session_id, Some(RuntimeTaskStatus::Running), None, None, Some(stats), false).await;
+            }
+            _ => {}
+        }
+    }
+
     async fn handle_part(&self, part: &Value) {
+        if let Some((child_id, task)) = opencode_child_task(part, None) {
+            self.observe_child(child_id, task).await;
+        }
         let id = part.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let kind = part.get("type").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let message_id = part.get("messageID").and_then(|s| s.as_str()).unwrap_or("").to_string();
@@ -775,6 +1072,14 @@ impl AgentSession for Handle {
         s.post(&format!("/session/{session_id}/permissions/{request_id}"), json!({ "response": response })).await.map(|_| ())
     }
 
+    async fn stop_runtime_task(&self, task: &RuntimeTask) -> Result<()> {
+        let session_id = task
+            .provider_thread_id
+            .as_deref()
+            .ok_or_else(|| DriverError::Unsupported("OpenCode did not expose the child session id needed to stop this task".into()))?;
+        self.0.stop_child(session_id).await
+    }
+
     async fn close(&self) -> Result<()> {
         let mut child = self.0.child.lock().await;
         let _ = child.kill().await;
@@ -784,10 +1089,16 @@ impl AgentSession for Handle {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_skills, skill_command};
-    use kybern_protocol::{ContentPart, SkillScope, UserMessage};
+    use super::{MODEL_DISCOVERY_TIMEOUT, opencode_child_session, opencode_child_task, parse_skills, skill_command};
+    use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStatus, SkillScope, UserMessage};
     use serde_json::json;
     use std::path::Path;
+    use std::time::Duration;
+
+    #[test]
+    fn model_discovery_budget_covers_a_cold_provider_refresh() {
+        assert!(MODEL_DISCOVERY_TIMEOUT >= Duration::from_secs(10));
+    }
 
     #[test]
     fn parses_opencodes_effective_skill_catalog() {
@@ -827,5 +1138,89 @@ mod tests {
             command.files,
             vec![json!({ "type": "file", "mime": "image/png", "url": "data:image/png;base64,aW1hZ2U=", "filename": "image" })]
         );
+    }
+
+    #[test]
+    fn maps_opencode_child_session_metadata_to_native_runtime_activity() {
+        let (child_id, task) = opencode_child_task(
+            &json!({
+                "id": "part-task-1",
+                "sessionID": "ses_parent",
+                "messageID": "msg_parent",
+                "type": "tool",
+                "callID": "call-task-1",
+                "tool": "task",
+                "state": {
+                    "status": "running",
+                    "input": {
+                        "description": "Audit the driver",
+                        "prompt": "Check native lifecycle support",
+                        "subagent_type": "general",
+                        "background": true
+                    },
+                    "title": "Audit the driver",
+                    "metadata": {
+                        "parentSessionId": "ses_parent",
+                        "sessionId": "ses_child",
+                        "background": true,
+                        "model": { "providerID": "openai", "modelID": "gpt-5.6-sol" }
+                    }
+                }
+            }),
+            None,
+        )
+        .expect("OpenCode child task");
+
+        assert_eq!(child_id, "ses_child");
+        assert_eq!(task.id, "opencode:ses_child");
+        assert_eq!(task.kind, RuntimeTaskKind::Agent);
+        assert_eq!(task.status, RuntimeTaskStatus::Running);
+        assert_eq!(task.title, "Audit the driver");
+        assert_eq!(task.provider_thread_id.as_deref(), Some("ses_child"));
+        assert_eq!(task.tool_call_id.as_deref(), Some("call-task-1"));
+        assert_eq!(task.model.as_deref(), Some("openai/gpt-5.6-sol"));
+        assert!(task.backgrounded);
+        assert!(task.capabilities.stop);
+    }
+
+    #[test]
+    fn discovers_nested_children_from_session_events() {
+        let (child_id, task) = opencode_child_session(
+            &json!({
+                "id": "ses_nested",
+                "parentID": "ses_child",
+                "title": "Trace lifecycle edges (@explore subagent)",
+                "agent": "explore"
+            }),
+            Some("opencode:ses_child".into()),
+        )
+        .expect("OpenCode child session");
+
+        assert_eq!(child_id, "ses_nested");
+        assert_eq!(task.title, "Trace lifecycle edges");
+        assert_eq!(task.parent_id.as_deref(), Some("opencode:ses_child"));
+        assert_eq!(task.provider_type.as_deref(), Some("task:explore"));
+    }
+
+    #[test]
+    fn keeps_promoted_opencode_children_active_after_the_parent_tool_returns() {
+        let (_, task) = opencode_child_task(
+            &json!({
+                "id": "part-task-2",
+                "type": "tool",
+                "callID": "call-task-2",
+                "tool": "task",
+                "state": {
+                    "status": "completed",
+                    "input": { "description": "Run independently" },
+                    "metadata": { "sessionId": "ses_background", "background": true }
+                }
+            }),
+            Some("opencode:ses_parent_child".into()),
+        )
+        .expect("promoted OpenCode child");
+
+        assert_eq!(task.status, RuntimeTaskStatus::Running);
+        assert_eq!(task.parent_id.as_deref(), Some("opencode:ses_parent_child"));
     }
 }

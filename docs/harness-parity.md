@@ -59,13 +59,34 @@ owns an unrecovered process or child session.
 | --- | --- | --- | --- | --- |
 | Claude Code | Native task lifecycle and background-task updates | Yes, with `stop_task` | Yes, with `background_tasks` when Claude supplies a tool-use id | Preserves Claude task type, hierarchy, description, usage, and progress. |
 | Codex | Child-thread and collaboration items; experimental background-terminal inventory | Yes for a child turn; yes for a discovered background process | No | Background process CPU and RSS are polled from `thread/backgroundTerminals/list`; termination uses `thread/backgroundTerminals/terminate`. The driver degrades cleanly when the experimental API is unavailable. |
-| OpenCode | Task-shaped tool calls while the provider tool is active | No | No | A detached result is retained as recent activity with a note that ongoing lifecycle is unavailable. |
-| pi / omp | Task-shaped tool calls while the provider tool is active | No | No | Same conservative tool-scoped fallback. |
+| OpenCode | Native task metadata plus child-session SSE status, tool, and usage updates | Yes, by aborting the exact child session | No | Background children stay active after the parent task tool returns. Nested child sessions retain their hierarchy. Process and monitor tools use the conservative fallback. |
+| Oh My Pi | Native RPC subagent lifecycle/progress and managed Bash async updates | No | No | Kybern subscribes at `progress` level. OMP exposes child identity and background-job state, but its RPC does not expose targeted subagent or job controls. |
+| pi | Task-shaped tool calls while the provider tool is active | No | No | Conservative tool-scoped fallback because the driven pi RPC does not expose a child lifecycle channel. |
 | Cursor (ACP) | Agent-shaped ACP tool calls while the provider tool is active | No | No | ACP `other` calls use the title as a classification hint; controls remain hidden. |
 
 The generic fallback is intentionally observational. A provider tool completing
 must not leave an immortal active task in Kybern when that provider exposes no
 subsequent lifecycle channel.
+
+## Model catalog parity
+
+Model selection follows each harness's own effective catalog instead of a
+Kybern-maintained list. Probes inherit the selected project's working directory,
+configured binary, and provider environment.
+
+| Harness | Catalog source |
+| --- | --- |
+| Claude Code | Effective account/project configuration plus CLI-advertised aliases |
+| Codex | App-server `model/list` |
+| OpenCode | `opencode models` |
+| pi | `pi --list-models` |
+| Oh My Pi | `omp models ls --json` |
+| Cursor | `agent models` |
+
+Catalog probes are bounded and safe to cancel. If an authenticated provider
+returns no models—most commonly during a cold network-backed refresh—the
+desktop keeps the provider selectable and offers **Reload models** with an
+actionable failure message.
 
 ## Reference implementations
 
@@ -110,7 +131,11 @@ process support:
    CLI is available, and RPC/CLI coverage for every advertised control.
 9. Check the desktop at narrow and wide dock widths. Long commands and agent
    prompts must truncate visually while remaining available in a tooltip.
-10. Update the matrix above with exact observation and control limits.
+10. Probe model catalogs in the project context with the harness's configured
+    binary and environment. Budget for a cold network-backed refresh, and give
+    an empty catalog a visible retry path instead of silently removing model
+    selection.
+11. Update the matrix above with exact observation and control limits.
 
 The protocol and Activity UI should not need provider-specific branches. If a
 new provider concept cannot be represented without discarding meaningful

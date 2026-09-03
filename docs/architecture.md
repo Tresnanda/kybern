@@ -63,6 +63,11 @@ and an Activity dock. Targeted controls only appear when the provider advertises
 the exact capability. See [Runtime activity and harness parity](harness-parity.md)
 for provider coverage and the checklist for new drivers.
 
+OpenCode activity follows its child-session SSE stream, while Oh My Pi uses its
+dedicated RPC subagent subscription and managed-Bash updates. Plain pi and
+Cursor ACP retain a conservative tool-scoped fallback until their driven
+protocols expose provider-stable child lifecycle events.
+
 ## Approvals
 
 Drivers surface provider permission prompts as `PermissionRequest` driver
