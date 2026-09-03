@@ -250,6 +250,57 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "A provider-owned subagent, process, or monitor became visible.",
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/RuntimeTask"
+        },
+        "kind": {
+          "type": "string",
+          "const": "runtime_task_started"
+        }
+      },
+      "required": [
+        "kind",
+        "task"
+      ]
+    },
+    {
+      "description": "Full latest-state snapshot for an existing provider-owned task.",
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/RuntimeTask"
+        },
+        "kind": {
+          "type": "string",
+          "const": "runtime_task_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "task"
+      ]
+    },
+    {
+      "description": "Terminal snapshot retained in the event log for history and recovery.",
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/RuntimeTask"
+        },
+        "kind": {
+          "type": "string",
+          "const": "runtime_task_completed"
+        }
+      },
+      "required": [
+        "kind",
+        "task"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "approval": {
@@ -714,6 +765,243 @@ expression: schema_for!(ThreadEvent)
         "input"
       ]
     },
+    "RuntimeTask": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Provider-stable task, child-thread, tool-call, or process id.",
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "origin_turn_id": {
+          "description": "Kybern turn that launched this task. Background work can outlive it.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/RuntimeTaskKind"
+        },
+        "status": {
+          "$ref": "#/$defs/RuntimeTaskStatus"
+        },
+        "title": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backgrounded": {
+          "type": "boolean",
+          "default": false
+        },
+        "last_tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stats": {
+          "$ref": "#/$defs/RuntimeTaskStats",
+          "default": {}
+        },
+        "capabilities": {
+          "$ref": "#/$defs/RuntimeTaskCapabilities",
+          "default": {
+            "stop": false,
+            "background": false
+          }
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "origin_turn_id",
+        "kind",
+        "status",
+        "title",
+        "started_at",
+        "updated_at"
+      ]
+    },
+    "RuntimeTaskKind": {
+      "description": "A durable unit of work started by the provider while handling a thread.\n\nProviders expose different names for these (subagent, task, background\ncommand, monitor). Kybern preserves the provider type while normalizing the\nlifecycle so every client can render the same activity surface.",
+      "type": "string",
+      "enum": [
+        "agent",
+        "process",
+        "monitor"
+      ]
+    },
+    "RuntimeTaskStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "waiting",
+        "stopping",
+        "completed",
+        "failed",
+        "stopped",
+        "interrupted"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ]
+    },
+    "RuntimeTaskStats": {
+      "type": "object",
+      "properties": {
+        "token_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tool_uses": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cpu_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rss_kb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "RuntimeTaskCapabilities": {
+      "type": "object",
+      "properties": {
+        "stop": {
+          "description": "The provider exposes a targeted stop operation for this task.",
+          "type": "boolean",
+          "default": false
+        },
+        "background": {
+          "description": "The provider can detach this foreground task without interrupting it.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
     "ApprovalRequest": {
       "description": "A pending or resolved request for the user to approve a tool call.",
       "type": "object",
@@ -822,37 +1110,6 @@ expression: schema_for!(ThreadEvent)
         "interrupted",
         "max_turns",
         "error"
-      ]
-    },
-    "Usage": {
-      "type": "object",
-      "properties": {
-        "input_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "output_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "cache_read_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "default": 0
-        },
-        "cache_write_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "default": 0
-        }
-      },
-      "required": [
-        "input_tokens",
-        "output_tokens"
       ]
     },
     "NoticeLevel": {

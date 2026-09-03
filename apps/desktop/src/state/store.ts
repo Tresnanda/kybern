@@ -3,13 +3,27 @@
 import { create } from "zustand"
 import { reloadOnHotUpdate } from "@/lib/hot"
 
-import type { DaemonInfo, Diff, Project, ProviderKind, ProviderStatus, Settings, Thread, ThreadId, ProjectId, TurnId, UserMessage } from "@/protocol"
+import type {
+  DaemonInfo,
+  Diff,
+  Project,
+  ProviderKind,
+  ProviderStatus,
+  RuntimeTask,
+  Settings,
+  Thread,
+  ThreadActivitySummary,
+  ThreadId,
+  ProjectId,
+  TurnId,
+  UserMessage,
+} from "@/protocol"
 
 import { emptyThreadState, type ThreadState } from "./transcript"
 
 export type Connection = { state: "connecting" } | { state: "open" } | { state: "reconnecting"; detail?: string } | { state: "failed"; detail: string }
 
-export type RightTab = "changes" | "terminal" | "explorer"
+export type RightTab = "activity" | "changes" | "terminal" | "explorer"
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {
@@ -39,6 +53,10 @@ export interface AppState {
   projects: Record<ProjectId, Project>
   threads: Record<ThreadId, Thread>
   transcripts: Record<ThreadId, ThreadState>
+  /** Provider-owned agents, processes, and monitors, including recent history. */
+  runtimeTasks: Record<ThreadId, RuntimeTask[]>
+  /** Compact active counts used by the sidebar before a thread is opened. */
+  threadActivity: Record<ThreadId, ThreadActivitySummary>
   /** `threadId:turnId` → diff, filled lazily for "Edited N files" cards and the changes panel. */
   diffs: Record<string, Diff>
   selected: { kind: "thread"; id: ThreadId } | { kind: "draft"; draft: Draft } | { kind: "pulls" } | { kind: "none" }
@@ -88,6 +106,8 @@ export const useStore = create<Store>()((set, get) => ({
   projects: {},
   threads: {},
   transcripts: {},
+  runtimeTasks: {},
+  threadActivity: {},
   diffs: {},
   selected: { kind: "none" },
   sidebarOpen: true,
@@ -148,6 +168,76 @@ export const selectSelectedThread = (s: AppState): Thread | null =>
   s.selected.kind === "thread" ? (s.threads[s.selected.id] ?? null) : null
 
 export const selectAvailableProviders = (s: AppState): ProviderStatus[] => s.providers.filter((p) => p.available)
+
+export const isRuntimeTaskActive = (task: RuntimeTask): boolean =>
+  task.status === "pending" || task.status === "running" || task.status === "waiting" || task.status === "stopping"
+
+export const selectRuntimeTasks = (s: AppState, threadId: ThreadId): RuntimeTask[] => s.runtimeTasks[threadId] ?? []
+
+/** Stable launch order for live work, newest-first for history, with children
+ * kept immediately beneath their parent. Metric ticks must not reorder rows. */
+export function sortRuntimeTasks(input: RuntimeTask[]): RuntimeTask[] {
+  const orderGroup = (tasks: RuntimeTask[], newestFirst: boolean) => {
+    const ids = new Set(tasks.map((task) => task.id))
+    const children = new Map<string | null, RuntimeTask[]>()
+    for (const task of tasks) {
+      const parent = task.parent_id && ids.has(task.parent_id) ? task.parent_id : null
+      children.set(parent, [...(children.get(parent) ?? []), task])
+    }
+    const compare = (left: RuntimeTask, right: RuntimeTask) => {
+      const time = newestFirst ? right.updated_at.localeCompare(left.updated_at) : left.started_at.localeCompare(right.started_at)
+      return time || left.id.localeCompare(right.id)
+    }
+    for (const siblings of children.values()) siblings.sort(compare)
+
+    const ordered: RuntimeTask[] = []
+    const seen = new Set<string>()
+    const append = (parent: string | null) => {
+      for (const task of children.get(parent) ?? []) {
+        if (seen.has(task.id)) continue
+        seen.add(task.id)
+        ordered.push(task)
+        append(task.id)
+      }
+    }
+    append(null)
+    ordered.push(...tasks.filter((task) => !seen.has(task.id)).sort(compare))
+    return ordered
+  }
+
+  return [
+    ...orderGroup(input.filter(isRuntimeTaskActive), false),
+    ...orderGroup(input.filter((task) => !isRuntimeTaskActive(task)), true),
+  ]
+}
+
+/** Merge an RPC snapshot with live events without letting an older response
+ * roll back task progress. Terminal evidence wins timestamp ties. */
+export function mergeRuntimeTasks(current: RuntimeTask[], incoming: RuntimeTask[]): RuntimeTask[] {
+  const merged = new Map(current.map((task) => [task.id, task]))
+  for (const task of incoming) {
+    const previous = merged.get(task.id)
+    const newer = !previous || task.updated_at > previous.updated_at
+    const tiedAndNotRegressing =
+      !!previous && task.updated_at === previous.updated_at && (isRuntimeTaskActive(previous) || !isRuntimeTaskActive(task))
+    if (newer || tiedAndNotRegressing) merged.set(task.id, task)
+  }
+  return sortRuntimeTasks([...merged.values()])
+}
+
+export function summarizeRuntimeTasks(threadId: ThreadId, tasks: RuntimeTask[]): ThreadActivitySummary {
+  const active = tasks.filter(isRuntimeTaskActive)
+  const active_agents = active.filter((task) => task.kind === "agent").length
+  const active_processes = active.filter((task) => task.kind === "process").length
+  const active_monitors = active.filter((task) => task.kind === "monitor").length
+  return {
+    thread_id: threadId,
+    state: active_agents > 0 ? "working" : active_processes > 0 || active_monitors > 0 ? "monitoring" : undefined,
+    active_agents,
+    active_processes,
+    active_monitors,
+  }
+}
 
 export const diffKey = (threadId: ThreadId, turnId?: TurnId | null) => `${threadId}:${turnId ?? "all"}`
 

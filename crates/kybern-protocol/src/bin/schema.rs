@@ -44,6 +44,8 @@ fn main() {
     add::<PullRequest>(&mut types, "PullRequest");
     add::<TerminalOutputNotification>(&mut types, "TerminalOutputNotification");
     add::<TerminalExitedNotification>(&mut types, "TerminalExitedNotification");
+    add::<RuntimeTask>(&mut types, "RuntimeTask");
+    add::<ThreadActivitySummary>(&mut types, "ThreadActivitySummary");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -60,6 +62,9 @@ fn main() {
     method::<ThreadsArchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);
     method::<ThreadsInterrupt>(&mut methods);
+    method::<TasksList>(&mut methods);
+    method::<TaskStop>(&mut methods);
+    method::<TaskBackground>(&mut methods);
     method::<ThreadsRegenerateTitle>(&mut methods);
     method::<ThreadsCheckpoints>(&mut methods);
     method::<ThreadsDiff>(&mut methods);

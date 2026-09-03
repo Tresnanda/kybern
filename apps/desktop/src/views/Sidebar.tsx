@@ -25,6 +25,7 @@ import {
   BellIcon,
   BookIcon,
   CircleQuestionIcon,
+  ClockIcon,
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
@@ -50,7 +51,7 @@ import {
 } from "@/lib/synara/sidebarRowStyles"
 import { pickFolder, platform } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import type { Project, Thread } from "@/protocol"
+import type { Project, Thread, ThreadActivityState } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
 import { selectThreadsForProject, useStore } from "@/state/store"
@@ -71,6 +72,7 @@ export function ThreadSidebar() {
   const projectList = useMemo(() => Object.values(projects).sort((a, b) => a.name.localeCompare(b.name)), [projects])
   const set = useStore((s) => s.set)
   const pullsActive = useStore((s) => s.selected.kind === "pulls")
+  const selected = useStore((s) => s.selected)
   const mac = platform() === "macos"
 
   const onAddProject = async () => {
@@ -124,7 +126,17 @@ export function ThreadSidebar() {
           </Menu>
           <div className="ml-auto flex items-center gap-1.5">
             <SidebarIconButton icon={SearchIcon} label="Search" glyph="leading" size="header" tooltip={`Search (${mod}K)`} tooltipSide="bottom" className="text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]" onClick={() => setTimeout(() => set({ paletteOpen: true }), 0)} />
-            <SidebarIconButton icon={BellIcon} label="Activity" glyph="leading" size="header" tooltip="Activity" tooltipSide="bottom" className="text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]" />
+            <SidebarIconButton
+              icon={BellIcon}
+              label="Activity"
+              glyph="leading"
+              size="header"
+              tooltip="Activity"
+              tooltipSide="bottom"
+              className="text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]"
+              disabled={selected.kind !== "thread"}
+              onClick={() => set({ rightOpen: true, rightTab: "activity" })}
+            />
           </div>
         </div>
 
@@ -235,11 +247,17 @@ function ProjectItem({ project }: { project: Project }) {
   const collapsed = useStore((s) => !!s.collapsedProjects[project.id])
   const toggle = useStore((s) => s.toggleProject)
   const selected = useStore((s) => s.selected)
+  const activity = useStore((s) => s.threadActivity)
   const [showAll, setShowAll] = useState(false)
   const open = !collapsed
   const isDraftHere = selected.kind === "draft" && selected.draft.projectId === project.id
   const running = threads.some((t) => t.status === "running")
   const waiting = threads.some((t) => t.status === "awaiting-approval")
+  const activityState: ThreadActivityState | undefined = threads.some((thread) => activity[thread.id]?.state === "working")
+    ? "working"
+    : threads.some((thread) => activity[thread.id]?.state === "monitoring")
+      ? "monitoring"
+      : undefined
   const visible = showAll ? threads : threads.slice(0, MAX_PROJECT_THREADS)
 
   return (
@@ -274,9 +292,9 @@ function ProjectItem({ project }: { project: Project }) {
               <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]">
                 <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/95">{project.name}</span>
               </div>
-              {!open && (running || waiting) && (
+              {!open && (running || waiting || activityState) && (
                 <span className={cn("ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center", HOVER_HIDE_PROJECT)}>
-                  <StatusGlyph status={waiting ? "awaiting-approval" : "running"} />
+                  <StatusGlyph status={waiting ? "awaiting-approval" : running ? "running" : "idle"} activity={activityState} />
                 </span>
               )}
             </SidebarMenuButton>
@@ -325,21 +343,29 @@ function ProjectItem({ project }: { project: Project }) {
   )
 }
 
-function StatusGlyph({ status }: { status: Thread["status"] }) {
-  if (status === "running") {
+function StatusGlyph({ status, activity }: { status: Thread["status"]; activity?: ThreadActivityState }) {
+  if (status === "awaiting-approval") return <span role="img" aria-label="Pending approval" className="size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90" />
+  if (status === "running" || activity === "working") {
     return (
       <span role="img" aria-label="Working" className="inline-flex shrink-0">
         <ThreadRunningSpinner />
       </span>
     )
   }
-  if (status === "awaiting-approval") return <span role="img" aria-label="Pending approval" className="size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90" />
   if (status === "failed") return <span role="img" aria-label="Failed" className="size-1.5 shrink-0 rounded-full bg-destructive" />
+  if (activity === "monitoring") {
+    return (
+      <span role="img" aria-label="Monitoring" title="Monitoring" className="inline-flex shrink-0 text-muted-foreground/75">
+        <ClockIcon className="size-3" />
+      </span>
+    )
+  }
   return null
 }
 
 function ThreadRow({ thread }: { thread: Thread }) {
   const selected = useStore((s) => s.selected.kind === "thread" && s.selected.id === thread.id)
+  const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
 
@@ -353,7 +379,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
     if (next && next !== thread.title) updateThread(thread.id, { title: next }).catch((e) => toast.error("Unable to rename", { description: errorText(e) }))
     else setTitle(thread.title)
   }
-  const hasGlyph = thread.status !== "idle"
+  const hasGlyph = thread.status !== "idle" || !!activity
 
   return (
     <ContextMenu>
@@ -407,7 +433,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
           <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
             {(hasGlyph || thread.pinned) && (
               <span className={cn("flex w-[15px] shrink-0 items-center justify-center leading-none text-muted-foreground/34", HOVER_HIDE_THREAD)}>
-                {hasGlyph ? <StatusGlyph status={thread.status} /> : <PinFilledIcon className="size-3 shrink-0" />}
+                {hasGlyph ? <StatusGlyph status={thread.status} activity={activity} /> : <PinFilledIcon className="size-3 shrink-0" />}
               </span>
             )}
             <div className="pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex items-center opacity-0 transition-opacity group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100">

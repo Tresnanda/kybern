@@ -14,6 +14,7 @@ import { ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from 
 import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/synara/chat/ComposerStackedPanelContent"
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
 import { PROVIDER_LABEL, basename, toolLine } from "@/lib/format"
+import { activeTaskSummary } from "@/lib/runtimeActivity"
 import {
   ArchiveIcon,
   ChangesIcon,
@@ -33,14 +34,15 @@ import {
   StopIcon,
   TerminalIcon,
   Trash2,
+  WorkflowIcon,
 } from "@/lib/synara/icons"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/synara/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import type { ApprovalRequest, JsonValue, ThreadId, UserMessage } from "@/protocol"
+import type { ApprovalRequest, JsonValue, RuntimeTask, ThreadId, UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, updateThread } from "@/state/rpc"
-import { useStore } from "@/state/store"
+import { isRuntimeTaskActive, useStore } from "@/state/store"
 
 import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/synara/chat/composerPickerStyles"
 
@@ -51,12 +53,15 @@ import { CHAT_COLUMN_GUTTER, CHAT_COLUMN_GUTTER_PX } from "./chatLayout"
 import { ChatHeaderButton, ChatHeaderIconButton, SurfaceHeader } from "./chrome"
 
 const EMPTY: never[] = []
+const EMPTY_TASKS: RuntimeTask[] = []
 
 export function ThreadView({ threadId }: { threadId: ThreadId }) {
   const thread = useStore((s) => s.threads[threadId])
   const loaded = useStore((s) => s.transcripts[threadId]?.loaded)
   const pending = useStore((s) => s.transcripts[threadId]?.pendingApprovals ?? EMPTY)
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
+  const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_TASKS)
+  const activeTasks = useMemo(() => runtimeTasks.filter(isRuntimeTaskActive), [runtimeTasks])
   const providers = useStore((s) => s.providers)
   const set = useStore((s) => s.set)
   const envOpen = useStore((s) => s.envOpen)
@@ -111,6 +116,7 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
     () => [
       { name: "new", hint: "Start a new thread in this project", icon: <NewThreadIcon className="size-4" />, run: () => newThread(thread?.project_id) },
       { name: "stop", hint: "Interrupt the running turn", icon: <StopIcon className="size-4" />, run: () => void interrupt(threadId) },
+      { name: "activity", hint: "Show agents and background processes", icon: <WorkflowIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "activity" }) },
       { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
       { name: "changes", hint: "Show the changes panel", icon: <ChangesIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" }) },
       { name: "terminal", hint: "Open a terminal in this thread", icon: <TerminalIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "terminal" }) },
@@ -178,6 +184,7 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
               onDigit={(n) => answer(n)}
               above={
                 <>
+                  {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
                   {queued.length > 0 && <QueuedPanel threadId={threadId} onEdit={(t) => composer.current?.setText(t)} />}
                   {approval && (
                     <div className="pb-2">
@@ -191,6 +198,26 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
         </div>
       </div>
     </div>
+  )
+}
+
+function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
+  const set = useStore((state) => state.set)
+  const foreground = tasks.find((task) => !task.backgrounded)
+  const detail = foreground?.title ?? tasks[0]?.title
+  return (
+    <ComposerStackedPanel>
+      <ComposerStackedPanelRow>
+        <ComposerStackedPanelRowMain>
+          <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          <span className="truncate font-medium text-foreground/85">{activeTaskSummary(tasks)}</span>
+          {detail && <span className="hidden min-w-0 truncate text-muted-foreground/55 sm:inline">· {detail}</span>}
+        </ComposerStackedPanelRowMain>
+        <Button variant="ghost" size="chip" onClick={() => set({ rightOpen: true, rightTab: "activity" })}>
+          View activity
+        </Button>
+      </ComposerStackedPanelRow>
+    </ComposerStackedPanel>
   )
 }
 

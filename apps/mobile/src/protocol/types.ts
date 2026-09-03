@@ -181,6 +181,56 @@ export interface Usage {
   cache_write_tokens: number;
 }
 
+export type RuntimeTaskKind = "agent" | "process" | "monitor";
+export type RuntimeTaskStatus = "pending" | "running" | "waiting" | "stopping" | "completed" | "failed" | "stopped" | "interrupted";
+
+export interface RuntimeTaskCapabilities {
+  stop: boolean;
+  background: boolean;
+}
+
+export interface RuntimeTaskStats {
+  token_count?: number | null;
+  tool_uses?: number | null;
+  duration_ms?: number | null;
+  cpu_percent?: number | null;
+  rss_kb?: number | null;
+}
+
+export interface RuntimeTask {
+  id: string;
+  thread_id: ThreadId;
+  origin_turn_id: TurnId;
+  kind: RuntimeTaskKind;
+  status: RuntimeTaskStatus;
+  title: string;
+  detail?: string | null;
+  provider_type?: string | null;
+  parent_id?: string | null;
+  tool_call_id?: string | null;
+  provider_thread_id?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  backgrounded: boolean;
+  last_tool_name?: string | null;
+  usage?: Usage | null;
+  stats: RuntimeTaskStats;
+  capabilities: RuntimeTaskCapabilities;
+  started_at: DateTime;
+  updated_at: DateTime;
+  completed_at?: DateTime | null;
+}
+
+export type ThreadActivityState = "working" | "monitoring";
+
+export interface ThreadActivitySummary {
+  thread_id: ThreadId;
+  state?: ThreadActivityState | null;
+  active_agents: number;
+  active_processes: number;
+  active_monitors: number;
+}
+
 export interface ApprovalRequest {
   id: ApprovalId;
   thread_id: ThreadId;
@@ -282,6 +332,9 @@ export type EventPayload =
   | { kind: "tool_call_started"; call: ToolCall }
   | { kind: "tool_call_output_delta"; tool_call_id: string; delta: string }
   | { kind: "tool_call_completed"; tool_call_id: string; output: JsonValue; is_error: boolean }
+  | { kind: "runtime_task_started"; task: RuntimeTask }
+  | { kind: "runtime_task_updated"; task: RuntimeTask }
+  | { kind: "runtime_task_completed"; task: RuntimeTask }
   | { kind: "approval_requested"; approval: ApprovalRequest }
   | { kind: "approval_resolved"; approval_id: ApprovalId; decision: ApprovalDecision }
   | {
@@ -364,6 +417,7 @@ export interface ThreadsListParams {
 
 export interface ThreadsListResult {
   threads: Thread[];
+  activity?: ThreadActivitySummary[];
 }
 
 export interface ThreadsCreateParams {
@@ -384,6 +438,7 @@ export interface ThreadsGetResult {
   thread: Thread;
   transcript: TranscriptEntry[];
   pending_approvals: ApprovalRequest[];
+  runtime_tasks?: RuntimeTask[];
 }
 
 export interface ThreadsUpdateParams {
@@ -410,6 +465,20 @@ export interface ThreadsSendResult {
 
 export interface ThreadsInterruptParams {
   thread_id: ThreadId;
+}
+
+export interface TasksListParams {
+  thread_id: ThreadId;
+  include_completed?: boolean;
+}
+
+export interface TasksListResult {
+  tasks: RuntimeTask[];
+}
+
+export interface TaskControlParams {
+  thread_id: ThreadId;
+  task_id: string;
 }
 
 export interface ThreadsRegenerateTitleParams {
@@ -555,6 +624,9 @@ export interface Methods {
   "threads.archive": [ThreadsArchiveParams, Empty];
   "threads.send": [ThreadsSendParams, ThreadsSendResult];
   "threads.interrupt": [ThreadsInterruptParams, Empty];
+  "tasks.list": [TasksListParams, TasksListResult];
+  "tasks.stop": [TaskControlParams, RuntimeTask];
+  "tasks.background": [TaskControlParams, RuntimeTask];
   "threads.regenerateTitle": [ThreadsRegenerateTitleParams, Thread];
   "threads.checkpoints": [ThreadsCheckpointsParams, ThreadsCheckpointsResult];
   "threads.diff": [ThreadsDiffParams, Diff];

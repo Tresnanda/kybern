@@ -83,7 +83,9 @@ ubuntu and macos.
 - Adding a driver: implement the traits in `drivers/src/lib.rs`, register in
   `registry.rs`, add a live test in `tests/live_drivers.rs`, document the
   permission-mode mapping in `docs/architecture.md`. Speak the agent's own
-  protocol; do not add a shared abstraction layer.
+  protocol; do not add a shared abstraction layer. Follow
+  `docs/harness-parity.md` for spawned-agent and background-process lifecycle,
+  controls, recovery, and UI parity.
 - Events are append-only. New behavior means a new `EventPayload` variant plus
   handling in `store/projection.rs` and `apps/desktop/src/state/transcript.ts`.
   Clients ignore unknown kinds.

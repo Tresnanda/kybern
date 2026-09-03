@@ -92,6 +92,55 @@ pub struct RewindPoint {
     pub keep_through: Option<TurnAnchors>,
 }
 
+/// Provider-normalized task metadata. The daemon adds Kybern thread/turn ids
+/// and durable timestamps before publishing it.
+#[derive(Debug, Clone)]
+pub struct DriverRuntimeTask {
+    pub id: String,
+    pub kind: RuntimeTaskKind,
+    pub status: RuntimeTaskStatus,
+    pub title: String,
+    pub detail: Option<String>,
+    pub provider_type: Option<String>,
+    pub parent_id: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub provider_thread_id: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub backgrounded: bool,
+    pub last_tool_name: Option<String>,
+    pub usage: Option<Usage>,
+    pub stats: RuntimeTaskStats,
+    pub capabilities: RuntimeTaskCapabilities,
+}
+
+#[derive(Debug, Clone)]
+pub struct DriverRuntimeTaskUpdate {
+    pub id: String,
+    pub status: Option<RuntimeTaskStatus>,
+    pub detail: Option<String>,
+    pub backgrounded: Option<bool>,
+    pub last_tool_name: Option<String>,
+    pub usage: Option<Usage>,
+    pub stats: Option<RuntimeTaskStats>,
+    pub capabilities: Option<RuntimeTaskCapabilities>,
+}
+
+impl DriverRuntimeTaskUpdate {
+    pub fn status(id: impl Into<String>, status: RuntimeTaskStatus) -> Self {
+        Self {
+            id: id.into(),
+            status: Some(status),
+            detail: None,
+            backgrounded: None,
+            last_tool_name: None,
+            usage: None,
+            stats: None,
+            capabilities: None,
+        }
+    }
+}
+
 /// Normalized stream of what a provider is doing. Ordered per session.
 #[derive(Debug, Clone)]
 pub enum DriverEvent {
@@ -125,6 +174,9 @@ pub enum DriverEvent {
         output: Value,
         is_error: bool,
     },
+    RuntimeTaskStarted(DriverRuntimeTask),
+    RuntimeTaskUpdated(DriverRuntimeTaskUpdate),
+    RuntimeTaskCompleted(DriverRuntimeTaskUpdate),
     /// The provider is blocked waiting for `respond_permission`.
     PermissionRequest {
         request_id: String,
@@ -170,6 +222,15 @@ pub trait AgentSession: Send + Sync {
     async fn set_model(&self, model: &str) -> Result<()>;
     async fn set_effort(&self, effort: &str) -> Result<()>;
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()>;
+    /// Stop one provider-owned subagent or background process without
+    /// interrupting unrelated work in the parent thread.
+    async fn stop_runtime_task(&self, _task: &RuntimeTask) -> Result<()> {
+        Err(DriverError::Unsupported("targeted task stop".into()))
+    }
+    /// Detach a foreground provider task so the parent can continue.
+    async fn background_runtime_task(&self, _task: &RuntimeTask) -> Result<()> {
+        Err(DriverError::Unsupported("task backgrounding".into()))
+    }
     /// Graceful shutdown. The event stream ends with `Exited`.
     async fn close(&self) -> Result<()>;
 }

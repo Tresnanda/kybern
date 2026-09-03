@@ -1,14 +1,16 @@
 //! Owns live provider sessions and turns their events into the persisted,
 //! broadcast thread log.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use kybern_drivers::registry::DriverRegistry;
-use kybern_drivers::{AgentSession, DriverEvent, RewindPoint, SessionConfig, SpawnedSession, TurnAnchors};
+use kybern_drivers::{
+    AgentSession, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, RewindPoint, SessionConfig, SpawnedSession, TurnAnchors,
+};
 use kybern_git::{Repo, checkpoint_ref};
 use kybern_protocol::*;
 use kybern_store::{Store, TurnUsageRow};
@@ -38,6 +40,13 @@ struct LiveSession {
     session: Box<dyn AgentSession>,
     /// The turn currently executing, if any.
     turn: Mutex<Option<ActiveTurn>>,
+    /// Most recent parent turn. Provider task notifications can arrive after
+    /// the parent reports completion.
+    last_turn_id: Mutex<Option<TurnId>>,
+    /// Latest provider-owned task state for targeted controls and checkpointing.
+    tasks: Mutex<HashMap<String, RuntimeTask>>,
+    /// Parent turns whose after-checkpoint waits for launched work to settle.
+    deferred_checkpoints: Mutex<HashSet<TurnId>>,
     /// Approval id -> provider request id, for pending permission requests.
     pending: Mutex<HashMap<ApprovalId, String>>,
 }
@@ -78,8 +87,28 @@ impl Orchestrator {
         self.inner.settings.get().providers.get(&kind).and_then(|p| p.binary.clone()).map(PathBuf::from)
     }
 
-    /// Threads persisted as running belong to a dead daemon; close their turns.
+    /// Provider-owned tasks and turns cannot survive a daemon restart. Close
+    /// both projections explicitly so clients never show immortal work.
     pub async fn recover_after_restart(&self) -> Result<()> {
+        let threads = self.inner.store.threads_list(None, true)?;
+        for t in &threads {
+            let tasks = self.inner.store.runtime_tasks_for_thread(t.id)?;
+            let mut checkpoint_turns = HashSet::new();
+            for mut task in tasks.into_iter().filter(|task| task.status.is_active()) {
+                task.status = RuntimeTaskStatus::Interrupted;
+                task.detail = Some("Daemon restarted before this work finished".into());
+                task.capabilities = RuntimeTaskCapabilities::default();
+                task.updated_at = Utc::now();
+                task.completed_at = Some(task.updated_at);
+                checkpoint_turns.insert(task.origin_turn_id);
+                self.emit(t.id, Some(task.origin_turn_id), EventPayload::RuntimeTaskCompleted { task })?;
+            }
+            for turn_id in checkpoint_turns {
+                if self.inner.store.checkpoint_get(turn_id)?.is_some_and(|checkpoint| checkpoint.after.is_none()) {
+                    self.checkpoint(t, turn_id, "after").await;
+                }
+            }
+        }
         for mut t in self.inner.store.threads_running()? {
             let last_turn = self.inner.store.events_for_thread(t.id)?.iter().rev().find_map(|e| match e.payload {
                 EventPayload::TurnStarted { .. } => e.turn_id,
@@ -314,6 +343,7 @@ impl Orchestrator {
             let mut turn = live.turn.lock().await;
             *turn = Some(ActiveTurn { id: turn_id, started: std::time::Instant::now(), messages: HashMap::new(), completed: false });
         }
+        *live.last_turn_id.lock().await = Some(turn_id);
         self.checkpoint(&thread, turn_id, "before").await;
 
         if let Err(e) = live.session.send_message(&message_id.to_string(), &message).await {
@@ -333,6 +363,85 @@ impl Orchestrator {
             Some(live) => Ok(live.session.interrupt().await?),
             None => Err(anyhow!("thread has no live session")),
         }
+    }
+
+    pub async fn stop_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
+        let live = self
+            .inner
+            .sessions
+            .lock()
+            .await
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("this task no longer has a live provider session"))?;
+        let task = live
+            .tasks
+            .lock()
+            .await
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("this task is not attached to the live provider session"))?;
+        if !task.status.is_active() {
+            return Err(anyhow!("this task has already finished"));
+        }
+        if !task.capabilities.stop {
+            return Err(anyhow!("{} does not expose a targeted stop control for this task", self.provider_name(thread_id)?));
+        }
+        live.session.stop_runtime_task(&task).await?;
+        self.apply_runtime_task_update(
+            thread_id,
+            &live,
+            DriverRuntimeTaskUpdate::status(task.id.clone(), RuntimeTaskStatus::Stopping),
+            false,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("task not found"))
+    }
+
+    pub async fn background_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
+        let live = self
+            .inner
+            .sessions
+            .lock()
+            .await
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("this task no longer has a live provider session"))?;
+        let task = live
+            .tasks
+            .lock()
+            .await
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("this task is not attached to the live provider session"))?;
+        if !task.status.is_active() {
+            return Err(anyhow!("this task has already finished"));
+        }
+        if !task.capabilities.background {
+            return Err(anyhow!("{} cannot move this task to the background", self.provider_name(thread_id)?));
+        }
+        live.session.background_runtime_task(&task).await?;
+        self.apply_runtime_task_update(
+            thread_id,
+            &live,
+            DriverRuntimeTaskUpdate {
+                id: task.id.clone(),
+                status: None,
+                detail: None,
+                backgrounded: Some(true),
+                last_tool_name: None,
+                usage: None,
+                stats: None,
+                capabilities: Some(RuntimeTaskCapabilities { stop: task.capabilities.stop, background: false }),
+            },
+            false,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("task not found"))
+    }
+
+    fn provider_name(&self, thread_id: ThreadId) -> Result<&'static str> {
+        Ok(self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?.provider.kind.display_name())
     }
 
     pub async fn respond_approval(&self, approval_id: ApprovalId, decision: ApprovalDecision) -> Result<()> {
@@ -567,6 +676,9 @@ impl Orchestrator {
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             return Err(anyhow!("thread is busy; interrupt it first"));
         }
+        if self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.status.is_active()) {
+            return Err(anyhow!("background work is active; stop it before rewinding"));
+        }
         let all = self.inner.store.checkpoints_for_thread(thread_id)?;
         let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
         let c = all[idx].clone();
@@ -627,13 +739,203 @@ impl Orchestrator {
             env: provider_settings.env.into_iter().collect(),
         };
         let SpawnedSession { session, events } = driver.spawn(config).await?;
-        let live = Arc::new(LiveSession { session, turn: Mutex::new(None), pending: Mutex::new(HashMap::new()) });
+        let live = Arc::new(LiveSession {
+            session,
+            turn: Mutex::new(None),
+            last_turn_id: Mutex::new(None),
+            tasks: Mutex::new(HashMap::new()),
+            deferred_checkpoints: Mutex::new(HashSet::new()),
+            pending: Mutex::new(HashMap::new()),
+        });
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
         let pump_live = live.clone();
         tokio::spawn(async move { this.pump(thread_id, pump_live, events).await });
         Ok(live)
+    }
+
+    async fn persist_runtime_task_start(
+        &self,
+        thread_id: ThreadId,
+        live: &Arc<LiveSession>,
+        turn_id: Option<TurnId>,
+        incoming: DriverRuntimeTask,
+    ) -> Result<RuntimeTask> {
+        let origin_turn_id = match turn_id.or(*live.last_turn_id.lock().await) {
+            Some(turn_id) => turn_id,
+            None => self
+                .inner
+                .store
+                .events_for_thread(thread_id)?
+                .iter()
+                .rev()
+                .find_map(|event| matches!(event.payload, EventPayload::TurnStarted { .. }).then_some(event.turn_id).flatten())
+                .ok_or_else(|| anyhow!("provider reported a task before the thread had a turn"))?,
+        };
+        let now = Utc::now();
+        let mut tasks = live.tasks.lock().await;
+        let (task, started) = match tasks.get(&incoming.id) {
+            Some(existing) => {
+                let mut task = existing.clone();
+                task.kind = incoming.kind;
+                // Provider retries and aggregate rosters can replay a start
+                // after terminal evidence. Runtime task state is monotonic.
+                if task.status.is_active() || !incoming.status.is_active() {
+                    task.status = incoming.status;
+                }
+                task.title = incoming.title;
+                task.detail = incoming.detail.or(task.detail);
+                task.provider_type = incoming.provider_type.or(task.provider_type);
+                task.parent_id = incoming.parent_id.or(task.parent_id);
+                task.tool_call_id = incoming.tool_call_id.or(task.tool_call_id);
+                task.provider_thread_id = incoming.provider_thread_id.or(task.provider_thread_id);
+                task.model = incoming.model.or(task.model);
+                task.effort = incoming.effort.or(task.effort);
+                task.backgrounded |= incoming.backgrounded;
+                task.last_tool_name = incoming.last_tool_name.or(task.last_tool_name);
+                task.usage = incoming.usage.or(task.usage);
+                merge_task_stats(&mut task.stats, incoming.stats);
+                task.capabilities = if task.status.is_active() { incoming.capabilities } else { RuntimeTaskCapabilities::default() };
+                task.updated_at = now;
+                if !task.status.is_active() {
+                    task.completed_at.get_or_insert(now);
+                }
+                (task, false)
+            }
+            None => (
+                RuntimeTask {
+                    id: incoming.id,
+                    thread_id,
+                    origin_turn_id,
+                    kind: incoming.kind,
+                    status: incoming.status,
+                    title: incoming.title,
+                    detail: incoming.detail,
+                    provider_type: incoming.provider_type,
+                    parent_id: incoming.parent_id,
+                    tool_call_id: incoming.tool_call_id,
+                    provider_thread_id: incoming.provider_thread_id,
+                    model: incoming.model,
+                    effort: incoming.effort,
+                    backgrounded: incoming.backgrounded,
+                    last_tool_name: incoming.last_tool_name,
+                    usage: incoming.usage,
+                    stats: incoming.stats,
+                    capabilities: incoming.capabilities,
+                    started_at: now,
+                    updated_at: now,
+                    completed_at: (!incoming.status.is_active()).then_some(now),
+                },
+                true,
+            ),
+        };
+        tasks.insert(task.id.clone(), task.clone());
+        drop(tasks);
+        let payload = if started {
+            EventPayload::RuntimeTaskStarted { task: task.clone() }
+        } else if task.status.is_active() {
+            EventPayload::RuntimeTaskUpdated { task: task.clone() }
+        } else {
+            EventPayload::RuntimeTaskCompleted { task: task.clone() }
+        };
+        self.emit(thread_id, Some(task.origin_turn_id), payload)?;
+        if !task.status.is_active() {
+            self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
+        }
+        Ok(task)
+    }
+
+    async fn apply_runtime_task_update(
+        &self,
+        thread_id: ThreadId,
+        live: &Arc<LiveSession>,
+        update: DriverRuntimeTaskUpdate,
+        completed: bool,
+    ) -> Result<Option<RuntimeTask>> {
+        let mut tasks = live.tasks.lock().await;
+        let Some(task) = tasks.get_mut(&update.id) else {
+            tracing::debug!(thread_id = %thread_id, task_id = %update.id, "provider updated an unknown runtime task");
+            return Ok(None);
+        };
+        let next_status = match (update.status, completed) {
+            (Some(status), true) if status.is_active() => RuntimeTaskStatus::Completed,
+            (Some(status), _) => status,
+            (None, true) => RuntimeTaskStatus::Completed,
+            (None, false) => task.status,
+        };
+        if task.status.is_active() || !next_status.is_active() {
+            task.status = next_status;
+        }
+        if let Some(detail) = update.detail {
+            task.detail = Some(detail);
+        }
+        if let Some(backgrounded) = update.backgrounded {
+            task.backgrounded = backgrounded;
+        }
+        if let Some(last_tool_name) = update.last_tool_name {
+            task.last_tool_name = Some(last_tool_name);
+        }
+        if let Some(usage) = update.usage {
+            task.usage = Some(usage);
+        }
+        if let Some(stats) = update.stats {
+            merge_task_stats(&mut task.stats, stats);
+        }
+        if let Some(capabilities) = update.capabilities {
+            task.capabilities = capabilities;
+        }
+        task.updated_at = Utc::now();
+        if completed || !task.status.is_active() {
+            task.completed_at = Some(task.updated_at);
+            task.capabilities = RuntimeTaskCapabilities::default();
+        }
+        let task = task.clone();
+        drop(tasks);
+        let payload = if completed || !task.status.is_active() {
+            EventPayload::RuntimeTaskCompleted { task: task.clone() }
+        } else {
+            EventPayload::RuntimeTaskUpdated { task: task.clone() }
+        };
+        self.emit(thread_id, Some(task.origin_turn_id), payload)?;
+        if completed || !task.status.is_active() {
+            self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
+        }
+        Ok(Some(task))
+    }
+
+    async fn finish_deferred_checkpoint(&self, thread_id: ThreadId, live: &Arc<LiveSession>, turn_id: TurnId) -> Result<()> {
+        let any_active = live.tasks.lock().await.values().any(|task| task.origin_turn_id == turn_id && task.status.is_active());
+        if any_active || !live.deferred_checkpoints.lock().await.remove(&turn_id) {
+            return Ok(());
+        }
+        if let Some(thread) = self.inner.store.thread_get(thread_id)? {
+            self.checkpoint(&thread, turn_id, "after").await;
+        }
+        Ok(())
+    }
+
+    async fn interrupt_runtime_tasks(&self, thread_id: ThreadId, live: &Arc<LiveSession>, detail: &str) {
+        let ids = live.tasks.lock().await.values().filter(|task| task.status.is_active()).map(|task| task.id.clone()).collect::<Vec<_>>();
+        for id in ids {
+            let _ = self
+                .apply_runtime_task_update(
+                    thread_id,
+                    live,
+                    DriverRuntimeTaskUpdate {
+                        id,
+                        status: Some(RuntimeTaskStatus::Interrupted),
+                        detail: Some(detail.into()),
+                        backgrounded: None,
+                        last_tool_name: None,
+                        usage: None,
+                        stats: None,
+                        capabilities: None,
+                    },
+                    true,
+                )
+                .await;
+        }
     }
 
     /// Translate driver events into thread events until the provider exits.
@@ -645,6 +947,7 @@ impl Orchestrator {
         }
         // Stream closed: provider is gone.
         self.inner.sessions.lock().await.remove(&thread_id);
+        self.interrupt_runtime_tasks(thread_id, &live, "Provider exited before this work finished").await;
         let turn = live.turn.lock().await.take();
         if let Some(turn) = turn.filter(|t| !t.completed) {
             let _ =
@@ -685,13 +988,92 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::AssistantMessageCompleted { message_id: id, text, thinking })?;
             }
             DriverEvent::ToolStarted(call) => {
-                self.emit(thread_id, turn_id, EventPayload::ToolCallStarted { call })?;
+                self.emit(thread_id, turn_id, EventPayload::ToolCallStarted { call: call.clone() })?;
+                if let Some(parent_id) = call.parent_id.as_deref() {
+                    let task_id = live
+                        .tasks
+                        .lock()
+                        .await
+                        .values()
+                        .find(|task| task.id == parent_id || task.tool_call_id.as_deref() == Some(parent_id))
+                        .map(|task| task.id.clone());
+                    if let Some(task_id) = task_id {
+                        let _ = self
+                            .apply_runtime_task_update(
+                                thread_id,
+                                live,
+                                DriverRuntimeTaskUpdate {
+                                    id: task_id,
+                                    status: Some(RuntimeTaskStatus::Running),
+                                    detail: None,
+                                    backgrounded: None,
+                                    last_tool_name: Some(call.name.clone()),
+                                    usage: None,
+                                    stats: None,
+                                    capabilities: None,
+                                },
+                                false,
+                            )
+                            .await?;
+                    }
+                }
+                let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
+                if !matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Codex)
+                    && let Some(task) = generic_runtime_task(&call)
+                {
+                    self.persist_runtime_task_start(thread_id, live, turn_id, task).await?;
+                }
             }
             DriverEvent::ToolOutputDelta { tool_call_id, delta } => {
                 self.emit(thread_id, turn_id, EventPayload::ToolCallOutputDelta { tool_call_id, delta })?;
             }
             DriverEvent::ToolCompleted { tool_call_id, output, is_error } => {
-                self.emit(thread_id, turn_id, EventPayload::ToolCallCompleted { tool_call_id, output, is_error })?;
+                self.emit(
+                    thread_id,
+                    turn_id,
+                    EventPayload::ToolCallCompleted { tool_call_id: tool_call_id.clone(), output: output.clone(), is_error },
+                )?;
+                let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
+                if !matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Codex) {
+                    let task_id = live
+                        .tasks
+                        .lock()
+                        .await
+                        .values()
+                        .find(|task| task.tool_call_id.as_deref() == Some(&tool_call_id))
+                        .map(|task| task.id.clone());
+                    if let Some(task_id) = task_id {
+                        let detached = output_indicates_running(&output);
+                        let status = if is_error { RuntimeTaskStatus::Failed } else { RuntimeTaskStatus::Completed };
+                        let detail = detached.then(|| "Detached; this provider does not expose ongoing lifecycle updates".to_string());
+                        let _ = self
+                            .apply_runtime_task_update(
+                                thread_id,
+                                live,
+                                DriverRuntimeTaskUpdate {
+                                    id: task_id,
+                                    status: Some(status),
+                                    detail,
+                                    backgrounded: detached.then_some(true),
+                                    last_tool_name: None,
+                                    usage: None,
+                                    stats: None,
+                                    capabilities: None,
+                                },
+                                true,
+                            )
+                            .await?;
+                    }
+                }
+            }
+            DriverEvent::RuntimeTaskStarted(task) => {
+                self.persist_runtime_task_start(thread_id, live, turn_id, task).await?;
+            }
+            DriverEvent::RuntimeTaskUpdated(update) => {
+                let _ = self.apply_runtime_task_update(thread_id, live, update, false).await?;
+            }
+            DriverEvent::RuntimeTaskCompleted(update) => {
+                let _ = self.apply_runtime_task_update(thread_id, live, update, true).await?;
             }
             DriverEvent::PermissionRequest { request_id, tool_call_id, tool_name, input, summary, suggestions } => {
                 let Some(turn_id) = turn_id else {
@@ -757,7 +1139,13 @@ impl Orchestrator {
                     duration_ms,
                     at: Utc::now(),
                 })?;
-                self.checkpoint(&t, turn_id, "after").await;
+                let has_active_tasks =
+                    live.tasks.lock().await.values().any(|task| task.origin_turn_id == turn_id && task.status.is_active());
+                if has_active_tasks {
+                    live.deferred_checkpoints.lock().await.insert(turn_id);
+                } else {
+                    self.checkpoint(&t, turn_id, "after").await;
+                }
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms })?;
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
@@ -770,7 +1158,13 @@ impl Orchestrator {
                 *turn_guard = None;
                 drop(turn_guard);
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
-                self.checkpoint(&t, turn_id, "after").await;
+                let has_active_tasks =
+                    live.tasks.lock().await.values().any(|task| task.origin_turn_id == turn_id && task.status.is_active());
+                if has_active_tasks {
+                    live.deferred_checkpoints.lock().await.insert(turn_id);
+                } else {
+                    self.checkpoint(&t, turn_id, "after").await;
+                }
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error })?;
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
@@ -803,6 +1197,110 @@ fn map_message(turn: &mut Option<ActiveTurn>, provider_id: &str) -> MessageId {
     }
 }
 
+fn merge_task_stats(current: &mut RuntimeTaskStats, update: RuntimeTaskStats) {
+    if update.token_count.is_some() {
+        current.token_count = update.token_count;
+    }
+    if update.tool_uses.is_some() {
+        current.tool_uses = update.tool_uses;
+    }
+    if update.duration_ms.is_some() {
+        current.duration_ms = update.duration_ms;
+    }
+    if update.cpu_percent.is_some() {
+        current.cpu_percent = update.cpu_percent;
+    }
+    if update.rss_kb.is_some() {
+        current.rss_kb = update.rss_kb;
+    }
+}
+
+fn generic_runtime_task(call: &ToolCall) -> Option<DriverRuntimeTask> {
+    let normalized = call.name.chars().filter(|char| char.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let title_hint = json_text(&call.input, &["title"]).unwrap_or_default();
+    let normalized_title = title_hint.chars().filter(|char| char.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let explicit_background = json_bool(&call.input, &["background", "run_in_background", "runInBackground", "detach", "detached"])
+        || json_false(&call.input, &["blocking"]);
+    let agent_tool = matches!(
+        normalized.as_str(),
+        "task" | "agent" | "spawnagent" | "subagent" | "delegate" | "delegation" | "launchagent" | "callagent" | "runagent"
+    ) || normalized.contains("subagent")
+        || normalized.ends_with("spawnagent");
+    let ambiguous_agent_tool = matches!(normalized.as_str(), "other" | "tool")
+        && ["task", "agent", "subagent", "delegate", "spawnagent"].iter().any(|prefix| normalized_title.starts_with(prefix));
+    let kind = if agent_tool || ambiguous_agent_tool {
+        RuntimeTaskKind::Agent
+    } else if matches!(normalized.as_str(), "monitor" | "monitortask" | "monitormcp") {
+        RuntimeTaskKind::Monitor
+    } else if explicit_background
+        && matches!(normalized.as_str(), "bash" | "shell" | "execute" | "exec" | "command" | "runcommand" | "terminal")
+    {
+        RuntimeTaskKind::Process
+    } else {
+        return None;
+    };
+    let title = json_text(&call.input, &["description", "title", "prompt", "command", "task"])
+        .map(|text| text.lines().next().unwrap_or(&text).chars().take(120).collect())
+        .unwrap_or_else(|| match kind {
+            RuntimeTaskKind::Agent => "Subagent".into(),
+            RuntimeTaskKind::Process => "Background process".into(),
+            RuntimeTaskKind::Monitor => "Monitor".into(),
+        });
+    Some(DriverRuntimeTask {
+        id: format!("tool:{}", call.id),
+        kind,
+        status: RuntimeTaskStatus::Running,
+        title,
+        detail: None,
+        provider_type: Some(call.name.clone()),
+        parent_id: call.parent_id.clone(),
+        tool_call_id: Some(call.id.clone()),
+        provider_thread_id: None,
+        model: None,
+        effort: None,
+        backgrounded: explicit_background,
+        last_tool_name: None,
+        usage: None,
+        stats: RuntimeTaskStats::default(),
+        capabilities: RuntimeTaskCapabilities::default(),
+    })
+}
+
+fn json_bool(value: &serde_json::Value, keys: &[&str]) -> bool {
+    keys.iter().any(|key| value.get(*key).and_then(serde_json::Value::as_bool) == Some(true))
+        || ["raw", "args", "input"].iter().any(|key| value.get(*key).is_some_and(|nested| json_bool(nested, keys)))
+}
+
+fn json_false(value: &serde_json::Value, keys: &[&str]) -> bool {
+    keys.iter().any(|key| value.get(*key).and_then(serde_json::Value::as_bool) == Some(false))
+        || ["raw", "args", "input"].iter().any(|key| value.get(*key).is_some_and(|nested| json_false(nested, keys)))
+}
+
+fn json_text(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_str).map(str::to_string))
+        .or_else(|| ["raw", "args", "input"].iter().find_map(|key| value.get(*key).and_then(|nested| json_text(nested, keys))))
+}
+
+fn output_indicates_running(output: &serde_json::Value) -> bool {
+    if let Some(object) = output.as_object() {
+        if json_bool(output, &["background", "backgrounded", "running", "is_running"]) {
+            return true;
+        }
+        if object
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|status| matches!(status, "running" | "in_progress" | "backgrounded" | "pending"))
+        {
+            return true;
+        }
+    }
+    output
+        .as_str()
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|text| text.contains("running in background") || text.contains("background task") || text.contains("process id"))
+}
+
 fn clean_title(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let line = line.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim();
@@ -821,4 +1319,58 @@ pub fn title_from_message(message: &UserMessage) -> String {
         title.push('…');
     }
     title
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generic_runtime_task, output_indicates_running};
+    use kybern_protocol::{RuntimeTaskKind, ToolCall};
+    use serde_json::json;
+
+    #[test]
+    fn classifies_native_and_acp_style_subagent_tools() {
+        let native = generic_runtime_task(&ToolCall {
+            id: "one".into(),
+            name: "spawn_agent".into(),
+            input: json!({ "description": "Audit the protocol" }),
+            parent_id: None,
+        })
+        .unwrap();
+        assert_eq!(native.kind, RuntimeTaskKind::Agent);
+        assert_eq!(native.title, "Audit the protocol");
+
+        let acp = generic_runtime_task(&ToolCall {
+            id: "two".into(),
+            name: "other".into(),
+            input: json!({ "title": "Task: inspect tests", "raw": {} }),
+            parent_id: None,
+        })
+        .unwrap();
+        assert_eq!(acp.kind, RuntimeTaskKind::Agent);
+        assert_eq!(acp.title, "Task: inspect tests");
+    }
+
+    #[test]
+    fn requires_an_explicit_background_signal_for_generic_shells() {
+        let foreground = ToolCall { id: "one".into(), name: "shell".into(), input: json!({ "command": "cargo test" }), parent_id: None };
+        assert!(generic_runtime_task(&foreground).is_none());
+
+        let background = generic_runtime_task(&ToolCall {
+            id: "two".into(),
+            name: "execute".into(),
+            input: json!({ "title": "Run dev server", "raw": { "blocking": false } }),
+            parent_id: None,
+        })
+        .unwrap();
+        assert_eq!(background.kind, RuntimeTaskKind::Process);
+        assert!(background.backgrounded);
+        assert!(!background.capabilities.stop);
+    }
+
+    #[test]
+    fn recognizes_detached_results_without_claiming_native_lifecycle() {
+        assert!(output_indicates_running(&json!({ "status": "in_progress" })));
+        assert!(output_indicates_running(&json!("Process ID 42 is running in background")));
+        assert!(!output_indicates_running(&json!({ "status": "completed" })));
+    }
 }

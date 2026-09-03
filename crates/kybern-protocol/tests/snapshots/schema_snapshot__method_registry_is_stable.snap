@@ -16,6 +16,9 @@ expression: names
 - threads.archive
 - threads.send
 - threads.interrupt
+- tasks.list
+- tasks.stop
+- tasks.background
 - threads.regenerateTitle
 - threads.checkpoints
 - threads.diff

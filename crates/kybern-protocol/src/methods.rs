@@ -111,6 +111,9 @@ pub struct ThreadsListParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsListResult {
     pub threads: Vec<Thread>,
+    /// Compact activity summaries for sidebar rendering.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activity: Vec<ThreadActivitySummary>,
 }
 method!(ThreadsList, "threads.list", Some(Scope::OrchestrationRead), ThreadsListParams, ThreadsListResult);
 
@@ -148,6 +151,9 @@ pub struct ThreadsGetResult {
     pub thread: Thread,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_approvals: Vec<ApprovalRequest>,
+    /// Durable latest-state task projection for this thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_tasks: Vec<RuntimeTask>,
 }
 method!(ThreadsGet, "threads.get", Some(Scope::OrchestrationRead), ThreadsGetParams, ThreadsGetResult);
 
@@ -190,6 +196,29 @@ pub struct ThreadsInterruptParams {
     pub thread_id: ThreadId,
 }
 method!(ThreadsInterrupt, "threads.interrupt", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Empty);
+
+// ---- provider-owned runtime tasks ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TasksListParams {
+    pub thread_id: ThreadId,
+    /// Include terminal tasks in addition to active work.
+    #[serde(default)]
+    pub include_completed: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TasksListResult {
+    pub tasks: Vec<RuntimeTask>,
+}
+method!(TasksList, "tasks.list", Some(Scope::OrchestrationRead), TasksListParams, TasksListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskControlParams {
+    pub thread_id: ThreadId,
+    pub task_id: String,
+}
+method!(TaskStop, "tasks.stop", Some(Scope::OrchestrationOperate), TaskControlParams, RuntimeTask);
+method!(TaskBackground, "tasks.background", Some(Scope::OrchestrationOperate), TaskControlParams, RuntimeTask);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsRegenerateTitleParams {
@@ -752,6 +781,9 @@ registry!(
     ThreadsArchive,
     ThreadsSend,
     ThreadsInterrupt,
+    TasksList,
+    TaskStop,
+    TaskBackground,
     ThreadsRegenerateTitle,
     ThreadsCheckpoints,
     ThreadsDiff,

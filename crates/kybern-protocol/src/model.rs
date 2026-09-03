@@ -339,6 +339,119 @@ impl Usage {
     }
 }
 
+/// A durable unit of work started by the provider while handling a thread.
+///
+/// Providers expose different names for these (subagent, task, background
+/// command, monitor). Kybern preserves the provider type while normalizing the
+/// lifecycle so every client can render the same activity surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeTaskKind {
+    Agent,
+    Process,
+    Monitor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeTaskStatus {
+    Pending,
+    Running,
+    Waiting,
+    Stopping,
+    Completed,
+    Failed,
+    Stopped,
+    Interrupted,
+}
+
+impl RuntimeTaskStatus {
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Pending | Self::Running | Self::Waiting | Self::Stopping)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeTaskCapabilities {
+    /// The provider exposes a targeted stop operation for this task.
+    #[serde(default)]
+    pub stop: bool,
+    /// The provider can detach this foreground task without interrupting it.
+    #[serde(default)]
+    pub background: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeTaskStats {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_uses: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_kb: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeTask {
+    /// Provider-stable task, child-thread, tool-call, or process id.
+    pub id: String,
+    pub thread_id: ThreadId,
+    /// Kybern turn that launched this task. Background work can outlive it.
+    pub origin_turn_id: TurnId,
+    pub kind: RuntimeTaskKind,
+    pub status: RuntimeTaskStatus,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub backgrounded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+    #[serde(default)]
+    pub stats: RuntimeTaskStats,
+    #[serde(default)]
+    pub capabilities: RuntimeTaskCapabilities,
+    pub started_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadActivityState {
+    Working,
+    Monitoring,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadActivitySummary {
+    pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<ThreadActivityState>,
+    pub active_agents: u32,
+    pub active_processes: u32,
+    pub active_monitors: u32,
+}
+
 /// A pending or resolved request for the user to approve a tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ApprovalRequest {

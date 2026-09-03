@@ -14,6 +14,7 @@ import {
   type ProjectId,
   type ProviderKind,
   type ProviderInstance,
+  type RuntimeTask,
   type SkillInfo,
   type ThreadEvent,
   type ThreadId,
@@ -22,7 +23,7 @@ import {
 } from "@/protocol"
 
 import { applyEvent, seedFromGet } from "./transcript"
-import { diffKey, useStore } from "./store"
+import { diffKey, mergeRuntimeTasks, summarizeRuntimeTasks, useStore } from "./store"
 
 let client: KybernClient | null = null
 let httpBase = ""
@@ -79,6 +80,7 @@ async function loadAll(): Promise<void> {
       settings,
       projects: Object.fromEntries(projects.projects.map((p) => [p.id, p])),
       threads: Object.fromEntries(threads.threads.map((t) => [t.id, t])),
+      threadActivity: Object.fromEntries((threads.activity ?? []).map((summary) => [summary.thread_id, summary])),
     })
     const sel = useStore.getState().selected
     if (sel.kind === "thread") void loadThread(sel.id)
@@ -93,7 +95,15 @@ async function loadAll(): Promise<void> {
 
 export async function loadThread(id: ThreadId): Promise<void> {
   const res = await rpc().call("threads.get", { thread_id: id })
-  useStore.getState().updateTranscript(id, (prev) => seedFromGet(res, prev))
+  const store = useStore.getState()
+  store.set((state) => {
+    const tasks = mergeRuntimeTasks(state.runtimeTasks[id] ?? [], res.runtime_tasks ?? [])
+    return {
+      runtimeTasks: { ...state.runtimeTasks, [id]: tasks },
+      threadActivity: { ...state.threadActivity, [id]: summarizeRuntimeTasks(id, tasks) },
+    }
+  })
+  store.updateTranscript(id, (prev) => seedFromGet(res, prev))
   void loadCheckpoints(id)
 }
 
@@ -114,6 +124,9 @@ function onEvent(ev: ThreadEvent) {
   const s = useStore.getState()
   if (ev.kind === "thread_created") {
     s.set((st) => ({ threads: { ...st.threads, [ev.thread.id]: ev.thread } }))
+  }
+  if (ev.kind === "runtime_task_started" || ev.kind === "runtime_task_updated" || ev.kind === "runtime_task_completed") {
+    storeRuntimeTask(ev.task)
   }
   s.updateTranscript(ev.thread_id, (t) => applyEvent(t, ev))
 
@@ -266,6 +279,27 @@ export async function handOff(threadId: ThreadId, provider: ProviderInstance, mo
 
 export async function interrupt(threadId: ThreadId): Promise<void> {
   await rpc().call("threads.interrupt", { thread_id: threadId })
+}
+
+export async function stopRuntimeTask(threadId: ThreadId, taskId: string): Promise<void> {
+  const task = await rpc().call("tasks.stop", { thread_id: threadId, task_id: taskId })
+  storeRuntimeTask(task)
+}
+
+export async function backgroundRuntimeTask(threadId: ThreadId, taskId: string): Promise<void> {
+  const task = await rpc().call("tasks.background", { thread_id: threadId, task_id: taskId })
+  storeRuntimeTask(task)
+}
+
+function storeRuntimeTask(task: RuntimeTask) {
+  useStore.getState().set((state) => {
+    const current = state.runtimeTasks[task.thread_id] ?? []
+    const tasks = mergeRuntimeTasks(current, [task])
+    return {
+      runtimeTasks: { ...state.runtimeTasks, [task.thread_id]: tasks },
+      threadActivity: { ...state.threadActivity, [task.thread_id]: summarizeRuntimeTasks(task.thread_id, tasks) },
+    }
+  })
 }
 
 export async function respondApproval(id: ApprovalId, decision: ApprovalDecision): Promise<void> {

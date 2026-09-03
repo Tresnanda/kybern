@@ -22,7 +22,8 @@ use uuid::Uuid;
 use crate::binary::{at_least, resolve, version_of};
 use crate::ndjson::NdjsonChild;
 use crate::{
-    AgentDriver, AgentSession, DriverError, DriverEvent, ProbeContext, Result, SessionConfig, SpawnedSession, summarize_tool_call,
+    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, ProbeContext, Result, SessionConfig,
+    SpawnedSession, summarize_tool_call,
 };
 
 const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
@@ -563,12 +564,33 @@ impl ClaudeSession {
                 .await;
             }
             "task_started" => {
-                self.emit(DriverEvent::Notice {
-                    level: NoticeLevel::Info,
-                    text: format!("subagent started: {}", v.get("description").and_then(|s| s.as_str()).unwrap_or("")),
-                    data: Some(v.clone()),
-                })
-                .await;
+                if let Some(task) = claude_task_started(v) {
+                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                }
+            }
+            "task_progress" | "task_updated" => {
+                if let Some(update) = claude_task_update(v) {
+                    let terminal = update.status.is_some_and(|status| !status.is_active());
+                    self.emit(if terminal { DriverEvent::RuntimeTaskCompleted(update) } else { DriverEvent::RuntimeTaskUpdated(update) })
+                        .await;
+                }
+            }
+            "task_notification" => {
+                if let Some(mut update) = claude_task_update(v) {
+                    if update.status.is_none() {
+                        update.status = Some(RuntimeTaskStatus::Completed);
+                    }
+                    self.emit(DriverEvent::RuntimeTaskCompleted(update)).await;
+                }
+            }
+            "background_tasks_changed" => {
+                if let Some(tasks) = v.get("tasks").or_else(|| v.get("running_background_tasks")).and_then(Value::as_array) {
+                    for task in tasks {
+                        if let Some(task) = claude_background_task(task) {
+                            self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -717,6 +739,139 @@ fn parse_usage(u: &Value) -> Usage {
     }
 }
 
+fn claude_task_started(value: &Value) -> Option<DriverRuntimeTask> {
+    let id = value.get("task_id").or_else(|| value.get("taskId")).or_else(|| value.get("id")).and_then(Value::as_str)?.to_string();
+    let provider_type = value
+        .get("task_type")
+        .or_else(|| value.get("taskType"))
+        .or_else(|| value.get("subagent_type"))
+        .or_else(|| value.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("local_agent")
+        .to_string();
+    let kind = match provider_type.as_str() {
+        "local_bash" | "shell" => RuntimeTaskKind::Process,
+        "monitor" | "monitor_mcp" => RuntimeTaskKind::Monitor,
+        _ => RuntimeTaskKind::Agent,
+    };
+    let status = value.get("status").and_then(Value::as_str).map(claude_task_status).unwrap_or(RuntimeTaskStatus::Running);
+    let backgrounded = value.get("is_backgrounded").or_else(|| value.get("isBackgrounded")).and_then(Value::as_bool).unwrap_or(false);
+    let tool_call_id = value.get("tool_use_id").or_else(|| value.get("toolUseId")).and_then(Value::as_str).map(str::to_string);
+    let title = value
+        .get("description")
+        .or_else(|| value.get("summary"))
+        .or_else(|| value.get("prompt"))
+        .and_then(Value::as_str)
+        .filter(|title| !title.trim().is_empty())
+        .map(|title| title.lines().next().unwrap_or(title).chars().take(120).collect())
+        .unwrap_or_else(|| match kind {
+            RuntimeTaskKind::Agent => "Subagent".into(),
+            RuntimeTaskKind::Process => "Background process".into(),
+            RuntimeTaskKind::Monitor => "Monitor".into(),
+        });
+    Some(DriverRuntimeTask {
+        id,
+        kind,
+        status,
+        title,
+        detail: value.get("summary").and_then(Value::as_str).map(str::to_string),
+        provider_type: Some(provider_type),
+        parent_id: value.get("parent_task_id").or_else(|| value.get("parentTaskId")).and_then(Value::as_str).map(str::to_string),
+        tool_call_id: tool_call_id.clone(),
+        provider_thread_id: None,
+        model: value.get("model").and_then(Value::as_str).map(str::to_string),
+        effort: None,
+        backgrounded,
+        last_tool_name: value.get("last_tool_name").or_else(|| value.get("lastToolName")).and_then(Value::as_str).map(str::to_string),
+        usage: claude_task_usage(value.get("usage")),
+        stats: claude_task_stats(value.get("usage")),
+        capabilities: RuntimeTaskCapabilities {
+            stop: status.is_active(),
+            background: status.is_active() && !backgrounded && tool_call_id.is_some() && kind != RuntimeTaskKind::Monitor,
+        },
+    })
+}
+
+fn claude_background_task(value: &Value) -> Option<DriverRuntimeTask> {
+    let mut task = claude_task_started(value)?;
+    // `background_tasks_changed` is the full background roster; individual
+    // rows do not repeat the background flag.
+    task.backgrounded = true;
+    task.capabilities.background = false;
+    Some(task)
+}
+
+fn claude_task_update(value: &Value) -> Option<DriverRuntimeTaskUpdate> {
+    let patch = value.get("patch").unwrap_or(value);
+    let id = value
+        .get("task_id")
+        .or_else(|| value.get("taskId"))
+        .or_else(|| value.get("id"))
+        .or_else(|| patch.get("task_id"))
+        .or_else(|| patch.get("taskId"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let status = patch.get("status").or_else(|| value.get("status")).and_then(Value::as_str).map(claude_task_status);
+    let usage_value = value.get("usage").or_else(|| patch.get("usage"));
+    let backgrounded = patch
+        .get("is_backgrounded")
+        .or_else(|| patch.get("isBackgrounded"))
+        .or_else(|| value.get("is_backgrounded"))
+        .or_else(|| value.get("isBackgrounded"))
+        .and_then(Value::as_bool);
+    Some(DriverRuntimeTaskUpdate {
+        id,
+        status,
+        detail: value
+            .get("summary")
+            .or_else(|| value.get("description"))
+            .or_else(|| patch.get("summary"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        backgrounded,
+        last_tool_name: value
+            .get("last_tool_name")
+            .or_else(|| value.get("lastToolName"))
+            .or_else(|| patch.get("last_tool_name"))
+            .or_else(|| patch.get("lastToolName"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        usage: claude_task_usage(usage_value),
+        stats: usage_value.map(|usage| claude_task_stats(Some(usage))),
+        capabilities: (backgrounded == Some(true))
+            .then_some(RuntimeTaskCapabilities { stop: status.is_none_or(RuntimeTaskStatus::is_active), background: false }),
+    })
+}
+
+fn claude_task_status(status: &str) -> RuntimeTaskStatus {
+    match status {
+        "pending" => RuntimeTaskStatus::Pending,
+        "paused" | "waiting" => RuntimeTaskStatus::Waiting,
+        "completed" | "done" | "success" => RuntimeTaskStatus::Completed,
+        "failed" | "error" => RuntimeTaskStatus::Failed,
+        "killed" | "stopped" | "cancelled" | "canceled" => RuntimeTaskStatus::Stopped,
+        "interrupted" => RuntimeTaskStatus::Interrupted,
+        _ => RuntimeTaskStatus::Running,
+    }
+}
+
+fn claude_task_usage(value: Option<&Value>) -> Option<Usage> {
+    let value = value?;
+    let usage = parse_usage(value);
+    (usage != Usage::default()).then_some(usage)
+}
+
+fn claude_task_stats(value: Option<&Value>) -> RuntimeTaskStats {
+    let Some(value) = value else { return RuntimeTaskStats::default() };
+    RuntimeTaskStats {
+        token_count: value.get("total_tokens").or_else(|| value.get("totalTokens")).and_then(Value::as_u64),
+        tool_uses: value.get("tool_uses").or_else(|| value.get("toolUses")).and_then(Value::as_u64),
+        duration_ms: value.get("duration_ms").or_else(|| value.get("durationMs")).and_then(Value::as_u64),
+        cpu_percent: None,
+        rss_kb: None,
+    }
+}
+
 fn content_blocks(message: &UserMessage) -> Vec<Value> {
     let Some(last_skill) = message.parts.iter().rposition(|part| matches!(part, ContentPart::Skill { .. })) else {
         return message.parts.iter().filter_map(claude_block).collect();
@@ -834,6 +989,18 @@ impl AgentSession for SessionHandle {
         self.0.respond_control(request_id, Ok(response)).await
     }
 
+    async fn stop_runtime_task(&self, task: &RuntimeTask) -> Result<()> {
+        self.0.send_control("stop_task", json!({ "task_id": task.id })).await.map(|_| ())
+    }
+
+    async fn background_runtime_task(&self, task: &RuntimeTask) -> Result<()> {
+        let tool_use_id = task
+            .tool_call_id
+            .as_deref()
+            .ok_or_else(|| DriverError::Unsupported("Claude Code did not expose the tool id needed to background this task".into()))?;
+        self.0.send_control("background_tasks", json!({ "tool_use_id": tool_use_id })).await.map(|_| ())
+    }
+
     async fn close(&self) -> Result<()> {
         let _ = self.0.child.close_stdin().await;
         let child = self.0.child.clone();
@@ -847,8 +1014,8 @@ impl AgentSession for SessionHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::{claude_efforts, claude_model_aliases, content_blocks};
-    use kybern_protocol::{ContentPart, UserMessage};
+    use super::{claude_background_task, claude_efforts, claude_model_aliases, claude_task_started, claude_task_update, content_blocks};
+    use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStatus, UserMessage};
     use serde_json::json;
 
     const HELP: &str = "\
@@ -885,5 +1052,44 @@ mod tests {
                 json!({ "type": "text", "text": "/fix-ci carefully" }),
             ]
         );
+    }
+
+    #[test]
+    fn parses_native_task_lifecycle_and_capabilities() {
+        let task = claude_task_started(&json!({
+            "task_id": "agent-7",
+            "task_type": "local_agent",
+            "description": "Inspect the daemon",
+            "tool_use_id": "tool-2",
+            "status": "running",
+            "usage": { "total_tokens": 1200, "tool_uses": 4, "duration_ms": 3200 }
+        }))
+        .unwrap();
+        assert_eq!(task.kind, RuntimeTaskKind::Agent);
+        assert_eq!(task.status, RuntimeTaskStatus::Running);
+        assert_eq!(task.title, "Inspect the daemon");
+        assert!(task.capabilities.stop);
+        assert!(task.capabilities.background);
+        assert_eq!(task.stats.token_count, Some(1200));
+
+        let update = claude_task_update(&json!({
+            "taskId": "agent-7",
+            "patch": { "isBackgrounded": true, "status": "waiting" },
+            "summary": "Waiting for results"
+        }))
+        .unwrap();
+        assert_eq!(update.status, Some(RuntimeTaskStatus::Waiting));
+        assert_eq!(update.backgrounded, Some(true));
+        assert_eq!(update.detail.as_deref(), Some("Waiting for results"));
+        assert_eq!(update.capabilities.unwrap().background, false);
+
+        let background = claude_background_task(&json!({
+            "task_id": "shell-4",
+            "task_type": "local_bash",
+            "description": "pnpm dev"
+        }))
+        .unwrap();
+        assert!(background.backgrounded);
+        assert!(!background.capabilities.background);
     }
 }

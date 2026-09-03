@@ -50,6 +50,19 @@ session on later daemon starts. Driver events are translated into thread
 events, persisted with a monotonic `seq`, and broadcast to every connection.
 Clients subscribe with `after_seq` to replay what they missed.
 
+## Runtime activity
+
+Subagents, background commands, and monitors launched by the main agent are
+durable runtime tasks. Drivers report provider-native lifecycle updates; the
+orchestrator persists complete task snapshots and clients project the newest
+snapshot per id. An after-turn checkpoint waits for work launched by that turn,
+and rewind is blocked while background work can still mutate the tree.
+
+The desktop exposes this state as a sidebar cue, a compact composer summary,
+and an Activity dock. Targeted controls only appear when the provider advertises
+the exact capability. See [Runtime activity and harness parity](harness-parity.md)
+for provider coverage and the checklist for new drivers.
+
 ## Approvals
 
 Drivers surface provider permission prompts as `PermissionRequest` driver

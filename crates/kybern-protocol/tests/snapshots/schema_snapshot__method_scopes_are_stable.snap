@@ -30,6 +30,12 @@ expression: scopes
   - "orchestration:operate"
 - - threads.interrupt
   - "orchestration:operate"
+- - tasks.list
+  - "orchestration:read"
+- - tasks.stop
+  - "orchestration:operate"
+- - tasks.background
+  - "orchestration:operate"
 - - threads.regenerateTitle
   - "orchestration:operate"
 - - threads.checkpoints

@@ -47,14 +47,15 @@ import {
   WebSearchIcon,
 } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
-import type { ContentPart, Diff, ThreadId } from "@/protocol"
+import type { ContentPart, Diff, RuntimeTask, ThreadId } from "@/protocol"
 import { errorText, revertTo } from "@/state/rpc"
-import { diffKey, useStore } from "@/state/store"
+import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { groupTurns, type Block, type TurnGroup } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
 const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
 const META = getChatMessageFooterTextStyle()
+const EMPTY_RUNTIME_TASKS: RuntimeTask[] = []
 // No horizontal inset: message edges sit exactly on the composer's edges.
 const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)] transition-colors duration-500"
 const HOVER_REVEAL =
@@ -158,7 +159,12 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
-  const hasWork = group.work.length > 0
+  const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
+  const launchedTasks = useMemo(
+    () => runtimeTasks.filter((task) => task.origin_turn_id === group.turnId),
+    [group.turnId, runtimeTasks],
+  )
+  const hasWork = group.work.length > 0 || launchedTasks.length > 0
   const hasLiveWork = group.work.some(
     (block) =>
       (block.kind === "tool" && !block.complete) ||
@@ -187,6 +193,7 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
         <div className={cn(ROW, "pb-2")} data-timeline-row-kind="work">
           <div className="space-y-0.5">
             <WorkList blocks={group.work} />
+            <RuntimeTaskTranscriptRows tasks={launchedTasks} />
           </div>
         </div>
       )}
@@ -216,6 +223,7 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
                 </button>
                 <DisclosureRegion open={open} contentClassName="mb-2.5 space-y-1.5">
                   <WorkList blocks={group.work} />
+                  <RuntimeTaskTranscriptRows tasks={launchedTasks} />
                 </DisclosureRegion>
               </div>
               <div className="h-px w-full bg-border" />
@@ -261,6 +269,43 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
     </>
   )
 })
+
+function RuntimeTaskTranscriptRows({ tasks }: { tasks: RuntimeTask[] }) {
+  const set = useStore((state) => state.set)
+  if (tasks.length === 0) return null
+  return tasks.map((task) => {
+    const active = isRuntimeTaskActive(task)
+    const noun = task.kind === "agent" ? "agent" : task.kind === "process" ? "process" : "monitor"
+    const status = active
+      ? task.status === "waiting"
+        ? "Monitoring"
+        : task.status === "stopping"
+          ? "Stopping"
+          : "Active"
+      : task.status === "failed"
+        ? "Failed"
+        : task.status === "stopped" || task.status === "interrupted"
+          ? "Stopped"
+          : "Completed"
+    return (
+      <button
+        key={task.id}
+        type="button"
+        title={task.title}
+        onClick={() => set({ rightOpen: true, rightTab: "activity" })}
+        className="group/task-row flex w-full cursor-pointer items-center gap-1.5 py-1 text-start focus-visible:outline-none"
+      >
+        <span className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
+          {task.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
+        </span>
+        <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
+          Started {noun} · {task.title}
+        </span>
+        <span className={cn("shrink-0 font-system-ui text-[11px] tabular-nums", task.status === "failed" ? "text-destructive" : "text-muted-foreground/55")}>{status}</span>
+      </button>
+    )
+  })
+}
 
 function WorkingHeader({ since }: { since: string }) {
   const now = useTicker(true)

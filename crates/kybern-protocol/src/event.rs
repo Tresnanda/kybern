@@ -64,6 +64,18 @@ pub enum EventPayload {
         output: Value,
         is_error: bool,
     },
+    /// A provider-owned subagent, process, or monitor became visible.
+    RuntimeTaskStarted {
+        task: RuntimeTask,
+    },
+    /// Full latest-state snapshot for an existing provider-owned task.
+    RuntimeTaskUpdated {
+        task: RuntimeTask,
+    },
+    /// Terminal snapshot retained in the event log for history and recovery.
+    RuntimeTaskCompleted {
+        task: RuntimeTask,
+    },
     ApprovalRequested {
         approval: ApprovalRequest,
     },

@@ -109,7 +109,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
-            ok(ThreadsListResult { threads: state.store.threads_list(p.project_id, p.include_archived).map_err(internal)? })
+            let threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
+            let activity = threads
+                .iter()
+                .map(|thread| {
+                    let tasks = state.store.runtime_tasks_for_thread(thread.id).map_err(internal)?;
+                    Ok(kybern_store::project_thread_activity(thread.id, &tasks))
+                })
+                .collect::<Result<Vec<_>, RpcError>>()?
+                .into_iter()
+                .filter(|summary| summary.state.is_some())
+                .collect();
+            ok(ThreadsListResult { threads, activity })
         }
         ThreadsCreate::NAME => {
             let p: ThreadsCreateParams = parse(params)?;
@@ -120,14 +131,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             let store = state.store.clone();
             let id = p.thread_id;
-            let (transcript, pending_approvals) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let (transcript, pending_approvals, runtime_tasks) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                 let events = store.events_for_thread(id)?;
-                Ok((kybern_store::project_transcript(&events), store.approvals_pending(Some(id))?))
+                Ok((
+                    kybern_store::project_transcript(&events),
+                    store.approvals_pending(Some(id))?,
+                    kybern_store::project_runtime_tasks(&events),
+                ))
             })
             .await
             .map_err(internal)?
             .map_err(internal)?;
-            ok(ThreadsGetResult { thread, transcript, pending_approvals })
+            ok(ThreadsGetResult { thread, transcript, pending_approvals, runtime_tasks })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
@@ -155,6 +170,22 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ThreadsInterruptParams = parse(params)?;
             state.orchestrator.interrupt(p.thread_id).await.map_err(bad)?;
             ok(Empty {})
+        }
+        TasksList::NAME => {
+            let p: TasksListParams = parse(params)?;
+            let mut tasks = state.store.runtime_tasks_for_thread(p.thread_id).map_err(internal)?;
+            if !p.include_completed {
+                tasks.retain(|task| task.status.is_active());
+            }
+            ok(TasksListResult { tasks })
+        }
+        TaskStop::NAME => {
+            let p: TaskControlParams = parse(params)?;
+            ok(state.orchestrator.stop_runtime_task(p.thread_id, &p.task_id).await.map_err(provider_err)?)
+        }
+        TaskBackground::NAME => {
+            let p: TaskControlParams = parse(params)?;
+            ok(state.orchestrator.background_runtime_task(p.thread_id, &p.task_id).await.map_err(provider_err)?)
         }
         ThreadsRegenerateTitle::NAME => {
             let p: ThreadsRegenerateTitleParams = parse(params)?;

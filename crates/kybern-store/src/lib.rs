@@ -6,7 +6,7 @@
 mod projection;
 mod schema;
 
-pub use projection::project_transcript;
+pub use projection::{project_runtime_tasks, project_thread_activity, project_transcript};
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -382,6 +382,18 @@ impl Store {
         self.with(|c| {
             let mut st = c.prepare("SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 ORDER BY seq")?;
             Ok(st.query_map([thread_id.to_string()], row_to_event)?.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    pub fn runtime_tasks_for_thread(&self, thread_id: ThreadId) -> Result<Vec<RuntimeTask>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events
+                 WHERE thread_id = ?1 AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed')
+                 ORDER BY seq",
+            )?;
+            let events = st.query_map([thread_id.to_string()], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
+            Ok(project_runtime_tasks(&events))
         })
     }
 

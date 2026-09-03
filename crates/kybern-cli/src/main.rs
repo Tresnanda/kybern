@@ -93,6 +93,12 @@ enum Cmd {
     },
     /// Interrupt the running turn.
     Interrupt { thread: String },
+    /// Inspect or control provider-owned agents and background processes.
+    Tasks {
+        thread: String,
+        #[command(subcommand)]
+        cmd: Option<TasksCmd>,
+    },
     /// List or answer pending approvals.
     Approvals {
         #[command(subcommand)]
@@ -279,6 +285,19 @@ enum ApprovalsCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum TasksCmd {
+    /// List task history as well as active work.
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Stop one task without interrupting its parent thread.
+    Stop { task: String },
+    /// Move one foreground task to the background.
+    Background { task: String },
+}
+
 fn parse_mode(s: &str) -> Result<PermissionMode, String> {
     serde_json::from_value(serde_json::Value::String(s.to_string()))
         .map_err(|_| format!("unknown mode {s}; use supervised|accept-edits|auto|full-access"))
@@ -386,6 +405,45 @@ async fn main() -> Result<()> {
         Cmd::Interrupt { thread } => {
             client.call::<ThreadsInterrupt>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
             println!("interrupt sent");
+        }
+        Cmd::Tasks { thread, cmd } => {
+            let thread_id = thread.parse()?;
+            match cmd.unwrap_or(TasksCmd::List { all: false }) {
+                TasksCmd::List { all } => {
+                    let result = client.call::<TasksList>(TasksListParams { thread_id, include_completed: all }).await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    } else if result.tasks.is_empty() {
+                        println!("no provider tasks");
+                    } else {
+                        for task in result.tasks {
+                            println!(
+                                "{:<38} {:<9} {:<11} {}",
+                                task.id,
+                                format!("{:?}", task.kind).to_lowercase(),
+                                format!("{:?}", task.status).to_lowercase(),
+                                task.title
+                            );
+                        }
+                    }
+                }
+                TasksCmd::Stop { task } => {
+                    let result = client.call::<TaskStop>(TaskControlParams { thread_id, task_id: task }).await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    } else {
+                        println!("stop requested for {}", result.title);
+                    }
+                }
+                TasksCmd::Background { task } => {
+                    let result = client.call::<TaskBackground>(TaskControlParams { thread_id, task_id: task }).await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    } else {
+                        println!("moved {} to the background", result.title);
+                    }
+                }
+            }
         }
         Cmd::Approvals { cmd } => match cmd.unwrap_or(ApprovalsCmd::List) {
             ApprovalsCmd::List => {

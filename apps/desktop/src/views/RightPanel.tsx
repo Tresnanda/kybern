@@ -15,13 +15,14 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/toolt
 import { FileDiffCard } from "@/components/kybern/DiffView"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { plural } from "@/lib/format"
-import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
+import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, WorkflowIcon, XIcon } from "@/lib/synara/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { Diff, GitStatus, ThreadId } from "@/protocol"
 import { errorText, loadDiff, loadFileDiff, rpc } from "@/state/rpc"
-import { diffKey, useStore, type RightTab } from "@/state/store"
+import { diffKey, isRuntimeTaskActive, useStore, type RightTab } from "@/state/store"
 
+import { ActivityPane } from "./Activity"
 import { ExplorerPane } from "./Explorer"
 import { TerminalWorkspace } from "./Terminal"
 import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME, DOCK_HEADER_ICON_BUTTON_CLASS } from "./chrome"
@@ -43,6 +44,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const projectId = useStore((s) => (threadId ? s.threads[threadId]?.project_id : undefined) ?? (s.selected.kind === "draft" ? s.selected.draft.projectId : undefined))
   const adds = diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0
   const dels = diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0
+  const activeTasks = useStore((s) => (threadId ? (s.runtimeTasks[threadId] ?? []).filter(isRuntimeTaskActive).length : 0))
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
@@ -51,6 +53,9 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "drag-region gap-1 px-1.5")}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <DockTab active={tab === "activity"} onClick={() => set({ rightTab: "activity" })} icon={<WorkflowIcon className="size-3.5 shrink-0 opacity-70" />} label="Activity">
+            {activeTasks > 0 && <span className="ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
+          </DockTab>
           <DockTab active={tab === "changes"} onClick={() => set({ rightTab: "changes" })} icon={<DiffIcon className="size-3.5 shrink-0 opacity-70" />} label="Diff">
             {adds + dels > 0 && <DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" />}
           </DockTab>
@@ -67,6 +72,10 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
               <MenuGroup>
+                <MenuItem onClick={() => set({ rightTab: "activity" })}>
+                  <WorkflowIcon className="size-3.5 shrink-0" />
+                  <span>Activity</span>
+                </MenuItem>
                 <MenuItem onClick={() => set({ rightTab: "changes" })}>
                   <DiffIcon className="size-3.5 shrink-0" />
                   <span>Diff</span>
@@ -90,9 +99,12 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
 
       <div className="relative min-h-0 flex-1">
         {!threadId ? (
-          <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its changes and terminal.</div>
+          <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its activity, changes, and terminal.</div>
         ) : (
           <>
+            <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "activity" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "activity"}>
+              <ActivityPane threadId={threadId} />
+            </div>
             <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "changes" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "changes"}>
               <Changes key={threadId} threadId={threadId} />
             </div>
