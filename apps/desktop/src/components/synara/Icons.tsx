@@ -294,6 +294,24 @@ export const PiIcon: Icon = (props) => (
   </svg>
 );
 
+/** Official OMP mark from https://omp.sh. */
+export const OmpIcon: Icon = (props) => {
+  const gradientId = `${useId()}-omp-gradient`;
+
+  return (
+    <svg {...props} viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="oklch(0.7 0.24 340)" />
+          <stop offset=".5" stopColor="oklch(0.62 0.21 295)" />
+          <stop offset="1" stopColor="oklch(0.81 0.14 200)" />
+        </linearGradient>
+      </defs>
+      <path fill={`url(#${gradientId})`} d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z" />
+    </svg>
+  );
+};
+
 export const OpenCodeIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg">
     <g clipPath="url(#opencode__clip0_1311_94969)">

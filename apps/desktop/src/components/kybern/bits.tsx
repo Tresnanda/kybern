@@ -15,7 +15,7 @@ const SYNARA_PROVIDER: Record<ProviderKind, string> = {
   cursor: "cursor",
   opencode: "opencode",
   pi: "pi",
-  omp: "pi",
+  omp: "omp",
 }
 
 export function ProviderMark({ kind, className, size = 14, tone }: { kind: ProviderKind; className?: string; size?: number; tone?: "default" | "header" }) {
