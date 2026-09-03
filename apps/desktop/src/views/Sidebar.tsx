@@ -87,6 +87,7 @@ export function ThreadSidebar() {
   return (
     <>
       <SidebarHeader
+        data-tauri-drag-region="deep"
         className={cn(
           "drag-region flex h-[46px] flex-row items-center gap-1 !pt-0 !pb-0 pe-3 font-system-ui",
           mac ? "desktop-top-bar-traffic-light-gutter" : "ps-4",

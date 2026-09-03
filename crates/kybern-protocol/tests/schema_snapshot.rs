@@ -60,4 +60,7 @@ fn wire_examples_roundtrip() {
     assert_eq!(part, ContentPart::FileMention { path: "src/main.rs".into() });
     assert_eq!(serde_json::to_value(ProviderKind::ClaudeCode).unwrap(), "claude-code");
     assert_eq!(serde_json::to_value(PermissionMode::AcceptEdits).unwrap(), "accept-edits");
+
+    let legacy_diff_params: ThreadsDiffParams = serde_json::from_value(serde_json::json!({ "thread_id": uuid::Uuid::nil() })).unwrap();
+    assert!(legacy_diff_params.include_patch);
 }

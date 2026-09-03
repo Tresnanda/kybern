@@ -1,4 +1,4 @@
-export const DEFAULT_CHAT_FONT_SIZE_PX = 12
+export const DEFAULT_CHAT_FONT_SIZE_PX = 14
 export const MIN_CHAT_FONT_SIZE_PX = 11
 export const MAX_CHAT_FONT_SIZE_PX = 18
 

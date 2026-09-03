@@ -16,11 +16,16 @@ import { DisclosureRegion } from "@/components/synara/DisclosureRegion"
 import { DiffStatLabel } from "@/components/synara/chat/DiffStatLabel"
 import { MessageActionButton } from "@/components/synara/chat/MessageActionButton"
 import { ReviewChangesButton } from "@/components/synara/chat/ReviewChangesButton"
+import {
+  getChatMessageFooterTextStyle,
+  getChatTranscriptTextStyle,
+} from "@/components/synara/chat/chatTypography"
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
 import { copyText, useTicker } from "@/lib/hooks"
 import { MessageScroller } from "@/components/beui/message-scroller"
 import {
   ArrowDownIcon,
+  BookIcon,
   BotIcon,
   BrainIcon,
   ChangesIcon,
@@ -42,8 +47,9 @@ import { errorText, revertTo } from "@/state/rpc"
 import { diffKey, useStore } from "@/state/store"
 import { groupTurns, type Block, type TurnGroup } from "@/state/transcript"
 
-const TEXT: CSSProperties = { fontSize: 12, lineHeight: "19.5px" }
-const META: CSSProperties = { fontSize: 10, lineHeight: "16.25px" }
+const TEXT = getChatTranscriptTextStyle()
+const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
+const META = getChatMessageFooterTextStyle()
 // No horizontal inset: message edges sit exactly on the composer's edges.
 const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)] transition-colors duration-500"
 const HOVER_REVEAL =
@@ -139,6 +145,12 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
   const hasWork = group.work.length > 0
+  const hasLiveWork = group.work.some(
+    (block) =>
+      (block.kind === "tool" && !block.complete) ||
+      (block.kind === "assistant" && !block.complete && (!!block.text.trim() || !!block.thinking.trim())) ||
+      (block.kind === "approval" && !block.decision),
+  )
   const settled = !group.running
   const open = group.running || !!expanded
   const streaming = group.running && !!group.answerLive
@@ -167,9 +179,9 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
         </div>
       )}
 
-      {group.running && !streaming && (
+      {group.running && !streaming && !hasLiveWork && (
         <div className={cn(ROW, "pb-1")} data-timeline-row-kind="working">
-          <div className="shimmer pt-0.5 font-system-ui text-muted-foreground" style={{ fontSize: 12 }}>
+          <div className="shimmer pt-0.5 font-system-ui text-muted-foreground" style={CHAT_FONT}>
             Thinking
           </div>
         </div>
@@ -185,7 +197,7 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
                   aria-expanded={open}
                   onClick={() => toggle(group.turnId)}
                   className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground transition-colors duration-200 hover:text-foreground"
-                  style={{ fontSize: 12 }}
+                  style={CHAT_FONT}
                 >
                   <span>{group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : "Details"}</span>
                   <DisclosureChevron open={open} className="text-muted-foreground/70" />
@@ -244,7 +256,7 @@ function WorkingHeader({ since }: { since: string }) {
   const now = useTicker(true)
   return (
     <>
-      <div className="-ml-0.5 pb-2 text-muted-foreground" style={{ fontSize: 12 }}>
+      <div className="-ml-0.5 pb-2 text-muted-foreground" style={CHAT_FONT}>
         Working for {clockDuration(elapsedSince(since, now))}
       </div>
       <div className="h-px w-full bg-border" />
@@ -290,7 +302,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
                 ) : (
                   <span
                     key={i}
-                    className="inline-flex h-7 max-w-[16rem] min-w-0 items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] px-2 text-[11px] font-medium text-[var(--color-text-foreground)]"
+                    className="inline-flex h-7 max-w-[16rem] min-w-0 items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] px-2 text-[length:var(--app-font-size-ui-sm,13px)] font-medium text-[var(--color-text-foreground)]"
                   >
                     <FileIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
                     <span className="min-w-0 truncate">{p.type === "attachment" ? p.name : p.path}</span>
@@ -316,31 +328,38 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
   )
 }
 
-function workIcon(verb: string, isError: boolean, complete: boolean) {
-  if (!complete) return <Spinner size={14} className="text-muted-foreground" />
-  if (isError) return <CircleAlertIcon className="size-4 text-muted-foreground/50" />
-  switch (verb) {
-    case "Ran":
+function workIcon(kind: ReturnType<typeof toolLine>["kind"], isError: boolean) {
+  if (isError)
+    return <CircleAlertIcon className="size-4 text-muted-foreground/50" />
+  switch (kind) {
+    case "command":
       return <TerminalIcon className="size-4" />
-    case "Edited":
-    case "Wrote":
+    case "edit":
+    case "write":
       return <PencilIcon className="size-4" />
-    case "Read":
-    case "Searched":
+    case "read":
+      return <BookIcon className="size-4" />
+    case "search":
+    case "list":
       return <SearchIcon className="size-4" />
-    case "Fetched":
+    case "fetch":
       return <WebSearchIcon className="size-4" />
-    case "Delegated":
+    case "delegate":
       return <BotIcon className="size-4" />
     default:
       return <HammerIcon className="size-4" />
   }
 }
 
-function workLabel(verb: string, detail: string, name: string): string {
-  if (verb === "Ran") return detail ? `Ran ${detail}` : "Ran a command"
-  if (verb === "Searched") return detail ? `Searched for ${detail}` : "Searched"
-  if (verb === "Planned") return "Updated the plan"
+function workLabel(
+  { verb, detail, kind }: ReturnType<typeof toolLine>,
+  name: string,
+  complete: boolean
+): string {
+  if (kind === "command" && !detail)
+    return complete ? "Ran a command" : "Running a command"
+  if (kind === "read" && !detail)
+    return complete ? "Read a file" : "Reading a file"
   if (detail) return `${verb} ${detail}`
   return verb === name ? `Used ${name}` : verb
 }
@@ -360,7 +379,7 @@ function WorkRow({ block }: { block: Block }) {
             <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
               {block.decision ? <CheckIcon className="size-4 text-muted-foreground/50" /> : <Spinner size={14} />}
             </span>
-            <p className="truncate leading-6 text-muted-foreground" style={{ fontSize: 12 }}>
+            <p className="truncate leading-6 text-muted-foreground" style={CHAT_FONT}>
               {block.decision ? (block.decision.decision === "deny" ? "Declined " : "Approved ") : "Waiting to approve "}
               {block.approval.summary || block.approval.tool_name}
             </p>
@@ -374,7 +393,7 @@ function WorkRow({ block }: { block: Block }) {
             <span className={cn("flex size-5 shrink-0 items-center justify-center", block.level === "error" ? "text-destructive" : "text-muted-foreground")}>
               <CircleAlertIcon className="size-4" />
             </span>
-            <p className={cn("min-w-0 leading-6", block.level === "error" ? "text-destructive" : "text-muted-foreground")} style={{ fontSize: 12 }}>
+            <p className={cn("min-w-0 leading-6", block.level === "error" ? "text-destructive" : "text-muted-foreground")} style={CHAT_FONT}>
               {block.text}
             </p>
           </div>
@@ -387,7 +406,7 @@ function WorkRow({ block }: { block: Block }) {
 
 function ToolRow({ block }: { block: Extract<Block, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false)
-  const { verb, detail } = toolLine(block.call)
+  const activity = toolLine(block.call, block.complete)
   const out = outputText(block.output, block.stream)
   const canOpen = out.trim().length > 0
   return (
@@ -399,18 +418,18 @@ function ToolRow({ block }: { block: Extract<Block, { kind: "tool" }> }) {
         className={cn("group/tool-row flex w-full items-center gap-2 text-left transition-[opacity,translate] duration-200", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
       >
         <span data-work-entry-icon className={cn("flex size-5 shrink-0 items-center justify-center", TONE)}>
-          {workIcon(verb, block.isError, block.complete)}
+          {workIcon(activity.kind, block.isError)}
         </span>
         <div className="min-w-0 overflow-hidden">
-          <p className={cn("truncate leading-6", TONE)} style={{ fontSize: 12 }}>
-            <span data-work-entry-display-text>{workLabel(verb, detail, block.call.name)}</span>
+          <p className={cn("truncate leading-6", TONE, !block.complete && "shimmer")} style={CHAT_FONT}>
+            <span data-work-entry-display-text>{workLabel(activity, block.call.name, block.complete)}</span>
           </p>
         </div>
         {canOpen && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
       </button>
       {canOpen && (
         <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ml-7">
-          <pre className="selectable max-h-72 overflow-auto rounded-md bg-[var(--app-chat-code-surface)] px-2.5 py-2 font-chat-code text-[11px] leading-relaxed whitespace-pre-wrap break-words text-foreground/92">{out}</pre>
+          <pre className="selectable max-h-72 overflow-auto rounded-md bg-[var(--app-chat-code-surface)] px-2.5 py-2 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words text-foreground/92">{out}</pre>
         </DisclosureRegion>
       )}
     </div>
@@ -431,7 +450,7 @@ function AssistantWorkRow({ block }: { block: Extract<Block, { kind: "assistant"
               {block.complete ? <BrainIcon className="size-4" /> : <Spinner size={14} className="text-muted-foreground" />}
             </span>
             <div className="min-w-0 overflow-hidden">
-              <p className={cn("truncate leading-6", TONE, !block.complete && "shimmer")} style={{ fontSize: 12 }}>
+              <p className={cn("truncate leading-6", TONE, !block.complete && "shimmer")} style={CHAT_FONT}>
                 {block.complete ? "Thought" : "Thinking"}
               </p>
             </div>
@@ -497,18 +516,18 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
     <div className="mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
       <div
         className={cn(
-          "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-user-message-background)_40%,transparent)] px-3 py-1.5",
+          "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-chat-code-surface)_40%,transparent)] px-3 py-1.5",
           expanded && "border-b border-[color:var(--color-border-light)]",
         )}
       >
         <div className="flex min-w-0 items-center gap-2.5">
           <ChangesIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
           <div className="min-w-0">
-            <div className="truncate font-normal text-foreground/92" style={{ fontSize: 12 }}>
+            <div className="truncate font-normal text-foreground/92" style={CHAT_FONT}>
               Edited {plural(diff.files.length, "file")}
             </div>
             {(adds > 0 || dels > 0) && (
-              <div className="font-system-ui tabular-nums" style={{ fontSize: 12 }}>
+              <div className="font-system-ui tabular-nums" style={CHAT_FONT}>
                 <DiffStatLabel additions={adds} deletions={dels} />
               </div>
             )}
@@ -516,11 +535,11 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {canUndo && (
-            <button type="button" onClick={undo} disabled={reverting} className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground" style={{ fontSize: 12 }}>
+            <button type="button" onClick={undo} disabled={reverting} className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground" style={CHAT_FONT}>
               Undo {reverting ? <Spinner size={12} /> : <Undo2Icon className="size-3" />}
             </button>
           )}
-          <ReviewChangesButton onClick={review} style={{ fontSize: 12 }} />
+          <ReviewChangesButton onClick={review} style={CHAT_FONT} />
           <button
             type="button"
             aria-label={expanded ? "Collapse changed files list" : "Expand changed files list"}
@@ -545,7 +564,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
             type="button"
             onClick={() => setShowAll((v) => !v)}
             className="flex w-full items-center justify-start gap-1.5 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2 font-system-ui font-normal text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
-            style={{ fontSize: 12 }}
+            style={CHAT_FONT}
           >
             <DisclosureChevron open={showAll} />
             {showAll ? "Show less" : `Show ${plural(rest.length, "more file")}`}
@@ -573,10 +592,10 @@ function EditedFileRow({ file, first, open, onToggle, onReview }: { file: FileDi
         >
           <DisclosureChevron open={open} className="text-muted-foreground/60" />
           <FileIcon className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80" />
-          <span className="min-w-0 truncate font-system-ui font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline" style={{ fontSize: 12 }}>
+          <span className="min-w-0 truncate font-system-ui font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline" style={CHAT_FONT}>
             {file.path}
           </span>
-          <span className="ml-auto shrink-0 font-system-ui tabular-nums" style={{ fontSize: 12 }}>
+          <span className="ml-auto shrink-0 font-system-ui tabular-nums" style={CHAT_FONT}>
             <DiffStatLabel additions={file.additions} deletions={file.deletions} />
           </span>
         </button>

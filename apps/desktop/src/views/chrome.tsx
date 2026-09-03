@@ -129,7 +129,10 @@ const SIDEBAR_TRIGGER_CLASS_NAME = cn(
 export function SidebarLeadingControls({ className }: { className?: string }) {
   const { toggleSidebar } = useSidebar()
   return (
-    <div className={cn("no-drag flex shrink-0 items-center gap-0", className)}>
+    <div
+      data-tauri-drag-region="false"
+      className={cn("no-drag flex shrink-0 items-center gap-0", className)}
+    >
       <Tooltip>
         <TooltipTrigger
           render={
@@ -267,6 +270,7 @@ export function SurfaceHeader({
   const gutter = !open && platform() === "macos"
   return (
     <div
+      data-tauri-drag-region="deep"
       className={cn(
         CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
         CHAT_SURFACE_HEADER_PADDING_X_CLASS,
@@ -284,7 +288,10 @@ export function SurfaceHeader({
           <SidebarHeaderNavigationControls />
           {!minimal && <div className="flex min-w-0 flex-1 items-center gap-2">{children}</div>}
         </div>
-        <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+        <div
+          data-tauri-drag-region="false"
+          className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]"
+        >
           {trailing}
           {environment && <EnvironmentToggle />}
           <DockToggle />

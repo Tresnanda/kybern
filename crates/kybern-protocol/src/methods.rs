@@ -216,6 +216,12 @@ pub struct ThreadsDiffParams {
     /// Omit for the whole thread: first checkpoint → current working tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<TurnId>,
+    /// Include unified patch text. Defaults to true for older clients.
+    #[serde(default = "default_true")]
+    pub include_patch: bool,
+    /// Limit the diff to one repository-relative path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 method!(ThreadsDiff, "threads.diff", Some(Scope::OrchestrationRead), ThreadsDiffParams, Diff);
 

@@ -65,7 +65,12 @@ export default function App() {
       data-sidebar-side="left"
       style={{ "--sidebar-width": `${sidebar.width}px` } as React.CSSProperties}
     >
-      <Sidebar side="left" collapsible="offcanvas" transparentSurface>
+      <Sidebar
+        side="left"
+        collapsible="offcanvas"
+        transparentSurface
+        innerClassName="app-sidebar-surface"
+      >
         <ErrorBoundary label="the sidebar">
           <ThreadSidebar />
         </ErrorBoundary>

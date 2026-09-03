@@ -1,4 +1,6 @@
-import type { JsonValue, PermissionMode, ProviderKind, ThreadStatus, ToolCall } from "@/protocol"
+import type { JsonValue, PermissionMode, ProviderKind, ThreadStatus } from "@/protocol"
+
+export { toolLine } from "@/lib/toolActivity"
 
 export function relativeTime(iso: string, now = Date.now()): string {
   const t = Date.parse(iso)
@@ -94,40 +96,6 @@ export const PROVIDER_LABEL: Record<ProviderKind, string> = {
   pi: "pi",
   omp: "Oh My Pi",
   cursor: "Cursor",
-}
-
-function str(input: JsonValue, key: string): string | undefined {
-  if (!input || typeof input !== "object") return undefined
-  const v = (input as Record<string, unknown>)[key]
-  return typeof v === "string" ? v.split("\n")[0] : undefined
-}
-
-/** Verb + object line for a tool call, e.g. ["Ran", "git status"]. */
-export function toolLine(call: ToolCall): { verb: string; detail: string; mono: boolean } {
-  const name = call.name
-  const lower = name.toLowerCase()
-  const input = call.input
-  if (["bash", "shell", "execute", "run"].includes(lower)) {
-    return { verb: "Ran", detail: str(input, "command") ?? str(input, "cmd") ?? "", mono: true }
-  }
-  if (["write", "create"].includes(lower)) return { verb: "Wrote", detail: shortenPath(str(input, "file_path") ?? str(input, "path") ?? ""), mono: true }
-  if (["edit", "multiedit", "apply_patch", "str_replace_editor", "patch"].includes(lower)) {
-    const changes = (input as { changes?: { path?: string }[] } | null)?.changes
-    const detail = Array.isArray(changes)
-      ? changes.map((c) => shortenPath(c.path ?? "")).join(", ")
-      : shortenPath(str(input, "file_path") ?? str(input, "path") ?? "")
-    return { verb: "Edited", detail, mono: true }
-  }
-  if (lower === "read") return { verb: "Read", detail: shortenPath(str(input, "file_path") ?? str(input, "path") ?? ""), mono: true }
-  if (["grep", "glob", "search", "ripgrep", "find"].includes(lower)) {
-    return { verb: "Searched", detail: str(input, "pattern") ?? str(input, "query") ?? "", mono: true }
-  }
-  if (["webfetch", "fetch", "web_search", "websearch"].includes(lower)) return { verb: "Fetched", detail: str(input, "url") ?? str(input, "query") ?? "", mono: false }
-  if (["task", "agent", "subagent"].includes(lower)) return { verb: "Delegated", detail: str(input, "description") ?? str(input, "prompt") ?? "", mono: false }
-  if (["todowrite", "todo", "plan"].includes(lower)) return { verb: "Planned", detail: "", mono: false }
-  const detail =
-    str(input, "title") ?? str(input, "query") ?? str(input, "command") ?? str(input, "path") ?? str(input, "file_path") ?? ""
-  return { verb: name, detail, mono: true }
 }
 
 export function outputText(output: JsonValue | null, stream: string): string {

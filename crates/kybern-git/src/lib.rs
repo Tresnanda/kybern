@@ -166,9 +166,23 @@ impl Repo {
     }
 
     pub async fn diff(&self, from: &str, to: &str) -> Result<Diff> {
-        let numstat = self.git(&["diff", "--numstat", "-M", from, to]).await?;
-        let status = self.git(&["diff", "--name-status", "-M", from, to]).await?;
-        let patch = self.git(&["diff", "--no-color", "-M", from, to]).await?;
+        self.diff_with_options(from, to, true, None).await
+    }
+
+    /// Diff two snapshots, optionally omitting the unified patch or limiting it
+    /// to one repository-relative path. Metadata is always returned.
+    pub async fn diff_with_options(&self, from: &str, to: &str, include_patch: bool, path: Option<&str>) -> Result<Diff> {
+        let args = |mode: &'static str| {
+            let mut args = vec!["diff", mode, "-M", from, to];
+            if let Some(path) = path {
+                args.extend(["--", path]);
+            }
+            args
+        };
+        let numstat_args = args("--numstat");
+        let status_args = args("--name-status");
+        let (numstat, status) = tokio::try_join!(self.git(&numstat_args), self.git(&status_args))?;
+        let patch = if include_patch { self.git(&args("--no-color")).await? } else { String::new() };
 
         let mut files: Vec<FileChange> = Vec::new();
         for line in status.lines() {
@@ -274,6 +288,30 @@ mod tests {
         repo.restore(&before).await.unwrap();
         assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "one\n");
         assert!(!dir.path().join("new.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn diff_can_skip_patch_and_scope_to_path() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+
+        let before = repo.snapshot("before").await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "one\nthree\n").unwrap();
+        let after = repo.snapshot("after").await.unwrap();
+
+        let summary = repo.diff_with_options(&before, &after, false, None).await.unwrap();
+        assert_eq!(summary.files.len(), 2);
+        assert!(summary.patch.is_empty());
+
+        let file = repo.diff_with_options(&before, &after, true, Some("a.txt")).await.unwrap();
+        assert_eq!(file.files.len(), 1);
+        assert_eq!(file.files[0].path, "a.txt");
+        assert!(file.patch.contains("+two"));
+        assert!(!file.patch.contains("b.txt"));
     }
 
     #[tokio::test]

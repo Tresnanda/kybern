@@ -4,17 +4,7 @@
 // Exports: transcript measurement helpers and inline styles for chat text
 
 import type { CSSProperties } from "react";
-const DEFAULT_CHAT_FONT_SIZE_PX = 12;
-const MIN_CHAT_FONT_SIZE_PX = 11;
-const MAX_CHAT_FONT_SIZE_PX = 20;
-export function normalizeChatFontSizePx(value: number | null | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_CHAT_FONT_SIZE_PX;
-  }
-
-  return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
-}
-
+import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "@/lib/synara/appSettings";
 
 export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME = "rounded-[var(--radius-user-message)]";
 export const USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME = "py-1.5";

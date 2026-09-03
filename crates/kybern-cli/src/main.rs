@@ -423,7 +423,12 @@ async fn main() -> Result<()> {
         }
         Cmd::Diff { thread, turn, stat } => {
             let d = client
-                .call::<ThreadsDiff>(ThreadsDiffParams { thread_id: thread.parse()?, turn_id: turn.map(|t| t.parse()).transpose()? })
+                .call::<ThreadsDiff>(ThreadsDiffParams {
+                    thread_id: thread.parse()?,
+                    turn_id: turn.map(|t| t.parse()).transpose()?,
+                    include_patch: !stat,
+                    path: None,
+                })
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&d)?)

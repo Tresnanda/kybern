@@ -369,6 +369,7 @@ function Header({ threadId }: { threadId: ThreadId }) {
               />
             ) : (
               <h2
+                data-tauri-drag-region="false"
                 onDoubleClick={() => {
                   setTitle(thread.title)
                   setRenaming(true)

@@ -96,13 +96,42 @@ export function FileDiffBody({ file }: { file: FileDiff }) {
   )
 }
 
-/** Collapsible per-file card: header + body. */
-export function FileDiffCard({ file, defaultOpen = true, className }: { file: FileDiff; defaultOpen?: boolean; className?: string }) {
-  const [open, setOpen] = useState(defaultOpen)
+/** Collapsible per-file card: header + body. Supports controlled lazy loading. */
+export function FileDiffCard({
+  file,
+  defaultOpen = true,
+  open: controlledOpen,
+  onOpenChange,
+  loading = false,
+  error = false,
+  className,
+}: {
+  file: FileDiff
+  defaultOpen?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  loading?: boolean
+  error?: boolean
+  className?: string
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
+  const open = controlledOpen ?? uncontrolledOpen
+  const toggle = () => {
+    const next = !open
+    if (onOpenChange) onOpenChange(next)
+    else setUncontrolledOpen(next)
+  }
   return (
     <div className={cn("diff-render-file overflow-hidden rounded-md border border-[color:var(--color-border)]", className)}>
-      <FileDiffHeader file={file} open={open} onToggle={() => setOpen((v) => !v)} />
-      {open && <FileDiffBody file={file} />}
+      <FileDiffHeader file={file} open={open} onToggle={toggle} />
+      {open &&
+        (loading ? (
+          <p className="shimmer px-3 py-2 text-[11px] text-muted-foreground/75">Loading changes…</p>
+        ) : error ? (
+          <p className="px-3 py-2 text-[11px] text-destructive">Unable to load this file’s changes.</p>
+        ) : (
+          <FileDiffBody file={file} />
+        ))}
     </div>
   )
 }

@@ -61,6 +61,9 @@ jobs:
       - name: typecheck
         working-directory: apps/desktop
         run: pnpm typecheck
+      - name: test
+        working-directory: apps/desktop
+        run: pnpm test
       - name: lint
         working-directory: apps/desktop
         run: pnpm lint

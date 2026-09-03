@@ -910,16 +910,16 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown :not(pre) > code {
   border-radius: 0.4rem;
-  background: var(--app-user-message-background);
+  background: var(--app-chat-code-surface);
   padding: 0.1rem 0.35rem;
   color: var(--foreground);
   font-size: var(--app-font-size-chat-code);
   font-family: var(--font-chat-code-family);
 }
 
-/* User-bubble markdown (sent messages). The bubble tint IS the code surface
-   color, so code needs its own contrast step against the bubble, and block
-   margins tighten to read well inside the compact bubble padding. */
+/* User-bubble markdown (sent messages). Inline and fenced code use a local
+   contrast step against the composer-matched bubble, while block margins
+   tighten to read well inside the compact bubble padding. */
 .chat-markdown--user p,
 .chat-markdown--user ul,
 .chat-markdown--user ol,
@@ -1558,7 +1558,7 @@ label:has(> select#reasoning-effort) select {
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  background: var(--app-user-message-background);
+  background: var(--app-chat-code-surface);
 }
 
 .pdf-viewer-page {
@@ -2630,6 +2630,11 @@ diffs-container {
   /* Same base as `.composer-picker-menu-surface`, kept opaque here so the shared
      `--composer-glass-opacity` knob is the only thing thinning it. */
   --composer-glass-surface: var(--popover);
+  --app-composer-surface-fill: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-opacity),
+    transparent
+  );
 }
 
 .chat-composer-surface,
@@ -2660,11 +2665,7 @@ diffs-container {
 }
 
 .chat-composer-surface {
-  background: color-mix(
-    in srgb,
-    var(--composer-glass-surface) var(--composer-glass-opacity),
-    transparent
-  );
+  background: var(--app-composer-surface-fill);
 }
 
 /* Recessed track: a hairline border + faint inner shadow read the base as a sunken

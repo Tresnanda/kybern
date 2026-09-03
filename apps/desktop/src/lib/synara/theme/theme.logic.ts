@@ -150,9 +150,9 @@ const SURFACE_UNDER_BASE_ALPHA: Record<ThemeVariant, number> = {
   dark: 0.16,
   light: 0.04,
 };
-const SIDEBAR_TRANSLUCENT_MIX: Record<ThemeVariant, number> = {
-  dark: 0.86,
-  light: 0.8,
+const SIDEBAR_TINT_OPACITY: Record<ThemeVariant, number> = {
+  dark: 0.56,
+  light: 0.68,
 };
 const CONTENT_SURFACE_LIFT: Record<ThemeVariant, number> = {
   dark: 0.08,
@@ -724,6 +724,10 @@ export function buildThemeCssVariables(
       : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
   const seedSurface = readCodexVariable("--color-background-surface");
+  // Codex's sidebar uses the primary app surface as a translucent color wash
+  // over the native material. The panel token is intentionally darker and
+  // leaves the glass looking like a grey overlay instead of window chrome.
+  const sidebarSurface = readCodexVariable("--color-background-surface");
   const contentLift = CONTENT_SURFACE_LIFT[variant];
   const contentSurface =
     variant === "dark"
@@ -745,9 +749,8 @@ export function buildThemeCssVariables(
     variant,
     resolvedTokens.computed.panel,
   );
-  // Shared surface for the user message bubble and fenced code blocks so both
-  // read as the same "input/source" affordance inside the transcript. Sourced
-  // from the user-message token so code blocks pick up the bubble's color.
+  // Code keeps its own transcript surface. Sent messages instead share the
+  // composer's final glass-fill token so the two input surfaces cannot drift.
   const chatCodeSurface = readCodexVariable("--color-background-user-message");
   const appVariables: Record<string, string> = {
     "--accent": readCodexVariable("--color-background-accent"),
@@ -767,7 +770,7 @@ export function buildThemeCssVariables(
     "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,
-    "--app-user-message-background": chatCodeSurface,
+    "--app-user-message-background": "var(--app-composer-surface-fill)",
     "--app-sidebar-backdrop-filter":
       material === "translucent" ? "blur(8px) saturate(135%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
@@ -776,8 +779,8 @@ export function buildThemeCssVariables(
     "--app-settings-backdrop-filter": "none",
     "--app-sidebar-surface":
       material === "translucent"
-        ? `color-mix(in srgb, ${seedSurface} ${Math.round(SIDEBAR_TRANSLUCENT_MIX[variant] * 100)}%, transparent)`
-        : seedSurface,
+        ? `color-mix(in srgb, ${sidebarSurface} ${Math.round(SIDEBAR_TINT_OPACITY[variant] * 100)}%, transparent)`
+        : sidebarSurface,
     "--app-settings-surface": contentSurface,
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),

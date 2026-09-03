@@ -427,6 +427,8 @@ export interface ThreadsCheckpointsResult {
 export interface ThreadsDiffParams {
   thread_id: ThreadId;
   turn_id?: TurnId;
+  include_patch?: boolean;
+  path?: string;
 }
 
 export interface ThreadsRevertParams {

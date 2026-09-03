@@ -2,7 +2,7 @@
 // collapse control, and panes kept mounted underneath. The Changes pane
 // combines the Environment card rows with the diff file list.
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { Spinner } from "@/components/kybern/bits"
@@ -18,8 +18,8 @@ import { plural } from "@/lib/format"
 import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import type { GitStatus, ThreadId } from "@/protocol"
-import { errorText, loadDiff, rpc } from "@/state/rpc"
+import type { Diff, GitStatus, ThreadId } from "@/protocol"
+import { errorText, loadDiff, loadFileDiff, rpc } from "@/state/rpc"
 import { diffKey, useStore, type RightTab } from "@/state/store"
 
 import { ExplorerPane } from "./Explorer"
@@ -34,6 +34,7 @@ const ENV_ROW =
 const ENV_ICON = "size-4 shrink-0 text-[var(--color-text-foreground)]"
 const ENV_LABEL = "font-normal text-muted-foreground/40"
 const ENV_SECTION_LABEL = `${ENV_LABEL} text-[length:var(--app-font-size-ui-sm,11px)] px-2 py-1`
+const DIFF_FILES_BATCH = 100
 
 export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const tab = useStore((s) => s.rightTab)
@@ -45,7 +46,10 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
-      <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "drag-region gap-1 px-1.5")}>
+      <div
+        data-tauri-drag-region="deep"
+        className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "drag-region gap-1 px-1.5")}
+      >
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <DockTab active={tab === "changes"} onClick={() => set({ rightTab: "changes" })} icon={<DiffIcon className="size-3.5 shrink-0 opacity-70" />} label="Diff">
             {adds + dels > 0 && <DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" />}
@@ -53,7 +57,10 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
           <DockTab active={tab === "terminal"} onClick={() => set({ rightTab: "terminal" })} icon={<TerminalIcon className="size-3.5 shrink-0 opacity-70" />} label="Terminal" />
           <DockTab active={tab === "explorer"} onClick={() => set({ rightTab: "explorer" })} icon={<FoldersIcon className="size-3.5 shrink-0 opacity-70" />} label="Explorer" />
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]">
+        <div
+          data-tauri-drag-region="false"
+          className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]"
+        >
           <Menu>
             <MenuTrigger render={<Button variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON_CLASS} aria-label="Add pane" />}>
               <PlusIcon className="size-3.5" />
@@ -87,7 +94,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         ) : (
           <>
             <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "changes" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "changes"}>
-              <Changes threadId={threadId} />
+              <Changes key={threadId} threadId={threadId} />
             </div>
             <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "explorer" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "explorer"}>
               {projectId && <ExplorerPane projectId={projectId} />}
@@ -118,6 +125,7 @@ function Changes({ threadId }: { threadId: ThreadId }) {
   const diff = useStore((s) => s.diffs[diffKey(threadId)])
   const [git, setGit] = useState<GitStatus | null>(null)
   const [busy, setBusy] = useState<"commit" | "pr" | null>(null)
+  const [visibleCount, setVisibleCount] = useState(DIFF_FILES_BATCH)
   const lastSeq = useStore((s) => s.transcripts[threadId]?.lastSeq)
 
   useEffect(() => {
@@ -129,11 +137,7 @@ function Changes({ threadId }: { threadId: ThreadId }) {
   }, [threadId, lastSeq])
 
   const files = diff?.files ?? []
-  const byPath = useMemo(() => {
-    const m = new Map<string, FileDiff>()
-    for (const f of parseUnifiedDiff(diff?.patch ?? "")) m.set(f.path, f)
-    return m
-  }, [diff?.patch])
+  const visibleFiles = files.slice(0, visibleCount)
 
   const commit = async () => {
     setBusy("commit")
@@ -226,15 +230,60 @@ function Changes({ threadId }: { threadId: ThreadId }) {
             <DiffStat additions={files.reduce((n, f) => n + f.additions, 0)} deletions={files.reduce((n, f) => n + f.deletions, 0)} className="shrink-0 text-[11px] font-medium" />
           </div>
           <div className="h-full min-h-0 overflow-auto px-2 pb-2">
-            {files.map((f) => {
-              const parsed = byPath.get(f.path) ?? { path: f.path, oldPath: f.old_path ?? null, status: f.status === "added" ? "added" : f.status === "deleted" ? "deleted" : "modified", binary: f.binary, hunks: [], additions: f.additions, deletions: f.deletions }
-              return <FileDiffCard key={f.path} file={parsed} className="mb-2 first:mt-2 last:mb-0" />
-            })}
+            {visibleFiles.map((file) => (
+              <LazyFileDiffCard key={file.path} threadId={threadId} change={file} />
+            ))}
+            {visibleCount < files.length && (
+              <button
+                type="button"
+                onClick={() => setVisibleCount((count) => count + DIFF_FILES_BATCH)}
+                className="mb-2 flex w-full items-center justify-center rounded-md border border-[color:var(--color-border)] px-3 py-2 text-[11px] text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
+              >
+                Show {Math.min(DIFF_FILES_BATCH, files.length - visibleCount)} more of {files.length} files
+              </button>
+            )}
           </div>
         </div>
       )}
     </div>
   )
+}
+
+function fileChangeShell(change: Diff["files"][number]): FileDiff {
+  return {
+    path: change.path,
+    oldPath: change.old_path ?? null,
+    status: change.status === "added" ? "added" : change.status === "deleted" ? "deleted" : "modified",
+    binary: change.binary,
+    hunks: [],
+    additions: change.additions,
+    deletions: change.deletions,
+  }
+}
+
+function LazyFileDiffCard({ threadId, change }: { threadId: ThreadId; change: Diff["files"][number] }) {
+  const [open, setOpen] = useState(false)
+  const [file, setFile] = useState<FileDiff>(() => fileChangeShell(change))
+  const [loading, setLoading] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  const onOpenChange = (next: boolean) => {
+    setOpen(next)
+    if (!next || loaded || loading) return
+    setLoading(true)
+    setFailed(false)
+    void loadFileDiff(threadId, change.path)
+      .then((diff) => {
+        const parsed = parseUnifiedDiff(diff.patch)
+        setFile(parsed.find((candidate) => candidate.path === change.path) ?? fileChangeShell(change))
+        setLoaded(true)
+      })
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false))
+  }
+
+  return <FileDiffCard file={file} open={open} onOpenChange={onOpenChange} loading={loading} error={failed} className="mb-2 first:mt-2 last:mb-0" />
 }
 
 function EnvRow({ icon, label, trailing, onClick, disabled }: { icon: React.ReactNode; label: string; trailing?: React.ReactNode; onClick?: () => void; disabled?: boolean }) {

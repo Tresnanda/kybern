@@ -9,6 +9,7 @@ import {
   KybernClient,
   type ApprovalDecision,
   type ApprovalId,
+  type Diff,
   type PermissionMode,
   type ProjectId,
   type ProviderInstance,
@@ -24,6 +25,7 @@ import { diffKey, useStore } from "./store"
 let client: KybernClient | null = null
 let httpBase = ""
 let token = ""
+const diffLoads = new Map<string, Promise<void>>()
 
 export function rpc(): KybernClient {
   if (!client) throw new Error("Not connected")
@@ -134,13 +136,37 @@ async function announce(ev: ThreadEvent) {
   else if (ev.kind === "turn_failed") await notify(title, `Failed: ${ev.error}`)
 }
 
-export async function loadDiff(threadId: ThreadId, turnId?: TurnId): Promise<void> {
-  try {
-    const d = await rpc().call("threads.diff", turnId ? { thread_id: threadId, turn_id: turnId } : { thread_id: threadId })
-    useStore.getState().set((s) => ({ diffs: { ...s.diffs, [diffKey(threadId, turnId)]: d } }))
-  } catch {
-    // no git, no diff
-  }
+export function loadDiff(threadId: ThreadId, turnId?: TurnId): Promise<void> {
+  const includePatch = !!turnId
+  const requestKey = `${diffKey(threadId, turnId)}:${includePatch ? "patch" : "stat"}`
+  const pending = diffLoads.get(requestKey)
+  if (pending) return pending
+
+  const request = (async () => {
+    try {
+      const d = await rpc().call("threads.diff", {
+        thread_id: threadId,
+        ...(turnId ? { turn_id: turnId } : {}),
+        include_patch: includePatch,
+      })
+      useStore.getState().set((s) => ({ diffs: { ...s.diffs, [diffKey(threadId, turnId)]: d } }))
+    } catch {
+      // no git, no diff
+    } finally {
+      diffLoads.delete(requestKey)
+    }
+  })()
+  diffLoads.set(requestKey, request)
+  return request
+}
+
+export function loadFileDiff(threadId: ThreadId, path: string, turnId?: TurnId): Promise<Diff> {
+  return rpc().call("threads.diff", {
+    thread_id: threadId,
+    ...(turnId ? { turn_id: turnId } : {}),
+    include_patch: true,
+    path,
+  })
 }
 
 // ---- actions ----

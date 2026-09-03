@@ -532,7 +532,7 @@ impl Orchestrator {
         }
     }
 
-    pub async fn diff(&self, thread_id: ThreadId, turn_id: Option<TurnId>) -> Result<Diff> {
+    pub async fn diff(&self, thread_id: ThreadId, turn_id: Option<TurnId>, include_patch: bool, path: Option<&str>) -> Result<Diff> {
         let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         let repo = Repo::new(&thread.cwd);
         if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
@@ -558,7 +558,7 @@ impl Orchestrator {
                 (first.before, repo.snapshot("kybern diff (now)").await?)
             }
         };
-        repo.diff(&from, &to).await
+        repo.diff_with_options(&from, &to, include_patch, path).await
     }
 
     /// Reset the working tree to the snapshot taken before `turn_id`.

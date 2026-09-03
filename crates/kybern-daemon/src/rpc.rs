@@ -190,7 +190,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsDiff::NAME => {
             let p: ThreadsDiffParams = parse(params)?;
-            ok(state.orchestrator.diff(p.thread_id, p.turn_id).await.map_err(bad)?)
+            ok(state.orchestrator.diff(p.thread_id, p.turn_id, p.include_patch, p.path.as_deref()).await.map_err(bad)?)
         }
         ThreadsRevert::NAME => {
             let p: ThreadsRevertParams = parse(params)?;
