@@ -441,6 +441,7 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
         match part {
             ContentPart::Text { text } => out.push(ContentBlock::Text(TextContent::new(text.clone()))),
             ContentPart::FileMention { path } => out.push(ContentBlock::Text(TextContent::new(format!("@{path}")))),
+            ContentPart::Skill { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("/{name}")))),
             ContentPart::Image { media_type, data } => out.push(ContentBlock::Image(ImageContent::new(data.clone(), media_type.clone()))),
             ContentPart::Attachment { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("[attached file: {name}]")))),
         }
@@ -499,5 +500,21 @@ impl AgentSession for Handle {
     async fn close(&self) -> Result<()> {
         let _ = self.commands.send(SessionCommand::Close).await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blocks;
+    use agent_client_protocol::schema::v1::ContentBlock;
+    use kybern_protocol::{ContentPart, UserMessage};
+
+    #[test]
+    fn cursor_uses_its_native_skill_command_syntax() {
+        let message = UserMessage { parts: vec![ContentPart::Skill { name: "review".into(), path: "/skills/review/SKILL.md".into() }] };
+
+        let blocks = blocks(&message);
+        let ContentBlock::Text(text) = &blocks[0] else { panic!("expected text block") };
+        assert_eq!(text.text, "/review");
     }
 }

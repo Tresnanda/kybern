@@ -40,6 +40,7 @@ fn main() {
     add::<PairRequest>(&mut types, "PairRequest");
     add::<PairResponse>(&mut types, "PairResponse");
     add::<AssetInfo>(&mut types, "AssetInfo");
+    add::<SkillInfo>(&mut types, "SkillInfo");
     add::<PullRequest>(&mut types, "PullRequest");
     add::<TerminalOutputNotification>(&mut types, "TerminalOutputNotification");
     add::<TerminalExitedNotification>(&mut types, "TerminalExitedNotification");
@@ -84,6 +85,7 @@ fn main() {
     method::<FilesSearch>(&mut methods);
     method::<FilesList>(&mut methods);
     method::<FilesRead>(&mut methods);
+    method::<SkillsList>(&mut methods);
     method::<ApprovalsRespond>(&mut methods);
     method::<ApprovalsList>(&mut methods);
     method::<EventsSubscribe>(&mut methods);

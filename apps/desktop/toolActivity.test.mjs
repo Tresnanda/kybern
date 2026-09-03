@@ -1,9 +1,24 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { toolLine } from "./src/lib/toolActivity.ts"
+import { buildStructuredTextParts } from "./src/lib/composerTokens.ts"
+import { getAttachmentIconName, getFileIconName } from "./src/lib/synara/fileIcons.ts"
+import {
+  humanizeToolName,
+  summarizeToolCalls,
+  toolLine,
+  toolVisualKind,
+} from "./src/lib/toolActivity.ts"
 
 const call = (name, input) => ({ id: "tool-1", name, input })
+
+test("Synara file icons distinguish common project and attachment types", () => {
+  assert.equal(getFileIconName("Cargo.toml"), "rust")
+  assert.equal(getFileIconName("src/App.tsx"), "react")
+  assert.equal(getFileIconName("docs/RTK.md"), "markdown")
+  assert.equal(getFileIconName(".gitignore"), "git")
+  assert.equal(getAttachmentIconName({ name: "scan", mimeType: "application/pdf" }), "file-pdf")
+})
 
 test("Claude read calls use live and settled tense", () => {
   const read = call("Read", { file_path: "/workspace/docs/RTK.md" })
@@ -166,5 +181,82 @@ test("generic commands retain a useful running label", () => {
       mono: true,
       kind: "command",
     }
+  )
+})
+
+test("namespaced tools get recognizable labels and icons", () => {
+  const github = call("mcp__codex_apps__github__search_code", { query: "ToolStarted" })
+  assert.equal(humanizeToolName(github.name), "GitHub · Search Code")
+  assert.equal(toolVisualKind(github), "github")
+  assert.deepEqual(toolLine(github, false), {
+    verb: "Searching",
+    detail: "GitHub for ToolStarted",
+    mono: true,
+    kind: "search",
+  })
+
+  const browser = call("mcp__cua_repl__js", { title: "Open settings" })
+  assert.equal(humanizeToolName(browser.name), "Browser · Js")
+  assert.equal(toolVisualKind(browser), "web")
+  assert.deepEqual(toolLine(browser, true), {
+    verb: "Used",
+    detail: "Browser · Js — Open settings",
+    mono: false,
+    kind: "other",
+  })
+  assert.equal(humanizeToolName("web__run"), "Web search")
+
+  assert.deepEqual(
+    toolLine(call("web__run", { search_query: [{ q: "Tauri CORS" }] }), false),
+    {
+      verb: "Searching",
+      detail: "the web for Tauri CORS",
+      mono: false,
+      kind: "search",
+    }
+  )
+})
+
+test("settled contiguous tools collapse into a plain-language summary", () => {
+  const summary = summarizeToolCalls([
+    { call: call("Read", { file_path: "src/a.ts" }), complete: true, isError: false },
+    { call: call("Read", { file_path: "src/a.ts" }), complete: true, isError: false },
+    { call: call("Read", { file_path: "src/b.ts" }), complete: true, isError: false },
+    { call: call("bash", { command: "pnpm test" }), complete: true, isError: false },
+  ])
+  assert.deepEqual(summary, {
+    label: "Ran 1 command and read 2 files",
+    visual: "read",
+    entryCount: 4,
+  })
+  assert.equal(
+    summarizeToolCalls([
+      { call: call("Read", { path: "a" }), complete: false, isError: false },
+      { call: call("Read", { path: "b" }), complete: true, isError: false },
+    ]),
+    null
+  )
+})
+
+test("composer preserves spaced skill names as structured provider references", () => {
+  const skill = {
+    name: "Expo UI SwiftUI",
+    path: "/skills/expo-ui-swiftui/SKILL.md",
+    scope: "user",
+    enabled: true,
+  }
+  assert.deepEqual(
+    buildStructuredTextParts(
+      "Use $Expo UI SwiftUI with @src/App.tsx and keep $HOME.",
+      new Set(["src/App.tsx"]),
+      [skill]
+    ),
+    [
+      { type: "text", text: "Use " },
+      { type: "skill", name: "Expo UI SwiftUI", path: skill.path },
+      { type: "text", text: " with " },
+      { type: "file_mention", path: "src/App.tsx" },
+      { type: "text", text: " and keep $HOME." },
+    ]
   )
 })

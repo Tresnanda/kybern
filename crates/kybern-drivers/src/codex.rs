@@ -118,6 +118,83 @@ async fn codex_models(bin: &std::path::Path) -> Vec<ProviderModel> {
     models
 }
 
+/// Ask Codex's own app-server for its effective skill catalog. This preserves
+/// plugin namespaces, disabled state, and repo/system precedence that cannot be
+/// reconstructed reliably from a blind filesystem walk.
+pub async fn discover_skills(cwd: &std::path::Path, binary: Option<&PathBuf>) -> Option<Vec<SkillInfo>> {
+    let bin = resolve(ProviderKind::Codex, binary).ok()?;
+    let mut cmd = Command::new(bin);
+    cmd.current_dir(cwd).arg("app-server");
+    let child = NdjsonChild::spawn(cmd).ok()?;
+    let initialized = catalog_call(
+        &child,
+        1,
+        "initialize",
+        json!({
+            "clientInfo": { "name": "kybern", "title": "Kybern", "version": env!("CARGO_PKG_VERSION") },
+            "capabilities": { "experimentalApi": false }
+        }),
+    )
+    .await
+    .is_some();
+    if !initialized || child.write(&json!({ "method": "initialized" })).await.is_err() {
+        child.kill().await;
+        return None;
+    }
+
+    let cwd_text = cwd.to_string_lossy().to_string();
+    let result = catalog_call(&child, 2, "skills/list", json!({ "cwds": [&cwd_text] })).await;
+    child.kill().await;
+    let result = result?;
+    let entries = result.get("data")?.as_array()?;
+    let entry =
+        entries.iter().find(|entry| entry.get("cwd").and_then(Value::as_str) == Some(cwd_text.as_str())).or_else(|| entries.first())?;
+    let skills = entry
+        .get("skills")?
+        .as_array()?
+        .iter()
+        .filter_map(|skill| {
+            let name = skill.get("name")?.as_str()?.trim();
+            let path = skill.get("path")?.as_str()?.trim();
+            if name.is_empty() || path.is_empty() {
+                return None;
+            }
+            let interface = skill.get("interface");
+            let display_name = interface
+                .and_then(|value| value.get("displayName"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let description = skill
+                .get("shortDescription")
+                .and_then(Value::as_str)
+                .or_else(|| interface.and_then(|value| value.get("shortDescription")).and_then(Value::as_str))
+                .or_else(|| skill.get("description").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let scope = match skill.get("scope").and_then(Value::as_str) {
+                Some("repo") => SkillScope::Repo,
+                Some("user") => SkillScope::User,
+                Some("system") => SkillScope::System,
+                Some("admin") => SkillScope::Admin,
+                Some("project") => SkillScope::Project,
+                _ => SkillScope::Other,
+            };
+            Some(SkillInfo {
+                name: name.to_string(),
+                display_name,
+                description,
+                path: path.to_string(),
+                scope,
+                enabled: skill.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+            })
+        })
+        .collect();
+    Some(skills)
+}
+
 #[async_trait]
 impl AgentDriver for CodexDriver {
     fn kind(&self) -> ProviderKind {
@@ -744,6 +821,12 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
         match part {
             ContentPart::Text { text } => items.push(json!({ "type": "text", "text": text, "text_elements": [] })),
             ContentPart::FileMention { path } => items.push(json!({ "type": "text", "text": format!("@{path}"), "text_elements": [] })),
+            ContentPart::Skill { name, path } => {
+                // App-server currently expects both the visible `$skill` text
+                // and the structured item that identifies the canonical file.
+                items.push(json!({ "type": "text", "text": format!("${name}"), "text_elements": [] }));
+                items.push(json!({ "type": "skill", "name": name, "path": path }));
+            }
             ContentPart::Image { media_type, data } => {
                 if base64::engine::general_purpose::STANDARD.decode(data).is_ok() {
                     items.push(json!({ "type": "image", "url": format!("data:{media_type};base64,{data}"), "detail": "auto" }));
@@ -838,5 +921,26 @@ impl AgentSession for Handle {
             Err(_) => child.kill().await,
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::input_items;
+    use kybern_protocol::{ContentPart, UserMessage};
+    use serde_json::json;
+
+    #[test]
+    fn sends_codex_skills_as_visible_text_and_structured_items() {
+        let message = UserMessage {
+            parts: vec![ContentPart::Skill { name: "Expo UI SwiftUI".into(), path: "/skills/expo-ui-swiftui/SKILL.md".into() }],
+        };
+        assert_eq!(
+            input_items(&message),
+            vec![
+                json!({ "type": "text", "text": "$Expo UI SwiftUI", "text_elements": [] }),
+                json!({ "type": "skill", "name": "Expo UI SwiftUI", "path": "/skills/expo-ui-swiftui/SKILL.md" }),
+            ]
+        );
     }
 }

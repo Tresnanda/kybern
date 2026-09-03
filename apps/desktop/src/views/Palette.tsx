@@ -27,6 +27,13 @@ interface Item {
   run: () => void
 }
 
+function itemToSearchValue(value: unknown): string {
+  if (!value || typeof value !== "object") return ""
+  const label = "label" in value && typeof value.label === "string" ? value.label : ""
+  const keywords = "keywords" in value && typeof value.keywords === "string" ? value.keywords : ""
+  return `${label} ${keywords}`.trim()
+}
+
 export function Palette() {
   const open = useStore((s) => s.paletteOpen)
   const set = useStore((s) => s.set)
@@ -128,7 +135,7 @@ export function Palette() {
   return (
     <CommandDialog open={open} onOpenChange={(o) => set({ paletteOpen: o })}>
       <CommandDialogPopup className="max-w-2xl" aria-label="Search">
-        <Command items={groups} itemToStringLabel={(i: Item) => i.keywords} onValueChange={() => {}}>
+        <Command items={groups} itemToStringValue={itemToSearchValue} onValueChange={() => {}}>
           <CommandPanel className="overflow-hidden">
             <CommandInput placeholder="Search threads, projects, and commands" />
             <CommandList className="max-h-[min(24rem,60vh)] not-empty:px-1.5 not-empty:pt-0 not-empty:pb-1.5">

@@ -12,7 +12,9 @@ import {
   type Diff,
   type PermissionMode,
   type ProjectId,
+  type ProviderKind,
   type ProviderInstance,
+  type SkillInfo,
   type ThreadEvent,
   type ThreadId,
   type TurnId,
@@ -220,6 +222,11 @@ export async function searchFiles(projectId: ProjectId, query: string, limit = 3
   return r.files
 }
 
+export async function listSkills(projectId: ProjectId, provider: ProviderKind): Promise<SkillInfo[]> {
+  const result = await rpc().call("skills.list", { project_id: projectId, provider })
+  return result.skills
+}
+
 /** Start a new thread with another agent, seeded with the conversation so far. */
 export async function handOff(threadId: ThreadId, provider: ProviderInstance, model?: string): Promise<ThreadId> {
   const s = useStore.getState()
@@ -229,7 +236,9 @@ export async function handOff(threadId: ThreadId, provider: ProviderInstance, mo
   const lines: string[] = []
   for (const b of t?.blocks ?? []) {
     if (b.kind === "user") {
-      const text = b.message.parts.map((p) => (p.type === "text" ? p.text : p.type === "file_mention" ? `@${p.path}` : `[${p.type}]`)).join("")
+      const text = b.message.parts
+        .map((p) => (p.type === "text" ? p.text : p.type === "file_mention" ? `@${p.path}` : p.type === "skill" ? `$${p.name}` : `[${p.type}]`))
+        .join("")
       lines.push(`User:\n${text}`)
     } else if (b.kind === "assistant" && b.text.trim()) {
       lines.push(`Assistant:\n${b.text.trim()}`)
@@ -303,13 +312,23 @@ export async function removeProject(projectId: ProjectId) {
 }
 
 export async function uploadFile(file: File): Promise<{ id: string; name: string; media_type: string; size: number }> {
-  const r = await fetch(`${httpBase}/assets`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": file.type || "application/octet-stream", "x-kybern-filename": file.name },
-    body: file,
-  })
-  if (!r.ok) throw new Error(await r.text())
-  return r.json()
+  try {
+    const response = await fetch(`${httpBase}/assets`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": file.type || "application/octet-stream", "x-kybern-filename": file.name },
+      body: file,
+    })
+    if (!response.ok) {
+      const detail = (await response.text()).trim()
+      throw new Error(detail || `Upload failed (${response.status})`)
+    }
+    return response.json()
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("Kybern couldn’t reach the attachment service. Restart Kybern, then try again.", { cause: error })
+    }
+    throw error
+  }
 }
 
 export function errorText(e: unknown): string {

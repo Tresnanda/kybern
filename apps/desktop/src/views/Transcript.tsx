@@ -3,7 +3,7 @@
 // with a hairline, quiet work rows, markdown answer with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
+import { memo, useMemo, useRef, useState, type CSSProperties } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -14,6 +14,7 @@ import { Spinner } from "@/components/kybern/bits"
 import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
 import { DisclosureRegion } from "@/components/synara/DisclosureRegion"
 import { DiffStatLabel } from "@/components/synara/chat/DiffStatLabel"
+import { FileEntryIcon } from "@/components/synara/chat/FileEntryIcon"
 import { MessageActionButton } from "@/components/synara/chat/MessageActionButton"
 import { ReviewChangesButton } from "@/components/synara/chat/ReviewChangesButton"
 import {
@@ -21,22 +22,26 @@ import {
   getChatTranscriptTextStyle,
 } from "@/components/synara/chat/chatTypography"
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
+import { summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useTicker } from "@/lib/hooks"
 import { MessageScroller } from "@/components/beui/message-scroller"
 import {
   ArrowDownIcon,
-  BookIcon,
   BotIcon,
   BrainIcon,
   ChangesIcon,
   CheckIcon,
   CircleAlertIcon,
   CopyIcon,
-  FileIcon,
+  EyeIcon,
+  GitHubIcon,
+  GlobeIcon,
   HammerIcon,
+  McpIcon,
   PanelRightCloseIcon,
   PencilIcon,
   SearchIcon,
+  SkillCubeIcon,
   TerminalIcon,
   Undo2Icon,
   WebSearchIcon,
@@ -172,9 +177,7 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
       {group.running && hasWork && (
         <div className={cn(ROW, "pb-2")} data-timeline-row-kind="work">
           <div className="space-y-0.5">
-            {group.work.map((b) => (
-              <WorkRow key={b.id} block={b} />
-            ))}
+            <WorkList blocks={group.work} />
           </div>
         </div>
       )}
@@ -203,9 +206,7 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
                   <DisclosureChevron open={open} className="text-muted-foreground/70" />
                 </button>
                 <DisclosureRegion open={open} contentClassName="mb-2.5 space-y-1.5">
-                  {group.work.map((b) => (
-                    <WorkRow key={b.id} block={b} />
-                  ))}
+                  <WorkList blocks={group.work} />
                 </DisclosureRegion>
               </div>
               <div className="h-px w-full bg-border" />
@@ -298,14 +299,28 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
             <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-2 self-end">
               {files.map((p, i) =>
                 p.type === "image" ? (
-                  <img key={i} src={`data:${p.media_type};base64,${p.data}`} alt="" className="size-15 rounded-xl border border-border/70 object-cover" />
+                  <img
+                    key={i}
+                    src={`data:${p.media_type};base64,${p.data}`}
+                    alt=""
+                    className="size-15 rounded-xl object-cover outline -outline-offset-1 outline-black/10 dark:outline-white/10"
+                  />
                 ) : (
                   <span
                     key={i}
                     className="inline-flex h-7 max-w-[16rem] min-w-0 items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] px-2 text-[length:var(--app-font-size-ui-sm,13px)] font-medium text-[var(--color-text-foreground)]"
                   >
-                    <FileIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
-                    <span className="min-w-0 truncate">{p.type === "attachment" ? p.name : p.path}</span>
+                    {p.type === "skill" ? (
+                      <SkillCubeIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
+                    ) : (
+                      <FileEntryIcon
+                        pathValue={p.type === "attachment" ? p.name : p.path}
+                        kind="file"
+                        mimeType={p.type === "attachment" ? p.media_type : undefined}
+                        className="size-3.5"
+                      />
+                    )}
+                    <span className="min-w-0 truncate">{p.type === "attachment" ? p.name : p.type === "skill" ? `$${p.name}` : p.path}</span>
                   </span>
                 ),
               )}
@@ -328,34 +343,67 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
   )
 }
 
-function workIcon(kind: ReturnType<typeof toolLine>["kind"], isError: boolean) {
-  if (isError)
+function workIcon(kind: ToolVisualKind, isError: boolean) {
+  if (isError && !["github", "web", "mcp", "skill"].includes(kind))
     return <CircleAlertIcon className="size-4 text-muted-foreground/50" />
   switch (kind) {
+    case "github":
+      return <GitHubIcon className="size-3.5" />
+    case "web":
+      return <GlobeIcon className="size-3.5" />
+    case "mcp":
+      return <McpIcon className="size-3.5" />
+    case "skill":
+      return <SkillCubeIcon className="size-3.5" />
     case "command":
-      return <TerminalIcon className="size-4" />
+      return <TerminalIcon className="size-3.5" />
     case "edit":
     case "write":
-      return <PencilIcon className="size-4" />
+      return <PencilIcon className="size-3.5" />
     case "read":
-      return <BookIcon className="size-4" />
+      return <SearchIcon className="size-3.5" />
     case "search":
     case "list":
-      return <SearchIcon className="size-4" />
+      return <SearchIcon className="size-3.5" />
     case "fetch":
-      return <WebSearchIcon className="size-4" />
+      return <WebSearchIcon className="size-3.5" />
+    case "image":
+      return <EyeIcon className="size-3.5" />
     case "delegate":
-      return <BotIcon className="size-4" />
+      return <BotIcon className="size-3.5" />
     default:
-      return <HammerIcon className="size-4" />
+      return <HammerIcon className="size-3.5" />
   }
 }
 
 function workLabel(
   { verb, detail, kind }: ReturnType<typeof toolLine>,
   name: string,
-  complete: boolean
+  complete: boolean,
+  isError = false,
 ): string {
+  if (isError) {
+    if (kind === "other") return detail ? `Failed to use ${detail}` : `Tool call failed`
+    const action =
+      kind === "command"
+        ? "run a command"
+        : kind === "read"
+          ? "read"
+          : kind === "search"
+            ? "search"
+            : kind === "list"
+              ? "list"
+              : kind === "write"
+                ? "write"
+                : kind === "edit"
+                  ? "edit"
+                  : kind === "fetch"
+                    ? "fetch"
+                    : kind === "delegate"
+                      ? "delegate"
+                      : "use the tool"
+    return detail ? `Failed to ${action} ${detail}` : `Failed to ${action}`
+  }
   if (kind === "command" && !detail)
     return complete ? "Ran a command" : "Running a command"
   if (kind === "read" && !detail)
@@ -365,6 +413,68 @@ function workLabel(
 }
 
 const TONE = "text-muted-foreground transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground"
+
+type ToolBlock = Extract<Block, { kind: "tool" }>
+type WorkChunk = { kind: "single"; block: Block } | { kind: "tools"; blocks: ToolBlock[] }
+
+function chunkWork(blocks: readonly Block[]): WorkChunk[] {
+  const chunks: WorkChunk[] = []
+  let tools: ToolBlock[] = []
+  const flush = () => {
+    if (tools.length >= 2) chunks.push({ kind: "tools", blocks: tools })
+    else if (tools[0]) chunks.push({ kind: "single", block: tools[0] })
+    tools = []
+  }
+  for (const block of blocks) {
+    if (block.kind === "tool" && block.complete && !block.isError) {
+      tools.push(block)
+    } else {
+      flush()
+      chunks.push({ kind: "single", block })
+    }
+  }
+  flush()
+  return chunks
+}
+
+function WorkList({ blocks }: { blocks: readonly Block[] }) {
+  return chunkWork(blocks).map((chunk) =>
+    chunk.kind === "single" ? (
+      <WorkRow key={chunk.block.id} block={chunk.block} />
+    ) : (
+      <ToolGroupRow key={`${chunk.blocks[0]!.id}:${chunk.blocks.at(-1)!.id}`} blocks={chunk.blocks} />
+    ),
+  )
+}
+
+function ToolGroupRow({ blocks }: { blocks: ToolBlock[] }) {
+  const [open, setOpen] = useState(false)
+  const summary = summarizeToolCalls(blocks.map((block) => ({ call: block.call, complete: block.complete, isError: block.isError })))
+  if (!summary) return blocks.map((block) => <ToolRow key={block.id} block={block} />)
+  return (
+    <div className="py-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
+      >
+        <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
+          {workIcon(summary.visual, false)}
+        </span>
+        <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
+          {summary.label}
+        </span>
+        <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
+      </button>
+      <DisclosureRegion open={open} contentClassName="ms-5 mt-0.5 space-y-0.5 ps-0.5">
+        {blocks.map((block) => (
+          <ToolRow key={block.id} block={block} />
+        ))}
+      </DisclosureRegion>
+    </div>
+  )
+}
 
 function WorkRow({ block }: { block: Block }) {
   switch (block.kind) {
@@ -407,29 +517,40 @@ function WorkRow({ block }: { block: Block }) {
 function ToolRow({ block }: { block: Extract<Block, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false)
   const activity = toolLine(block.call, block.complete)
+  const visual = toolVisualKind(block.call, activity)
   const out = outputText(block.output, block.stream)
   const canOpen = out.trim().length > 0
+  const tone = block.isError
+    ? "text-destructive/80 transition-colors group-hover/tool-row:text-destructive group-focus-visible/tool-row:text-destructive"
+    : TONE
   return (
     <div className="rounded-lg py-1">
       <button
         type="button"
         onClick={() => canOpen && setOpen((v) => !v)}
         aria-expanded={canOpen ? open : undefined}
-        className={cn("group/tool-row flex w-full items-center gap-2 text-left transition-[opacity,translate] duration-200", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
+        className={cn("group/tool-row flex w-full items-center gap-1.5 text-start transition-[opacity,translate] duration-200", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
       >
-        <span data-work-entry-icon className={cn("flex size-5 shrink-0 items-center justify-center", TONE)}>
-          {workIcon(activity.kind, block.isError)}
+        <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", tone)}>
+          {workIcon(visual, block.isError)}
         </span>
         <div className="min-w-0 overflow-hidden">
-          <p className={cn("truncate leading-6", TONE, !block.complete && "shimmer")} style={CHAT_FONT}>
-            <span data-work-entry-display-text>{workLabel(activity, block.call.name, block.complete)}</span>
+          <p className={cn("truncate leading-6", tone, !block.complete && "shimmer")} style={CHAT_FONT}>
+            <span data-work-entry-display-text>{workLabel(activity, block.call.name, block.complete, block.isError)}</span>
           </p>
         </div>
         {canOpen && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
       </button>
       {canOpen && (
-        <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ml-7">
-          <pre className="selectable max-h-72 overflow-auto rounded-md bg-[var(--app-chat-code-surface)] px-2.5 py-2 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words text-foreground/92">{out}</pre>
+        <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ms-[1.375rem]">
+          <pre
+            className={cn(
+              "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
+              block.isError ? "text-destructive/90" : "text-foreground/92",
+            )}
+          >
+            {out}
+          </pre>
         </DisclosureRegion>
       )}
     </div>
@@ -456,7 +577,7 @@ function AssistantWorkRow({ block }: { block: Extract<Block, { kind: "assistant"
             </div>
             <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />
           </button>
-          <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ml-7">
+          <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ms-7">
             <p className="selectable whitespace-pre-wrap text-muted-foreground" style={TEXT}>
               {block.thinking}
             </p>
@@ -478,7 +599,7 @@ const MAX_VISIBLE_CHANGED_FILES = 5
 
 function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; threadId: ThreadId; turnId: string; canUndo: boolean }) {
   const [expanded, setExpanded] = useState(true)
-  const [showAll, setShowAll] = useState(false)
+  const [showAllFor, setShowAllFor] = useState<string | null>(null)
   const [reverting, setReverting] = useState(false)
   const [openFiles, setOpenFiles] = useState<Record<string, boolean>>({})
   const set = useStore((s) => s.set)
@@ -494,11 +615,9 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   const dels = diff.files.reduce((n, f) => n + f.deletions, 0)
   const head = diff.files.slice(0, MAX_VISIBLE_CHANGED_FILES)
   const rest = diff.files.slice(MAX_VISIBLE_CHANGED_FILES)
+  const restKey = rest.map((file) => file.path).join("\u0000")
+  const showAll = rest.length > 0 && showAllFor === restKey
   const review = () => set({ rightOpen: true, rightTab: "changes" })
-
-  useEffect(() => {
-    if (rest.length === 0) setShowAll(false)
-  }, [rest.length])
 
   const undo = async () => {
     setReverting(true)
@@ -562,7 +681,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
         {rest.length > 0 && (
           <button
             type="button"
-            onClick={() => setShowAll((v) => !v)}
+            onClick={() => setShowAllFor(showAll ? null : restKey)}
             className="flex w-full items-center justify-start gap-1.5 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2 font-system-ui font-normal text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
             style={CHAT_FONT}
           >
@@ -591,7 +710,7 @@ function EditedFileRow({ file, first, open, onToggle, onReview }: { file: FileDi
           className="group/file-row flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent py-1 pl-3 text-left focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none"
         >
           <DisclosureChevron open={open} className="text-muted-foreground/60" />
-          <FileIcon className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80" />
+          <FileEntryIcon pathValue={file.path} kind="file" colorMode="inherit" className="size-4 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80" />
           <span className="min-w-0 truncate font-system-ui font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline" style={CHAT_FONT}>
             {file.path}
           </span>

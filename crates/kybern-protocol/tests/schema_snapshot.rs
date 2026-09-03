@@ -58,6 +58,8 @@ fn wire_examples_roundtrip() {
 
     let part: ContentPart = serde_json::from_str(r#"{"type":"file_mention","path":"src/main.rs"}"#).unwrap();
     assert_eq!(part, ContentPart::FileMention { path: "src/main.rs".into() });
+    let skill: ContentPart = serde_json::from_str(r#"{"type":"skill","name":"better-ui","path":"/skills/better-ui/SKILL.md"}"#).unwrap();
+    assert_eq!(skill, ContentPart::Skill { name: "better-ui".into(), path: "/skills/better-ui/SKILL.md".into() });
     assert_eq!(serde_json::to_value(ProviderKind::ClaudeCode).unwrap(), "claude-code");
     assert_eq!(serde_json::to_value(PermissionMode::AcceptEdits).unwrap(), "accept-edits");
 

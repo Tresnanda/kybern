@@ -4,13 +4,14 @@
 // Stacked panels (queued follow-ups, approval card, empty-landing tray) render
 // through `above`, inside the same column frame.
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react"
+import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { HiOutlineHandRaised } from "react-icons/hi2"
 import { toast } from "sonner"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/synara/button"
 import { ComposerColumnFrame } from "@/components/synara/chat/ComposerColumnFrame"
+import { FileEntryIcon } from "@/components/synara/chat/FileEntryIcon"
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
@@ -34,12 +35,13 @@ import {
 import { Kbd } from "@/components/synara/kbd"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/synara/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/tooltip"
+import { buildStructuredTextParts } from "@/lib/composerTokens"
 import { PROVIDER_LABEL, basename } from "@/lib/format"
 import { CentralIcon } from "@/lib/synara/central-icons"
-import { ChevronDownIcon, ComposerSendArrowIcon, FileIcon, PaperclipIcon, PencilIcon, PlusIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
+import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
-import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, UserMessage } from "@/protocol"
-import { errorText, searchFiles, uploadFile } from "@/state/rpc"
+import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
+import { errorText, listSkills, searchFiles, uploadFile } from "@/state/rpc"
 
 export interface ComposerHandle {
   focus: () => void
@@ -58,6 +60,7 @@ interface Attachment {
 export interface SlashCommand {
   name: string
   hint: string
+  icon?: React.ReactNode
   run: () => void
 }
 
@@ -110,7 +113,73 @@ function prettyModel(id: string): string {
 const EDITOR_CLASS =
   "block max-h-[200px] w-full resize-none overflow-y-auto bg-transparent font-system-ui text-[length:var(--app-font-size-chat,12px)] leading-relaxed break-words whitespace-pre-wrap text-foreground min-h-[var(--app-density-composer-editor-min-height,2lh)] placeholder:text-muted-foreground/40 focus:outline-none disabled:opacity-60 selectable"
 
-const DEFAULT_PLACEHOLDER = "Ask anything, @tag files/folders, or use / to show available commands"
+const DEFAULT_PLACEHOLDER = "Ask anything, @ files, $ skills, or / commands"
+
+type ComposerMenuItem =
+  | { id: string; type: "file"; path: string }
+  | { id: string; type: "command"; command: SlashCommand }
+  | { id: string; type: "skill"; skill: SkillInfo }
+
+function fuzzyScore(value: string, query: string): number | null {
+  const haystack = value.toLowerCase()
+  const needle = query.trim().toLowerCase()
+  if (!needle) return 0
+  if (haystack === needle) return 0
+  if (haystack.startsWith(needle)) return 1
+  const boundary = haystack.search(new RegExp(`(?:^|[\\s:_-])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))
+  if (boundary >= 0) return 2 + boundary / 100
+  const included = haystack.indexOf(needle)
+  if (included >= 0) return 4 + included / 100
+  let at = 0
+  for (const character of needle) {
+    at = haystack.indexOf(character, at)
+    if (at < 0) return null
+    at += 1
+  }
+  return 10 + (haystack.length - needle.length) / 100
+}
+
+function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12): SkillInfo[] {
+  return skills
+    .filter((skill) => skill.enabled)
+    .flatMap((skill) => {
+      const scores = [skill.name, skill.display_name ?? "", skill.description ?? ""].flatMap((value) => {
+        const score = fuzzyScore(value, query)
+        return score == null ? [] : [score]
+      })
+      return scores.length ? [{ skill, score: Math.min(...scores) }] : []
+    })
+    .sort((left, right) => left.score - right.score || left.skill.name.localeCompare(right.skill.name))
+    .slice(0, limit)
+    .map(({ skill }) => skill)
+}
+
+function skillSourceLabel(scope: SkillInfo["scope"]): string {
+  switch (scope) {
+    case "project":
+      return "Project"
+    case "repo":
+      return "Repo"
+    case "user":
+      return "Personal"
+    case "app":
+      return "App"
+    case "system":
+    case "admin":
+      return "System"
+    default:
+      return "Provider"
+  }
+}
+
+function clipboardFiles(data: DataTransfer): File[] {
+  const files = Array.from(data.files)
+  if (files.length > 0) return files
+  return Array.from(data.items)
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file != null)
+}
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
   const {
@@ -142,12 +211,24 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
   const [dragOver, setDragOver] = useState(false)
-  const [files, setFiles] = useState<string[]>([])
+  const [fileResult, setFileResult] = useState<{ query: string; files: string[] }>({ query: "", files: [] })
+  const [skillCatalog, setSkillCatalog] = useState<{ key: string; skills: SkillInfo[] }>({ key: "", skills: [] })
   const [menuSel, setMenuSel] = useState<{ sig: string; index: number }>({ sig: "", index: 0 })
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
   const mentioned = useRef(new Set<string>())
+  const selectedSkills = useRef(new Map<string, SkillInfo>())
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const menuList = useRef<HTMLDivElement>(null)
+  const previewUrls = useRef(new Set<string>())
+
+  useEffect(
+    () => () => {
+      for (const url of previewUrls.current) URL.revokeObjectURL(url)
+      previewUrls.current.clear()
+    },
+    [],
+  )
 
   const grow = (el: HTMLTextAreaElement) => {
     el.style.height = "0px"
@@ -177,7 +258,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (autoFocus) ta.current?.focus()
   }, [autoFocus])
 
-  // ---- @ mentions and / commands ----
+  // ---- @ files, $ skills, and / commands ----
 
   const mention = useMemo(() => {
     if (!projectId) return null
@@ -191,21 +272,31 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [text, caret, projectId])
 
   const slash = useMemo(() => {
-    if (!text.startsWith("/") || commands.length === 0) return null
-    const token = text.slice(1, caret)
+    const before = text.slice(0, caret)
+    if (!before.startsWith("/")) return null
+    const token = before.slice(1)
     if (/\s/.test(token)) return null
-    const q = token.toLowerCase()
-    const items = commands.filter((c) => c.name.startsWith(q))
-    return items.length ? { query: token, items } : null
-  }, [text, caret, commands])
+    const skillOnly = token.toLowerCase().startsWith("skill:")
+    return { query: skillOnly ? token.slice(6) : token, skillOnly }
+  }, [text, caret])
+
+  const skill = useMemo(() => {
+    if (!projectId || !provider) return null
+    const before = text.slice(0, caret)
+    const dollar = before.lastIndexOf("$")
+    if (dollar < 0 || (dollar > 0 && !/\s/.test(before[dollar - 1]!))) return null
+    const query = before.slice(dollar + 1)
+    if (!/^(?:[A-Za-z][A-Za-z0-9:_-]*)?$/.test(query)) return null
+    return { start: dollar, query }
+  }, [text, caret, projectId, provider])
 
   useEffect(() => {
     if (!mention || !projectId) return
     let live = true
     const id = setTimeout(() => {
       searchFiles(projectId, mention.query, 12)
-        .then((r) => live && setFiles(r))
-        .catch(() => live && setFiles([]))
+        .then((files) => live && setFileResult({ query: mention.query, files }))
+        .catch(() => live && setFileResult({ query: mention.query, files: [] }))
     }, 60)
     return () => {
       live = false
@@ -213,12 +304,50 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }, [mention, projectId])
 
-  const menuKey = mention ? `@${mention.start}` : slash ? "/" : null
-  const menuItems = mention ? files : (slash?.items.map((c) => c.name) ?? [])
-  const menuOpen = !!menuKey && menuDismissed !== menuKey && (menuItems.length > 0 || !!mention)
-  const menuSignature = `${menuKey}:${menuItems.length}`
+  const skillCatalogKey = projectId && provider ? `${projectId}:${provider.kind}` : ""
+  const needsSkills = !!skill || !!slash
+  useEffect(() => {
+    selectedSkills.current.clear()
+  }, [skillCatalogKey])
+  useEffect(() => {
+    if (!needsSkills || !projectId || !provider || skillCatalog.key === skillCatalogKey) return
+    let live = true
+    listSkills(projectId, provider.kind)
+      .then((skills) => live && setSkillCatalog({ key: skillCatalogKey, skills }))
+      .catch(() => live && setSkillCatalog({ key: skillCatalogKey, skills: [] }))
+    return () => {
+      live = false
+    }
+  }, [needsSkills, projectId, provider, skillCatalog.key, skillCatalogKey])
+
+  const skills = useMemo(() => (skillCatalog.key === skillCatalogKey ? skillCatalog.skills : []), [skillCatalog, skillCatalogKey])
+  const files = useMemo(() => (fileResult.query === mention?.query ? fileResult.files : []), [fileResult, mention?.query])
+  const menuItems = useMemo<ComposerMenuItem[]>(() => {
+    if (mention) return files.map((path) => ({ id: `file:${path}`, type: "file", path }))
+    if (skill) return rankSkills(skills, skill.query).map((item) => ({ id: `skill:${item.name}`, type: "skill", skill: item }))
+    if (!slash) return []
+    const commandItems = slash.skillOnly
+      ? []
+      : commands
+          .flatMap((command) => {
+            const scores = [fuzzyScore(command.name, slash.query), fuzzyScore(command.hint, slash.query)].filter((score): score is number => score != null)
+            return scores.length ? [{ command, score: Math.min(...scores) }] : []
+          })
+          .sort((left, right) => left.score - right.score)
+          .map(({ command }) => ({ id: `command:${command.name}`, type: "command" as const, command }))
+    const skillItems = rankSkills(skills, slash.query).map((item) => ({ id: `skill:${item.name}`, type: "skill" as const, skill: item }))
+    return [...commandItems, ...skillItems].slice(0, 16)
+  }, [commands, files, mention, skill, skills, slash])
+  const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? "/" : null
+  const menuOpen = !!menuKey && menuDismissed !== menuKey
+  const menuSignature = `${menuKey}:${menuItems.map((item) => item.id).join("|")}`
   const menuIndex = menuSel.sig === menuSignature ? menuSel.index : 0
   const setMenuIndex = (f: number | ((i: number) => number)) => setMenuSel({ sig: menuSignature, index: typeof f === "function" ? f(menuIndex) : f })
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return
+    menuList.current?.querySelector<HTMLElement>(`[data-menu-index="${menuIndex}"]`)?.scrollIntoView({ block: "nearest" })
+  }, [menuIndex, menuOpen, menuSignature])
 
   const pickMention = (path: string) => {
     if (!mention) return
@@ -226,17 +355,24 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const next = `${text.slice(0, mention.start)}@${path} ${text.slice(caret)}`
     setTextAndCaret(next, mention.start + path.length + 2)
   }
-  const pickCommand = (name: string) => {
-    const cmd = commands.find((c) => c.name === name)
-    if (!cmd) return
+  const pickCommand = (cmd: SlashCommand) => {
     setTextAndCaret("")
     cmd.run()
+  }
+  const pickSkill = (item: SkillInfo) => {
+    selectedSkills.current.set(item.name.toLowerCase(), item)
+    const trigger = skill ?? (slash ? { start: 0, query: slash.query } : null)
+    if (!trigger) return
+    const token = `$${item.name} `
+    const next = `${text.slice(0, trigger.start)}${token}${text.slice(caret)}`
+    setTextAndCaret(next, trigger.start + token.length)
   }
   const pick = (i: number) => {
     const item = menuItems[i]
     if (!item) return
-    if (mention) pickMention(item)
-    else pickCommand(item)
+    if (item.type === "file") pickMention(item.path)
+    else if (item.type === "command") pickCommand(item.command)
+    else pickSkill(item.skill)
   }
 
   // ---- sending ----
@@ -244,23 +380,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const canSend = !disabled && !sending && uploading === 0 && (text.trim().length > 0 || attachments.length > 0)
 
   const buildParts = (): ContentPart[] => {
-    const parts: ContentPart[] = []
-    const t = text.trim()
-    if (t) {
-      const re = /@([^\s]+)/g
-      let last = 0
-      let m: RegExpExecArray | null
-      while ((m = re.exec(t))) {
-        const path = m[1]!
-        if (!mentioned.current.has(path)) continue
-        const before = t.slice(last, m.index)
-        if (before) parts.push({ type: "text", text: before })
-        parts.push({ type: "file_mention", path })
-        last = m.index + m[0].length
-      }
-      const rest = t.slice(last)
-      if (rest || parts.length === 0) parts.push({ type: "text", text: rest })
-    }
+    const skillItems = [...skills, ...selectedSkills.current.values()]
+    const parts = buildStructuredTextParts(text, mentioned.current, skillItems)
     for (const a of attachments) parts.push({ type: "attachment", asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size })
     return parts
   }
@@ -271,8 +392,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     try {
       await onSend({ parts: buildParts() })
       setText("")
+      for (const attachment of attachments) {
+        if (attachment.preview) {
+          URL.revokeObjectURL(attachment.preview)
+          previewUrls.current.delete(attachment.preview)
+        }
+      }
       setAttachments([])
       mentioned.current.clear()
+      selectedSkills.current.clear()
       if (ta.current) {
         ta.current.style.height = "auto"
         ta.current.focus()
@@ -292,6 +420,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       try {
         const info = await uploadFile(f)
         const preview = f.type.startsWith("image/") ? URL.createObjectURL(f) : undefined
+        if (preview) previewUrls.current.add(preview)
         setAttachments((a) => [...a, { ...info, preview }])
       } catch (e) {
         toast.error(`Unable to attach ${f.name}`, { description: errorText(e) })
@@ -300,6 +429,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       }
     }
   }, [])
+
+  const removeAttachment = (attachment: Attachment) => {
+    if (attachment.preview) {
+      URL.revokeObjectURL(attachment.preview)
+      previewUrls.current.delete(attachment.preview)
+    }
+    setAttachments((list) => list.filter((item) => item.id !== attachment.id))
+  }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen && menuItems.length > 0) {
@@ -352,6 +489,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const canPickModel = !!onModelChange && (models.length > 0 || efforts.length > 0)
   const canPickProvider = !!onProviderChange
   const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
+  const menuLoading = mention ? fileResult.query !== mention.query : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
+  const menuEmptyText = menuLoading
+    ? mention
+      ? "Searching project files…"
+      : "Loading agent skills…"
+    : mention
+      ? mention.query
+        ? "No matching files"
+        : "Type to search project files"
+      : skill
+        ? "No matching skills"
+        : "No matching commands or skills"
 
   return (
     <ComposerColumnFrame className={className}>
@@ -374,19 +523,32 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             {menuOpen && (
               <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
                 <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME} role="listbox">
-                  <div className="max-h-72 scroll-py-1 overflow-y-auto p-1">
-                    {mention && menuItems.length === 0 ? (
-                      <p className="px-2 py-1.5 text-[11px] text-muted-foreground/50">{mention.query ? "No matching file." : "Type to search for files"}</p>
+                  <div ref={menuList} className="max-h-72 scroll-py-1 overflow-y-auto overscroll-contain p-1.5">
+                    {menuItems.length === 0 ? (
+                      <p className="px-2.5 py-2 text-[length:var(--app-font-size-ui-sm,11px)] leading-relaxed text-muted-foreground/60">{menuEmptyText}</p>
                     ) : (
-                      <>
-                        <div className="px-2 pt-1.5 pb-1 text-[11px] font-normal text-muted-foreground/60">{mention ? "Files" : "Built-in"}</div>
-                        {menuItems.map((item, i) => {
-                          const cmd = !mention ? commands.find((c) => c.name === item) : undefined
-                          const active = i === menuIndex
-                          return (
+                      menuItems.map((item, i) => {
+                        const active = i === menuIndex
+                        const previous = menuItems[i - 1]
+                        const section = item.type === "file" ? "Files" : item.type === "command" ? "Commands" : "Skills"
+                        const previousSection = previous?.type === "file" ? "Files" : previous?.type === "command" ? "Commands" : previous ? "Skills" : null
+                        const title =
+                          item.type === "file"
+                            ? basename(item.path)
+                            : item.type === "command"
+                              ? titleCase(item.command.name)
+                              : `$${item.skill.name}`
+                        const description = item.type === "command" ? item.command.hint : item.type === "skill" ? item.skill.description : null
+                        return (
+                          <Fragment key={item.id}>
+                            {section !== previousSection && (
+                              <div className={cn("px-2.5 pb-1 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground/60", i > 0 ? "pt-2.5" : "pt-1")}>
+                                {section}
+                              </div>
+                            )}
                             <button
-                              key={item}
                               type="button"
+                              data-menu-index={i}
                               role="option"
                               aria-selected={active}
                               onMouseEnter={() => setMenuIndex(i)}
@@ -394,20 +556,34 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               onClick={() => pick(i)}
                               className={cn("w-full", COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME, active && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME)}
                             >
-                              <span className={cn("flex size-4 shrink-0 items-center justify-center", active ? "text-foreground/70" : "text-muted-foreground/60")}>
-                                {mention ? <FileIcon className="size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80" /> : <TerminalIcon className="size-3.5" />}
+                              <span className={cn("flex size-4 shrink-0 items-center justify-center", active ? "text-foreground/80" : "text-muted-foreground/70")}>
+                                {item.type === "file" ? (
+                                  <FileEntryIcon pathValue={item.path} kind="file" className="size-4" />
+                                ) : item.type === "skill" ? (
+                                  <SkillCubeIcon className="size-4" />
+                                ) : (
+                                  item.command.icon ?? <TerminalIcon className="size-4" />
+                                )}
                               </span>
                               <div className="flex min-w-0 flex-1 items-center gap-3">
-                                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                  <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">{mention ? basename(item) : titleCase(item)}</span>
-                                  <span className="truncate text-[11px] text-muted-foreground/55">{mention ? "" : cmd?.hint}</span>
+                                <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                                  <span className="max-w-[45%] shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/90">{title}</span>
+                                  {description && <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/60">{description}</span>}
                                 </div>
-                                <span className="shrink-0 pl-2 text-right text-[10.5px] text-muted-foreground/42">{mention ? parentPath(item) : `/${item}`}</span>
+                                {item.type === "file" ? (
+                                  <span className="max-w-[42%] shrink truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
+                                ) : item.type === "command" ? (
+                                  <span className="shrink-0 text-end font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">/{item.command.name}</span>
+                                ) : (
+                                  <span className="shrink-0 rounded-full bg-[var(--color-background-button-secondary)] px-2 py-0.5 text-[length:var(--app-font-size-ui-2xs,10px)] font-medium text-muted-foreground/70">
+                                    {skillSourceLabel(item.skill.scope)}
+                                  </span>
+                                )}
                               </div>
                             </button>
-                          )
-                        })}
-                      </>
+                          </Fragment>
+                        )
+                      })
                     )}
                   </div>
                 </div>
@@ -418,25 +594,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               <div className="-mx-1.5 -mt-1 mb-2 flex flex-wrap items-start gap-1.5">
                 {attachments.map((a) =>
                   a.preview ? (
-                    <div key={a.id} className="group relative shrink-0">
-                      <button
-                        type="button"
-                        className="block size-16 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] transition-colors hover:border-[color:var(--color-border)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                      >
-                        <img src={a.preview} alt="" className="size-full object-cover" />
-                      </button>
-                      <RemoveButton name={a.name} onClick={() => setAttachments((list) => list.filter((x) => x.id !== a.id))} />
+                    <div key={a.id} className="group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+                        <img src={a.preview} alt="" className="size-full object-cover outline -outline-offset-1 outline-black/10 dark:outline-white/10" />
+                      <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </div>
                   ) : (
                     <span key={a.id} className="group relative inline-flex h-14 w-60 max-w-full items-center gap-2.5 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] py-2 pr-8 pl-2 shadow-sm">
                       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] text-muted-foreground">
-                        <FileIcon className="size-4" />
+                        <FileEntryIcon pathValue={a.name} kind="file" mimeType={a.media_type} className="size-4" />
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 leading-tight">
                         <span className="truncate text-[13px] font-medium text-foreground">{a.name}</span>
                         <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground uppercase">{a.name.split(".").pop()}</span>
                       </span>
-                      <RemoveButton name={a.name} onClick={() => setAttachments((list) => list.filter((x) => x.id !== a.id))} />
+                      <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </span>
                   ),
                 )}
@@ -461,13 +632,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 setText(e.target.value)
                 syncCaret(e.target)
                 grow(e.target)
+                setMenuSel({ sig: "", index: 0 })
                 setMenuDismissed(null)
               }}
               onKeyUp={(e) => syncCaret(e.currentTarget)}
               onClick={(e) => syncCaret(e.currentTarget)}
               onKeyDown={onKeyDown}
               onPaste={(e) => {
-                const pasted = Array.from(e.clipboardData.files)
+                const pasted = clipboardFiles(e.clipboardData)
                 if (pasted.length) {
                   e.preventDefault()
                   void addFiles(pasted)

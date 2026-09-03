@@ -10,7 +10,7 @@ import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPicker
 import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/synara/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
-import { CheckIcon, ChevronDownIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, WorktreeIcon } from "@/lib/synara/icons"
+import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, PaperclipIcon, SettingsIcon, WorktreeIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
 import { createThread, rpc } from "@/state/rpc"
@@ -66,9 +66,9 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
 
   const commands = useMemo<SlashCommand[]>(
     () => [
-      { name: "attach", hint: "Attach files or images", run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
-      { name: "settings", hint: "Open settings", run: () => set({ settingsOpen: true, settingsTab: "general" }) },
-      { name: "usage", hint: "Token usage and cost", run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
+      { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
+      { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
+      { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
     ],
     [set],
   )

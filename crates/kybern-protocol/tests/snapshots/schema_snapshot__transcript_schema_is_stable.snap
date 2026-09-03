@@ -293,6 +293,28 @@ expression: schema_for!(TranscriptEntry)
             "type",
             "path"
           ]
+        },
+        {
+          "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Canonical `SKILL.md` path returned by the provider catalog. Codex\nrequires it for its structured `skill` turn input; other drivers\nmay use only the name.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "skill"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
         }
       ]
     },

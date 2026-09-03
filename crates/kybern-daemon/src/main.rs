@@ -7,6 +7,7 @@ mod http;
 mod orchestrator;
 mod rpc;
 mod settings;
+mod skills;
 mod state;
 mod terminal;
 mod ws;

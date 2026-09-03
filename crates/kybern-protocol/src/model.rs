@@ -242,6 +242,16 @@ pub enum ContentPart {
     FileMention {
         path: String,
     },
+    /// A user-selected agent skill. Drivers translate this into the provider's
+    /// native invocation syntax instead of treating a lookalike `$NAME` as a
+    /// skill accidentally.
+    Skill {
+        name: String,
+        /// Canonical `SKILL.md` path returned by the provider catalog. Codex
+        /// requires it for its structured `skill` turn input; other drivers
+        /// may use only the name.
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -264,6 +274,10 @@ impl UserMessage {
                     out.push('@');
                     out.push_str(path);
                 }
+                ContentPart::Skill { name, .. } => {
+                    out.push('$');
+                    out.push_str(name);
+                }
                 ContentPart::Image { .. } => out.push_str("[image]"),
                 ContentPart::Attachment { name, .. } => {
                     out.push('[');
@@ -274,6 +288,36 @@ impl UserMessage {
         }
         out
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillScope {
+    Project,
+    Repo,
+    User,
+    System,
+    Admin,
+    App,
+    Other,
+}
+
+/// One skill the selected provider can invoke in a project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SkillInfo {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub path: String,
+    pub scope: SkillScope,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

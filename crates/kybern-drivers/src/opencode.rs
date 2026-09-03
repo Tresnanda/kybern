@@ -6,8 +6,8 @@
 //! are persisted by OpenCode on disk, so resuming is just prompting the same
 //! `ses_*` id from a fresh server.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -23,6 +23,7 @@ use crate::binary::{at_least, resolve, version_of};
 use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, Result, SessionConfig, SpawnedSession, summarize_tool_call};
 
 const MIN_VERSION: (u64, u64, u64) = (1, 10, 0);
+const MAX_SKILL_DISCOVERY_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct OpencodeDriver;
@@ -55,6 +56,55 @@ async fn opencode_models(bin: &std::path::Path) -> Vec<ProviderModel> {
         .collect();
     models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)));
     models
+}
+
+/// Ask OpenCode for the effective skill catalog in this project. The CLI
+/// applies OpenCode's own config, compatibility roots, and precedence rules,
+/// which a filesystem walk cannot reconstruct reliably.
+pub async fn discover_skills(cwd: &Path, binary: Option<&PathBuf>, env: &BTreeMap<String, String>) -> Option<Vec<SkillInfo>> {
+    let bin = resolve(ProviderKind::Opencode, binary).ok()?;
+    let mut command = Command::new(bin);
+    command.current_dir(cwd).args(["debug", "skill"]).stdin(Stdio::null()).stderr(Stdio::null());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), command.output()).await.ok()?.ok()?;
+    if !output.status.success() || output.stdout.len() > MAX_SKILL_DISCOVERY_BYTES {
+        return None;
+    }
+    parse_skills(&output.stdout, cwd)
+}
+
+fn parse_skills(bytes: &[u8], cwd: &Path) -> Option<Vec<SkillInfo>> {
+    let entries = serde_json::from_slice::<Vec<Value>>(bytes).ok()?;
+    let mut skills = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let Some(name) = entry.get("name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()) else { continue };
+        let Some(location) = entry.get("location").and_then(Value::as_str).map(str::trim).filter(|path| !path.is_empty()) else { continue };
+        if !seen.insert(name.to_ascii_lowercase()) {
+            continue;
+        }
+        let description =
+            entry.get("description").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+        let scope = if location == "<built-in>" {
+            SkillScope::System
+        } else {
+            let path = Path::new(location);
+            let resolved = if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) };
+            if resolved.starts_with(cwd) { SkillScope::Project } else { SkillScope::User }
+        };
+        skills.push(SkillInfo {
+            name: name.to_string(),
+            display_name: None,
+            description,
+            path: location.to_string(),
+            scope,
+            enabled: true,
+        });
+    }
+    skills.sort_by_key(|skill| skill.name.to_ascii_lowercase());
+    Some(skills)
 }
 
 #[async_trait]
@@ -590,6 +640,7 @@ fn parts(message: &UserMessage) -> Vec<Value> {
         match part {
             ContentPart::Text { text } => out.push(json!({ "type": "text", "text": text })),
             ContentPart::FileMention { path } => out.push(json!({ "type": "text", "text": format!("@{path}") })),
+            ContentPart::Skill { name, .. } => out.push(json!({ "type": "text", "text": format!("/{name}") })),
             ContentPart::Image { media_type, data } => out.push(
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
@@ -597,6 +648,45 @@ fn parts(message: &UserMessage) -> Vec<Value> {
         }
     }
     out
+}
+
+struct SkillCommand {
+    name: String,
+    arguments: String,
+    files: Vec<Value>,
+}
+
+/// OpenCode exposes every discovered skill as a native session command. Use
+/// that endpoint instead of hoping a `$name` text mention makes the model load
+/// it. The last selected skill is the command; earlier skills remain explicit
+/// slash references in its arguments, matching the single-command behavior of
+/// the OpenCode and Claude harnesses.
+fn skill_command(message: &UserMessage) -> Option<SkillCommand> {
+    let command_index = message.parts.iter().rposition(|part| matches!(part, ContentPart::Skill { .. }))?;
+    let ContentPart::Skill { name, .. } = &message.parts[command_index] else { unreachable!() };
+    let mut arguments = String::new();
+    let mut files = Vec::new();
+    for (index, part) in message.parts.iter().enumerate() {
+        if index == command_index {
+            continue;
+        }
+        match part {
+            ContentPart::Text { text } => arguments.push_str(text),
+            ContentPart::FileMention { path } => {
+                arguments.push('@');
+                arguments.push_str(path);
+            }
+            ContentPart::Skill { name, .. } => {
+                arguments.push('/');
+                arguments.push_str(name);
+            }
+            ContentPart::Image { media_type, data } => files.push(
+                json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
+            ),
+            ContentPart::Attachment { name, .. } => arguments.push_str(&format!("[attached file: {name}]")),
+        }
+    }
+    Some(SkillCommand { name: name.clone(), arguments: arguments.trim().to_string(), files })
 }
 
 #[async_trait]
@@ -609,9 +699,22 @@ impl AgentSession for Handle {
         };
         // OpenCode ids must start with "msg"; derive a stable one from ours.
         let oc_message_id = format!("msg_{}", message_id.replace('-', ""));
-        let mut body = json!({ "parts": parts(message), "messageID": oc_message_id });
-        if let Some((provider, model)) = model.as_deref().and_then(split_model) {
-            body["model"] = json!({ "providerID": provider, "modelID": model });
+        let command = skill_command(message);
+        let mut body = match &command {
+            Some(command) => json!({
+                "messageID": oc_message_id,
+                "command": command.name,
+                "arguments": command.arguments,
+                "parts": command.files,
+            }),
+            None => json!({ "parts": parts(message), "messageID": oc_message_id }),
+        };
+        if let Some(model) = model.as_deref() {
+            if command.is_some() {
+                body["model"] = Value::String(model.to_string());
+            } else if let Some((provider, model)) = split_model(model) {
+                body["model"] = json!({ "providerID": provider, "modelID": model });
+            }
         }
         {
             let mut st = s.state.lock().await;
@@ -621,7 +724,18 @@ impl AgentSession for Handle {
             st.turn_cost = 0.0;
             st.current_message_id = Some(oc_message_id);
         }
-        s.post(&format!("/session/{session_id}/prompt_async"), body).await.map(|_| ())
+        if command.is_some() {
+            let session = s.clone();
+            tokio::spawn(async move {
+                if let Err(error) = session.post(&format!("/session/{session_id}/command"), body).await {
+                    session.state.lock().await.active = false;
+                    session.emit(DriverEvent::TurnFailed { error: error.to_string() }).await;
+                }
+            });
+            Ok(())
+        } else {
+            s.post(&format!("/session/{session_id}/prompt_async"), body).await.map(|_| ())
+        }
     }
 
     async fn interrupt(&self) -> Result<()> {
@@ -665,5 +779,53 @@ impl AgentSession for Handle {
         let mut child = self.0.child.lock().await;
         let _ = child.kill().await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_skills, skill_command};
+    use kybern_protocol::{ContentPart, SkillScope, UserMessage};
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn parses_opencodes_effective_skill_catalog() {
+        let skills = parse_skills(
+            br#"[
+                {"name":"built-in","description":"Bundled","location":"<built-in>"},
+                {"name":"review","description":"Review code","location":"/work/repo/.opencode/skills/review/SKILL.md"},
+                {"name":"global","description":null,"location":"/home/me/.config/opencode/skills/global/SKILL.md"}
+            ]"#,
+            Path::new("/work/repo"),
+        )
+        .expect("valid catalog");
+
+        assert_eq!(skills.iter().map(|skill| skill.name.as_str()).collect::<Vec<_>>(), ["built-in", "global", "review"]);
+        assert_eq!(skills[0].scope, SkillScope::System);
+        assert_eq!(skills[1].scope, SkillScope::User);
+        assert_eq!(skills[2].scope, SkillScope::Project);
+    }
+
+    #[test]
+    fn dispatches_selected_skill_through_opencodes_command_contract() {
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "Review ".into() },
+                ContentPart::Skill { name: "security".into(), path: "/skills/security/SKILL.md".into() },
+                ContentPart::Text { text: " then ".into() },
+                ContentPart::Skill { name: "fix-ci".into(), path: "/skills/fix-ci/SKILL.md".into() },
+                ContentPart::Text { text: " carefully".into() },
+                ContentPart::Image { media_type: "image/png".into(), data: "aW1hZ2U=".into() },
+            ],
+        };
+
+        let command = skill_command(&message).expect("skill command");
+        assert_eq!(command.name, "fix-ci");
+        assert_eq!(command.arguments, "Review /security then  carefully");
+        assert_eq!(
+            command.files,
+            vec![json!({ "type": "file", "mime": "image/png", "url": "data:image/png;base64,aW1hZ2U=", "filename": "image" })]
+        );
     }
 }

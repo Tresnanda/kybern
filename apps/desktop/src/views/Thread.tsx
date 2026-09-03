@@ -14,7 +14,26 @@ import { ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from 
 import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/synara/chat/ComposerStackedPanelContent"
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
 import { PROVIDER_LABEL, basename, toolLine } from "@/lib/format"
-import { ArchiveIcon, EllipsisIcon, HandoffIcon, PencilIcon, PinFilledIcon, PinIcon, SteerIcon, Trash2 } from "@/lib/synara/icons"
+import {
+  ArchiveIcon,
+  ChangesIcon,
+  ClockIcon,
+  EllipsisIcon,
+  FoldersIcon,
+  GitBranchIcon,
+  GitPullRequestIcon,
+  HandoffIcon,
+  NewThreadIcon,
+  PaperclipIcon,
+  PencilIcon,
+  PinFilledIcon,
+  PinIcon,
+  SettingsIcon,
+  SteerIcon,
+  StopIcon,
+  TerminalIcon,
+  Trash2,
+} from "@/lib/synara/icons"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/synara/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -90,25 +109,26 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
 
   const commands = useMemo<SlashCommand[]>(
     () => [
-      { name: "new", hint: "Start a new thread in this project", run: () => newThread(thread?.project_id) },
-      { name: "stop", hint: "Interrupt the running turn", run: () => void interrupt(threadId) },
-      { name: "attach", hint: "Attach files or images", run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
-      { name: "changes", hint: "Show the changes panel", run: () => set({ rightOpen: true, rightTab: "changes" }) },
-      { name: "terminal", hint: "Open a terminal in this thread", run: () => set({ rightOpen: true, rightTab: "terminal" }) },
-      { name: "files", hint: "Browse the project files", run: () => set({ rightOpen: true, rightTab: "explorer" }) },
-      { name: "environment", hint: "Show branch, commit and PR controls", run: () => set({ rightOpen: true, rightTab: "changes" }) },
+      { name: "new", hint: "Start a new thread in this project", icon: <NewThreadIcon className="size-4" />, run: () => newThread(thread?.project_id) },
+      { name: "stop", hint: "Interrupt the running turn", icon: <StopIcon className="size-4" />, run: () => void interrupt(threadId) },
+      { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
+      { name: "changes", hint: "Show the changes panel", icon: <ChangesIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" }) },
+      { name: "terminal", hint: "Open a terminal in this thread", icon: <TerminalIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "terminal" }) },
+      { name: "files", hint: "Browse the project files", icon: <FoldersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "explorer" }) },
+      { name: "environment", hint: "Show branch, commit and pull request controls", icon: <GitBranchIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" }) },
       {
         name: "pr",
         hint: "Create a pull request from this thread",
+        icon: <GitPullRequestIcon className="size-4" />,
         run: () =>
           rpc()
             .call("github.pr.create", { thread_id: threadId })
             .then((p) => toast("Pull request opened", { description: p.title, action: { label: "Open", onClick: () => void openExternal(p.url) } }))
             .catch((e) => toast.error("Unable to create pull request", { description: errorText(e) })),
       },
-      { name: "archive", hint: "Archive this thread", run: () => void archiveThread(threadId) },
-      { name: "settings", hint: "Open settings", run: () => set({ settingsOpen: true, settingsTab: "general" }) },
-      { name: "usage", hint: "Token usage and cost", run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
+      { name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) },
+      { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
+      { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
     ],
     [threadId, thread?.project_id, set],
   )

@@ -7,9 +7,9 @@ import { useState } from "react"
 
 import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
 import { DiffStatLabel } from "@/components/synara/chat/DiffStatLabel"
+import { FileEntryIcon } from "@/components/synara/chat/FileEntryIcon"
 import type { DiffHunk, FileDiff } from "@/lib/diff"
 import { basename } from "@/lib/format"
-import { FileIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
 
 const ADD_BG = "bg-[color-mix(in_srgb,var(--background)_92%,var(--success))]"
@@ -33,7 +33,7 @@ export function FileDiffHeader({ file, open, onToggle, trailing }: { file: FileD
     >
       {onToggle && <DisclosureChevron open={!!open} className="size-3.5 opacity-50" />}
       <span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/60">
-        <FileIcon className="size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80" />
+        <FileEntryIcon pathValue={file.path} kind="file" className="size-3.5" />
       </span>
       {file.oldPath && <span className="shrink-0 text-[11.5px] text-muted-foreground/65 line-through">{basename(file.oldPath)}</span>}
       {file.oldPath && <span className="text-[11px] text-muted-foreground/45">→</span>}

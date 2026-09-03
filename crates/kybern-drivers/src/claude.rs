@@ -718,21 +718,65 @@ fn parse_usage(u: &Value) -> Usage {
 }
 
 fn content_blocks(message: &UserMessage) -> Vec<Value> {
+    let Some(last_skill) = message.parts.iter().rposition(|part| matches!(part, ContentPart::Skill { .. })) else {
+        return message.parts.iter().filter_map(claude_block).collect();
+    };
+
     let mut blocks = Vec::new();
-    for part in &message.parts {
-        match part {
-            ContentPart::Text { text } => blocks.push(json!({ "type": "text", "text": text })),
-            ContentPart::FileMention { path } => blocks.push(json!({ "type": "text", "text": format!("@{path}") })),
-            ContentPart::Image { media_type, data } => {
-                // Validate base64 so a bad upload fails here instead of as an API error mid-turn.
-                if base64::engine::general_purpose::STANDARD.decode(data).is_ok() {
-                    blocks.push(json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }));
-                }
-            }
-            ContentPart::Attachment { name, .. } => blocks.push(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
+    for part in &message.parts[..last_skill] {
+        if let Some(block) = match part {
+            // Claude expands only one leading slash command. Earlier selected
+            // skills remain explicit context for the model to invoke itself.
+            ContentPart::Skill { name, .. } => Some(json!({ "type": "text", "text": format!("/{name}") })),
+            _ => claude_block(part),
+        } {
+            blocks.push(block);
         }
     }
+
+    let ContentPart::Skill { name, .. } = &message.parts[last_skill] else { unreachable!() };
+    let mut trailing = String::new();
+    let mut trailing_media = Vec::new();
+    for part in &message.parts[last_skill + 1..] {
+        match part {
+            ContentPart::Text { text } => trailing.push_str(text),
+            ContentPart::FileMention { path } => {
+                trailing.push('@');
+                trailing.push_str(path);
+            }
+            ContentPart::Attachment { name, .. } => {
+                trailing.push_str(&format!("\n[attached file: {name}]"));
+            }
+            ContentPart::Image { .. } => {
+                if let Some(block) = claude_block(part) {
+                    trailing_media.push(block);
+                }
+            }
+            ContentPart::Skill { .. } => unreachable!(),
+        }
+    }
+    // Claude Code only expands a slash command at the start of the last text
+    // block. Media can precede it, so keep uploads while making invocation
+    // deterministic.
+    blocks.extend(trailing_media);
+    blocks.push(json!({ "type": "text", "text": format!("/{name}{trailing}").trim_end() }));
     blocks
+}
+
+fn claude_block(part: &ContentPart) -> Option<Value> {
+    match part {
+        ContentPart::Text { text } => Some(json!({ "type": "text", "text": text })),
+        ContentPart::FileMention { path } => Some(json!({ "type": "text", "text": format!("@{path}") })),
+        ContentPart::Skill { name, .. } => Some(json!({ "type": "text", "text": format!("${name}") })),
+        ContentPart::Image { media_type, data } => {
+            // Validate base64 so a bad upload fails here instead of as an API error mid-turn.
+            base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .is_ok()
+                .then(|| json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }))
+        }
+        ContentPart::Attachment { name, .. } => Some(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
+    }
 }
 
 #[async_trait]
@@ -803,7 +847,9 @@ impl AgentSession for SessionHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::{claude_efforts, claude_model_aliases};
+    use super::{claude_efforts, claude_model_aliases, content_blocks};
+    use kybern_protocol::{ContentPart, UserMessage};
+    use serde_json::json;
 
     const HELP: &str = "\
   --effort <level>  Effort level for the current session\n\
@@ -817,5 +863,27 @@ mod tests {
     fn parses_capabilities_reported_by_help() {
         assert_eq!(claude_model_aliases(HELP), ["fable", "opus", "sonnet"]);
         assert_eq!(claude_efforts(HELP), ["low", "medium", "high", "xhigh", "max"]);
+    }
+
+    #[test]
+    fn dispatches_the_last_selected_skill_as_claudes_slash_command() {
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "First use ".into() },
+                ContentPart::Skill { name: "review".into(), path: "/skills/review/SKILL.md".into() },
+                ContentPart::Text { text: ", then ".into() },
+                ContentPart::Skill { name: "fix-ci".into(), path: "/skills/fix-ci/SKILL.md".into() },
+                ContentPart::Text { text: " carefully".into() },
+            ],
+        };
+        assert_eq!(
+            content_blocks(&message),
+            vec![
+                json!({ "type": "text", "text": "First use " }),
+                json!({ "type": "text", "text": "/review" }),
+                json!({ "type": "text", "text": ", then " }),
+                json!({ "type": "text", "text": "/fix-ci carefully" }),
+            ]
+        );
     }
 }

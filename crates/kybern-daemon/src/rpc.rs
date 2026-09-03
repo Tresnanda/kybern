@@ -293,6 +293,27 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             ok(crate::files::read_file(std::path::Path::new(&project.path), &p.path, p.max_bytes).await.map_err(bad)?)
         }
+        SkillsList::NAME => {
+            let p: SkillsListParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let cwd = std::path::Path::new(&project.path);
+            let provider_settings = state.settings.get().providers.get(&p.provider).cloned().unwrap_or_default();
+            let binary = provider_settings.binary.as_ref().map(std::path::PathBuf::from);
+            let skills = match p.provider {
+                ProviderKind::Codex => match kybern_drivers::codex::discover_skills(cwd, binary.as_ref()).await {
+                    Some(skills) => skills,
+                    None => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
+                },
+                ProviderKind::Opencode => {
+                    match kybern_drivers::opencode::discover_skills(cwd, binary.as_ref(), &provider_settings.env).await {
+                        Some(skills) => skills,
+                        None => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
+                    }
+                }
+                _ => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
+            };
+            ok(SkillsListResult { skills })
+        }
         GitStatusMethod::NAME => {
             let p: GitStatusParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;

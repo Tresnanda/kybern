@@ -345,7 +345,7 @@ impl PiSession {
         None
     }
 
-    async fn handle_frame(&self, v: Value) {
+    async fn handle_frame(self: &Arc<Self>, v: Value) {
         let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match ty {
             "ready" => {
@@ -474,10 +474,14 @@ impl PiSession {
                     Flavor::Omp => v.get("isTerminal").and_then(|t| t.as_bool()) != Some(false),
                 };
                 if terminal {
-                    self.finish_turn().await;
+                    let session = self.clone();
+                    tokio::spawn(async move { session.finish_turn().await });
                 }
             }
-            "agent_settled" => self.finish_turn().await,
+            "agent_settled" => {
+                let session = self.clone();
+                tokio::spawn(async move { session.finish_turn().await });
+            }
             "extension_ui_request" => self.handle_ui_request(&v).await,
             "auto_retry_start" => {
                 self.emit(DriverEvent::Notice {
@@ -606,6 +610,30 @@ fn images(message: &UserMessage) -> Vec<Value> {
         .collect()
 }
 
+fn prompt_text(message: &UserMessage) -> String {
+    let mut out = String::new();
+    for part in &message.parts {
+        match part {
+            ContentPart::Text { text } => out.push_str(text),
+            ContentPart::FileMention { path } => {
+                out.push('@');
+                out.push_str(path);
+            }
+            ContentPart::Skill { name, .. } => {
+                out.push_str("/skill:");
+                out.push_str(name);
+            }
+            ContentPart::Image { .. } => out.push_str("[image]"),
+            ContentPart::Attachment { name, .. } => {
+                out.push('[');
+                out.push_str(name);
+                out.push(']');
+            }
+        }
+    }
+    out
+}
+
 #[async_trait]
 impl AgentSession for Handle {
     async fn send_message(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
@@ -619,7 +647,7 @@ impl AgentSession for Handle {
             st.turn_error = None;
             st.aborted = false;
         }
-        let mut params = json!({ "message": message.plain_text() });
+        let mut params = json!({ "message": prompt_text(message) });
         let imgs = images(message);
         if !imgs.is_empty() {
             params["images"] = Value::Array(imgs);
@@ -668,5 +696,63 @@ impl AgentSession for Handle {
             Err(_) => child.kill().await,
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn pi_and_omp_use_their_native_skill_command_prefix() {
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "Use ".into() },
+                ContentPart::Skill { name: "review".into(), path: "/skills/review/SKILL.md".into() },
+                ContentPart::Text { text: " now".into() },
+            ],
+        };
+        assert_eq!(prompt_text(&message), "Use /skill:review now");
+    }
+
+    #[tokio::test]
+    async fn omp_terminal_frame_completes_while_anchor_response_is_read() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(
+            r#"
+printf '%s\n' '{"type":"agent_end","isTerminal":true}'
+IFS= read -r line
+id=${line#*\"id\":\"}
+id=${id%%\"*}
+printf '{"id":"%s","type":"response","command":"get_branch_messages","success":true,"data":{"messages":[{"entryId":"entry-1"}]}}\n' "$id"
+"#,
+        );
+        let child = Arc::new(NdjsonChild::spawn(command).expect("spawn fake omp"));
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(PiSession {
+            flavor: Flavor::Omp,
+            child,
+            events,
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            state: Mutex::new(State { active: true, ..State::default() }),
+            ready: Mutex::new(None),
+        });
+        let reader = session.clone();
+        tokio::spawn(async move { reader.read_loop().await });
+
+        let completed = tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(event) = rx.recv().await {
+                if let DriverEvent::TurnCompleted { anchors, .. } = event {
+                    return anchors.turn_id;
+                }
+            }
+            None
+        })
+        .await
+        .expect("OMP terminal frame should not block its own response reader");
+
+        assert_eq!(completed.as_deref(), Some("entry-1"));
     }
 }

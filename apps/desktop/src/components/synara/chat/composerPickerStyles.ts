@@ -203,7 +203,7 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
  *  Picker border/radius/shadow, but a solid fill: the menu floats over the
  *  transcript, so frosted bg-popover/70 would let chat content bleed through. */
 export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
-  "relative overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground";
+  `relative overflow-hidden ${COMPOSER_PICKER_RADIUS_CLASS_NAME} border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 /** Opaque Environment panel card — same rationale as the command menu (overlays transcript).
  *  Docks alongside the composer, so it carries the shared raised-chrome border rather
@@ -220,7 +220,7 @@ export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
 
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
-  "pointer-events-auto absolute inset-x-0 bottom-full z-20 mb-2 overflow-visible px-1 pt-2";
+  "pointer-events-auto absolute bottom-full start-0 z-20 mb-2 w-[min(36rem,100%)] overflow-visible pt-2";
 
 /** Inline command menu slot for compact composers rendered near the top of a scrollable dialog. */
 export const COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME =
@@ -231,7 +231,7 @@ export const COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME =
  *  composer picker. The `elevated-secondary-opaque` token lightens toward white,
  *  which is invisible on the near-white popover surface, so it is not used here. */
 export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
-  "flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)]";
+  `flex min-h-9 cursor-pointer select-none items-center gap-2.5 ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} px-2.5 py-1.5 text-start transition-colors duration-100 hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)] motion-reduce:transition-none`;
 
 /** Active command menu row — keyboard-selected pill fill. */
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =

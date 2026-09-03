@@ -41,6 +41,7 @@ expression: names
 - files.search
 - files.list
 - files.read
+- skills.list
 - approvals.respond
 - approvals.list
 - events.subscribe

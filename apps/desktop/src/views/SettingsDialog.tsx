@@ -199,7 +199,7 @@ function Agents() {
   return (
     <Section title="Agents on this Mac">
       {providers.map((p) => (
-        <Row key={p.kind} title={p.display_name} description={p.available ? p.binary_path : (p.unavailable_reason ?? "Not found on PATH")}>
+        <Row key={p.kind} title={p.display_name} description={p.available ? (p.binary_path ?? undefined) : (p.unavailable_reason ?? "Not found on PATH")}>
           {p.available ? (
             <span className="flex items-center gap-1.5 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">
               <CheckIcon className="size-3.5 text-success" /> {p.version ?? "Installed"}
@@ -314,7 +314,7 @@ function About() {
   return (
     <Section title="About">
       <Row title="Daemon" description={info?.version ?? "…"} />
-      <Row title="Protocol" description={info?.protocol_version ?? "…"} />
+      <Row title="Protocol" description={info ? String(info.protocol_version) : "…"} />
       <Row title="Host" description={info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"} />
       <Row title="Data" description={info?.data_dir ?? "…"} />
     </Section>

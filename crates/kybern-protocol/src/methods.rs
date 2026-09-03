@@ -645,6 +645,20 @@ pub struct FilesReadResult {
 }
 method!(FilesRead, "files.read", Some(Scope::OrchestrationRead), FilesReadParams, FilesReadResult);
 
+// ---- skills ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SkillsListParams {
+    pub project_id: ProjectId,
+    pub provider: ProviderKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SkillsListResult {
+    pub skills: Vec<SkillInfo>,
+}
+method!(SkillsList, "skills.list", Some(Scope::OrchestrationRead), SkillsListParams, SkillsListResult);
+
 // ---- approvals ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -763,6 +777,7 @@ registry!(
     FilesSearch,
     FilesList,
     FilesRead,
+    SkillsList,
     ApprovalsRespond,
     ApprovalsList,
     EventsSubscribe,

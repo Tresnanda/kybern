@@ -12,6 +12,7 @@ import { Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/synara/button"
 import { IconButton } from "@/components/synara/icon-button"
 import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
+import { FileEntryIcon } from "@/components/synara/chat/FileEntryIcon"
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
 import { SearchInput } from "@/components/synara/search-input"
 import { Skeleton } from "@/components/synara/skeleton"
@@ -19,7 +20,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/toolt
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import { copyText, useResize } from "@/lib/hooks"
 import { basename } from "@/lib/format"
-import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon, FileIcon, FolderIcon } from "@/lib/synara/icons"
+import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon, FolderIcon } from "@/lib/synara/icons"
 import { revealInFinder } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { FileEntry, FilesReadResult, ProjectId } from "@/protocol"
@@ -132,7 +133,7 @@ export function ExplorerPane({ projectId }: { projectId: ProjectId }) {
           {expanded.includes(e.path) ? renderDir(e.path) : <FileTreeFile value={`${e.path}/…`} name="" disabled className="hidden" />}
         </FileTreeFolder>
       ) : (
-        <FileTreeFile key={e.path} value={e.path} name={e.name} />
+        <FileTreeFile key={e.path} value={e.path} name={e.name} icon={<FileEntryIcon pathValue={e.path} kind="file" className="size-3.5" />} />
       ),
     )
   }
@@ -158,7 +159,7 @@ export function ExplorerPane({ projectId }: { projectId: ProjectId }) {
                 {results.map((path) => (
                   <li key={path}>
                     <button type="button" onClick={() => reveal(path)} title={path} className={cn(ROW, selected === path && "bg-[var(--color-background-button-secondary)] text-foreground")}>
-                      <FileIcon className="size-3.5 shrink-0 opacity-75" />
+                      <FileEntryIcon pathValue={path} kind="file" className="size-3.5" />
                       <span className="min-w-0 truncate">{basename(path)}</span>
                       <span className="ml-auto min-w-0 max-w-[45%] truncate text-[10.5px] text-muted-foreground/50">{path.slice(0, path.length - basename(path).length)}</span>
                     </button>
@@ -346,7 +347,7 @@ function FileViewer({ projectId, path, projectName, projectPath }: { projectId: 
         </div>
       ) : file.binary ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground/70">
-          <FileIcon className="size-5 opacity-50" />
+          <FileEntryIcon pathValue={path} kind="file" className="size-5 opacity-70" />
           <p>Binary file, {formatBytes(file.size)}.</p>
           <Button size="xs" variant="chrome-outline" onClick={() => void revealInFinder(`${projectPath}/${path}`)}>
             Reveal in Finder

@@ -183,7 +183,8 @@ export type ContentPart =
   | { type: "text"; text: string }
   | { type: "image"; media_type: string; data: string }
   | { type: "attachment"; asset_id: AssetId; name: string; media_type: string; size: number }
-  | { type: "file_mention"; path: string };
+  | { type: "file_mention"; path: string }
+  | { type: "skill"; name: string; path: string };
 
 export interface UserMessage {
   parts: ContentPart[];
@@ -725,6 +726,26 @@ export interface FilesReadResult {
   size: number;
 }
 
+export type SkillScope = "project" | "repo" | "user" | "system" | "admin" | "app" | "other";
+
+export interface SkillInfo {
+  name: string;
+  display_name?: string | null;
+  description?: string | null;
+  path: string;
+  scope: SkillScope;
+  enabled: boolean;
+}
+
+export interface SkillsListParams {
+  project_id: ProjectId;
+  provider: ProviderKind;
+}
+
+export interface SkillsListResult {
+  skills: SkillInfo[];
+}
+
 export interface AssetInfo {
   id: AssetId;
   name: string;
@@ -740,6 +761,7 @@ export interface Methods {
   "files.search": [FilesSearchParams, FilesSearchResult];
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
+  "skills.list": [SkillsListParams, SkillsListResult];
   "daemon.shutdown": [Empty, Empty];
   "projects.list": [Empty, ProjectsListResult];
   "projects.add": [ProjectsAddParams, Project];

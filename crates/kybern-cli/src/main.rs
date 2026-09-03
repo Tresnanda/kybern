@@ -146,6 +146,12 @@ enum Cmd {
         #[arg(default_value = "")]
         query: String,
     },
+    /// List skills available to an agent in a project.
+    Skills {
+        project: String,
+        #[arg(long, default_value = "codex")]
+        provider: ProviderKind,
+    },
     /// List one directory of a project (relative path, empty for the root)
     Ls {
         project: String,
@@ -485,6 +491,22 @@ async fn main() -> Result<()> {
                 println!("{f}");
             }
             eprintln!("{} of {} files", r.files.len(), r.total);
+        }
+        Cmd::Skills { project, provider } => {
+            let project_id = resolve_project(&client, &project, false).await?;
+            let r = client.call::<SkillsList>(SkillsListParams { project_id, provider }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                for skill in r.skills {
+                    println!(
+                        "${:<28} {:<8} {}",
+                        skill.name,
+                        format!("{:?}", skill.scope).to_lowercase(),
+                        skill.description.unwrap_or_default()
+                    );
+                }
+            }
         }
         Cmd::Ls { project, path } => {
             let r = client.call::<FilesList>(FilesListParams { project_id: project.parse()?, path }).await?;

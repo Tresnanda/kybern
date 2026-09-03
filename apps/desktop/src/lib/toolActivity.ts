@@ -67,8 +67,18 @@ const SEARCH_TOOLS = new Set([
 ])
 const LIST_TOOLS = new Set(["list", "listfiles", "ls"])
 const FETCH_TOOLS = new Set(["webfetch", "fetch", "urlfetch", "httpfetch"])
-const WEB_SEARCH_TOOLS = new Set(["websearch", "searchweb"])
-const DELEGATE_TOOLS = new Set(["task", "agent", "subagent", "delegate"])
+const WEB_SEARCH_TOOLS = new Set(["websearch", "searchweb", "webrun"])
+const DELEGATE_TOOLS = new Set([
+  "task",
+  "agent",
+  "subagent",
+  "delegate",
+  "spawnagent",
+  "sendmessagetoagent",
+  "followuptask",
+  "waitagent",
+  "listagents",
+])
 const PLAN_TOOLS = new Set(["todowrite", "todo", "plan", "updateplan"])
 const IMAGE_TOOLS = new Set([
   "imageview",
@@ -149,6 +159,24 @@ function inputString(
   return undefined
 }
 
+function inputQuery(input: JsonValue): string | undefined {
+  const direct = inputString(input, ["query", "q", "pattern"])
+  if (direct) return direct
+  for (const record of inputRecords(input)) {
+    for (const key of ["search_query", "image_query"] as const) {
+      const entries = record[key]
+      if (!Array.isArray(entries)) continue
+      for (const entry of entries) {
+        const item = asRecord(entry)
+        if (!item) continue
+        const query = directString(item, "q") ?? directString(item, "query")
+        if (query) return query
+      }
+    }
+  }
+  return undefined
+}
+
 function normalized(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "")
 }
@@ -158,6 +186,45 @@ function compactText(value: string, max = 120): string {
   return oneLine.length > max
     ? `${oneLine.slice(0, max - 1).trimEnd()}…`
     : oneLine
+}
+
+function titleCaseWords(value: string): string {
+  return value
+    .split(/[\s:_/-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ")
+}
+
+/** A provider namespace is useful context; its transport spelling is not. */
+export function humanizeToolName(name: string): string {
+  const lower = name.toLowerCase()
+  if (lower === "web__run") return "Web search"
+  const namespaced = name.split("__").filter(Boolean)
+  const slashNamespaced = name.startsWith("mcp:")
+    ? name.slice(4).split("/").filter(Boolean)
+    : []
+  const parts = namespaced.length > 1 ? namespaced : slashNamespaced
+  if (parts.length > 1) {
+    const tool = titleCaseWords(parts.at(-1)!)
+    if (lower.includes("github")) return `GitHub · ${tool}`
+    if (/browser|playwright|computer|cua/.test(lower))
+      return `Browser · ${tool}`
+    const server = titleCaseWords(parts.at(-2)!.replace(/^codex[_-]apps?$/, "apps"))
+    return `${server} · ${tool}`
+  }
+  return titleCaseWords(name) || "Tool"
+}
+
+function leafToolName(name: string): string {
+  const doubleUnderscore = name.split("__").filter(Boolean)
+  if (doubleUnderscore.length > 1) return normalized(doubleUnderscore.at(-1)!)
+  const segments = name.replace(/^mcp:/i, "").split(/[/:.]/).filter(Boolean)
+  return normalized(segments.at(-1) ?? name)
+}
+
+function matchesTool(set: ReadonlySet<string>, tool: string, leaf: string): boolean {
+  return set.has(tool) || set.has(leaf)
 }
 
 function compactPath(value: string | undefined): string {
@@ -515,9 +582,12 @@ function changedPaths(input: JsonValue): string[] {
 export function toolLine(call: ToolCall, complete = true): ToolActivityLine {
   const name = call.name
   const tool = normalized(name)
+  const leaf = leafToolName(name)
+  const namespaced = name.includes("__") || name.startsWith("mcp:")
+  const readableName = namespaced ? humanizeToolName(name) : ""
   const input = call.input
 
-  if (COMMAND_TOOLS.has(tool)) {
+  if (!WEB_SEARCH_TOOLS.has(tool) && (matchesTool(COMMAND_TOOLS, tool, leaf) || leaf === "execcommand")) {
     const actions = commandActions(input)
     for (const action of actions) {
       const activity = commandActionLine(action, complete)
@@ -538,53 +608,57 @@ export function toolLine(call: ToolCall, complete = true): ToolActivityLine {
       complete
     )
   }
-  if (READ_TOOLS.has(tool)) {
+  if (matchesTool(READ_TOOLS, tool, leaf) || /^(?:read|getfile|viewfile)/.test(leaf)) {
     const path = inputString(input, ["file_path", "filePath", "path"])
     const title = titleLine(inputString(input, ["title"]), complete)
-    return line("read", compactPath(path) || title?.detail || "", complete)
+    return line("read", compactPath(path) || title?.detail || readableName, complete)
   }
   if (
-    WRITE_TOOLS.has(tool) ||
-    (tool === "create" && inputString(input, ["file_path", "filePath", "path"]))
+    matchesTool(WRITE_TOOLS, tool, leaf) ||
+    (/^(?:write|createfile)/.test(leaf) && !!inputString(input, ["file_path", "filePath", "path"]))
   ) {
     return line(
       "write",
-      compactPath(inputString(input, ["file_path", "filePath", "path"])),
+      compactPath(inputString(input, ["file_path", "filePath", "path"])) || readableName,
       complete
     )
   }
-  if (EDIT_TOOLS.has(tool)) {
+  if (matchesTool(EDIT_TOOLS, tool, leaf) || /^(?:edit|updatefile|applypatch)/.test(leaf)) {
     const paths = changedPaths(input)
     const detail =
       paths.length > 0
         ? paths.join(", ")
-        : compactPath(inputString(input, ["file_path", "filePath", "path"]))
+        : compactPath(inputString(input, ["file_path", "filePath", "path"])) || readableName
     return line("edit", detail, complete)
   }
-  if (SEARCH_TOOLS.has(tool)) {
+  if (matchesTool(SEARCH_TOOLS, tool, leaf) || /^(?:search|find)/.test(leaf)) {
     const query = inputString(input, ["pattern", "query"])
     const path = compactPath(inputString(input, ["path", "directory", "cwd"]))
+    const context = name.toLowerCase().includes("github") ? "GitHub" : ""
     return line(
       "search",
-      query && path
+      query && context
+        ? `${context} for ${query}`
+        : query && path
         ? `for ${query} in ${path}`
         : query
           ? `for ${query}`
           : path
             ? `in ${path}`
-            : "",
+            : readableName,
       complete
     )
   }
-  if (LIST_TOOLS.has(tool))
+  if (matchesTool(LIST_TOOLS, tool, leaf) || leaf.startsWith("list"))
     return line(
       "list",
       compactPath(inputString(input, ["path", "directory", "cwd"])) ||
+        readableName ||
         "current directory",
       complete
     )
   if (WEB_SEARCH_TOOLS.has(tool)) {
-    const query = inputString(input, ["query", "pattern"])
+    const query = inputQuery(input)
     return line(
       "search",
       query ? `the web for ${query}` : "the web",
@@ -592,22 +666,22 @@ export function toolLine(call: ToolCall, complete = true): ToolActivityLine {
       false
     )
   }
-  if (FETCH_TOOLS.has(tool))
+  if (matchesTool(FETCH_TOOLS, tool, leaf))
     return line(
       "fetch",
       inputString(input, ["url", "uri", "query"]) ?? "",
       complete,
       false
     )
-  if (DELEGATE_TOOLS.has(tool))
+  if (matchesTool(DELEGATE_TOOLS, tool, leaf))
     return line(
       "delegate",
       inputString(input, ["description", "prompt", "title"]) ?? "",
       complete,
       false
     )
-  if (PLAN_TOOLS.has(tool)) return line("plan", "", complete, false)
-  if (IMAGE_TOOLS.has(tool))
+  if (matchesTool(PLAN_TOOLS, tool, leaf)) return line("plan", "", complete, false)
+  if (matchesTool(IMAGE_TOOLS, tool, leaf) || leaf === "imagegen")
     return line(
       "image",
       inputString(input, ["path", "file_path", "filePath", "title"]) ??
@@ -623,5 +697,169 @@ export function toolLine(call: ToolCall, complete = true): ToolActivityLine {
   const detail =
     inputString(input, ["title", "query", "path", "file_path", "filePath"]) ??
     ""
-  return line("other", detail || name, complete)
+  const label = humanizeToolName(name)
+  return line("other", namespaced && detail ? `${label} — ${compactText(detail)}` : detail || label, complete, !namespaced)
+}
+
+export type ToolVisualKind =
+  | ToolActivityKind
+  | "github"
+  | "web"
+  | "mcp"
+  | "skill"
+
+/** Pick a recognizable 16px glyph before falling back to the activity kind. */
+export function toolVisualKind(
+  call: ToolCall,
+  activity: ToolActivityLine = toolLine(call)
+): ToolVisualKind {
+  const name = call.name.toLowerCase()
+  const tool = normalized(call.name)
+  const actions = commandActions(call.input)
+  const rawCommand =
+    actions.find((action) => action.command)?.command ??
+    inputString(call.input, ["command", "cmd"])
+  if (name.includes("github") || isGitCommand(rawCommand)) return "github"
+  if (/browser|playwright|computer|cua[_:]/.test(name)) return "web"
+  if (name === "web__run" || WEB_SEARCH_TOOLS.has(tool) || activity.kind === "fetch")
+    return "web"
+  if (name.startsWith("mcp__") || name.startsWith("mcp:")) return "mcp"
+  const leaf = leafToolName(call.name)
+  if ([tool, leaf].some((value) => value === "skill" || value === "useskill" || value === "loadskill"))
+    return "skill"
+  return activity.kind
+}
+
+function isGitCommand(command: string | undefined): boolean {
+  if (!command) return false
+  const unwrapped = unwrapShellCommand(command)
+  for (const segment of shellSegments(unwrapped)) {
+    const tool = executable(meaningfulCommandTokens(segment)[0] ?? "")
+    if (tool === "git" || tool === "gh") return true
+    if (tool !== "cd" && tool !== "pushd") return false
+  }
+  return false
+}
+
+export interface ToolSummaryItem {
+  call: ToolCall
+  complete: boolean
+  isError: boolean
+}
+
+export interface ToolCallSummary {
+  label: string
+  visual: ToolVisualKind
+  entryCount: number
+}
+
+type SummaryCategory = "command" | "edit" | "read" | "search" | "agent" | "tool"
+
+const SUMMARY_ORDER: readonly SummaryCategory[] = [
+  "command",
+  "edit",
+  "read",
+  "search",
+  "agent",
+  "tool",
+]
+
+/** Summarize a settled, contiguous tool run using distinct file counts. */
+export function summarizeToolCalls(
+  items: readonly ToolSummaryItem[]
+): ToolCallSummary | null {
+  if (
+    items.length < 2 ||
+    items.some((item) => !item.complete || item.isError)
+  )
+    return null
+
+  const counts = new Map<SummaryCategory, number>()
+  const fileKeys = new Map<SummaryCategory, Set<string>>()
+  for (const item of items) {
+    const activity = toolLine(item.call, true)
+    const category = summaryCategory(activity.kind)
+    if (category === "read" || category === "edit") {
+      const keys = summaryFileKeys(item.call, activity)
+      if (keys.length > 0) {
+        const seen = fileKeys.get(category) ?? new Set<string>()
+        keys.forEach((key) => seen.add(key))
+        fileKeys.set(category, seen)
+        continue
+      }
+    }
+    counts.set(category, (counts.get(category) ?? 0) + 1)
+  }
+  for (const [category, paths] of fileKeys)
+    counts.set(category, (counts.get(category) ?? 0) + paths.size)
+
+  const phrases = SUMMARY_ORDER.flatMap((category) => {
+    const count = counts.get(category) ?? 0
+    return count > 0 ? [summaryPhrase(category, count)] : []
+  })
+  return {
+    label: joinSummaryPhrases(phrases),
+    visual: toolVisualKind(items[0]!.call),
+    entryCount: items.length,
+  }
+}
+
+function summaryCategory(kind: ToolActivityKind): SummaryCategory {
+  switch (kind) {
+    case "command":
+      return "command"
+    case "edit":
+    case "write":
+      return "edit"
+    case "read":
+      return "read"
+    case "search":
+    case "list":
+    case "fetch":
+      return "search"
+    case "delegate":
+      return "agent"
+    default:
+      return "tool"
+  }
+}
+
+function summaryFileKeys(
+  call: ToolCall,
+  activity: ToolActivityLine
+): string[] {
+  const changed = changedPaths(call.input)
+  if (changed.length > 0) return changed
+  const direct = inputString(call.input, ["file_path", "filePath", "path"])
+  if (direct) return [direct]
+  const detail = activity.detail.trim()
+  if (!detail || detail === "a file") return []
+  return detail.split(/,\s+/).filter(Boolean)
+}
+
+function summaryPhrase(category: SummaryCategory, count: number): string {
+  const plural = (one: string, many = `${one}s`) => (count === 1 ? one : many)
+  switch (category) {
+    case "command":
+      return `ran ${count} ${plural("command")}`
+    case "edit":
+      return `edited ${count} ${plural("file")}`
+    case "read":
+      return `read ${count} ${plural("file")}`
+    case "search":
+      return `ran ${count} ${plural("search", "searches")}`
+    case "agent":
+      return `ran ${count} agent ${plural("task")}`
+    case "tool":
+      return `used ${count} ${plural("tool")}`
+  }
+}
+
+function joinSummaryPhrases(phrases: readonly string[]): string {
+  if (phrases.length === 0) return "Used tools"
+  const [first, ...rest] = phrases
+  const capitalized = first!.charAt(0).toUpperCase() + first!.slice(1)
+  if (rest.length === 0) return capitalized
+  if (rest.length === 1) return `${capitalized} and ${rest[0]}`
+  return `${capitalized}, ${rest.slice(0, -1).join(", ")}, and ${rest.at(-1)}`
 }
