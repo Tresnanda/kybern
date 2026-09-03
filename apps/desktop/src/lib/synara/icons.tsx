@@ -69,7 +69,7 @@ export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
 
 function adaptIcon(Component: TablerIcon): LucideIcon {
   return function AdaptedIcon(props) {
-    return <Component {...(props as any)} />;
+    return <Component {...props} />;
   };
 }
 

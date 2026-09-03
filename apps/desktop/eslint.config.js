@@ -20,11 +20,44 @@ export default defineConfig([
     },
   },
   {
-    // Registry-managed components (shadcn, beui): keep upstream source as is.
-    files: ['src/components/ui/**', 'src/components/motion/**', 'src/components/agents/**'],
+    // Vendored and registry-managed components keep their upstream module shape.
+    files: [
+      'src/components/ui/**',
+      'src/components/motion/**',
+      'src/components/agents/**',
+      'src/components/beui/**',
+      'src/components/synara/**',
+      'src/lib/synara/**',
+    ],
     rules: {
       'react-refresh/only-export-components': 'off',
       'react-hooks/set-state-in-effect': 'off',
+    },
+  },
+  {
+    // These app modules intentionally colocate React components and shared helpers.
+    files: ['src/components/kybern/Markdown.tsx', 'src/views/chrome.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
+    // Existing imperative surfaces are not compiled with React Compiler.
+    files: ['src/views/Explorer.tsx', 'src/views/PullRequests.tsx', 'src/views/Terminal.tsx'],
+    rules: {
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
+  {
+    files: ['src/views/Environment.tsx'],
+    rules: {
+      'react-hooks/preserve-manual-memoization': 'off',
+    },
+  },
+  {
+    files: ['src/views/Terminal.tsx'],
+    rules: {
+      'react-hooks/refs': 'off',
     },
   },
 ])

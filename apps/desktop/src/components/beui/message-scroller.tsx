@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect, react-hooks/refs -- ported from beui.dev as-is */
+/* eslint-disable react-hooks/immutability -- ported from beui.dev as-is */
 // beui.dev/components/agents/message-scroller
 
 import { useReducedMotion } from "motion/react";
@@ -77,6 +77,8 @@ function getMessagePreview(
 export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
   /** Keep streamed output pinned while the reader remains near the end. */
   followOutput?: boolean;
+  /** Changing this value resumes following and jumps to the live edge. */
+  followKey?: string | number | null;
   /** Distance from the end that still counts as following the output. */
   followThreshold?: number;
   /** Smoothly follow growing content. */
@@ -109,6 +111,7 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
 
 export function MessageScroller({
   followOutput = true,
+  followKey,
   followThreshold = 56,
   smooth = true,
   onFollowChange,
@@ -303,14 +306,17 @@ export function MessageScroller({
   }, []);
 
   useLayoutEffect(() => {
-    followingRef.current = followOutput;
-    if (!followOutput) return;
+    if (!followOutput) {
+      followingRef.current = false;
+      return;
+    }
 
+    setFollowing(true);
     frameRef.current = requestAnimationFrame(() => scrollToEnd("auto"));
     return () => {
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
     };
-  }, [followOutput, scrollToEnd]);
+  }, [followKey, followOutput, scrollToEnd, setFollowing]);
 
   useEffect(() => {
     const content = contentRef.current;

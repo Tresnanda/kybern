@@ -76,6 +76,14 @@ export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bott
   const state = useStore((s) => s.transcripts[threadId])
   const blocks = state?.blocks
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks])
+  let latestUserMessageId: string | null = null
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const user = groups[i]?.user
+    if (user) {
+      latestUserMessageId = user.id
+      break
+    }
+  }
   const viewport = useRef<HTMLElement>(null)
   const [following, setFollowing] = useState(true)
   const busy = groups.some((g) => g.running)
@@ -102,6 +110,7 @@ export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bott
           navigationLabel="Message navigation"
           navigationSide="left"
           followOutput
+          followKey={latestUserMessageId}
           followThreshold={56}
           onFollowChange={setFollowing}
           busy={busy}

@@ -275,6 +275,20 @@ export interface TurnGroup {
   running: boolean
 }
 
+type AssistantBlock = Extract<Block, { kind: "assistant" }>
+
+function splitAssistantForPresentation(block: AssistantBlock): {
+  answer: AssistantBlock
+  reasoning: AssistantBlock | null
+} {
+  return {
+    answer: block.thinking ? { ...block, thinking: "" } : block,
+    reasoning: block.thinking.trim()
+      ? { ...block, id: `reasoning:${block.id}`, text: "" }
+      : null,
+  }
+}
+
 export function groupTurns(blocks: Block[]): TurnGroup[] {
   const groups: TurnGroup[] = []
   const byId = new Map<string, TurnGroup>()
@@ -318,15 +332,21 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
       }
     }
     if (answerIdx !== -1) {
-      g.answer = g.work[answerIdx] as Extract<Block, { kind: "assistant" }>
-      g.work = [...g.work.slice(0, answerIdx), ...g.work.slice(answerIdx + 1)]
+      const { answer, reasoning } = splitAssistantForPresentation(g.work[answerIdx] as AssistantBlock)
+      g.answer = answer
+      g.work = [
+        ...g.work.slice(0, answerIdx),
+        ...(reasoning ? [reasoning] : []),
+        ...g.work.slice(answerIdx + 1),
+      ]
     }
     g.running = !g.end && !!g.user
     if (g.running) {
       const last = g.work[g.work.length - 1]
       if (last && last.kind === "assistant" && last.text.trim()) {
-        g.answerLive = last
-        g.work = g.work.slice(0, -1)
+        const { answer, reasoning } = splitAssistantForPresentation(last)
+        g.answerLive = answer
+        g.work = [...g.work.slice(0, -1), ...(reasoning ? [reasoning] : [])]
       }
     }
   }

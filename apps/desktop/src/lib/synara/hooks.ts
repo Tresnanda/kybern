@@ -38,6 +38,7 @@ export function getLocalStorageItem<T = unknown>(key: string, codec?: Codec): T 
 }
 
 export function setLocalStorageItem(key: string, value: unknown, _codec?: Codec): void {
+  void _codec
   try {
     localStorage.setItem(key, JSON.stringify(value))
   } catch {

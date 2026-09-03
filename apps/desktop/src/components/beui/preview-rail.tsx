@@ -1,5 +1,3 @@
-/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect, react-hooks/refs -- ported from beui.dev as-is */
-
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type MouseEvent,

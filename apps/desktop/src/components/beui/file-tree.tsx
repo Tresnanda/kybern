@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect, react-hooks/refs, react-hooks/set-state-in-render -- ported from beui.dev as-is */
 // beui.dev/components/motion/file-tree
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";

@@ -1,5 +1,3 @@
-/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect, react-hooks/refs, react-hooks/set-state-in-render -- ported from beui.dev as-is */
-
 import {
   AnimatePresence,
   type HTMLMotionProps,
