@@ -20,7 +20,7 @@
     "android": {
       "package": "dev.kybern.mobile",
       "adaptiveIcon": {
-        "backgroundColor": "#111111",
+        "backgroundColor": "#F4F2EE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

@@ -6,5 +6,8 @@
 /apps/mobile/.expo
 *.snap.new
 
+# Compiled from assets/icon-composer by the macOS Tauri bundle hook.
+/apps/desktop/src-tauri/icons/Assets.car
+
 # Claude Code agent worktrees
 /.claude/worktrees/
