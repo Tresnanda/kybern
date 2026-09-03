@@ -51,6 +51,13 @@ connects to the daemon named by `KYBERN_DATA_DIR` (port and token files) and
 spawns `kybernd` from its own directory or `PATH` when none is reachable.
 `KYBERN_NO_ACTIVATE=1` keeps the window from stealing focus.
 
+The desktop package scripts build and stage `kybernd` as a Tauri sidecar; use
+`pnpm tauri ...` rather than calling the Tauri CLI directly. Daemons outlive
+desktop windows. After rebuilding daemon or driver code, run
+`./target/debug/kybern --data-dir /tmp/kyb stop-daemon` from the repository root
+before relaunching against that data directory; the next launch must report a
+new `started_at`.
+
 ## Tests and checks
 
 ```sh

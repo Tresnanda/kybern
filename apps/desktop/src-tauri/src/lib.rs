@@ -6,9 +6,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use kybern_client::Endpoint;
+use kybern_client::{Client, Endpoint};
+use kybern_protocol::PROTOCOL_VERSION;
+use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, Empty};
 use serde::Serialize;
 use tauri::Manager;
+
+static ENDPOINT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EndpointInfo {
@@ -33,10 +37,28 @@ fn http_base(url: &str) -> String {
     url.replace("ws://", "http://").replace("wss://", "https://").trim_end_matches("/ws").to_string()
 }
 
-async fn reachable(url: &str) -> bool {
-    let Some(rest) = url.split("://").nth(1) else { return false };
-    let host = rest.split('/').next().unwrap_or_default();
-    matches!(tokio::time::timeout(Duration::from_millis(400), tokio::net::TcpStream::connect(host)).await, Ok(Ok(_)))
+async fn daemon_info(endpoint: &Endpoint) -> Option<DaemonInfo> {
+    tokio::time::timeout(Duration::from_millis(750), async {
+        let client = Client::connect(endpoint).await?;
+        client.call::<DaemonInfoMethod>(Empty {}).await
+    })
+    .await
+    .ok()?
+    .ok()
+}
+
+fn ensure_compatible(info: &DaemonInfo) -> Result<()> {
+    if info.protocol_version != PROTOCOL_VERSION {
+        return Err(anyhow!(
+            "kybernd protocol v{} is incompatible with desktop protocol v{}; stop the existing daemon and reopen kybern",
+            info.protocol_version,
+            PROTOCOL_VERSION
+        ));
+    }
+    if info.version != env!("CARGO_PKG_VERSION") {
+        log::warn!("using compatible kybernd {} with desktop {}", info.version, env!("CARGO_PKG_VERSION"));
+    }
+    Ok(())
 }
 
 fn daemon_binary() -> Result<PathBuf> {
@@ -61,6 +83,9 @@ fn daemon_binary() -> Result<PathBuf> {
 fn spawn_daemon() -> Result<()> {
     let bin = daemon_binary()?;
     let root = data_dir();
+    // Launch the bundled externalBin directly instead of through the shell
+    // plugin: shell-plugin children are killed with the app, while kybernd is
+    // shared by the CLI and mobile clients and intentionally outlives it.
     let mut cmd = std::process::Command::new(&bin);
     if let Some(r) = &root {
         std::fs::create_dir_all(r)?;
@@ -70,6 +95,11 @@ fn spawn_daemon() -> Result<()> {
         cmd.stdout(log).stderr(log2);
     } else {
         cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    }
+    // Let the OS select an unused port for app-managed daemons. The daemon
+    // records the selected port under its data directory for every client.
+    if std::env::var_os("KYBERN_PORT").is_none() {
+        cmd.arg("--port").arg("0");
     }
     cmd.stdin(std::process::Stdio::null());
     #[cfg(unix)]
@@ -86,16 +116,24 @@ fn spawn_daemon() -> Result<()> {
 #[tauri::command]
 async fn endpoint() -> Result<EndpointInfo, String> {
     async fn inner() -> Result<EndpointInfo> {
+        // HMR or two frontend callers must not race each other into spawning
+        // more than one daemon from this app process.
+        let _guard = ENDPOINT_LOCK.lock().await;
         if let Ok(ep) = resolve() {
-            if reachable(&ep.url).await {
+            if let Some(info) = daemon_info(&ep).await {
+                ensure_compatible(&info)?;
                 return Ok(EndpointInfo { http_base: http_base(&ep.url), url: ep.url, token: ep.token, spawned: false });
             }
+        }
+        if std::env::var_os("KYBERN_URL").is_some() {
+            return Err(anyhow!("the daemon configured by KYBERN_URL is not reachable or rejected the configured token"));
         }
         spawn_daemon()?;
         for _ in 0..100 {
             tokio::time::sleep(Duration::from_millis(100)).await;
             if let Ok(ep) = resolve() {
-                if reachable(&ep.url).await {
+                if let Some(info) = daemon_info(&ep).await {
+                    ensure_compatible(&info)?;
                     return Ok(EndpointInfo { http_base: http_base(&ep.url), url: ep.url, token: ep.token, spawned: true });
                 }
             }

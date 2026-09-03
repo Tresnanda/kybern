@@ -56,3 +56,9 @@ insta = { version = "1", features = ["json", "yaml"] }
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Proc-macro dylibs are loaded by later Cargo invocations in the desktop
+# sidecar build. Stripping them on macOS makes those cached dylibs unloadable;
+# shipped binaries still use the release profile's strip setting above.
+[profile.release.build-override]
+strip = false

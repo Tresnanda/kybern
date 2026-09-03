@@ -9,5 +9,8 @@
 # Compiled from assets/icon-composer by the macOS Tauri bundle hook.
 /apps/desktop/src-tauri/icons/Assets.car
 
+# Target-triple daemon binaries staged for Tauri's externalBin bundler.
+/apps/desktop/src-tauri/binaries/
+
 # Claude Code agent worktrees
 /.claude/worktrees/

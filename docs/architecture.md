@@ -35,7 +35,7 @@ to the same threads later.
 | `kybern-daemon` | `kybernd`. axum for HTTP and WebSocket, tokio for everything else. |
 | `kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell; the web app speaks the same protocol from TypeScript (`apps/desktop/src/protocol`). |
 | `kybern-cli` | `kybern`. Also the integration harness for the daemon. |
-| `apps/desktop` | Tauri + React desktop client (crate `kybern-desktop` for the shell). |
+| `apps/desktop` | Tauri + React desktop client (crate `kybern-desktop` for the shell). Desktop packages include `kybernd` as a Tauri sidecar but it remains an independent process. |
 | `apps/mobile` | Expo client. |
 
 ## Threads and turns

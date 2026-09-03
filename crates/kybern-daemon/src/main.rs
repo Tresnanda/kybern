@@ -59,8 +59,9 @@ async fn main() -> Result<()> {
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state.clone());
 
-    let addr: SocketAddr = format!("{}:{}", args.bind, args.port).parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let requested_addr: SocketAddr = format!("{}:{}", args.bind, args.port).parse()?;
+    let listener = tokio::net::TcpListener::bind(requested_addr).await?;
+    let addr = listener.local_addr()?;
     tracing::info!(%addr, data_dir = %paths.root.display(), "kybernd listening");
     std::fs::write(&paths.port_file, addr.port().to_string())?;
     state.port.store(addr.port(), std::sync::atomic::Ordering::Relaxed);

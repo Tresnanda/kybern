@@ -22,7 +22,7 @@ and `apps/desktop/src/lib/synara`.
 | `crates/kybern-daemon` | `kybernd`. Owns provider processes, threads, approvals, terminals and project files; serves clients on a loopback port with bearer tokens. |
 | `crates/kybern-cli` | `kybern`. Command-line client and the integration harness for every driver. |
 | `crates/kybern-client` | Shared WebSocket client used by the CLI and the desktop shell. |
-| `apps/desktop` | The desktop app: Tauri 2 shell (`src-tauri`, crate `kybern-desktop`) around a React 19 + Tailwind 4 web app. Spawns `kybernd` if none is running. |
+| `apps/desktop` | The desktop app: Tauri 2 shell (`src-tauri`, crate `kybern-desktop`) around a React 19 + Tailwind 4 web app. Bundles and spawns `kybernd` if none is running. |
 | `apps/mobile` | Expo client (connect, threads, transcript, approvals, composer). |
 
 The previous GPUI desktop client lives on the `gpui` branch and is no longer
@@ -79,8 +79,7 @@ xattr -dr com.apple.quarantine /Applications/kybern.app
 ### Windows and Linux desktop app
 
 Not packaged yet. Build the desktop app from source (below); Tauri produces
-the platform installer, and the app starts `kybernd` from its own directory
-or from `PATH`.
+the platform installer with `kybernd` bundled as a sidecar.
 
 ## Build from source
 
@@ -92,8 +91,13 @@ cargo build --release -p kybern-daemon -p kybern-cli   # target/release/{kybernd
 
 cd apps/desktop
 pnpm install --frozen-lockfile
-pnpm tauri build                                        # apps/desktop/src-tauri/target/release/bundle/
+pnpm tauri build                                        # builds and bundles kybernd automatically
 ```
+
+The `pnpm tauri` wrapper builds the daemon for the same profile and target,
+stages the target-triple sidecar expected by Tauri, and then runs the Tauri
+CLI. The standalone daemon and CLI builds remain available for headless and
+remote use.
 
 For development, run the web app with hot reload inside the Tauri window:
 
@@ -101,14 +105,23 @@ For development, run the web app with hot reload inside the Tauri window:
 cd apps/desktop && pnpm tauri dev
 ```
 
+The desktop app reuses an authenticated, protocol-compatible daemon selected
+by `KYBERN_DATA_DIR`. If none is available it starts the bundled daemon on an
+unused port, writes that port to `daemon.port`, and leaves the daemon running
+for CLI and mobile clients when the window closes.
+
+During development, run `kybern --data-dir /tmp/kyb stop-daemon` before
+relaunching after daemon or driver changes; otherwise the new desktop build
+will intentionally reuse the old process for the same data directory.
+
 ### macOS app bundle
 
-`scripts/bundle-macos.sh` builds `kybernd` in release, runs `pnpm tauri build`,
-copies the daemon next to the app executable inside `kybern.app`, signs the
-bundle ad hoc, and writes `dist/kybern-<version>-<arch>-apple-darwin.dmg`:
+`scripts/bundle-macos.sh` runs the self-contained `pnpm tauri build`, verifies
+the bundled daemon, signs the app ad hoc, and writes
+`dist/kybern-<version>-<arch>-apple-darwin.dmg`:
 
 ```sh
-scripts/bundle-macos.sh              # SKIP_BUILD=1 reuses target/release/kybernd
+scripts/bundle-macos.sh              # SKIP_BUILD=1 reuses the last complete app
 ```
 
 It needs Xcode command line tools (`codesign`, `hdiutil`), Node 22 and pnpm.
