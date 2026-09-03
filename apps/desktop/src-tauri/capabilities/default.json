@@ -12,6 +12,7 @@
     "core:window:allow-close",
     "core:window:allow-is-focused",
     "core:window:allow-set-focus",
+    "core:window:allow-set-theme",
     "notification:default",
     "opener:default",
     "opener:allow-open-path",

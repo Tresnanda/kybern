@@ -1,9 +1,9 @@
-/* eslint-disable react-refresh/only-export-components */
 import * as React from "react"
 
 import { applyAppearance } from "@/lib/synara/applyTheme"
+import { isTauri } from "@/lib/tauri"
+import { isTheme, ThemeProviderContext, type Theme } from "@/components/theme-context"
 
-type Theme = "dark" | "light" | "system"
 type ResolvedTheme = "dark" | "light"
 
 type ThemeProviderProps = {
@@ -13,25 +13,7 @@ type ThemeProviderProps = {
   disableTransitionOnChange?: boolean
 }
 
-type ThemeProviderState = {
-  theme: Theme
-  setTheme: (theme: Theme) => void
-}
-
 const COLOR_SCHEME_QUERY = "(prefers-color-scheme: dark)"
-const THEME_VALUES: Theme[] = ["dark", "light", "system"]
-
-const ThemeProviderContext = React.createContext<
-  ThemeProviderState | undefined
->(undefined)
-
-function isTheme(value: string | null): value is Theme {
-  if (value === null) {
-    return false
-  }
-
-  return THEME_VALUES.includes(value as Theme)
-}
 
 function getSystemTheme(): ResolvedTheme {
   if (window.matchMedia(COLOR_SCHEME_QUERY).matches) {
@@ -79,6 +61,19 @@ function isEditableTarget(target: EventTarget | null) {
   return false
 }
 
+async function syncWindowAppearance(theme: Theme): Promise<void> {
+  if (!isTauri()) return
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    // Passing null does not reliably return the window to the system look once an
+    // explicit appearance was set, so resolve "system" ourselves.
+    const resolved = theme === "system" ? getSystemTheme() : theme
+    await getCurrentWindow().setTheme(resolved)
+  } catch {
+    // Window appearance is best effort; the CSS theme already applied.
+  }
+}
+
 export function ThemeProvider({
   children,
   defaultTheme = "system",
@@ -111,6 +106,9 @@ export function ThemeProvider({
 
       // Synara's runtime tokens (color math, density, typography) live on <html>.
       applyAppearance(nextTheme)
+      // The macOS window material (sidebar vibrancy) follows the NSWindow appearance,
+      // not our CSS, so a light theme on a dark desktop kept a dark sidebar.
+      void syncWindowAppearance(nextTheme)
 
       if (restoreTransitions) {
         restoreTransitions()
@@ -216,14 +214,4 @@ export function ThemeProvider({
       {children}
     </ThemeProviderContext.Provider>
   )
-}
-
-export const useTheme = () => {
-  const context = React.useContext(ThemeProviderContext)
-
-  if (context === undefined) {
-    throw new Error("useTheme must be used within a ThemeProvider")
-  }
-
-  return context
 }

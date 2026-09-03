@@ -16,6 +16,15 @@ use tokio::process::Command;
 pub const AUTHOR_NAME: &str = "kybern";
 pub const AUTHOR_EMAIL: &str = "checkpoint@kybern.local";
 
+/// One local branch from `for-each-ref`.
+#[derive(Debug, Clone)]
+pub struct BranchRef {
+    pub name: String,
+    pub upstream: Option<String>,
+    /// Committer time of the tip, unix seconds.
+    pub committed_at: i64,
+}
+
 pub struct Repo {
     /// Directory git commands run in (the project root or a worktree).
     pub workdir: PathBuf,
@@ -73,6 +82,36 @@ impl Repo {
 
     pub async fn current_branch(&self) -> Option<String> {
         self.git(&["symbolic-ref", "--short", "-q", "HEAD"]).await.ok().filter(|s| !s.is_empty())
+    }
+
+    /// Local branches, most recently committed first.
+    pub async fn branches(&self) -> Result<Vec<BranchRef>> {
+        let out = self
+            .git(&[
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname:short)%09%(upstream:short)%09%(committerdate:unix)",
+                "refs/heads",
+            ])
+            .await?;
+        Ok(out
+            .lines()
+            .filter_map(|line| {
+                let mut it = line.split('\t');
+                let name = it.next()?.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                let upstream = it.next().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+                let committed_at = it.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+                Some(BranchRef { name, upstream, committed_at })
+            })
+            .collect())
+    }
+
+    /// Check out an existing local branch in this working tree.
+    pub async fn switch(&self, branch: &str) -> Result<()> {
+        self.git(&["switch", branch]).await.map(|_| ())
     }
 
     /// Snapshot the working tree into a dangling commit and return its hash.
@@ -169,9 +208,14 @@ impl Repo {
 
     // ---- worktrees ----
 
-    pub async fn worktree_add(&self, path: &Path, branch: &str) -> Result<()> {
+    /// Add a worktree on a new branch, forked from `start` (HEAD when `None`).
+    pub async fn worktree_add(&self, path: &Path, branch: &str, start: Option<&str>) -> Result<()> {
         let p = path.to_string_lossy().to_string();
-        self.git(&["worktree", "add", "-b", branch, &p]).await.map(|_| ())
+        let mut args = vec!["worktree", "add", "-b", branch, &p];
+        if let Some(start) = start {
+            args.push(start);
+        }
+        self.git(&args).await.map(|_| ())
     }
 
     pub async fn worktree_remove(&self, path: &Path, force: bool) -> Result<()> {

@@ -206,7 +206,8 @@ function MenuCheckboxItem({
         </>
       ) : (
         <>
-          <span className="col-start-1 min-w-0">{children}</span>
+          {/* Flex row so a leading icon keeps the same gap as MenuItem instead of touching the label. */}
+          <span className="col-start-1 flex min-w-0 items-center gap-2 [&>svg]:shrink-0 [&>svg:not([class*='opacity-'])]:opacity-80">{children}</span>
           <MenuPrimitive.CheckboxItemIndicator className="col-start-2 justify-self-end">
             <svg
               className="size-3"

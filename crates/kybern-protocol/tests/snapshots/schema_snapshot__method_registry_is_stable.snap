@@ -34,6 +34,7 @@ expression: names
 - access.tokens.list
 - access.tokens.revoke
 - git.status
+- git.branches
 - git.commit
 - github.pr.create
 - github.pr.list

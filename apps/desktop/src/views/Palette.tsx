@@ -5,7 +5,7 @@ import { useMemo } from "react"
 import { useShallow } from "zustand/react/shallow"
 
 import { ProviderMark } from "@/components/kybern/bits"
-import { useTheme } from "@/components/theme-provider"
+import { useTheme } from "@/components/theme-context"
 import { ThreadRunningSpinner } from "@/components/synara/ThreadRunningSpinner"
 import { Command, CommandCollection, CommandDialog, CommandDialogPopup, CommandEmpty, CommandGroup, CommandGroupLabel, CommandInput, CommandList, CommandPanel, CommandSeparator } from "@/components/synara/command"
 import { Kbd, KbdGroup } from "@/components/synara/kbd"

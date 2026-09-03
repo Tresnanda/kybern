@@ -152,6 +152,7 @@ export async function createThread(opts: {
   model?: string
   effort?: string
   useWorktree?: boolean
+  baseBranch?: string
   message?: UserMessage
 }): Promise<ThreadId> {
   const t = await rpc().call("threads.create", {
@@ -161,6 +162,7 @@ export async function createThread(opts: {
     model: opts.model,
     effort: opts.effort,
     use_worktree: opts.useWorktree,
+    base_branch: opts.baseBranch,
     message: opts.message,
   })
   const s = useStore.getState()

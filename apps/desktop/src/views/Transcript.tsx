@@ -16,7 +16,7 @@ import { DisclosureRegion } from "@/components/synara/DisclosureRegion"
 import { DiffStatLabel } from "@/components/synara/chat/DiffStatLabel"
 import { MessageActionButton } from "@/components/synara/chat/MessageActionButton"
 import { ReviewChangesButton } from "@/components/synara/chat/ReviewChangesButton"
-import { clockTime, duration, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
+import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
 import { copyText, useTicker } from "@/lib/hooks"
 import { MessageScroller } from "@/components/beui/message-scroller"
 import {

@@ -1,38 +1,142 @@
-// Shared header chrome, mirroring Synara's ChatHeader / chatHeaderControls
-// constants: a 46px bar with a 1px gradient divider, the sidebar toggle and
-// back/forward cluster that moves into the route header when the sidebar is
-// collapsed, and the dock toggle.
+// Shared header chrome, mirroring Synara's ChatHeader / chatHeaderControls:
+// a 46px bar, 28px controls on one baseline, and the sidebar-toggle +
+// back/forward cluster that moves into the route header when the sidebar collapses.
 
+import { forwardRef, type ComponentProps, type ReactNode } from "react"
 import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io"
 
 import { Button } from "@/components/synara/button"
 import { useSidebar } from "@/components/synara/sidebar"
 import { Toggle } from "@/components/synara/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/tooltip"
-import { LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon } from "@/lib/synara/icons"
+import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/synara/desktopChrome"
+import { LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/synara/icons"
 import { mod } from "@/lib/format"
 import { isTauri, platform } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { useStore } from "@/state/store"
 
-export const CHAT_SURFACE_HEADER_ROW_CLASS_NAME = "flex shrink-0 items-center h-[46px] chat-surface-divider"
+export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_HEIGHT_PX}px]` =
+  "h-[46px]"
+
 export const CHAT_SURFACE_HEADER_PADDING_X_CLASS = "px-3 sm:px-5"
-export const CHAT_SURFACE_CHIP_CLASS_NAME =
-  "!h-7 shrink-0 rounded-lg gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-export const CHAT_HEADER_TOGGLE_CLASS_NAME = `${CHAT_SURFACE_CHIP_CLASS_NAME} data-pressed:text-[var(--color-text-foreground)]`
+
+export const CHAT_SURFACE_HEADER_ROW_CLASS_NAME = cn(
+  "flex shrink-0 items-center",
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  "chat-surface-divider",
+)
+
+/** Force header glyphs to full-strength ink. Base Button caps SVGs at opacity-80. */
+export const CHAT_HEADER_ICON_STRENGTH_CLASS_NAME =
+  "text-[var(--color-text-foreground)] [&_svg]:!opacity-100"
+
+/** Fixed control height + radius for every header toolbar control. */
+export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg"
+
+export const CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME =
+  "text-[var(--color-text-foreground-secondary)]"
+
+export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
+  "hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+
+/** 28px flat chip shared by header toggles and dock tabs. */
+export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
+  CHAT_HEADER_CONTROL_CLASS_NAME,
+  "gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
+  CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
+  CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
+)
+
+export const CHAT_SURFACE_CHIP_GLYPH_CLASS_NAME = "size-3.5 shrink-0"
+
+export const CHAT_SURFACE_CHIP_ICON_CLASS_NAME = cn(CHAT_SURFACE_CHIP_GLYPH_CLASS_NAME, "opacity-70")
+
+export function SurfaceChipIcon({ icon: Icon, className }: { icon: LucideIcon; className?: string }) {
+  return <Icon aria-hidden className={cn(CHAT_SURFACE_CHIP_ICON_CLASS_NAME, className)} />
+}
+
+export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
+  CHAT_SURFACE_CHIP_CLASS_NAME,
+  "data-pressed:text-[var(--color-text-foreground)]",
+)
+
+export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME =
+  "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0"
+
+export const DOCK_HEADER_ICON_BUTTON_CLASS = CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+
+export type ChatHeaderControlTone = "plain" | "outline"
+
+export function chatHeaderControlVariant(tone: ChatHeaderControlTone): "chrome" | "chrome-outline" {
+  return tone === "outline" ? "chrome-outline" : "chrome"
+}
+
+type ChatHeaderButtonProps = Omit<ComponentProps<typeof Button>, "variant" | "size"> & {
+  tone?: ChatHeaderControlTone
+}
+
+/** Text (or text + icon) header control. Safe as a Menu/Tooltip `render` target. */
+export const ChatHeaderButton = forwardRef<HTMLButtonElement, ChatHeaderButtonProps>(
+  function ChatHeaderButton({ tone: toneProp, className, ...props }, ref) {
+    const tone = toneProp ?? "outline"
+    return (
+      <Button
+        {...props}
+        ref={ref}
+        size="xs"
+        variant={chatHeaderControlVariant(tone)}
+        className={cn(CHAT_HEADER_CONTROL_CLASS_NAME, CHAT_HEADER_ICON_STRENGTH_CLASS_NAME, className)}
+      />
+    )
+  },
+)
+
+type ChatHeaderIconButtonProps = Omit<ComponentProps<typeof Button>, "variant" | "size" | "aria-label"> & {
+  label: string
+  tone?: ChatHeaderControlTone
+  children?: ReactNode
+}
+
+/** Square icon-only header control. Composes with Tooltip/Menu `render` wrappers. */
+export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIconButtonProps>(
+  function ChatHeaderIconButton({ label, tone: toneProp, className, children, ...props }, ref) {
+    const tone = toneProp ?? "plain"
+    return (
+      <Button
+        {...props}
+        ref={ref}
+        aria-label={label}
+        size="icon-xs"
+        variant={chatHeaderControlVariant(tone)}
+        className={cn(CHAT_HEADER_ICON_CONTROL_CLASS_NAME, CHAT_HEADER_ICON_STRENGTH_CLASS_NAME, className)}
+      >
+        {children}
+      </Button>
+    )
+  },
+)
+
+/** One footprint for the sidebar toggle and the back/forward arrows: 28px squares,
+ *  no gap, secondary ink at full strength (Base Button dims SVGs to 80%). */
+const SIDEBAR_TRIGGER_CLASS_NAME = cn(
+  "!size-7 shrink-0 rounded-lg [&_svg]:!opacity-100 [&_svg,&_[data-slot=central-icon]]:mx-0",
+  CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
+  CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
+)
 
 /** Sidebar toggle + back/forward, as Synara's SidebarLeadingControls. */
 export function SidebarLeadingControls({ className }: { className?: string }) {
   const { toggleSidebar } = useSidebar()
   return (
-    <div className={cn("flex shrink-0 items-center gap-0.5", className)}>
+    <div className={cn("no-drag flex shrink-0 items-center gap-0", className)}>
       <Tooltip>
         <TooltipTrigger
           render={
             <Button
               variant="ghost"
               size="icon-xs"
-              className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
+              className={SIDEBAR_TRIGGER_CLASS_NAME}
               aria-label="Toggle thread sidebar"
               onClick={toggleSidebar}
             />
@@ -43,13 +147,39 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
         <TooltipPopup side="bottom">Toggle sidebar ({mod}B)</TooltipPopup>
       </Tooltip>
       {isTauri() && (
-        <div className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]">
-          <Button variant="ghost" size="icon-xs" className="size-7" aria-label="Back" onClick={() => history.back()}>
-            <IoIosArrowRoundBack className="size-5" />
-          </Button>
-          <Button variant="ghost" size="icon-xs" className="size-7" aria-label="Forward" onClick={() => history.forward()}>
-            <IoIosArrowRoundForward className="size-5" />
-          </Button>
+        <div className="flex shrink-0 items-center gap-0">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className={SIDEBAR_TRIGGER_CLASS_NAME}
+                  aria-label="Back"
+                  onClick={() => history.back()}
+                />
+              }
+            >
+              <IoIosArrowRoundBack className="size-[22px]" />
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">Back ({mod}[)</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className={SIDEBAR_TRIGGER_CLASS_NAME}
+                  aria-label="Forward"
+                  onClick={() => history.forward()}
+                />
+              }
+            >
+              <IoIosArrowRoundForward className="size-[22px]" />
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">Forward ({mod}])</TooltipPopup>
+          </Tooltip>
         </div>
       )}
     </div>
@@ -62,6 +192,11 @@ export function SidebarHeaderNavigationControls() {
   if (open) return null
   return <SidebarLeadingControls className="hidden md:flex" />
 }
+
+const PANEL_TOGGLE_CLASS_NAME = cn(
+  CHAT_HEADER_TOGGLE_CLASS_NAME,
+  "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+)
 
 export function DockToggle() {
   const rightOpen = useStore((s) => s.rightOpen)
@@ -76,11 +211,11 @@ export function DockToggle() {
             pressed={rightOpen}
             onPressedChange={(pressed) => set({ rightOpen: pressed })}
             aria-label="Toggle right sidebar"
-            className={cn(CHAT_HEADER_TOGGLE_CLASS_NAME, "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0")}
+            className={PANEL_TOGGLE_CLASS_NAME}
           />
         }
       >
-        <PanelRightCloseIcon className="size-4 shrink-0 opacity-70" />
+        <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
       </TooltipTrigger>
       <TooltipPopup side="bottom">{rightOpen ? "Close right sidebar" : "Open right sidebar"}</TooltipPopup>
     </Tooltip>
@@ -101,11 +236,11 @@ export function EnvironmentToggle() {
             pressed={envOpen}
             onPressedChange={(pressed) => set({ envOpen: pressed })}
             aria-label="Toggle environment panel"
-            className={cn(CHAT_HEADER_TOGGLE_CLASS_NAME, "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0")}
+            className={PANEL_TOGGLE_CLASS_NAME}
           />
         }
       >
-        <WindowIcon className="size-4 shrink-0 opacity-70" />
+        <SurfaceChipIcon icon={WindowIcon} className="size-4" />
       </TooltipTrigger>
       <TooltipPopup side="bottom">Environment</TooltipPopup>
     </Tooltip>
@@ -117,7 +252,17 @@ export function EnvironmentToggle() {
  * `environment` adds the Environment toggle before the dock toggle.
  * On macOS the traffic-light gutter applies whenever the sidebar is collapsed.
  */
-export function SurfaceHeader({ minimal, environment, children, trailing }: { minimal?: boolean; environment?: boolean; children?: React.ReactNode; trailing?: React.ReactNode }) {
+export function SurfaceHeader({
+  minimal,
+  environment,
+  children,
+  trailing,
+}: {
+  minimal?: boolean
+  environment?: boolean
+  children?: ReactNode
+  trailing?: ReactNode
+}) {
   const { open } = useSidebar()
   const gutter = !open && platform() === "macos"
   return (
@@ -125,12 +270,17 @@ export function SurfaceHeader({ minimal, environment, children, trailing }: { mi
       className={cn(
         CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
         CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-        "drag-region font-system-ui",
+        "@container drag-region font-system-ui",
         gutter && "desktop-top-bar-traffic-light-gutter",
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <div className={cn("flex min-w-0 flex-1 items-center overflow-hidden gap-2 sm:gap-3", !open && "gap-4")}>
+        <div
+          className={cn(
+            "flex min-w-0 flex-1 items-center overflow-hidden",
+            !open ? "gap-4" : "gap-2 sm:gap-3",
+          )}
+        >
           <SidebarHeaderNavigationControls />
           {!minimal && <div className="flex min-w-0 flex-1 items-center gap-2">{children}</div>}
         </div>

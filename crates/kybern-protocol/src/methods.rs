@@ -127,6 +127,10 @@ pub struct ThreadsCreateParams {
     /// Create a git worktree for this thread. Defaults to the project override, then global off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_worktree: Option<bool>,
+    /// Branch to start from. A worktree forks its branch from it; a local thread
+    /// switches the project checkout to it first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Optionally send a first message in the same call.
@@ -464,6 +468,28 @@ pub struct GitStatus {
 method!(GitStatusMethod, "git.status", Some(Scope::OrchestrationRead), GitStatusParams, GitStatus);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GitBranchesParams {
+    pub project_id: ProjectId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_current: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// Committer time of the tip commit, unix seconds.
+    pub committed_at: i64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GitBranchesResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+    /// Local branches, most recently committed first. Empty when the project is not a repository.
+    pub branches: Vec<BranchInfo>,
+}
+method!(GitBranches, "git.branches", Some(Scope::OrchestrationRead), GitBranchesParams, GitBranchesResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitCommitParams {
     pub thread_id: ThreadId,
     /// Omit to generate a message from the diff.
@@ -724,6 +750,7 @@ registry!(
     TokensList,
     TokensRevoke,
     GitStatusMethod,
+    GitBranches,
     GitCommit,
     PrCreate,
     PrList,

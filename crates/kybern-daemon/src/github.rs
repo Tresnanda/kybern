@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use kybern_git::Repo;
-use kybern_protocol::methods::{GitStatus, PullRequest};
+use kybern_protocol::methods::{BranchInfo, GitBranchesResult, GitStatus, PullRequest};
 use serde_json::Value;
 use tokio::process::Command;
 
@@ -21,6 +21,27 @@ async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<String> {
         return Err(anyhow!("{program} {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+/// Local branches of a project checkout, most recently committed first.
+pub async fn branches(cwd: &Path) -> Result<GitBranchesResult> {
+    if !Repo::is_repo(cwd).await {
+        return Ok(GitBranchesResult { current: None, branches: Vec::new() });
+    }
+    let repo = Repo::new(cwd);
+    let current = repo.current_branch().await;
+    let branches = repo
+        .branches()
+        .await?
+        .into_iter()
+        .map(|b| BranchInfo {
+            is_current: current.as_deref() == Some(b.name.as_str()),
+            name: b.name,
+            upstream: b.upstream,
+            committed_at: b.committed_at,
+        })
+        .collect();
+    Ok(GitBranchesResult { current, branches })
 }
 
 pub async fn gh_available() -> bool {

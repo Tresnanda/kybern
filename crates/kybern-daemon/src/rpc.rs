@@ -298,6 +298,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::github::status(std::path::Path::new(&t.cwd)).await.map_err(internal)?)
         }
+        GitBranches::NAME => {
+            let p: GitBranchesParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(crate::github::branches(std::path::Path::new(&project.path)).await.map_err(internal)?)
+        }
         GitCommit::NAME => {
             let p: GitCommitParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;

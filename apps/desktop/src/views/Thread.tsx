@@ -29,7 +29,7 @@ import { Composer, type ComposerHandle, type SlashCommand } from "./Composer"
 import { ENVIRONMENT_DOCKED_CONTENT_INSET_PX, EnvironmentPanel } from "./Environment"
 import { Transcript } from "./Transcript"
 import { CHAT_COLUMN_GUTTER, CHAT_COLUMN_GUTTER_PX } from "./chatLayout"
-import { SurfaceHeader } from "./chrome"
+import { ChatHeaderButton, ChatHeaderIconButton, SurfaceHeader } from "./chrome"
 
 const EMPTY: never[] = []
 
@@ -303,11 +303,9 @@ function Header({ threadId }: { threadId: ThreadId }) {
         <>
           {others.length > 0 && (
             <Menu>
-              <MenuTrigger
-                render={<Button size="xs" variant="chrome-outline" className="!h-7 shrink-0 gap-1.5 rounded-lg text-[var(--color-text-foreground)] [&_svg]:!opacity-100" />}
-              >
+              <MenuTrigger render={<ChatHeaderButton type="button" tone="outline" className="gap-1.5" />}>
                 <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                <span className="truncate font-normal">Hand off</span>
+                <span className="truncate font-normal @max-[700px]:sr-only">Hand off</span>
               </MenuTrigger>
               <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
                 <MenuGroup>
@@ -322,11 +320,7 @@ function Header({ threadId }: { threadId: ThreadId }) {
             </Menu>
           )}
           <Menu>
-            <MenuTrigger
-              render={
-                <Button size="icon-xs" variant="chrome" aria-label="Thread actions" className="!size-7 shrink-0 rounded-lg text-[var(--color-text-foreground)] [&_svg,&_[data-slot=central-icon]]:mx-0 [&_svg]:!opacity-100" />
-              }
-            >
+            <MenuTrigger render={<ChatHeaderIconButton label="Thread actions" />}>
               <EllipsisIcon className="size-3.5" />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">

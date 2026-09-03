@@ -35,7 +35,7 @@ const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
  * Shared by the thread sidebar (left) and the right dock so the two slides match.
  */
 const SIDEBAR_OFFCANVAS_MOTION_CLASS =
-  "will-change-[transform] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]";
+  "will-change-[translate] duration-[260ms] ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[state=collapsed]:duration-[200ms]";
 
 /**
  * Suppresses the slide entirely — for first mount or a reposition/remount where
@@ -260,6 +260,12 @@ function Sidebar({
   const side = sideProp ?? "left";
   const variant = variantProp ?? "sidebar";
   const collapsible = collapsibleProp ?? "offcanvas";
+  // First paint lands in the resting geometry; only later open/close toggles slide.
+  const [hasMounted, setHasMounted] = React.useState(false);
+  React.useEffect(() => {
+    const id = requestAnimationFrame(() => setHasMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
   const resizable = resizableProp ?? false;
   const transparentSurface = transparentSurfaceProp ?? false;
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
@@ -334,7 +340,9 @@ function Sidebar({
         {/* This is what handles the sidebar gap on desktop */}
         <div
           className={cn(
-            "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+            "relative w-(--sidebar-width) bg-transparent transition-[width]",
+            SIDEBAR_OFFCANVAS_MOTION_CLASS,
+            !hasMounted && SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
             "group-data-[collapsible=offcanvas]:w-0",
             "group-data-[side=right]:rotate-180",
             variant === "floating" || variant === "inset"
@@ -350,7 +358,9 @@ function Sidebar({
             // (layout): a fixed panel relayouts its whole subtree per frame otherwise,
             // which read as a janky close on heavy sidebar content. The gap still
             // animates width — reserving layout is its job — but its subtree is empty.
-            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width,transform] duration-200 ease-linear md:flex",
+            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width,translate,transform] md:flex",
+            SIDEBAR_OFFCANVAS_MOTION_CLASS,
+            !hasMounted && SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
               : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",

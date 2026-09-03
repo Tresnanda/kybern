@@ -86,7 +86,12 @@ export function ThreadSidebar() {
 
   return (
     <>
-      <SidebarHeader className={cn("drag-region h-[46px] flex-row items-center gap-2 py-0 ps-4 pe-3 font-system-ui", mac && "desktop-top-bar-traffic-light-gutter")}>
+      <SidebarHeader
+        className={cn(
+          "drag-region flex h-[46px] flex-row items-center gap-1 !pt-0 !pb-0 pe-3 font-system-ui",
+          mac ? "desktop-top-bar-traffic-light-gutter" : "ps-4",
+        )}
+      >
         <SidebarLeadingControls className="hidden md:flex" />
       </SidebarHeader>
 
@@ -117,8 +122,8 @@ export function ThreadSidebar() {
             </ComposerPickerMenuPopup>
           </Menu>
           <div className="ml-auto flex items-center gap-1.5">
-            <SidebarIconButton icon={SearchIcon} label="Search" glyph="leading" size="header" tooltip={`Search (${mod}K)`} tooltipSide="bottom" onClick={() => setTimeout(() => set({ paletteOpen: true }), 0)} />
-            <SidebarIconButton icon={BellIcon} label="Activity" glyph="leading" size="header" tooltip="Activity" tooltipSide="bottom" className="text-muted-foreground/75 hover:text-foreground" />
+            <SidebarIconButton icon={SearchIcon} label="Search" glyph="leading" size="header" tooltip={`Search (${mod}K)`} tooltipSide="bottom" className="text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]" onClick={() => setTimeout(() => set({ paletteOpen: true }), 0)} />
+            <SidebarIconButton icon={BellIcon} label="Activity" glyph="leading" size="header" tooltip="Activity" tooltipSide="bottom" className="text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]" />
           </div>
         </div>
 

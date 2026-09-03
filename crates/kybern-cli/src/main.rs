@@ -67,6 +67,9 @@ enum Cmd {
         mode: Option<PermissionMode>,
         #[arg(long)]
         worktree: bool,
+        /// Branch to start from: the worktree forks from it, or the checkout switches to it.
+        #[arg(long)]
+        branch: Option<String>,
         /// Do not stream; return the thread id immediately.
         #[arg(long)]
         detach: bool,
@@ -135,6 +138,8 @@ enum Cmd {
     },
     /// Git status for a thread's working directory.
     Git { thread: String },
+    /// List a project's local branches, most recently committed first.
+    Branches { project: String },
     /// Find files in a project by fuzzy path match
     Files {
         project: String,
@@ -323,7 +328,7 @@ async fn main() -> Result<()> {
             let r = client.call::<ThreadsList>(ThreadsListParams { project_id, include_archived: archived }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::threads(&r.threads) }
         }
-        Cmd::New { project, provider, model, effort, mode, worktree, detach, prompt } => {
+        Cmd::New { project, provider, model, effort, mode, worktree, branch, detach, prompt } => {
             let project_id = resolve_project(&client, &project, true).await?;
             let prompt = join_prompt(prompt)?;
             let sub = if detach {
@@ -339,6 +344,7 @@ async fn main() -> Result<()> {
                     effort,
                     permission_mode: mode,
                     use_worktree: if worktree { Some(true) } else { None },
+                    base_branch: branch,
                     title: None,
                     message: Some(UserMessage::text(prompt)),
                 })
@@ -498,6 +504,14 @@ async fn main() -> Result<()> {
         Cmd::Git { thread } => {
             let r = client.call::<GitStatusMethod>(GitStatusParams { thread_id: thread.parse()? }).await?;
             println!("{}", serde_json::to_string_pretty(&r)?);
+        }
+        Cmd::Branches { project } => {
+            let project_id = resolve_project(&client, &project, false).await?;
+            let r = client.call::<GitBranches>(GitBranchesParams { project_id }).await?;
+            for b in r.branches {
+                let upstream = b.upstream.map(|u| format!("  -> {u}")).unwrap_or_default();
+                println!("{} {}{upstream}", if b.is_current { "*" } else { " " }, b.name);
+            }
         }
         Cmd::Commit { thread, message } => {
             let r = client.call::<GitCommit>(GitCommitParams { thread_id: thread.parse()?, message }).await?;

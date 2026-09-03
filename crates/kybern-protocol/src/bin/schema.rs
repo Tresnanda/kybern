@@ -77,6 +77,7 @@ fn main() {
     method::<TokensList>(&mut methods);
     method::<TokensRevoke>(&mut methods);
     method::<GitStatusMethod>(&mut methods);
+    method::<GitBranches>(&mut methods);
     method::<GitCommit>(&mut methods);
     method::<PrCreate>(&mut methods);
     method::<PrList>(&mut methods);

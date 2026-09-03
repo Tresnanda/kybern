@@ -18,9 +18,14 @@ import {
   COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
   COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
+  COMPOSER_FOOTER_ICON_BUTTON_CLASS_NAME,
+  COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
+  COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
+  COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
+  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
   COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
@@ -474,7 +479,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
           {!hideFooter && (
             <div data-chat-composer-footer className={cn("@container", COMPOSER_FOOTER_ROW_CLASS_NAME, "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0")}>
-              <div data-chat-composer-leading className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] sm:min-w-max sm:overflow-visible [&::-webkit-scrollbar]:hidden">
+              <div data-chat-composer-leading className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] sm:min-w-max sm:overflow-visible [&::-webkit-scrollbar]:hidden">
                 <input
                   ref={fileInput}
                   type="file"
@@ -486,8 +491,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   }}
                 />
                 <Menu>
-                  <MenuTrigger render={<Button size="icon-sm" variant="chrome" className="shrink-0 rounded-md" aria-label="Composer extras" />}>
-                    <PlusIcon className="size-4 text-primary" />
+                  <MenuTrigger render={<Button size="icon-xs" variant="chrome" className={COMPOSER_FOOTER_ICON_BUTTON_CLASS_NAME} aria-label="Composer extras" />}>
+                    <PlusIcon aria-hidden className="size-[18px] text-[var(--color-text-foreground)]" />
                   </MenuTrigger>
                   <ComposerPickerMenuPopup align="start">
                     <MenuGroup>
@@ -498,17 +503,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   </ComposerPickerMenuPopup>
                 </Menu>
 
-                <div className="flex shrink-0 items-center gap-1.5 text-[var(--color-text-foreground-secondary)]">
-                  <Menu>
-                    <MenuTrigger
+                <Menu>
+                  <MenuTrigger
                       render={
                         <Button
                           size="sm"
                           variant="chrome"
                           title={`${modeInfo.label}: ${modeInfo.description}. Click to change permissions.`}
                           className={cn(
-                            "min-w-0 shrink-0 justify-start gap-1.5 px-2 whitespace-nowrap sm:px-2.5 [&_svg]:mx-0",
+                            COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
                             COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+                            COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
                             mode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
                             mode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                           )}
@@ -516,9 +521,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       }
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        <span className="[&>*]:size-3.5 [&>*]:shrink-0">{modeInfo.icon}</span>
-                        <span className="truncate @max-[480px]:sr-only">{modeInfo.label}</span>
-                        <ChevronDownIcon className="size-3 shrink-0 opacity-70 @max-[480px]:hidden" />
+                        <span className="inline-flex size-4 shrink-0 items-center justify-center [&>*]:size-4 [&>*]:shrink-0">{modeInfo.icon}</span>
+                        <span className="truncate leading-none @max-[480px]:sr-only">{modeInfo.label}</span>
                       </span>
                     </MenuTrigger>
                     <ComposerPickerMenuPopup align="start" side="top" className="runtime-mode-menu w-[26rem] min-w-[26rem]">
@@ -548,11 +552,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         })}
                       </MenuRadioGroup>
                     </ComposerPickerMenuPopup>
-                  </Menu>
-                </div>
+                </Menu>
               </div>
 
-              <div data-chat-composer-actions="right" className="flex shrink-0 items-center gap-2">
+              <div data-chat-composer-actions="right" className="flex shrink-0 items-center gap-1">
                 {provider && (
                   <Menu>
                     <Tooltip>
@@ -565,7 +568,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 size="sm"
                                 variant="chrome"
                                 aria-label="Change model and reasoning"
-                                className={cn("min-w-0 shrink-0 justify-start gap-1.5 px-2 whitespace-nowrap sm:px-2.5 [&_svg]:mx-0 disabled:opacity-100", COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME)}
+                                className={cn(COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME, "disabled:opacity-100", COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME, COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME)}
                               />
                             }
                           />
@@ -573,9 +576,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       >
                         <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
                           <ProviderMark kind={provider.kind} size={14} className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100" />
-                          <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
-                          {modelLabel && effortLabel && <span className="shrink-0 text-muted-foreground capitalize">{effortLabel}</span>}
-                          {(canPickModel || canPickProvider) && <ChevronDownIcon className="ms-0.5 size-3 shrink-0 opacity-60" />}
+                          <span className="min-w-0 truncate leading-none text-[var(--color-text-foreground)]">{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
+                          {modelLabel && effortLabel && (
+                            <span className={cn("shrink-0 capitalize leading-none", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>{effortLabel}</span>
+                          )}
+                          {(canPickModel || canPickProvider) && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
                         </span>
                       </TooltipTrigger>
                       <TooltipPopup side="top" sideOffset={6} variant="picker">
@@ -647,7 +652,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           type="button"
                           variant="prominent"
                           size="icon-xs"
-                          className="sm:size-[26px] disabled:opacity-35"
+                          className={COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME}
                           aria-label="Stop generation"
                           title="Stop the current response. On Mac, press Ctrl+C to interrupt."
                           onClick={onStop}
@@ -655,7 +660,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         />
                       }
                     >
-                      <span className="block size-2 rounded-[1px] bg-current" />
+                      <span className="block size-2.5 rounded-[2px] bg-current" />
                     </TooltipTrigger>
                     <TooltipPopup side="top">{canSend ? "Stop. Press Enter to queue your message." : "Stop generation"}</TooltipPopup>
                   </Tooltip>
@@ -667,7 +672,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           type="button"
                           variant="prominent"
                           size="icon-xs"
-                          className="size-7 rounded-full sm:size-7 disabled:opacity-35"
+                          className={COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME}
                           aria-label={sending ? "Sending" : "Send message"}
                           disabled={!canSend}
                           onClick={() => void submit()}
@@ -729,7 +734,7 @@ export function LandingTray({ children }: { children: React.ReactNode }) {
   return (
     <div
       data-empty-landing-controls
-      className="chat-composer-shell mx-auto flex min-h-8 w-14/15 min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-t-[var(--composer-radius)] !rounded-b-none bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      className="chat-composer-shell mx-auto flex min-h-8 w-14/15 min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-t-[var(--composer-radius)] !rounded-b-none bg-[var(--composer-backing-surface)] px-2 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
     >
       {children}
     </div>

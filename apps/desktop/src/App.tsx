@@ -91,7 +91,7 @@ export default function App() {
                   </ErrorBoundary>
                 ) : selected.kind === "draft" ? (
                   <ErrorBoundary key={selected.draft.projectId} label="the home screen">
-                    <Draft projectId={selected.draft.projectId} />
+                    <Draft key={selected.draft.projectId} projectId={selected.draft.projectId} />
                   </ErrorBoundary>
                 ) : (
                   <Welcome />

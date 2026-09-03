@@ -159,7 +159,20 @@ impl Orchestrator {
         }
         let now = Utc::now();
         let id = Uuid::now_v7();
-        let worktree = if use_worktree { Some(self.create_worktree(&project, id).await?) } else { None };
+        let base_branch = params.base_branch.clone().map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
+        let worktree = if use_worktree {
+            Some(self.create_worktree(&project, id, base_branch.as_deref()).await?)
+        } else {
+            if let Some(branch) = base_branch.as_deref() {
+                let repo = Repo::new(&project.path);
+                if repo.current_branch().await.as_deref() != Some(branch) {
+                    repo.switch(branch)
+                        .await
+                        .map_err(|e| anyhow!("could not switch {} to {branch}: {e}. Commit or stash your changes first", project.name))?;
+                }
+            }
+            None
+        };
         let cwd = worktree.as_ref().map(|w| w.path.clone()).unwrap_or_else(|| project.path.clone());
         let thread = Thread {
             id,
@@ -189,12 +202,12 @@ impl Orchestrator {
         Ok(thread)
     }
 
-    async fn create_worktree(&self, project: &Project, thread_id: ThreadId) -> Result<WorktreeInfo> {
+    async fn create_worktree(&self, project: &Project, thread_id: ThreadId, base: Option<&str>) -> Result<WorktreeInfo> {
         let short = &thread_id.to_string()[..8];
         let branch = format!("kybern/{short}");
         let dir = self.inner.paths.worktrees.join(&project.name).join(short);
         std::fs::create_dir_all(dir.parent().unwrap())?;
-        Repo::new(&project.path).worktree_add(&dir, &branch).await?;
+        Repo::new(&project.path).worktree_add(&dir, &branch, base).await?;
         Ok(WorktreeInfo { path: dir.to_string_lossy().to_string(), branch })
     }
 

@@ -2,20 +2,21 @@
 // "What should we do in {project}?" heading with a dotted project picker, and
 // the composer anchored at the bottom with its controls tray.
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 
 import { Logo } from "@/components/kybern/bits"
 import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/synara/menu"
+import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
+import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/synara/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
-import { CheckIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, WorktreeIcon } from "@/lib/synara/icons"
+import { CheckIcon, ChevronDownIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, WorktreeIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
-import type { PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
-import { createThread } from "@/state/rpc"
+import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
+import { createThread, rpc } from "@/state/rpc"
 import { selectAvailableProviders, useStore } from "@/state/store"
 
-import { Composer, LandingTray, TrayChip, type ComposerHandle, type SlashCommand } from "./Composer"
+import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from "./Composer"
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { SurfaceHeader } from "./chrome"
 
@@ -32,6 +33,8 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
   const [providerStored, setProvider] = useLocalStorage<ProviderInstance | null>("kybern.provider", null)
   const [modelStored, setModelStored] = useLocalStorage<Record<string, { model?: string; effort?: string }>>("kybern.models", {})
   const [worktree, setWorktree] = useState<boolean | null>(null)
+  const [baseBranch, setBaseBranch] = useState<string | null>(null)
+  const [branches, setBranches] = useState<GitBranchesResult | null>(null)
 
   const mode = modeStored ?? settings?.default_permission_mode ?? "supervised"
   const provider = useMemo<ProviderInstance | null>(() => {
@@ -46,6 +49,20 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
   useEffect(() => {
     composer.current?.focus()
   }, [projectId])
+
+  const isGit = project?.is_git ?? false
+  const loadBranches = useCallback(() => {
+    if (!isGit) return
+    rpc()
+      .call("git.branches", { project_id: projectId })
+      .then(setBranches)
+      .catch(() => setBranches({ current: null, branches: [] }))
+  }, [projectId, isGit])
+
+  // Draft is keyed by project in App, so branch state resets with the project.
+  useEffect(() => {
+    loadBranches()
+  }, [loadBranches])
 
   const commands = useMemo<SlashCommand[]>(
     () => [
@@ -114,26 +131,108 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
             disabledReason="Install a coding agent first"
             above={
               <LandingTray>
-                <TrayChip icon={<FolderIcon className="size-3.5 shrink-0" />}>{project.name}</TrayChip>
-                <TrayChip icon={<DeviceLaptopIcon className="size-3.5 shrink-0" />}>Local</TrayChip>
-                {project.is_git && (
-                  <TrayChip
-                    icon={useWorktree ? <WorktreeIcon className="size-3.5 shrink-0" /> : <GitBranchIcon className="size-3.5 shrink-0" />}
-                    onClick={() => setWorktree(!useWorktree)}
-                    className={cn(useWorktree && "text-[var(--color-text-foreground)]")}
-                  >
-                    {useWorktree ? "New worktree" : "Current branch"}
-                  </TrayChip>
+                <Menu>
+                  <MenuTrigger render={<button type="button" aria-label="Switch project" className={TRAY_CHIP_CLASS_NAME} />}>
+                    <FolderIcon className="size-3.5 shrink-0" />
+                    <span className="min-w-0 truncate">{project.name}</span>
+                    <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+                  </MenuTrigger>
+                  <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="min-w-56">
+                    <MenuGroup>
+                      <MenuGroupLabel>Project</MenuGroupLabel>
+                      {projectList.map((p) => (
+                        <MenuItem key={p.id} onClick={() => useStore.getState().selectDraft(p.id)}>
+                          <FolderIcon />
+                          <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                          {p.id === projectId && <CheckIcon className="size-3.5 shrink-0" />}
+                        </MenuItem>
+                      ))}
+                    </MenuGroup>
+                  </ComposerPickerMenuPopup>
+                </Menu>
+
+                <Menu>
+                  <MenuTrigger render={<button type="button" aria-label="Choose where the thread runs" className={cn(TRAY_CHIP_CLASS_NAME, useWorktree && "text-[var(--color-text-foreground)]")} />}>
+                    {useWorktree ? <WorktreeIcon className="size-3.5 shrink-0" /> : <DeviceLaptopIcon className="size-3.5 shrink-0" />}
+                    <span className="min-w-0 truncate">{useWorktree ? "New worktree" : "Local"}</span>
+                    <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+                  </MenuTrigger>
+                  <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="w-64 min-w-64">
+                    <MenuGroup>
+                      <MenuGroupLabel>Run in</MenuGroupLabel>
+                      <MenuRadioGroup value={useWorktree ? "worktree" : "local"} onValueChange={(v) => setWorktree(v === "worktree")}>
+                        <MenuRadioItem value="local">
+                          <DeviceLaptopIcon className="size-3.5" />
+                          <span className="min-w-0 flex-1 truncate">Local</span>
+                          <span className="shrink-0 text-muted-foreground/70">{parentPath(project.path)}</span>
+                        </MenuRadioItem>
+                        <MenuRadioItem value="worktree" disabled={!isGit}>
+                          <WorktreeIcon className="size-3.5" />
+                          <span className="min-w-0 flex-1 truncate">New worktree</span>
+                          {!isGit && <span className="shrink-0 text-muted-foreground/70">Needs git</span>}
+                        </MenuRadioItem>
+                      </MenuRadioGroup>
+                    </MenuGroup>
+                  </ComposerPickerMenuPopup>
+                </Menu>
+
+                {isGit && (
+                  <Menu onOpenChange={(open) => open && loadBranches()}>
+                    <MenuTrigger render={<button type="button" aria-label="Choose a branch" className={cn(TRAY_CHIP_CLASS_NAME, baseBranch && "text-[var(--color-text-foreground)]")} />}>
+                      <GitBranchIcon className="size-3.5 shrink-0" />
+                      <span className="min-w-0 truncate">{baseBranch ?? branches?.current ?? "Current branch"}</span>
+                      <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+                    </MenuTrigger>
+                    <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="w-72 min-w-72">
+                      <MenuGroup>
+                        <MenuGroupLabel>{useWorktree ? "Fork the worktree from" : "Branch"}</MenuGroupLabel>
+                        {branches === null ? (
+                          <MenuItem disabled>
+                            <span className="text-muted-foreground">Loading branches…</span>
+                          </MenuItem>
+                        ) : branches.branches.length === 0 ? (
+                          <MenuItem disabled>
+                            <span className="text-muted-foreground">No branches yet. Make a first commit.</span>
+                          </MenuItem>
+                        ) : (
+                          <MenuRadioGroup value={baseBranch ?? branches.current ?? ""} onValueChange={(v) => setBaseBranch(v === branches.current ? null : (v as string))}>
+                            {branches.branches.map((b) => (
+                              <MenuRadioItem key={b.name} value={b.name}>
+                                <GitBranchIcon className="size-3.5" />
+                                <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                                {b.is_current && <span className="shrink-0 text-muted-foreground/70">current</span>}
+                              </MenuRadioItem>
+                            ))}
+                          </MenuRadioGroup>
+                        )}
+                      </MenuGroup>
+                      <MenuSeparator />
+                      <MenuGroup>
+                        <MenuCheckboxItem checked={useWorktree} onCheckedChange={(checked) => setWorktree(checked)}>
+                          <WorktreeIcon className="size-3.5" />
+                          <span className="min-w-0 flex-1 truncate">Create a worktree from this branch</span>
+                        </MenuCheckboxItem>
+                      </MenuGroup>
+                    </ComposerPickerMenuPopup>
+                  </Menu>
                 )}
               </LandingTray>
             }
             onSend={async (message) => {
               if (!provider) return
-              await createThread({ projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, message })
+              await createThread({ projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
             }}
           />
         </div>
       </div>
     </div>
   )
+}
+
+/** Pressable tray chip: the toolbar picker capsule with a chevron, capped so long branch names truncate. */
+const TRAY_CHIP_CLASS_NAME = cn(COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME, "max-w-64 min-w-0 shrink")
+
+function parentPath(p: string): string {
+  const i = p.lastIndexOf("/")
+  return i <= 0 ? p : "…/" + p.slice(p.slice(0, i).lastIndexOf("/") + 1, i)
 }

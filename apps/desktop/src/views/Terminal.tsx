@@ -10,7 +10,7 @@ import { Terminal } from "@xterm/xterm"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
-import { useTheme } from "@/components/theme-provider"
+import { useTheme } from "@/components/theme-context"
 import { IconButton } from "@/components/synara/icon-button"
 import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
@@ -24,13 +24,12 @@ import { TERMINAL_EXITED_NOTIFICATION, TERMINAL_OUTPUT_NOTIFICATION } from "@/pr
 import { errorText, rpc } from "@/state/rpc"
 import { useStore, type TerminalTab } from "@/state/store"
 
-import { CHAT_SURFACE_CHIP_CLASS_NAME } from "./chrome"
+import { CHAT_SURFACE_CHIP_CLASS_NAME, DOCK_HEADER_ICON_BUTTON_CLASS } from "./chrome"
 
 const b64ToBytes = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
 const bytesToB64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
 
 const EMPTY: never[] = []
-const DOCK_HEADER_ICON_BUTTON = "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0"
 const TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} group/dock-tab inline-flex min-w-0 items-center pr-2.5`
 const TAB_ACTIVE = "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
 
@@ -138,7 +137,7 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
             <TabChip key={t.key} tab={t} active={t.key === current?.key} onSelect={() => setTabs((x) => x, t.key)} onClose={() => closeTab(t.key)} />
           ))}
           <Tooltip>
-            <TooltipTrigger render={<IconButton variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON} label="New terminal tab" onClick={() => addTab("shell")} />}>
+            <TooltipTrigger render={<IconButton variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON_CLASS} label="New terminal tab" onClick={() => addTab("shell")} />}>
               <Plus className="size-3.5" />
             </TooltipTrigger>
             <TooltipPopup side="bottom">New terminal</TooltipPopup>
@@ -146,7 +145,7 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <Menu>
-            <IconButton render={<MenuTrigger />} variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON} label="Open an agent CLI" tooltip="Open an agent CLI" tooltipSide="bottom">
+            <IconButton render={<MenuTrigger />} variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON_CLASS} label="Open an agent CLI" tooltip="Open an agent CLI" tooltipSide="bottom">
               <TerminalSquareIcon className="size-3.5" />
             </IconButton>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
@@ -173,7 +172,7 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
           </Menu>
           <Tooltip>
             <TooltipTrigger
-              render={<IconButton variant="chrome" size="icon-xs" className={cn(DOCK_HEADER_ICON_BUTTON, !current && "pointer-events-none opacity-45")} label="Close active terminal tab" onClick={() => current && closeTab(current.key)} />}
+              render={<IconButton variant="chrome" size="icon-xs" className={cn(DOCK_HEADER_ICON_BUTTON_CLASS, !current && "pointer-events-none opacity-45")} label="Close active terminal tab" onClick={() => current && closeTab(current.key)} />}
             >
               <Trash2 className="size-3.5" />
             </TooltipTrigger>

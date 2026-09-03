@@ -1,5 +1,17 @@
 /* Tauri shell additions on top of synara.css. */
 
+:root {
+  --composer-glass-surface: var(--composer-surface);
+  --composer-glass-opacity: 86%;
+  --desktop-top-bar-traffic-light-gutter: 82px;
+}
+
+.dark {
+  --composer-glass-opacity: 100%;
+  --composer-glass-stacked-opacity: 100%;
+  --composer-backing-surface: #222222;
+}
+
 @utility drag-region {
   -webkit-app-region: drag;
 }

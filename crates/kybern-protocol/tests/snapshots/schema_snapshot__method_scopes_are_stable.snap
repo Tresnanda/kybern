@@ -66,6 +66,8 @@ expression: scopes
   - "access:write"
 - - git.status
   - "orchestration:read"
+- - git.branches
+  - "orchestration:read"
 - - git.commit
   - "orchestration:operate"
 - - github.pr.create

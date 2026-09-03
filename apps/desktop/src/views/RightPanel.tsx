@@ -24,11 +24,10 @@ import { diffKey, useStore, type RightTab } from "@/state/store"
 
 import { ExplorerPane } from "./Explorer"
 import { TerminalWorkspace } from "./Terminal"
-import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "./chrome"
+import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME, DOCK_HEADER_ICON_BUTTON_CLASS } from "./chrome"
 
 const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} inline-flex min-w-0 items-center pr-2.5`
 const DOCK_TAB_ACTIVE = "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
-const DOCK_HEADER_ICON_BUTTON = "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0"
 
 const ENV_ROW =
   "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground)] outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
@@ -56,7 +55,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         </div>
         <div className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]">
           <Menu>
-            <MenuTrigger render={<Button variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON} aria-label="Add pane" />}>
+            <MenuTrigger render={<Button variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON_CLASS} aria-label="Add pane" />}>
               <PlusIcon className="size-3.5" />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
@@ -76,7 +75,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
               </MenuGroup>
             </ComposerPickerMenuPopup>
           </Menu>
-          <IconButton variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON} label="Collapse panel" tooltip="Collapse panel" tooltipSide="bottom" onClick={() => set({ rightOpen: false })}>
+          <IconButton variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON_CLASS} label="Collapse panel" tooltip="Collapse panel" tooltipSide="bottom" onClick={() => set({ rightOpen: false })}>
             <PanelRightCloseIcon />
           </IconButton>
         </div>

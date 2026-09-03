@@ -15,7 +15,8 @@ type IconButtonProps = Omit<ComponentProps<typeof Button>, "aria-label" | "child
   label: string;
   tooltip?: ReactNode;
   tooltipSide?: ComponentProps<typeof TooltipPopup>["side"];
-  children: ReactNode;
+  /** Optional so the button can be a `render` target whose trigger supplies the glyph. */
+  children?: ReactNode;
 };
 
 // Keeps the accessible label, optional browser title, and tooltip wiring identical everywhere.

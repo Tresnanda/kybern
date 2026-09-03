@@ -158,6 +158,20 @@ const CONTENT_SURFACE_LIFT: Record<ThemeVariant, number> = {
   dark: 0.08,
   light: 0,
 };
+/** Dark thread / content-card fill. Composer chrome and its popups share the raised color. */
+const DARK_THREAD_SURFACE = "#181818";
+const DARK_COMPOSER_BACKING = "#222222";
+const DARK_COMPOSER_CHROME = "#2a2a2a";
+/** Menus and cards float one step above the composer plate. */
+const DARK_POPOVER = "#2e2e2e";
+/** The seed math lands the dark "elevated" tokens at rgb(23,23,23), one step
+ *  darker than the #181818 page, so every surface built from them sank instead
+ *  of lifting. Pin them to the raised plate colors measured from Codex. */
+const DARK_RAISED_TOKEN_OVERRIDES: Record<string, string> = {
+  "--color-background-control-opaque": DARK_COMPOSER_CHROME,
+  "--color-background-elevated-primary-opaque": DARK_POPOVER,
+  "--color-background-elevated-secondary-opaque": DARK_POPOVER,
+};
 const SURFACE_UNDER_CONTRAST_STEP: Record<ThemeVariant, number> = {
   dark: 0.0015,
   light: 0.0012,
@@ -712,15 +726,20 @@ export function buildThemeCssVariables(
   const seedSurface = readCodexVariable("--color-background-surface");
   const contentLift = CONTENT_SURFACE_LIFT[variant];
   const contentSurface =
-    contentLift > 0 ? mixHex(seedSurface, "#ffffff", contentLift) : seedSurface;
+    variant === "dark"
+      ? DARK_THREAD_SURFACE
+      : contentLift > 0
+        ? mixHex(seedSurface, "#ffffff", contentLift)
+        : seedSurface;
   const composerSurface =
     variant === "dark"
-      ? readCodexVariable("--color-background-control-opaque")
+      ? DARK_COMPOSER_CHROME
       : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
-  // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
-  // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
-  // handled by --color-background-control-opaque (white in light, dark control in dark).
-  const composerPickerMenuSurface = "color-mix(in oklab, var(--popover) 70%, transparent)";
+  // Dark composer chrome is a solid raised plate; light still frosts the control token.
+  const composerPickerMenuSurface =
+    variant === "dark"
+      ? DARK_COMPOSER_CHROME
+      : "color-mix(in oklab, var(--popover) 70%, transparent)";
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -765,6 +784,13 @@ export function buildThemeCssVariables(
     "--card": readCodexVariable("--color-background-panel"),
     "--card-foreground": readCodexVariable("--color-text-foreground"),
     "--composer-surface": composerSurface,
+    "--composer-backing-surface":
+      variant === "dark"
+        ? DARK_COMPOSER_BACKING
+        : "color-mix(in srgb, var(--color-background-elevated-secondary) 76%, var(--color-background-surface) 24%)",
+    "--composer-glass-surface": composerSurface,
+    "--composer-glass-opacity": variant === "dark" ? "100%" : "86%",
+    "--composer-glass-stacked-opacity": variant === "dark" ? "100%" : "43%",
     "--destructive": pack.theme.semanticColors.diffRemoved,
     "--destructive-foreground": pack.theme.surface,
     "--foreground": readCodexVariable("--color-text-foreground"),
@@ -775,7 +801,7 @@ export function buildThemeCssVariables(
     "--input": readCodexVariable("--color-background-control-opaque"),
     "--muted": readCodexVariable("--color-background-elevated-secondary"),
     "--muted-foreground": readCodexVariable("--color-text-foreground-secondary"),
-    "--popover": readCodexVariable("--color-background-elevated-primary-opaque"),
+    "--popover": variant === "dark" ? DARK_POPOVER : readCodexVariable("--color-background-elevated-primary-opaque"),
     "--popover-foreground": readCodexVariable("--color-text-foreground"),
     "--primary": readCodexVariable("--color-background-button-primary"),
     "--primary-foreground": readCodexVariable("--color-text-button-primary"),
@@ -822,6 +848,7 @@ export function buildResolvedThemeTokens(
       : buildDarkDerivedTokens(computedTheme);
   const panel = buildPanelBackground(computedTheme);
   const codexVariables = buildCodexCssVariables(computedTheme, derived, panel);
+  if (variant === "dark") Object.assign(codexVariables, DARK_RAISED_TOKEN_OVERRIDES);
 
   return {
     aliases: buildThemeTokenAliases(codexVariables),

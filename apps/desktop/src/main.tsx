@@ -11,6 +11,14 @@ import { TooltipProvider } from "@/components/synara/tooltip"
 import { isTauri, platform } from "@/lib/tauri"
 import { boot } from "@/state/rpc"
 
+// Dev only: `VITE_KYBERN_THEME=light pnpm tauri dev` boots the window in a fixed
+// appearance so light and dark can be screenshotted without touching settings.
+// `system` puts the stored preference back.
+const forcedTheme = import.meta.env.VITE_KYBERN_THEME
+if (import.meta.env.DEV && (forcedTheme === "light" || forcedTheme === "dark" || forcedTheme === "system")) {
+  localStorage.setItem("kybern.theme", forcedTheme)
+}
+
 // Synara's stylesheet keys desktop-only rules (traffic-light gutter, corner
 // smoothing) off this attribute; the Tauri shell wants the same treatment.
 if (isTauri()) {

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
-import { useTheme } from "@/components/theme-provider"
+import { useTheme } from "@/components/theme-context"
 import { Button } from "@/components/synara/button"
 import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "@/components/synara/dialog"
 import { Switch } from "@/components/synara/switch"

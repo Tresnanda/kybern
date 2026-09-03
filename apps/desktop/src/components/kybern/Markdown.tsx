@@ -6,7 +6,7 @@ import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "r
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import { useTheme } from "@/components/theme-provider"
+import { useTheme } from "@/components/theme-context"
 import { copyText } from "@/lib/hooks"
 import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/synara/icons"
 import { openExternal } from "@/lib/tauri"

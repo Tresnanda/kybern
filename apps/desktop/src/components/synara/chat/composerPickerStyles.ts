@@ -155,9 +155,9 @@ export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${RAISED_SURFACE_BORDER_
  *  dark mode (via `--surface-border`) instead of dropping to shadow-only separation. */
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
-/** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
+/** Floating menu, picker, and popover shell. Dark fill is `--popover` (#383838). */
 export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
-  "relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150";
+  "relative overflow-hidden border border-border bg-popover text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150";
 
 /** Default floating popup shell (dropdown menus, selects, popovers). */
 export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-2xl shadow-xl`;
@@ -277,3 +277,20 @@ export const COMPOSER_FOOTER_ROW_CLASS_NAME = [
   "pr-[var(--app-density-composer-footer-padding-end,0.5rem)]",
   "pb-[var(--app-density-composer-footer-padding,0.375rem)]",
 ].join(" ");
+
+/** Shared picker trigger footprint so + / mode / model sit on one 28px baseline.
+ *  Footer chips read at the editor size (ui, 12px), not the smaller ui-sm used by
+ *  the landing tray, so the row carries the same weight as the text above it. */
+export const COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME =
+  "!h-7 min-w-0 shrink-0 justify-start gap-1.5 rounded-lg px-2.5 whitespace-nowrap sm:px-2.5 [&_svg]:mx-0";
+
+/** Footer chip text size. Apply AFTER COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME so it wins the merge. */
+export const COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME =
+  "text-[length:var(--app-font-size-ui,12px)] sm:text-[length:var(--app-font-size-ui,12px)]";
+
+/** Square 28px icon control in the composer footer (+ menu). */
+export const COMPOSER_FOOTER_ICON_BUTTON_CLASS_NAME =
+  "size-7 shrink-0 rounded-lg sm:size-7 [&_svg,&_[data-slot=central-icon]]:mx-0 [&_svg]:!opacity-100";
+
+/** Round 32px send / stop control, as the Codex ink circle. */
+export const COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME = "size-8 sm:size-8 disabled:opacity-30";

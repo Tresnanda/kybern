@@ -389,6 +389,8 @@ export interface ThreadsCreateParams {
   effort?: string;
   permission_mode?: PermissionMode;
   use_worktree?: boolean;
+  /** Branch to start from: a worktree forks from it, a local thread switches to it first. */
+  base_branch?: string;
   title?: string;
   message?: UserMessage;
 }
@@ -625,6 +627,24 @@ export interface GitStatus {
   pull_request?: PullRequest | null;
 }
 
+export interface GitBranchesParams {
+  project_id: ProjectId;
+}
+
+export interface BranchInfo {
+  name: string;
+  is_current: boolean;
+  upstream?: string | null;
+  /** Committer time of the tip commit, unix seconds. */
+  committed_at: number;
+}
+
+export interface GitBranchesResult {
+  current?: string | null;
+  /** Local branches, most recently committed first. Empty when the project is not a repository. */
+  branches: BranchInfo[];
+}
+
 export interface GitCommitParams {
   thread_id: ThreadId;
   message?: string;
@@ -750,6 +770,7 @@ export interface Methods {
   "settings.update": [SettingsUpdateParams, Settings];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
   "git.status": [GitStatusParams, GitStatus];
+  "git.branches": [GitBranchesParams, GitBranchesResult];
   "git.commit": [GitCommitParams, GitCommitResult];
   "github.pr.create": [PrCreateParams, PullRequest];
   "github.pr.list": [PrListParams, PrListResult];
