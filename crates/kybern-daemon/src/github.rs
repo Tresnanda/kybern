@@ -102,15 +102,15 @@ pub async fn diff_against_base(cwd: &Path, base: &str) -> Result<String> {
 }
 
 pub async fn default_base(cwd: &Path) -> String {
-    if let Ok(s) = run(cwd, "gh", &["repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).await {
-        if !s.is_empty() {
-            return s;
-        }
+    if let Ok(s) = run(cwd, "gh", &["repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).await
+        && !s.is_empty()
+    {
+        return s;
     }
-    if let Ok(s) = run(cwd, "git", &["symbolic-ref", "refs/remotes/origin/HEAD"]).await {
-        if let Some(b) = s.rsplit('/').next() {
-            return b.to_string();
-        }
+    if let Ok(s) = run(cwd, "git", &["symbolic-ref", "refs/remotes/origin/HEAD"]).await
+        && let Some(b) = s.rsplit('/').next()
+    {
+        return b.to_string();
     }
     "main".into()
 }

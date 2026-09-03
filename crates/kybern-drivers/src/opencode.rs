@@ -27,6 +27,36 @@ const MIN_VERSION: (u64, u64, u64) = (1, 10, 0);
 #[derive(Default)]
 pub struct OpencodeDriver;
 
+async fn opencode_models(bin: &std::path::Path) -> Vec<ProviderModel> {
+    let output =
+        match tokio::time::timeout(std::time::Duration::from_secs(4), Command::new(bin).args(["models"]).stdin(Stdio::null()).output())
+            .await
+        {
+            Ok(Ok(output)) if output.status.success() => output,
+            _ => return Vec::new(),
+        };
+    let mut models: Vec<ProviderModel> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let id = line.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let (provider, name) = id.split_once('/').unwrap_or(("", id));
+            Some(ProviderModel {
+                id: id.to_string(),
+                display_name: name.to_string(),
+                provider: (!provider.is_empty()).then(|| provider.to_string()),
+                efforts: Vec::new(),
+                default_effort: None,
+                is_default: false,
+            })
+        })
+        .collect();
+    models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)));
+    models
+}
+
 #[async_trait]
 impl AgentDriver for OpencodeDriver {
     fn kind(&self) -> ProviderKind {
@@ -44,6 +74,9 @@ impl AgentDriver for OpencodeDriver {
             supported_permission_modes: PermissionMode::ALL.to_vec(),
             supports_fork: true,
             supports_model_switch: true,
+            supports_effort_switch: false,
+            supported_efforts: vec![],
+            models: vec![],
             instances: vec!["default".into()],
         };
         let bin = match resolve(ProviderKind::Opencode, binary) {
@@ -63,6 +96,9 @@ impl AgentDriver for OpencodeDriver {
                         Some(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
                 }
                 status.version = Some(v);
+                if ok {
+                    status.models = opencode_models(&bin).await;
+                }
             }
             None => status.unavailable_reason = Some("could not run `opencode --version`".into()),
         }
@@ -293,10 +329,10 @@ impl OpencodeSession {
                             let frame = buf[..pos].to_string();
                             buf.drain(..pos + 2);
                             for line in frame.lines() {
-                                if let Some(data) = line.strip_prefix("data:") {
-                                    if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
-                                        self.handle_event(&v).await;
-                                    }
+                                if let Some(data) = line.strip_prefix("data:")
+                                    && let Ok(v) = serde_json::from_str::<Value>(data.trim())
+                                {
+                                    self.handle_event(&v).await;
                                 }
                             }
                         }
@@ -325,10 +361,10 @@ impl OpencodeSession {
         let my_session = self.state.lock().await.session_id.clone();
         let sid =
             p.get("sessionID").or_else(|| p.pointer("/part/sessionID")).or_else(|| p.pointer("/info/sessionID")).and_then(|s| s.as_str());
-        if let (Some(mine), Some(theirs)) = (&my_session, sid) {
-            if mine != theirs {
-                return;
-            }
+        if let (Some(mine), Some(theirs)) = (&my_session, sid)
+            && mine != theirs
+        {
+            return;
         }
         match ty {
             "message.part.updated" => self.handle_part(&p["part"]).await,
@@ -347,14 +383,12 @@ impl OpencodeSession {
             }
             "message.updated" => {
                 let info = &p["info"];
-                if info.get("role").and_then(|r| r.as_str()) == Some("assistant") {
-                    if let Some(err) = info.get("error") {
-                        if !err.is_null() {
-                            let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("provider error");
-                            self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: msg.to_string(), data: Some(err.clone()) })
-                                .await;
-                        }
-                    }
+                if info.get("role").and_then(|r| r.as_str()) == Some("assistant")
+                    && let Some(err) = info.get("error")
+                    && !err.is_null()
+                {
+                    let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("provider error");
+                    self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: msg.to_string(), data: Some(err.clone()) }).await;
                 }
             }
             "permission.asked" => {
@@ -608,6 +642,10 @@ impl AgentSession for Handle {
         }
         self.0.state.lock().await.model = Some(model.to_string());
         Ok(())
+    }
+
+    async fn set_effort(&self, _effort: &str) -> Result<()> {
+        Err(DriverError::Unsupported("OpenCode did not report effort controls for this model".into()))
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {

@@ -1,6 +1,7 @@
 mod access;
 mod auth;
 mod config;
+mod files;
 mod github;
 mod http;
 mod orchestrator;
@@ -63,8 +64,12 @@ async fn main() -> Result<()> {
     std::fs::write(&paths.port_file, addr.port().to_string())?;
     state.port.store(addr.port(), std::sync::atomic::Ordering::Relaxed);
 
-    let shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
+    let shutdown_token = state.shutdown.clone();
+    let shutdown = async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = shutdown_token.cancelled() => {}
+        }
         tracing::info!("shutting down");
     };
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;

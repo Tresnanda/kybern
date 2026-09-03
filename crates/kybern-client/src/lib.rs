@@ -96,10 +96,10 @@ impl Client {
                 };
                 match serde_json::from_str::<ServerFrame>(&text) {
                     Ok(ServerFrame::Response(resp)) => {
-                        if let RpcId::Number(n) = resp.id {
-                            if let Some(tx) = p2.lock().await.remove(&n) {
-                                let _ = tx.send(resp);
-                            }
+                        if let RpcId::Number(n) = resp.id
+                            && let Some(tx) = p2.lock().await.remove(&n)
+                        {
+                            let _ = tx.send(resp);
                         }
                     }
                     Ok(ServerFrame::Notification(n)) => {

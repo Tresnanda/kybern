@@ -8,8 +8,8 @@ to the same threads later.
 
 ```
 ┌────────────┐  ws://…/ws (JSON-RPC 2.0)  ┌──────────────────────────────────┐
-│ kybern-app │◄──────────────────────────►│ kybernd                          │
-│ (GPUI)     │                            │  ws.rs      auth + subscriptions │
+│ desktop    │◄──────────────────────────►│ kybernd                          │
+│ (Tauri)    │                            │  ws.rs      auth + subscriptions │
 └────────────┘                            │  rpc.rs     method dispatch      │
 ┌────────────┐                            │  orchestrator.rs  threads/turns  │
 │ kybern CLI │◄──────────────────────────►│  terminal.rs      PTYs           │
@@ -33,9 +33,9 @@ to the same threads later.
 | `kybern-git` | Shells out to `git`. Snapshots use a temporary index so the user's index is never touched and untracked files are included. |
 | `kybern-drivers` | `AgentDriver` (probe, spawn, one-shot) and `AgentSession` (send, interrupt, approvals, mode, model). One native module per agent. |
 | `kybern-daemon` | `kybernd`. axum for HTTP and WebSocket, tokio for everything else. |
-| `kybern-client` | Async JSON-RPC client shared by the CLI and the desktop app. |
+| `kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell; the web app speaks the same protocol from TypeScript (`apps/desktop/src/protocol`). |
 | `kybern-cli` | `kybern`. Also the integration harness for the daemon. |
-| `kybern-app` | GPUI desktop client. |
+| `apps/desktop` | Tauri + React desktop client (crate `kybern-desktop` for the shell). |
 | `apps/mobile` | Expo client. |
 
 ## Threads and turns

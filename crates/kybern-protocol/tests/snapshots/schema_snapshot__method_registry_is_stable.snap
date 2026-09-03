@@ -3,6 +3,7 @@ source: crates/kybern-protocol/tests/schema_snapshot.rs
 expression: names
 ---
 - daemon.info
+- daemon.shutdown
 - providers.list
 - projects.list
 - projects.add
@@ -36,6 +37,9 @@ expression: names
 - git.commit
 - github.pr.create
 - github.pr.list
+- files.search
+- files.list
+- files.read
 - approvals.respond
 - approvals.list
 - events.subscribe

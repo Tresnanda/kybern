@@ -86,6 +86,9 @@ impl AgentDriver for CursorDriver {
             supported_permission_modes: vec![PermissionMode::Supervised, PermissionMode::Auto, PermissionMode::FullAccess],
             supports_fork: false,
             supports_model_switch: true,
+            supports_effort_switch: false,
+            supported_efforts: vec![],
+            models: vec![],
             instances: vec!["default".into()],
         };
         let bin = match resolve(ProviderKind::Cursor, binary) {
@@ -474,6 +477,10 @@ impl AgentSession for Handle {
             .await
             .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?;
         rx.await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?
+    }
+
+    async fn set_effort(&self, _effort: &str) -> Result<()> {
+        Err(DriverError::Unsupported("Cursor ACP did not advertise an effort control".into()))
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {

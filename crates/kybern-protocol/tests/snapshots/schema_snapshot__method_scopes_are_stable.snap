@@ -4,6 +4,8 @@ expression: scopes
 ---
 - - daemon.info
   - ~
+- - daemon.shutdown
+  - "access:write"
 - - providers.list
   - "orchestration:read"
 - - projects.list
@@ -69,6 +71,12 @@ expression: scopes
 - - github.pr.create
   - "orchestration:operate"
 - - github.pr.list
+  - "orchestration:read"
+- - files.search
+  - "orchestration:read"
+- - files.list
+  - "orchestration:read"
+- - files.read
   - "orchestration:read"
 - - approvals.respond
   - "orchestration:operate"

@@ -27,6 +27,12 @@ expression: schema_for!(Thread)
         "null"
       ]
     },
+    "effort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "permission_mode": {
       "$ref": "#/$defs/PermissionMode"
     },

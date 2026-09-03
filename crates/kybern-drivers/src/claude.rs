@@ -21,7 +21,9 @@ use uuid::Uuid;
 
 use crate::binary::{at_least, resolve, version_of};
 use crate::ndjson::NdjsonChild;
-use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, Result, SessionConfig, SpawnedSession, summarize_tool_call};
+use crate::{
+    AgentDriver, AgentSession, DriverError, DriverEvent, ProbeContext, Result, SessionConfig, SpawnedSession, summarize_tool_call,
+};
 
 const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
 
@@ -35,39 +37,11 @@ impl AgentDriver for ClaudeDriver {
     }
 
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
-        let mut status = ProviderStatus {
-            kind: ProviderKind::ClaudeCode,
-            display_name: ProviderKind::ClaudeCode.display_name().into(),
-            available: false,
-            binary_path: None,
-            version: None,
-            unavailable_reason: None,
-            supported_permission_modes: PermissionMode::ALL.to_vec(),
-            supports_fork: true,
-            supports_model_switch: true,
-            instances: vec!["default".into()],
-        };
-        let bin = match resolve(ProviderKind::ClaudeCode, binary) {
-            Ok(b) => b,
-            Err(e) => {
-                status.unavailable_reason = Some(format!("{e}. Install with: npm install -g @anthropic-ai/claude-code"));
-                return status;
-            }
-        };
-        status.binary_path = Some(bin.display().to_string());
-        match version_of(&bin, &["--version"]).await {
-            Some(v) => {
-                let ok = at_least(&v, MIN_VERSION);
-                status.available = ok;
-                if !ok {
-                    status.unavailable_reason =
-                        Some(format!("Claude Code {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
-                }
-                status.version = Some(v);
-            }
-            None => status.unavailable_reason = Some("could not run `claude --version`".into()),
-        }
-        status
+        self.probe_context(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }).await
+    }
+
+    async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        self.probe_context(context).await
     }
 
     async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
@@ -140,6 +114,9 @@ impl AgentDriver for ClaudeDriver {
         if let Some(model) = &config.model {
             cmd.args(["--model", model]);
         }
+        if let Some(effort) = &config.effort {
+            cmd.args(["--effort", effort]);
+        }
         cmd.env_remove("NODE_OPTIONS");
         for (k, v) in &config.env {
             cmd.env(k, v);
@@ -167,12 +144,198 @@ impl AgentDriver for ClaudeDriver {
     }
 }
 
+impl ClaudeDriver {
+    async fn probe_context(&self, context: &ProbeContext) -> ProviderStatus {
+        let mut status = ProviderStatus {
+            kind: ProviderKind::ClaudeCode,
+            display_name: ProviderKind::ClaudeCode.display_name().into(),
+            available: false,
+            binary_path: None,
+            version: None,
+            unavailable_reason: None,
+            supported_permission_modes: PermissionMode::ALL.to_vec(),
+            supports_fork: true,
+            supports_model_switch: true,
+            supports_effort_switch: false,
+            supported_efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
+            models: vec![
+                ProviderModel {
+                    id: "sonnet".into(),
+                    display_name: "Sonnet".into(),
+                    provider: None,
+                    efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
+                    default_effort: None,
+                    is_default: false,
+                },
+                ProviderModel {
+                    id: "opus".into(),
+                    display_name: "Opus".into(),
+                    provider: None,
+                    efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
+                    default_effort: None,
+                    is_default: false,
+                },
+            ],
+            instances: vec!["default".into()],
+        };
+        let bin = match resolve(ProviderKind::ClaudeCode, context.binary.as_ref()) {
+            Ok(b) => b,
+            Err(e) => {
+                status.unavailable_reason = Some(format!("{e}. Install with: npm install -g @anthropic-ai/claude-code"));
+                return status;
+            }
+        };
+        status.binary_path = Some(bin.display().to_string());
+        match version_of(&bin, &["--version"]).await {
+            Some(v) => {
+                let ok = at_least(&v, MIN_VERSION);
+                status.available = ok;
+                if !ok {
+                    status.unavailable_reason =
+                        Some(format!("Claude Code {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
+                }
+                status.version = Some(v);
+            }
+            None => status.unavailable_reason = Some("could not run `claude --version`".into()),
+        }
+        if status.available {
+            let config = crate::claude_config::resolve(context, &bin).await;
+            if let Ok(Ok(output)) =
+                tokio::time::timeout(std::time::Duration::from_secs(2), contextual_command(&bin, context).arg("--help").output()).await
+            {
+                let help = String::from_utf8_lossy(&output.stdout);
+                let efforts = claude_efforts(&help);
+                if !efforts.is_empty() {
+                    status.supported_efforts = efforts.clone();
+                }
+                let aliases = claude_model_aliases(&help);
+                if !aliases.is_empty() {
+                    let mut selectors = aliases;
+                    if !selectors.iter().any(|selector| selector == &config.model) {
+                        selectors.insert(0, config.model.clone());
+                    }
+                    let version = status.version.as_deref();
+                    status.models = selectors
+                        .into_iter()
+                        .map(|id| ProviderModel {
+                            display_name: claude_model_name(
+                                &id,
+                                version,
+                                (id == config.model).then_some(config.alias_target.as_deref()).flatten(),
+                            ),
+                            is_default: id == config.model,
+                            default_effort: Some(config.effort_for(&id)),
+                            id,
+                            provider: None,
+                            efforts: status.supported_efforts.clone(),
+                        })
+                        .collect();
+                }
+            }
+            if !status.models.iter().any(|model| model.is_default) {
+                status.models.insert(
+                    0,
+                    ProviderModel {
+                        id: config.model.clone(),
+                        display_name: claude_model_name(&config.model, status.version.as_deref(), config.alias_target.as_deref()),
+                        provider: None,
+                        efforts: status.supported_efforts.clone(),
+                        default_effort: Some(config.effort.clone()),
+                        is_default: true,
+                    },
+                );
+            }
+        }
+        status
+    }
+}
+
 fn mode_arg(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Supervised => "default",
         PermissionMode::AcceptEdits => "acceptEdits",
         PermissionMode::Auto => "auto",
         PermissionMode::FullAccess => "bypassPermissions",
+    }
+}
+
+fn option_excerpt<'a>(help: &'a str, flag: &str, max_len: usize) -> Option<&'a str> {
+    let start = help.find(flag)?;
+    let tail = &help[start..];
+    let end = tail.char_indices().nth(max_len).map(|(index, _)| index).unwrap_or(tail.len());
+    Some(&tail[..end])
+}
+
+fn claude_model_aliases(help: &str) -> Vec<String> {
+    let Some(excerpt) = option_excerpt(help, "--model <model>", 420) else { return Vec::new() };
+    let alias_text = excerpt.split("or a model's full name").next().unwrap_or(excerpt);
+    let mut aliases = Vec::new();
+    let mut rest = alias_text;
+    while let Some(start) = rest.find('\'') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('\'') else { break };
+        let value = &rest[..end];
+        if !value.is_empty() && value.chars().all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_') {
+            aliases.push(value.to_string());
+        }
+        rest = &rest[end + 1..];
+    }
+    aliases
+}
+
+fn claude_efforts(help: &str) -> Vec<String> {
+    let Some(excerpt) = option_excerpt(help, "--effort <level>", 260) else { return Vec::new() };
+    let Some(start) = excerpt.find('(') else { return Vec::new() };
+    let Some(end) = excerpt[start + 1..].find(')') else { return Vec::new() };
+    excerpt[start + 1..start + 1 + end]
+        .split(',')
+        .map(|value| value.trim().trim_start_matches("or "))
+        .filter(|value| !value.is_empty() && value.chars().all(|character| character.is_ascii_alphanumeric() || character == '-'))
+        .map(str::to_string)
+        .collect()
+}
+
+fn contextual_command(binary: &std::path::Path, context: &ProbeContext) -> Command {
+    let mut command = Command::new(binary);
+    if let Some(cwd) = context.cwd.as_deref() {
+        command.current_dir(cwd);
+    }
+    command.env_remove("NODE_OPTIONS").envs(&context.env);
+    command
+}
+
+/// Friendly names mirror T3Code's CLI-version-gated Claude manifest while the
+/// selector itself remains exactly what Claude Code accepts.
+fn claude_model_name(selector: &str, cli_version: Option<&str>, alias_target: Option<&str>) -> String {
+    let (base, context_suffix) =
+        selector.split_once('[').map_or((selector, None), |(base, suffix)| (base, Some(suffix.trim_end_matches(']'))));
+    let label = if let Some(target) = alias_target {
+        friendly_model_id(target)
+    } else {
+        match base.to_ascii_lowercase().as_str() {
+            "fable" if cli_version.is_some_and(|version| at_least(version, (2, 1, 257))) => "Claude Fable 5.1".into(),
+            "fable" => "Claude Fable 5".into(),
+            "opus" if cli_version.is_some_and(|version| at_least(version, (2, 1, 219))) => "Claude Opus 5".into(),
+            "opus" => "Claude Opus".into(),
+            "sonnet" => "Claude Sonnet 5".into(),
+            "haiku" => "Claude Haiku".into(),
+            _ => friendly_model_id(base),
+        }
+    };
+    match context_suffix {
+        Some(suffix) if suffix.eq_ignore_ascii_case("1m") => format!("{label} · 1M"),
+        Some(suffix) if !suffix.is_empty() => format!("{label} · {suffix}"),
+        _ => label,
+    }
+}
+
+fn friendly_model_id(model: &str) -> String {
+    match model.to_ascii_lowercase().as_str() {
+        "claude-fable-5-1" | "claude-fable-5.1" => "Claude Fable 5.1".into(),
+        "claude-fable-5" => "Claude Fable 5".into(),
+        "claude-opus-5" | "claude-opus-5-0" | "claude-opus-5.0" => "Claude Opus 5".into(),
+        "claude-sonnet-5" | "claude-sonnet-5-0" | "claude-sonnet-5.0" => "Claude Sonnet 5".into(),
+        _ => model.to_string(),
     }
 }
 
@@ -449,10 +612,10 @@ impl ClaudeSession {
 
     async fn handle_assistant(&self, v: &Value) {
         let parent = v.get("parent_tool_use_id").and_then(|p| p.as_str()).map(str::to_string);
-        if parent.is_none() {
-            if let Some(u) = v.get("uuid").and_then(|u| u.as_str()) {
-                self.state.lock().await.last_assistant_uuid = Some(u.to_string());
-            }
+        if parent.is_none()
+            && let Some(u) = v.get("uuid").and_then(|u| u.as_str())
+        {
+            self.state.lock().await.last_assistant_uuid = Some(u.to_string());
         }
         let msg = &v["message"];
         let message_id = msg.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
@@ -605,6 +768,10 @@ impl AgentSession for SessionHandle {
         self.0.send_control("set_model", json!({ "model": model })).await.map(|_| ())
     }
 
+    async fn set_effort(&self, _effort: &str) -> Result<()> {
+        Err(DriverError::Unsupported("Claude Code effort is fixed when the session starts; start a new thread to change it".into()))
+    }
+
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
         let Some((input, suggestions)) = self.0.pending_permissions.lock().await.remove(request_id) else {
             return Err(DriverError::Protocol(format!("no pending permission request {request_id}")));
@@ -631,5 +798,24 @@ impl AgentSession for SessionHandle {
             Err(_) => child.kill().await,
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{claude_efforts, claude_model_aliases};
+
+    const HELP: &str = "\
+  --effort <level>  Effort level for the current session\n\
+                    (low, medium, high, xhigh, max)\n\
+  --environment <environment_id>  Create a cloud session\n\
+  --model <model>  Model for the current session. Provide an alias for the latest model\n\
+                   (e.g. 'fable', 'opus', or 'sonnet') or a model's full name\n\
+                   (e.g. 'claude-fable-5').\n";
+
+    #[test]
+    fn parses_capabilities_reported_by_help() {
+        assert_eq!(claude_model_aliases(HELP), ["fable", "opus", "sonnet"]);
+        assert_eq!(claude_efforts(HELP), ["low", "medium", "high", "xhigh", "max"]);
     }
 }

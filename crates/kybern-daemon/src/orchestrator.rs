@@ -73,10 +73,6 @@ impl Orchestrator {
         }
     }
 
-    pub fn settings(&self) -> Settings {
-        self.inner.settings.get()
-    }
-
     /// Binary override for a provider from settings.
     fn binary_for(&self, kind: ProviderKind) -> Option<PathBuf> {
         self.inner.settings.get().providers.get(&kind).and_then(|p| p.binary.clone()).map(PathBuf::from)
@@ -126,10 +122,6 @@ impl Orchestrator {
         Ok(thread)
     }
 
-    pub fn store(&self) -> &Store {
-        &self.inner.store
-    }
-
     // ---- projects ----
 
     pub fn add_project(&self, path: String, name: Option<String>) -> Result<Project> {
@@ -174,6 +166,7 @@ impl Orchestrator {
             project_id: project.id,
             title: params.title.clone().unwrap_or_else(|| DEFAULT_TITLE.to_string()),
             model: params.model.or_else(|| settings.providers.get(&params.provider.kind).and_then(|p| p.model.clone())),
+            effort: params.effort,
             provider: params.provider,
             permission_mode: params.permission_mode.unwrap_or(settings.default_permission_mode),
             status: ThreadStatus::Idle,
@@ -219,11 +212,20 @@ impl Orchestrator {
         if let Some(m) = params.model {
             t.model = Some(m);
         }
+        if let Some(effort) = params.effort {
+            t.effort = Some(effort);
+        }
         self.update_thread(t)
     }
 
-    /// Push mode/model changes to a live session after the store is updated.
-    pub async fn apply_session_settings(&self, thread_id: ThreadId, mode: Option<PermissionMode>, model: Option<&str>) -> Result<()> {
+    /// Push mode/model/effort changes to a live session after the store is updated.
+    pub async fn apply_session_settings(
+        &self,
+        thread_id: ThreadId,
+        mode: Option<PermissionMode>,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<()> {
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
         if let Some(live) = live {
             if let Some(mode) = mode {
@@ -231,6 +233,9 @@ impl Orchestrator {
             }
             if let Some(model) = model {
                 live.session.set_model(model).await?;
+            }
+            if let Some(effort) = effort {
+                live.session.set_effort(effort).await?;
             }
         }
         Ok(())
@@ -257,21 +262,31 @@ impl Orchestrator {
             return Err(anyhow!("thread is archived"));
         }
 
-        let live = self.ensure_session(&thread).await?;
-
         let turn_id = Uuid::now_v7();
         let message_id = Uuid::now_v7();
-        {
-            let mut turn = live.turn.lock().await;
-            *turn = Some(ActiveTurn { id: turn_id, started: std::time::Instant::now(), messages: HashMap::new(), completed: false });
-        }
-
         if thread.title == DEFAULT_TITLE {
             thread.title = title_from_message(&message);
         }
         thread.status = ThreadStatus::Running;
         let thread = self.update_thread(thread)?;
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+
+        // Persist and broadcast the user's intent before starting a potentially
+        // slow harness process. Clients can navigate and render immediately.
+        let live = match self.ensure_session(&thread).await {
+            Ok(live) => live,
+            Err(error) => {
+                self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: error.to_string() })?;
+                let mut failed = thread;
+                failed.status = ThreadStatus::Failed;
+                self.update_thread(failed)?;
+                return Err(error);
+            }
+        };
+        {
+            let mut turn = live.turn.lock().await;
+            *turn = Some(ActiveTurn { id: turn_id, started: std::time::Instant::now(), messages: HashMap::new(), completed: false });
+        }
         self.checkpoint(&thread, turn_id, "before").await;
 
         if let Err(e) = live.session.send_message(&message_id.to_string(), &message).await {
@@ -304,13 +319,12 @@ impl Orchestrator {
         live.session.respond_permission(&request_id, &decision).await?;
         self.inner.store.approval_resolve(approval_id, &decision)?;
         self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
-        if live.pending.lock().await.is_empty() {
-            if let Some(mut t) = self.inner.store.thread_get(approval.thread_id)? {
-                if t.status == ThreadStatus::AwaitingApproval {
-                    t.status = ThreadStatus::Running;
-                    self.update_thread(t)?;
-                }
-            }
+        if live.pending.lock().await.is_empty()
+            && let Some(mut t) = self.inner.store.thread_get(approval.thread_id)?
+            && t.status == ThreadStatus::AwaitingApproval
+        {
+            t.status = ThreadStatus::Running;
+            self.update_thread(t)?;
         }
         Ok(())
     }
@@ -481,15 +495,12 @@ impl Orchestrator {
     fn resolve_attachments(&self, message: &mut UserMessage) {
         use base64::Engine;
         for part in message.parts.iter_mut() {
-            if let ContentPart::Attachment { asset_id, media_type, .. } = part {
-                if media_type.starts_with("image/") {
-                    if let Ok(bytes) = std::fs::read(self.inner.paths.assets.join(asset_id.to_string())) {
-                        *part = ContentPart::Image {
-                            media_type: media_type.clone(),
-                            data: base64::engine::general_purpose::STANDARD.encode(bytes),
-                        };
-                    }
-                }
+            if let ContentPart::Attachment { asset_id, media_type, .. } = part
+                && media_type.starts_with("image/")
+                && let Ok(bytes) = std::fs::read(self.inner.paths.assets.join(asset_id.to_string()))
+            {
+                *part =
+                    ContentPart::Image { media_type: media_type.clone(), data: base64::engine::general_purpose::STANDARD.encode(bytes) };
             }
         }
     }
@@ -580,6 +591,7 @@ impl Orchestrator {
         let config = SessionConfig {
             cwd: PathBuf::from(&thread.cwd),
             model: thread.model.clone(),
+            effort: thread.effort.clone(),
             permission_mode: thread.permission_mode,
             resume_session_id: thread.provider_session_id.clone(),
             fork: rewind.is_some(),
@@ -695,12 +707,12 @@ impl Orchestrator {
             }
             DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
-                if anchors.turn_id.is_some() || anchors.previous_end.is_some() {
-                    if let Ok(Some(mut c)) = self.inner.store.checkpoint_get(turn.id) {
-                        c.provider_turn_id = anchors.turn_id.clone();
-                        c.provider_turn_end = anchors.previous_end.clone();
-                        let _ = self.inner.store.checkpoint_upsert(&c);
-                    }
+                if (anchors.turn_id.is_some() || anchors.previous_end.is_some())
+                    && let Ok(Some(mut c)) = self.inner.store.checkpoint_get(turn.id)
+                {
+                    c.provider_turn_id = anchors.turn_id.clone();
+                    c.provider_turn_end = anchors.previous_end.clone();
+                    let _ = self.inner.store.checkpoint_upsert(&c);
                 }
                 turn.completed = true;
                 let duration_ms = if duration_ms == 0 { turn.started.elapsed().as_millis() as u64 } else { duration_ms };

@@ -7,6 +7,7 @@
 
 pub mod binary;
 pub mod claude;
+mod claude_config;
 pub mod codex;
 pub mod cursor;
 pub mod ndjson;
@@ -14,7 +15,7 @@ pub mod opencode;
 pub mod pi;
 pub mod registry;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -42,11 +43,25 @@ pub enum DriverError {
 
 pub type Result<T> = std::result::Result<T, DriverError>;
 
+/// Read-only context used while discovering a provider's installed
+/// capabilities and effective defaults.
+///
+/// Provider catalogs are not always machine-global. Claude Code, for example,
+/// layers user, project, local, managed, and environment settings. Keeping the
+/// context here lets each native driver follow its own harness semantics.
+#[derive(Debug, Clone, Default)]
+pub struct ProbeContext {
+    pub binary: Option<PathBuf>,
+    pub cwd: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
+}
+
 /// Everything a driver needs to start (or resume) a provider session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     pub cwd: PathBuf,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub permission_mode: PermissionMode,
     /// Resume this provider session instead of starting fresh.
     pub resume_session_id: Option<String>,
@@ -153,6 +168,7 @@ pub trait AgentSession: Send + Sync {
     async fn interrupt(&self) -> Result<()>;
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()>;
     async fn set_model(&self, model: &str) -> Result<()>;
+    async fn set_effort(&self, effort: &str) -> Result<()>;
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()>;
     /// Graceful shutdown. The event stream ends with `Exited`.
     async fn close(&self) -> Result<()>;
@@ -168,6 +184,11 @@ pub trait AgentDriver: Send + Sync {
     fn kind(&self) -> ProviderKind;
     /// Look for the binary, read its version, report capabilities.
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus;
+    /// Probe with the same project and environment that a new session would
+    /// inherit. Drivers whose catalog is machine-global can use `probe`.
+    async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        self.probe(context.binary.as_ref()).await
+    }
     /// Whether `spawn` with `fork: true` can drop turns from the conversation.
     fn supports_fork(&self) -> bool {
         true

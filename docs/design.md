@@ -1,64 +1,69 @@
 # kybern desktop design notes
 
-The bar: it should feel like Cursor or a first-party Apple app. Calm, dense
-where it matters, empty where it does not, and nothing moves unless the
-motion says something.
+The bar: it should feel like Synara and Codex. Calm, dense where it matters,
+empty where it does not, and nothing moves unless the motion says something.
+The desktop app vendors Synara's stylesheet, primitives and icon system; new
+UI reuses those before inventing anything.
 
 ## Layout
 
-Three panes, mirroring T3 Code:
-
-1. **Sidebar** (240px, resizable 200–360): projects as section headers, threads
-   beneath them. Status is a small dot before the title: none for idle, blue
-   pulse for running, amber for awaiting approval, red for failed. Pinned
-   threads sort first. No dividers between rows; grouping is spacing.
-2. **Thread** (fills): transcript at top, composer pinned at the bottom.
-   Transcript is a single column with a 720px measure. User messages are a
-   quiet card on the trailing side; assistant text is bare markdown on the
-   canvas. Tool calls are one-line rows ("Ran `git status`") that expand on
-   click. Approval cards are the only element with a primary button in the
-   transcript.
-3. **Right panel** (360px, resizable, collapsible): tabs "Changes" and
-   "Terminal". Changes lists files with +/- counts, then the patch below.
+1. **Sidebar** (256px, resizable 208–480, translucent over the window
+   vibrancy): a 46px drag strip with the sidebar toggle and back/forward, the
+   brand row, then New thread / Pull requests / Usage, then projects with
+   their threads nested beneath. Rows are 28px, 12px type. Status is a glyph
+   before the trailing edge: stepped spinner for running, amber dot plus
+   "Pending" for awaiting approval, red dot for failed. Pinned threads sort
+   first. Hover reveals pin and archive.
+2. **Thread** (fills, on the content card with a rounded top-left seam): a
+   46px header with the provider glyph, the title, Hand off, the thread menu,
+   the Environment toggle and the dock toggle. The transcript is a centered
+   46rem column. User messages are quiet rounded bubbles on the trailing side
+   at 80% width; assistant text is bare markdown. Work sits under a
+   "Worked for Ns" disclosure with a hairline; tool rows are one line
+   ("Ran `git status`") and expand in place. "Edited N files" cards unfold
+   their diffs inline. A tick rail on the left navigates messages.
+3. **Composer** floats over the transcript on a frosted 1.2rem squircle:
+   12px editor, then a footer with +, permission mode (Full access in
+   orange), the model/effort picker and the ink-filled send circle. Queued
+   follow-ups and the approval card stack above it as fused panels. The
+   transcript and composer share one gutter so their edges line up.
+4. **Right dock** (42% of the window, min 416px, resizable): surface chips for
+   Diff, Terminal and Explorer. Diff renders per-file cards with line numbers.
+   Terminal is a tab strip of shells and agent CLIs, full bleed. Explorer is a
+   file tree with search next to a file viewer with a breadcrumb header.
+5. **Environment card** (288px, floating at the right edge, toggled from the
+   header): Changes, Local/worktree, branch, Commit and push, Repository,
+   Pull request, Editor, Recap.
 
 The title bar is transparent and the traffic lights sit over the sidebar.
-No custom chrome beyond that.
 
 ## Type
 
-System font (SF on macOS, Segoe on Windows). Body 13px / 1.5, transcript
-markdown 14px / 1.6 with a 720px measure, sidebar 13px, captions 12px,
-headings semibold rather than large. Monospace for code, paths, commands, and
-token counts (tabular numbers). No weights under 400 anywhere.
+System UI font, 12px base with Synara's scale (`--app-font-size-*`). Cal Sans
+only for the brand word. JetBrains Mono for code, diffs and the terminal.
+Transcript line height 1.625. Headings are weight 500–600, never large.
 
 ## Color
 
-Use the theme tokens; never hardcode. Structure comes from spacing, not lines:
-the only borders are the pane edges and focus rings. Status colors are the
-only saturated colors on screen: blue running, amber waiting, red failed,
-green completed. Dark mode follows the system.
+Use Synara's runtime tokens (`--color-text-foreground`, `--color-border`,
+`--color-background-button-secondary-hover`, ...); never hardcode. Structure
+comes from spacing and hairlines. Saturated color is reserved for status
+(amber pending, red failed, green/red diff stats) and the orange Full access
+accent. Dark and light both come from the same seed; the window material
+shows through the sidebar.
 
 ## Motion
 
-- No animation on keyboard-driven or high-frequency actions: switching
-  threads, sending, opening the palette.
-- Streaming text appears as it arrives with no fade.
-- Approval cards and notices enter with a 150ms opacity+4px rise, ease-out.
-- Buttons scale to 0.97 on press.
-- Panels resize 1:1 with the drag, no easing.
+- No animation on keyboard-driven or high-frequency actions.
+- Streaming text appears as it arrives; "Thinking" shimmers.
+- Disclosures animate grid rows over 220ms ease-out; menus scale from their
+  trigger; dialogs scale from 0.98.
+- Sent messages rise 3px over 180ms. Panes resize 1:1 with the drag.
+- Buttons scale to 0.97 on press; the send circle grows to 1.05 on hover.
 
 ## Copy
 
-Sentence case everywhere. Verb-first buttons: "Send", "Allow", "Always allow",
-"Deny", "New thread", "Add project". Approval cards repeat the consequence in
-the title ("Run `rm -rf build`?"). Errors say what to do next. Empty states
-orient and offer one action.
-
-## Status labels
-
-| status | sidebar dot | label |
-| --- | --- | --- |
-| idle | none | — |
-| running | blue | Working |
-| awaiting-approval | amber | Needs approval |
-| failed | red | Failed |
+Sentence case everywhere. Verb-first buttons: "Send", "Approve once",
+"Always allow this session", "Decline", "New thread", "Add project".
+Approval cards say what will happen ("Approve this command?"). Errors say
+what to do next. Empty states orient and offer one action.

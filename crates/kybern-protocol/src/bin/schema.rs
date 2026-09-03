@@ -46,6 +46,7 @@ fn main() {
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
+    method::<DaemonShutdown>(&mut methods);
     method::<ProvidersList>(&mut methods);
     method::<ProjectsList>(&mut methods);
     method::<ProjectsAdd>(&mut methods);
@@ -79,6 +80,9 @@ fn main() {
     method::<GitCommit>(&mut methods);
     method::<PrCreate>(&mut methods);
     method::<PrList>(&mut methods);
+    method::<FilesSearch>(&mut methods);
+    method::<FilesList>(&mut methods);
+    method::<FilesRead>(&mut methods);
     method::<ApprovalsRespond>(&mut methods);
     method::<ApprovalsList>(&mut methods);
     method::<EventsSubscribe>(&mut methods);

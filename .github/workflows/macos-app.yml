@@ -37,6 +37,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
       - name: Build kybern.app and DMG
         run: scripts/bundle-macos.sh
       - name: Upload DMG to the release

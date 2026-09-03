@@ -54,6 +54,39 @@ impl PiDriver {
     }
 }
 
+async fn omp_models(bin: &std::path::Path) -> Vec<ProviderModel> {
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        Command::new(bin).args(["models", "--json"]).stdin(std::process::Stdio::null()).output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else { return Vec::new() };
+    let Some(items) = value.get("models").and_then(Value::as_array) else { return Vec::new() };
+    let mut models: Vec<ProviderModel> = items
+        .iter()
+        .filter_map(|item| {
+            let id = item.get("selector").and_then(Value::as_str)?.to_string();
+            let provider = item.get("provider").and_then(Value::as_str).map(str::to_string);
+            let display_name = item.get("name").and_then(Value::as_str).unwrap_or(&id).to_string();
+            let efforts = item
+                .get("thinking")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            Some(ProviderModel { is_default: id.ends_with("/default"), id, display_name, provider, efforts, default_effort: None })
+        })
+        .collect();
+    models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)));
+    models
+}
+
 #[async_trait]
 impl AgentDriver for PiDriver {
     fn kind(&self) -> ProviderKind {
@@ -75,6 +108,9 @@ impl AgentDriver for PiDriver {
             },
             supports_fork: true,
             supports_model_switch: true,
+            supports_effort_switch: self.flavor == Flavor::Omp,
+            supported_efforts: vec![],
+            models: vec![],
             instances: vec!["default".into()],
         };
         let bin = match resolve(kind, binary) {
@@ -99,6 +135,16 @@ impl AgentDriver for PiDriver {
                         Some(format!("{} {v} is older than the required {}.{}.{}", kind.display_name(), min.0, min.1, min.2));
                 }
                 status.version = Some(v);
+                if ok && self.flavor == Flavor::Omp {
+                    status.models = omp_models(&bin).await;
+                    for model in &status.models {
+                        for effort in &model.efforts {
+                            if !status.supported_efforts.contains(effort) {
+                                status.supported_efforts.push(effort.clone());
+                            }
+                        }
+                    }
+                }
             }
             None => status.unavailable_reason = Some(format!("could not run `{} --version`", kind.default_binary())),
         }
@@ -135,6 +181,11 @@ impl AgentDriver for PiDriver {
         if let Some(model) = &config.model {
             cmd.args(["--model", model]);
         }
+        if self.flavor == Flavor::Omp
+            && let Some(effort) = &config.effort
+        {
+            cmd.args(["--thinking", effort]);
+        }
         for (k, v) in &config.env {
             cmd.env(k, v);
         }
@@ -163,14 +214,14 @@ impl AgentDriver for PiDriver {
         }
 
         // Rewind: fork the persisted session at the first dropped user message.
-        if config.fork {
-            if let Some(entry) = config.rewind.as_ref().and_then(|r| r.drop_from.turn_id.clone()) {
-                let cmd_name = match self.flavor {
-                    Flavor::Pi => "fork",
-                    Flavor::Omp => "branch",
-                };
-                session.call(cmd_name, json!({ "entryId": entry })).await?;
-            }
+        if config.fork
+            && let Some(entry) = config.rewind.as_ref().and_then(|r| r.drop_from.turn_id.clone())
+        {
+            let cmd_name = match self.flavor {
+                Flavor::Pi => "fork",
+                Flavor::Omp => "branch",
+            };
+            session.call(cmd_name, json!({ "entryId": entry })).await?;
         }
 
         let state = session.call("get_state", json!({})).await?;
@@ -589,6 +640,13 @@ impl AgentSession for Handle {
             return Err(DriverError::Unsupported(format!("models are named provider/model, got {model}")));
         };
         self.0.call("set_model", json!({ "provider": provider, "modelId": model_id })).await.map(|_| ())
+    }
+
+    async fn set_effort(&self, effort: &str) -> Result<()> {
+        if self.0.flavor != Flavor::Omp {
+            return Err(DriverError::Unsupported("pi did not advertise an effort control".into()));
+        }
+        self.0.call("set_thinking_level", json!({ "level": effort })).await.map(|_| ())
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {

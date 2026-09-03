@@ -113,6 +113,10 @@ const MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL
     );
     ",
+    // v5: per-thread reasoning effort
+    "
+    ALTER TABLE threads ADD COLUMN effort TEXT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

@@ -180,14 +180,14 @@ impl Store {
 
     pub fn asset_get(&self, id: AssetId) -> Result<Option<methods::AssetInfo>> {
         self.with(|c| {
-            Ok(c.query_row("SELECT id, name, media_type, size, created_at FROM assets WHERE id = ?1", [id.to_string()], |r| {
+            c.query_row("SELECT id, name, media_type, size, created_at FROM assets WHERE id = ?1", [id.to_string()], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
             })
             .optional()?
             .map(|(id, name, media_type, size, created)| -> Result<methods::AssetInfo> {
                 Ok(methods::AssetInfo { id: id.parse()?, name, media_type, size: size as u64, created_at: created.parse()? })
             })
-            .transpose()?)
+            .transpose()
         })
     }
 
@@ -269,11 +269,11 @@ impl Store {
     pub fn thread_upsert(&self, t: &Thread) -> Result<()> {
         self.with(|c| {
             c.execute(
-                "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, permission_mode,
+                "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
                  ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title, model = excluded.model, permission_mode = excluded.permission_mode,
+                    title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
                     status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
                     cwd = excluded.cwd, provider_session_id = excluded.provider_session_id, pinned = excluded.pinned,
                     updated_at = excluded.updated_at, last_seq = excluded.last_seq",
@@ -284,6 +284,7 @@ impl Store {
                     t.provider.kind.as_str(),
                     t.provider.instance,
                     t.model,
+                    t.effort,
                     serde_json::to_value(t.permission_mode)?.as_str().unwrap().to_string(),
                     serde_json::to_value(t.status)?.as_str().unwrap().to_string(),
                     t.worktree.as_ref().map(|w| w.path.clone()),
@@ -549,7 +550,7 @@ impl Store {
     }
 }
 
-const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, permission_mode, status,
+const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq FROM threads";
 
 fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
@@ -566,28 +567,29 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
 
 fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
     let kind: String = r.get(3)?;
-    let mode: String = r.get(6)?;
-    let status: String = r.get(7)?;
-    let wt_path: Option<String> = r.get(8)?;
-    let wt_branch: Option<String> = r.get(9)?;
+    let mode: String = r.get(7)?;
+    let status: String = r.get(8)?;
+    let wt_path: Option<String> = r.get(9)?;
+    let wt_branch: Option<String> = r.get(10)?;
     Ok(Thread {
         id: parse_uuid(r.get::<_, String>(0)?)?,
         project_id: parse_uuid(r.get::<_, String>(1)?)?,
         title: r.get(2)?,
         provider: ProviderInstance { kind: kind.parse().map_err(|e: String| other(std::io::Error::other(e)))?, instance: r.get(4)? },
         model: r.get(5)?,
+        effort: r.get(6)?,
         permission_mode: serde_json::from_value(serde_json::Value::String(mode)).map_err(other)?,
         status: serde_json::from_value(serde_json::Value::String(status)).map_err(other)?,
         worktree: match (wt_path, wt_branch) {
             (Some(path), Some(branch)) => Some(WorktreeInfo { path, branch }),
             _ => None,
         },
-        cwd: r.get(10)?,
-        provider_session_id: r.get(11)?,
-        pinned: r.get(12)?,
-        created_at: parse_time(r.get::<_, String>(13)?)?,
-        updated_at: parse_time(r.get::<_, String>(14)?)?,
-        last_seq: r.get(15)?,
+        cwd: r.get(11)?,
+        provider_session_id: r.get(12)?,
+        pinned: r.get(13)?,
+        created_at: parse_time(r.get::<_, String>(14)?)?,
+        updated_at: parse_time(r.get::<_, String>(15)?)?,
+        last_seq: r.get(16)?,
     })
 }
 
@@ -651,6 +653,7 @@ mod tests {
             title: "hello".into(),
             provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
             model: None,
+            effort: Some("high".into()),
             permission_mode: PermissionMode::Supervised,
             status: ThreadStatus::Idle,
             worktree: None,
@@ -669,7 +672,9 @@ mod tests {
             .unwrap();
         let evs = s.events_after(Some(t.id), 0, 10).unwrap();
         assert_eq!(evs.len(), 2);
-        assert_eq!(s.thread_get(t.id).unwrap().unwrap().last_seq, 2);
+        let stored = s.thread_get(t.id).unwrap().unwrap();
+        assert_eq!(stored.last_seq, 2);
+        assert_eq!(stored.effort.as_deref(), Some("high"));
         assert_eq!(s.threads_list(None, false).unwrap().len(), 1);
     }
 }

@@ -220,6 +220,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
 
     loop {
         tokio::select! {
+            _ = state.shutdown.cancelled() => break,
             msg = stream.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {

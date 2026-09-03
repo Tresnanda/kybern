@@ -34,6 +34,7 @@ async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> 
         .spawn(SessionConfig {
             cwd: dir.path().to_path_buf(),
             model: None,
+            effort: None,
             permission_mode: mode,
             resume_session_id: None,
             fork: false,

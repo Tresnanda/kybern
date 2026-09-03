@@ -96,6 +96,24 @@ impl ProviderInstance {
 }
 
 /// Availability of a provider binary on the daemon host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderModel {
+    /// Model selector accepted by the provider (for example `gpt-5.6-sol` or `openai/gpt-5.6-sol`).
+    pub id: String,
+    pub display_name: String,
+    /// Upstream model provider. Harnesses that aggregate providers use this to build a paged picker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Effort values accepted for this model, in the provider's preferred order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+/// Availability and selectable capabilities of a provider binary on the daemon host.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderStatus {
     pub kind: ProviderKind,
@@ -114,6 +132,15 @@ pub struct ProviderStatus {
     /// Whether the provider can fork its conversation, enabling conversation rewind.
     pub supports_fork: bool,
     pub supports_model_switch: bool,
+    /// Whether effort can be changed after a provider session has started.
+    #[serde(default)]
+    pub supports_effort_switch: bool,
+    /// Fallback effort choices when the catalog does not vary by model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_efforts: Vec<String>,
+    /// Models reported by the installed harness. Empty means the harness has no catalog API.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ProviderModel>,
     pub instances: Vec<String>,
 }
 
@@ -174,6 +201,8 @@ pub struct Thread {
     pub provider: ProviderInstance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     pub permission_mode: PermissionMode,
     pub status: ThreadStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]

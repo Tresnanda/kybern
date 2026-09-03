@@ -6,6 +6,7 @@ use kybern_drivers::registry::DriverRegistry;
 use kybern_protocol::ThreadEvent;
 use kybern_store::Store;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use crate::access::Pairing;
 use crate::config::Paths;
@@ -31,6 +32,7 @@ pub struct Inner {
     pub bootstrap_token: String,
     pub environment_id: String,
     pub started_at: DateTime<Utc>,
+    pub shutdown: CancellationToken,
 }
 
 impl std::ops::Deref for AppState {
@@ -71,6 +73,7 @@ impl AppState {
                 bootstrap_token,
                 environment_id,
                 started_at: Utc::now(),
+                shutdown: CancellationToken::new(),
             }),
         })
     }

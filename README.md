@@ -1,24 +1,32 @@
 # kybern
 
-A native desktop harness for coding agents. Threads, worktrees, approvals,
-diffs and terminals for Claude Code, Codex, OpenCode, pi, Oh My Pi and Cursor,
-driven through their own protocols, from one Rust daemon and a GPUI client.
+A desktop harness for coding agents. Threads, worktrees, approvals, diffs,
+terminals and a file explorer for Claude Code, Codex, OpenCode, pi, Oh My Pi
+and Cursor, driven through their own protocols, from one Rust daemon and a
+Tauri + React desktop client.
 
 kybern is a reimplementation of the ideas in [T3 Code](https://github.com/pingdotgg/t3code)
 with a Rust daemon at the center so a desktop app, a phone, and a remote
-machine all see the same threads.
+machine all see the same threads. The desktop client's look follows
+[Synara](https://github.com/Emanuele-web04/synara) (MIT): its stylesheet,
+primitives and icon system are vendored under `apps/desktop/src/components/synara`
+and `apps/desktop/src/lib/synara`.
 
 ## Layout
 
-| Crate | What it is |
+| Path | What it is |
 | --- | --- |
-| `kybern-protocol` | Wire types. JSON-RPC 2.0 over WebSocket, scoped tokens, the event-sourced thread model. `kybern-schema` dumps JSON Schema for non-Rust clients. |
-| `kybern-store` | SQLite persistence (WAL, event log, projections). |
-| `kybern-drivers` | One native driver per agent. Claude Code today; Codex, OpenCode, pi, omp, Cursor next. |
-| `kybern-daemon` | `kybernd`. Owns provider processes, threads, approvals; serves clients on a loopback port with bearer tokens. |
-| `kybern-cli` | `kybern`. Command-line client and the integration harness for every driver. |
-| `kybern-client` | Shared WebSocket client used by the CLI and the desktop app. |
-| `kybern-app` | `kybern-app`. GPUI desktop client for macOS and Windows; spawns `kybernd` if none is running. |
+| `crates/kybern-protocol` | Wire types. JSON-RPC 2.0 over WebSocket, scoped tokens, the event-sourced thread model. `kybern-schema` dumps JSON Schema for non-Rust clients. |
+| `crates/kybern-store` | SQLite persistence (WAL, event log, projections). |
+| `crates/kybern-drivers` | One native driver per agent: Claude Code, Codex, OpenCode, pi, Oh My Pi, Cursor. |
+| `crates/kybern-daemon` | `kybernd`. Owns provider processes, threads, approvals, terminals and project files; serves clients on a loopback port with bearer tokens. |
+| `crates/kybern-cli` | `kybern`. Command-line client and the integration harness for every driver. |
+| `crates/kybern-client` | Shared WebSocket client used by the CLI and the desktop shell. |
+| `apps/desktop` | The desktop app: Tauri 2 shell (`src-tauri`, crate `kybern-desktop`) around a React 19 + Tailwind 4 web app. Spawns `kybernd` if none is running. |
+| `apps/mobile` | Expo client (connect, threads, transcript, approvals, composer). |
+
+The previous GPUI desktop client lives on the `gpui` branch and is no longer
+built from `main`.
 
 ## Install
 
@@ -70,32 +78,40 @@ xattr -dr com.apple.quarantine /Applications/kybern.app
 
 ### Windows and Linux desktop app
 
-Not packaged yet. Build `kybern-app` from source (below) and keep `kybernd`
-next to the binary or on `PATH`; the app starts the daemon itself.
+Not packaged yet. Build the desktop app from source (below); Tauri produces
+the platform installer, and the app starts `kybernd` from its own directory
+or from `PATH`.
 
 ## Build from source
 
-Needs stable Rust 1.88 or newer (`rust-toolchain.toml` picks it up).
+Needs stable Rust 1.88 or newer (`rust-toolchain.toml` picks it up), Node 22
+and pnpm 11 (`corepack enable`).
 
 ```sh
 cargo build --release -p kybern-daemon -p kybern-cli   # target/release/{kybernd,kybern}
-cargo build --release -p kybern-app                    # GPUI desktop app; slow the first time
+
+cd apps/desktop
+pnpm install --frozen-lockfile
+pnpm tauri build                                        # apps/desktop/src-tauri/target/release/bundle/
+```
+
+For development, run the web app with hot reload inside the Tauri window:
+
+```sh
+cd apps/desktop && pnpm tauri dev
 ```
 
 ### macOS app bundle
 
-`scripts/bundle-macos.sh` builds `kybern-app` and `kybernd` in release,
-assembles `dist/kybern.app` (daemon next to the app executable, icon from
-`assets/icon.svg`), signs it ad hoc, and writes
-`dist/kybern-<version>-<arch>-apple-darwin.dmg`:
+`scripts/bundle-macos.sh` builds `kybernd` in release, runs `pnpm tauri build`,
+copies the daemon next to the app executable inside `kybern.app`, signs the
+bundle ad hoc, and writes `dist/kybern-<version>-<arch>-apple-darwin.dmg`:
 
 ```sh
-scripts/bundle-macos.sh              # SKIP_BUILD=1 reuses target/release
+scripts/bundle-macos.sh              # SKIP_BUILD=1 reuses target/release/kybernd
 ```
 
-It needs Xcode command line tools (`iconutil`, `codesign`, `hdiutil`) and an
-SVG rasterizer: `rsvg-convert` (`brew install librsvg`) if present, otherwise
-the built-in `sips`, then `qlmanage`.
+It needs Xcode command line tools (`codesign`, `hdiutil`), Node 22 and pnpm.
 
 ### Releasing
 
@@ -117,6 +133,8 @@ cargo build
 ./target/debug/kybern threads
 ./target/debug/kybern send <thread-id> "now write the README"
 ./target/debug/kybern watch                  # live event stream for all threads
+./target/debug/kybern ls <project-id> src    # browse project files
+./target/debug/kybern terminal run <thread-id> "git status"
 ```
 
 Approvals show up inline in `new` and `send`; answer with `y`, `a` (always) or `n`.
@@ -127,22 +145,27 @@ What works today, all verified end to end on macOS:
 
 - **Daemon**: WebSocket JSON-RPC with scoped tokens, SQLite event log with
   replay, per-turn git checkpoints, turn and thread diffs, workspace revert
-  and conversation rewind, server-owned terminals, pairing codes for other
-  devices, attachment uploads, settings and keybindings files.
+  and conversation rewind, server-owned terminals, project file listing and
+  reading, pairing codes for other devices, attachment uploads, settings and
+  keybindings files.
 - **Agents**: Claude Code, Codex, OpenCode, Oh My Pi, and Cursor drive
   through their native protocols with streaming, tool calls, approvals,
   resume, and model switching. pi is wired but untested here.
-- **Desktop**: GPUI app with projects and threads, a streaming transcript,
-  approval cards, a composer with provider, mode, worktree and attachment
-  controls, a diff viewer, a terminal, a command palette, themes, usage, OS
-  notifications, and pull request creation through `gh`.
+- **Desktop**: projects and threads in a translucent sidebar, a streaming
+  transcript with a message rail, "Worked for" disclosures and inline diffs,
+  a frosted composer with @ file mentions, / commands, queued follow-ups,
+  approval cards answered by digit, permission mode and model/effort pickers,
+  hand-off between agents, a right dock with diff, terminal tabs (shells and
+  agent CLIs side by side) and a file explorer, an Environment card, a pull
+  request list, a command palette, settings, light and dark themes, and
+  resizable panes.
 - **CLI**: everything the daemon does, usable from scripts.
-- **Mobile**: Expo client scaffold in `apps/mobile` (connect, threads,
-  transcript, approvals, composer). Not yet run on a device.
+- **Mobile**: Expo client scaffold in `apps/mobile`. Not yet run on a device.
 
 See `docs/architecture.md` for how the pieces fit and `docs/design.md` for
 the desktop design rules.
 
 ## License
 
-MIT
+MIT. Synara's vendored UI code is MIT as well; see its license header notes
+in `apps/desktop/src/components/synara`.

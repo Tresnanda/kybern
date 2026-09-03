@@ -49,14 +49,22 @@ pub struct DaemonInfo {
     pub started_at: chrono::DateTime<chrono::Utc>,
 }
 method!(DaemonInfoMethod, "daemon.info", None, Empty, DaemonInfo);
+method!(DaemonShutdown, "daemon.shutdown", Some(Scope::AccessWrite), Empty, Empty);
 
 // ---- providers ----
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ProvidersListParams {
+    /// Resolve project-scoped harness settings for this project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProvidersListResult {
     pub providers: Vec<ProviderStatus>,
 }
-method!(ProvidersList, "providers.list", Some(Scope::OrchestrationRead), Empty, ProvidersListResult);
+method!(ProvidersList, "providers.list", Some(Scope::OrchestrationRead), ProvidersListParams, ProvidersListResult);
 
 // ---- projects ----
 
@@ -113,6 +121,8 @@ pub struct ThreadsCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,
     /// Create a git worktree for this thread. Defaults to the project override, then global off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,6 +158,8 @@ pub struct ThreadsUpdateParams {
     pub permission_mode: Option<PermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 method!(ThreadsUpdate, "threads.update", Some(Scope::OrchestrationOperate), ThreadsUpdateParams, Thread);
 
@@ -519,6 +531,88 @@ pub struct PrListResult {
 }
 method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, PrListResult);
 
+// ---- files ----
+
+/// Find files in a project by fuzzy path match, for @mentions in the composer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesSearchParams {
+    pub project_id: ProjectId,
+    /// Case-insensitive; every character must appear in order in the path.
+    #[serde(default)]
+    pub query: String,
+    #[serde(default = "default_files_limit")]
+    pub limit: u32,
+}
+fn default_files_limit() -> u32 {
+    30
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesSearchResult {
+    /// Paths relative to the project root, best match first.
+    pub files: Vec<String>,
+    /// Total files considered, so clients can say "of N".
+    pub total: u32,
+}
+method!(FilesSearch, "files.search", Some(Scope::OrchestrationRead), FilesSearchParams, FilesSearchResult);
+
+/// One entry of a directory listing, for the file explorer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FileEntry {
+    pub name: String,
+    /// Path relative to the project root.
+    pub path: String,
+    pub kind: FileEntryKind,
+    /// Bytes, for files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileEntryKind {
+    File,
+    Directory,
+}
+
+/// List one directory of a project (directories first, then files, sorted by name).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesListParams {
+    pub project_id: ProjectId,
+    /// Directory relative to the project root; empty for the root.
+    #[serde(default)]
+    pub path: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesListResult {
+    pub entries: Vec<FileEntry>,
+}
+method!(FilesList, "files.list", Some(Scope::OrchestrationRead), FilesListParams, FilesListResult);
+
+/// Read a text file of a project, capped at `max_bytes`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesReadParams {
+    pub project_id: ProjectId,
+    /// File relative to the project root.
+    pub path: String,
+    #[serde(default = "default_files_read_max")]
+    pub max_bytes: u64,
+}
+fn default_files_read_max() -> u64 {
+    512 * 1024
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesReadResult {
+    /// UTF-8 content (lossy), empty for binary files.
+    pub content: String,
+    /// True when the file was cut at `max_bytes`.
+    pub truncated: bool,
+    /// True when the file does not look like text.
+    pub binary: bool,
+    /// Full size on disk in bytes.
+    pub size: u64,
+}
+method!(FilesRead, "files.read", Some(Scope::OrchestrationRead), FilesReadParams, FilesReadResult);
+
 // ---- approvals ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -599,6 +693,7 @@ macro_rules! registry {
 
 registry!(
     DaemonInfoMethod,
+    DaemonShutdown,
     ProvidersList,
     ProjectsList,
     ProjectsAdd,
@@ -632,6 +727,9 @@ registry!(
     GitCommit,
     PrCreate,
     PrList,
+    FilesSearch,
+    FilesList,
+    FilesRead,
     ApprovalsRespond,
     ApprovalsList,
     EventsSubscribe,

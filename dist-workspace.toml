@@ -1,7 +1,7 @@
 # Config for `dist` (cargo-dist): https://axodotdev.github.io/cargo-dist/
 #
 # Builds and publishes the daemon (`kybernd`) and the CLI (`kybern`).
-# The GPUI desktop app is not distributed through dist; it is bundled by
+# The Tauri desktop app is not distributed through dist; it is bundled by
 # scripts/bundle-macos.sh and uploaded by .github/workflows/macos-app.yml,
 # which dist runs as a post-announce job.
 

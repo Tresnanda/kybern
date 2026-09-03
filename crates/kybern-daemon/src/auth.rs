@@ -29,12 +29,11 @@ pub fn generate() -> String {
 pub fn ensure_bootstrap(store: &Store, path: &std::path::Path) -> Result<String> {
     if let Ok(existing) = std::fs::read_to_string(path) {
         let existing = existing.trim().to_string();
-        if !existing.is_empty() {
-            if let Some(rec) = store.token_lookup(&hash(&existing))? {
-                if !rec.revoked {
-                    return Ok(existing);
-                }
-            }
+        if !existing.is_empty()
+            && let Some(rec) = store.token_lookup(&hash(&existing))?
+            && !rec.revoked
+        {
+            return Ok(existing);
         }
     }
     let token = generate();

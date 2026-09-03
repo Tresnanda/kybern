@@ -26,25 +26,62 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             };
             ok(info)
         }
-        ProvidersList::NAME => {
-            let mut providers = Vec::new();
-            for kind in ProviderKind::ALL {
-                match state.drivers.get(kind) {
-                    Some(d) => providers.push(d.probe(None).await),
-                    None => providers.push(ProviderStatus {
-                        kind,
-                        display_name: kind.display_name().to_string(),
-                        available: false,
-                        binary_path: None,
-                        version: None,
-                        unavailable_reason: Some("driver not implemented yet".into()),
-                        supported_permission_modes: vec![],
-                        supports_fork: false,
-                        supports_model_switch: false,
-                        instances: vec![],
-                    }),
-                }
+        DaemonShutdown::NAME => {
+            if ctx.principal.label != "bootstrap" {
+                return Err(RpcError::new(codes::FORBIDDEN, "daemon shutdown requires the local bootstrap client"));
             }
+            let shutdown = state.shutdown.clone();
+            tokio::spawn(async move {
+                // Let the response reach the desktop before closing every socket.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                shutdown.cancel();
+            });
+            ok(Empty {})
+        }
+        ProvidersList::NAME => {
+            let p: ProvidersListParams = parse_or_default(params)?;
+            let cwd = p
+                .project_id
+                .map(|project_id| {
+                    state
+                        .store
+                        .project_get(project_id)
+                        .map_err(internal)?
+                        .map(|project| std::path::PathBuf::from(project.path))
+                        .ok_or_else(|| RpcError::not_found("project"))
+                })
+                .transpose()?;
+            let settings = state.settings.get();
+            let probes = ProviderKind::ALL.into_iter().map(|kind| {
+                let driver = state.drivers.get(kind);
+                let provider_settings = settings.providers.get(&kind).cloned().unwrap_or_default();
+                let context = kybern_drivers::ProbeContext {
+                    binary: provider_settings.binary.map(std::path::PathBuf::from),
+                    cwd: cwd.clone(),
+                    env: provider_settings.env,
+                };
+                async move {
+                    match driver {
+                        Some(driver) => driver.probe_with_context(&context).await,
+                        None => ProviderStatus {
+                            kind,
+                            display_name: kind.display_name().to_string(),
+                            available: false,
+                            binary_path: None,
+                            version: None,
+                            unavailable_reason: Some("driver not implemented yet".into()),
+                            supported_permission_modes: vec![],
+                            supports_fork: false,
+                            supports_model_switch: false,
+                            supports_effort_switch: false,
+                            supported_efforts: vec![],
+                            models: vec![],
+                            instances: vec![],
+                        },
+                    }
+                }
+            });
+            let providers = futures::future::join_all(probes).await;
             ok(ProvidersListResult { providers })
         }
         ProjectsList::NAME => ok(ProjectsListResult { projects: state.store.projects_list().map_err(internal)? }),
@@ -96,8 +133,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ThreadsUpdateParams = parse(params)?;
             let mode = p.permission_mode;
             let model = p.model.clone();
+            let effort = p.effort.clone();
             let thread = state.orchestrator.update_thread_fields(p).map_err(bad)?;
-            state.orchestrator.apply_session_settings(thread.id, mode, model.as_deref()).await.map_err(provider_err)?;
+            state.orchestrator.apply_session_settings(thread.id, mode, model.as_deref(), effort.as_deref()).await.map_err(provider_err)?;
             ok(thread)
         }
         ThreadsArchive::NAME => {
@@ -141,6 +179,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                     pinned: None,
                     permission_mode: None,
                     model: None,
+                    effort: None,
                 })
                 .map_err(bad)?;
             ok(thread)
@@ -233,6 +272,26 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             state.store.token_revoke(p.token_id).map_err(internal)?;
             ok(Empty {})
+        }
+        FilesSearch::NAME => {
+            let p: FilesSearchParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let root = std::path::PathBuf::from(&project.path);
+            let files = crate::files::list(&root).await.map_err(internal)?;
+            let total = files.len() as u32;
+            let files = crate::files::rank(files, &p.query, p.limit as usize);
+            ok(FilesSearchResult { files, total })
+        }
+        FilesList::NAME => {
+            let p: FilesListParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let entries = crate::files::list_dir(std::path::Path::new(&project.path), &p.path).await.map_err(bad)?;
+            ok(FilesListResult { entries })
+        }
+        FilesRead::NAME => {
+            let p: FilesReadParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(crate::files::read_file(std::path::Path::new(&project.path), &p.path, p.max_bytes).await.map_err(bad)?)
         }
         GitStatusMethod::NAME => {
             let p: GitStatusParams = parse(params)?;

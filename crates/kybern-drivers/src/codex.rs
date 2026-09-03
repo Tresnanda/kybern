@@ -26,6 +26,98 @@ const MIN_VERSION: (u64, u64, u64) = (0, 140, 0);
 #[derive(Default)]
 pub struct CodexDriver;
 
+async fn catalog_call(child: &NdjsonChild, id: i64, method: &str, params: Value) -> Option<Value> {
+    child.write(&json!({ "id": id, "method": method, "params": params })).await.ok()?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let frame = {
+                let mut lines = child.lines.lock().await;
+                lines.recv().await?
+            };
+            if frame.get("id").and_then(Value::as_i64) == Some(id) {
+                return frame.get("result").cloned();
+            }
+            if let (Some(request_id), Some(_)) = (frame.get("id"), frame.get("method")) {
+                let _ = child
+                    .write(&json!({ "id": request_id, "error": { "code": -32601, "message": "unsupported during model discovery" } }))
+                    .await;
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn codex_models(bin: &std::path::Path) -> Vec<ProviderModel> {
+    let mut cmd = Command::new(bin);
+    cmd.arg("app-server");
+    let child = match NdjsonChild::spawn(cmd) {
+        Ok(child) => child,
+        Err(_) => return Vec::new(),
+    };
+    let initialized = catalog_call(
+        &child,
+        1,
+        "initialize",
+        json!({
+            "clientInfo": { "name": "kybern", "title": "Kybern", "version": env!("CARGO_PKG_VERSION") },
+            "capabilities": { "experimentalApi": false }
+        }),
+    )
+    .await
+    .is_some();
+    if !initialized {
+        child.kill().await;
+        return Vec::new();
+    }
+    if child.write(&json!({ "method": "initialized" })).await.is_err() {
+        child.kill().await;
+        return Vec::new();
+    }
+
+    let mut models = Vec::new();
+    let mut cursor: Option<String> = None;
+    for page in 0..10i64 {
+        let Some(result) =
+            catalog_call(&child, page + 2, "model/list", json!({ "limit": 100, "cursor": cursor, "includeHidden": false })).await
+        else {
+            break;
+        };
+        if let Some(items) = result.get("data").and_then(Value::as_array) {
+            models.extend(items.iter().filter_map(|item| {
+                if item.get("hidden").and_then(Value::as_bool).unwrap_or(false) {
+                    return None;
+                }
+                let id = item.get("model").or_else(|| item.get("id")).and_then(Value::as_str)?.to_string();
+                let display_name = item.get("displayName").and_then(Value::as_str).unwrap_or(&id).to_string();
+                let efforts = item
+                    .get("supportedReasoningEfforts")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|option| option.get("reasoningEffort").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect();
+                Some(ProviderModel {
+                    id,
+                    display_name,
+                    provider: None,
+                    efforts,
+                    default_effort: item.get("defaultReasoningEffort").and_then(Value::as_str).map(str::to_string),
+                    is_default: item.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
+                })
+            }));
+        }
+        cursor = result.get("nextCursor").and_then(Value::as_str).map(str::to_string);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    child.kill().await;
+    models
+}
+
 #[async_trait]
 impl AgentDriver for CodexDriver {
     fn kind(&self) -> ProviderKind {
@@ -43,6 +135,9 @@ impl AgentDriver for CodexDriver {
             supported_permission_modes: PermissionMode::ALL.to_vec(),
             supports_fork: true,
             supports_model_switch: true,
+            supports_effort_switch: true,
+            supported_efforts: vec![],
+            models: vec![],
             instances: vec!["default".into()],
         };
         let bin = match resolve(ProviderKind::Codex, binary) {
@@ -62,6 +157,16 @@ impl AgentDriver for CodexDriver {
                         Some(format!("Codex {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
                 }
                 status.version = Some(v);
+                if ok {
+                    status.models = codex_models(&bin).await;
+                    for model in &status.models {
+                        for effort in &model.efforts {
+                            if !status.supported_efforts.contains(effort) {
+                                status.supported_efforts.push(effort.clone());
+                            }
+                        }
+                    }
+                }
             }
             None => status.unavailable_reason = Some("could not run `codex --version`".into()),
         }
@@ -114,6 +219,7 @@ impl AgentDriver for CodexDriver {
                 turn_id: None,
                 mode: config.permission_mode,
                 model: config.model.clone(),
+                effort: config.effort.clone(),
                 cwd: config.cwd.clone(),
                 last_total_tokens: None,
                 message_ids: HashMap::new(),
@@ -198,6 +304,7 @@ struct State {
     turn_id: Option<String>,
     mode: PermissionMode,
     model: Option<String>,
+    effort: Option<String>,
     cwd: PathBuf,
     /// Cumulative thread total at the end of the previous turn, to compute per-turn usage.
     last_total_tokens: Option<Usage>,
@@ -607,10 +714,8 @@ impl CodexSession {
                     self.emit(DriverEvent::ToolCompleted { tool_call_id: id, output: item.clone(), is_error: false }).await;
                 }
             }
-            "contextCompaction" => {
-                if completed {
-                    self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "context compacted".into(), data: None }).await;
-                }
+            "contextCompaction" if completed => {
+                self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "context compacted".into(), data: None }).await;
             }
             _ => {}
         }
@@ -656,12 +761,13 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
 impl AgentSession for Handle {
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
-        let (thread_id, mode, model, cwd) = {
+        let (thread_id, mode, model, effort, cwd) = {
             let st = s.state.lock().await;
             (
                 st.thread_id.clone().ok_or_else(|| DriverError::Protocol("no codex thread".into()))?,
                 st.mode,
                 st.model.clone(),
+                st.effort.clone(),
                 st.cwd.clone(),
             )
         };
@@ -675,6 +781,9 @@ impl AgentSession for Handle {
         });
         if let Some(m) = model {
             params["model"] = Value::String(m);
+        }
+        if let Some(effort) = effort {
+            params["effort"] = Value::String(effort);
         }
         let resp = s.call("turn/start", params).await?;
         if let Some(id) = resp.pointer("/turn/id").and_then(|i| i.as_str()) {
@@ -701,6 +810,11 @@ impl AgentSession for Handle {
 
     async fn set_model(&self, model: &str) -> Result<()> {
         self.0.state.lock().await.model = Some(model.to_string());
+        Ok(())
+    }
+
+    async fn set_effort(&self, effort: &str) -> Result<()> {
+        self.0.state.lock().await.effort = Some(effort.to_string());
         Ok(())
     }
 

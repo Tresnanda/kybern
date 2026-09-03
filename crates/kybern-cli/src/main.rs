@@ -32,8 +32,14 @@ struct Cli {
 enum Cmd {
     /// Show daemon info.
     Info,
+    /// Stop the local daemon gracefully.
+    StopDaemon,
     /// List providers and their availability.
-    Providers,
+    Providers {
+        /// Resolve project-scoped provider settings for this project id or path.
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Manage projects.
     Projects {
         #[command(subcommand)]
@@ -55,6 +61,8 @@ enum Cmd {
         provider: String,
         #[arg(long)]
         model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
         #[arg(long, value_parser = parse_mode)]
         mode: Option<PermissionMode>,
         #[arg(long)]
@@ -127,6 +135,20 @@ enum Cmd {
     },
     /// Git status for a thread's working directory.
     Git { thread: String },
+    /// Find files in a project by fuzzy path match
+    Files {
+        project: String,
+        #[arg(default_value = "")]
+        query: String,
+    },
+    /// List one directory of a project (relative path, empty for the root)
+    Ls {
+        project: String,
+        #[arg(default_value = "")]
+        path: String,
+    },
+    /// Print a project file
+    Cat { project: String, path: String },
     /// Commit everything in a thread's working directory.
     Commit {
         thread: String,
@@ -263,8 +285,20 @@ async fn main() -> Result<()> {
             let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
             if json { println!("{}", serde_json::to_string_pretty(&info)?) } else { render::info(&info) }
         }
-        Cmd::Providers => {
-            let r = client.call::<ProvidersList>(Empty {}).await?;
+        Cmd::StopDaemon => {
+            client.call::<DaemonShutdown>(Empty {}).await?;
+            if json {
+                println!("{}", serde_json::to_string(&Empty {})?);
+            } else {
+                println!("kybernd stopping");
+            }
+        }
+        Cmd::Providers { project } => {
+            let project_id = match project {
+                Some(project) => Some(resolve_project(&client, &project, false).await?),
+                None => None,
+            };
+            let r = client.call::<ProvidersList>(ProvidersListParams { project_id }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::providers(&r.providers) }
         }
         Cmd::Projects { cmd } => match cmd {
@@ -289,7 +323,7 @@ async fn main() -> Result<()> {
             let r = client.call::<ThreadsList>(ThreadsListParams { project_id, include_archived: archived }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::threads(&r.threads) }
         }
-        Cmd::New { project, provider, model, mode, worktree, detach, prompt } => {
+        Cmd::New { project, provider, model, effort, mode, worktree, detach, prompt } => {
             let project_id = resolve_project(&client, &project, true).await?;
             let prompt = join_prompt(prompt)?;
             let sub = if detach {
@@ -302,6 +336,7 @@ async fn main() -> Result<()> {
                     project_id,
                     provider: ProviderInstance::default_for(provider.parse().map_err(|e: String| anyhow!(e))?),
                     model,
+                    effort,
                     permission_mode: mode,
                     use_worktree: if worktree { Some(true) } else { None },
                     title: None,
@@ -433,6 +468,33 @@ async fn main() -> Result<()> {
                 println!("revoked");
             }
         },
+        Cmd::Files { project, query } => {
+            let r = client.call::<FilesSearch>(FilesSearchParams { project_id: project.parse()?, query, limit: 30 }).await?;
+            for f in &r.files {
+                println!("{f}");
+            }
+            eprintln!("{} of {} files", r.files.len(), r.total);
+        }
+        Cmd::Ls { project, path } => {
+            let r = client.call::<FilesList>(FilesListParams { project_id: project.parse()?, path }).await?;
+            for e in &r.entries {
+                match e.kind {
+                    FileEntryKind::Directory => println!("{}/", e.name),
+                    FileEntryKind::File => println!("{}  {}", e.name, e.size.unwrap_or(0)),
+                }
+            }
+        }
+        Cmd::Cat { project, path } => {
+            let r = client.call::<FilesRead>(FilesReadParams { project_id: project.parse()?, path, max_bytes: 512 * 1024 }).await?;
+            if r.binary {
+                eprintln!("binary file, {} bytes", r.size);
+            } else {
+                print!("{}", r.content);
+                if r.truncated {
+                    eprintln!("\n[truncated at 512 KiB of {} bytes]", r.size);
+                }
+            }
+        }
         Cmd::Git { thread } => {
             let r = client.call::<GitStatusMethod>(GitStatusParams { thread_id: thread.parse()? }).await?;
             println!("{}", serde_json::to_string_pretty(&r)?);
