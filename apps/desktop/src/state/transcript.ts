@@ -277,6 +277,18 @@ export interface TurnGroup {
 
 type AssistantBlock = Extract<Block, { kind: "assistant" }>
 
+/**
+ * A provider can emit a single token and then spend seconds preparing the
+ * remainder. Keep the live status visible until the fragment has enough
+ * meaning to read as output, instead of presenting a visibly stalled glyph.
+ */
+export function shouldRevealLiveText(text: string, complete: boolean): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (complete) return true
+  return /\s/u.test(text) || Array.from(trimmed).length >= 12
+}
+
 function splitAssistantForPresentation(block: AssistantBlock): {
   answer: AssistantBlock
   reasoning: AssistantBlock | null

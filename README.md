@@ -110,9 +110,11 @@ by `KYBERN_DATA_DIR`. If none is available it starts the bundled daemon on an
 unused port, writes that port to `daemon.port`, and leaves the daemon running
 for CLI and mobile clients when the window closes.
 
-During development, run `kybern --data-dir /tmp/kyb stop-daemon` before
-relaunching after daemon or driver changes; otherwise the new desktop build
-will intentionally reuse the old process for the same data directory.
+For app-managed local endpoints, reopening the desktop automatically replaces a
+daemon when the staged binary is newer or incompatible. A daemon selected with
+`KYBERN_URL` is externally managed and is never stopped automatically. Note that
+`pnpm build` builds only the React frontend; use the Tauri wrapper to build and
+stage daemon or driver changes as well: `pnpm tauri dev` or `pnpm tauri build`.
 
 ### macOS app bundle
 

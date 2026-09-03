@@ -1,6 +1,6 @@
 // Transcript pane, to Synara's ChatTranscriptPane / MessagesTimeline spec:
-// centered 46rem column, user bubbles at 80% width, "Worked for" disclosure
-// with a hairline, quiet work rows, markdown answer with a tiny action footer,
+// centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
+// settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
 import { memo, useMemo, useRef, useState, type CSSProperties } from "react"
@@ -50,7 +50,7 @@ import { cn } from "@/lib/utils"
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from "@/protocol"
 import { errorText, revertTo } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
-import { groupTurns, type Block, type TurnGroup } from "@/state/transcript"
+import { groupTurns, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
 const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
@@ -164,51 +164,63 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
     () => runtimeTasks.filter((task) => task.origin_turn_id === group.turnId),
     [group.turnId, runtimeTasks],
   )
-  const hasWork = group.work.length > 0 || launchedTasks.length > 0
-  const hasLiveWork = group.work.some(
-    (block) =>
-      (block.kind === "tool" && !block.complete) ||
-      (block.kind === "assistant" && !block.complete && (!!block.text.trim() || !!block.thinking.trim())) ||
-      (block.kind === "approval" && !block.decision),
+  const transcriptTasks = useMemo(
+    () =>
+      launchedTasks.filter(
+        (task) =>
+          !task.tool_call_id ||
+          !group.work.some((block) => block.kind === "tool" && block.call.id === task.tool_call_id),
+      ),
+    [group.work, launchedTasks],
   )
+  const hasWork = group.work.length > 0 || launchedTasks.length > 0
+  const hasLiveWork =
+    launchedTasks.some(isRuntimeTaskActive) ||
+    group.work.some(
+      (block) =>
+        (block.kind === "tool" && !block.complete) ||
+        (block.kind === "assistant" && !block.complete && (!!block.text.trim() || !!block.thinking.trim())) ||
+        (block.kind === "approval" && !block.decision),
+    )
   const settled = !group.running
   const open = group.running || !!expanded
-  const streaming = group.running && !!group.answerLive
+  const streaming = group.running && !!group.answerLive && shouldRevealLiveText(group.answerLive.text, group.answerLive.complete)
 
   return (
     <>
       {group.user && (
-        <div className={cn(ROW, "pb-4")} data-timeline-row-kind="message" data-message-role="user" data-slot="message" data-from="user">
+        <div className={cn(ROW, group.running ? "pb-5" : "pb-4")} data-timeline-row-kind="message" data-message-role="user" data-slot="message" data-from="user">
           <UserBubble message={group.user.message} at={group.user.at} />
         </div>
       )}
 
       {group.running && (
-        <div className={cn(ROW, "pb-2")} data-timeline-row-kind="working-header">
+        <div className={cn(ROW, "pb-2")} data-timeline-row-kind="live-work">
           <WorkingHeader since={group.user?.at ?? ""} />
+          {hasWork && (
+            <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
+              <WorkList blocks={group.work} tasks={launchedTasks} />
+              <RuntimeTaskTranscriptRows tasks={transcriptTasks} />
+            </div>
+          )}
+          {!streaming && !hasLiveWork && (
+            <div className="shimmer mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
+              Thinking
+            </div>
+          )}
+          {streaming && group.answerLive && (
+            <div className="group/assistant mt-2 min-w-0 py-0.5" data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
+              <div data-slot="message-content">
+                <Markdown text={group.answerLive.text} style={TEXT} />
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {group.running && hasWork && (
-        <div className={cn(ROW, "pb-2")} data-timeline-row-kind="work">
-          <div className="space-y-0.5">
-            <WorkList blocks={group.work} />
-            <RuntimeTaskTranscriptRows tasks={launchedTasks} />
-          </div>
-        </div>
-      )}
-
-      {group.running && !streaming && !hasLiveWork && (
-        <div className={cn(ROW, "pb-1")} data-timeline-row-kind="working">
-          <div className="shimmer pt-0.5 font-system-ui text-muted-foreground" style={CHAT_FONT}>
-            Thinking
-          </div>
-        </div>
-      )}
-
-      {(settled || streaming) && (
-        <div className={cn(ROW, "group/assistant", streaming ? "pb-1" : "pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
-          {settled && hasWork && (
+      {settled && (
+        <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
+          {hasWork && (
             <div className="mb-3">
               <div className="group/collapsed-work">
                 <button
@@ -222,8 +234,8 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
                   <DisclosureChevron open={open} className="text-muted-foreground/70" />
                 </button>
                 <DisclosureRegion open={open} contentClassName="mb-2.5 space-y-1.5">
-                  <WorkList blocks={group.work} />
-                  <RuntimeTaskTranscriptRows tasks={launchedTasks} />
+                  <WorkList blocks={group.work} tasks={launchedTasks} />
+                  <RuntimeTaskTranscriptRows tasks={transcriptTasks} />
                 </DisclosureRegion>
               </div>
               <div className="h-px w-full bg-border" />
@@ -231,9 +243,9 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
           )}
 
           <div className="group min-w-0 py-0.5">
-            {(group.answer ?? group.answerLive) && (
+            {group.answer && (
               <div data-slot="message-content">
-                <Markdown text={(group.answer ?? group.answerLive)!.text} style={TEXT} />
+                <Markdown text={group.answer.text} style={TEXT} />
               </div>
             )}
 
@@ -310,12 +322,9 @@ function RuntimeTaskTranscriptRows({ tasks }: { tasks: RuntimeTask[] }) {
 function WorkingHeader({ since }: { since: string }) {
   const now = useTicker(true)
   return (
-    <>
-      <div className="-ml-0.5 pb-2 text-muted-foreground" style={CHAT_FONT}>
-        Working for {clockDuration(elapsedSince(since, now))}
-      </div>
-      <div className="h-px w-full bg-border" />
-    </>
+    <div className="-ml-0.5 text-muted-foreground" style={CHAT_FONT}>
+      Working for {clockDuration(elapsedSince(since, now))}
+    </div>
   )
 }
 
@@ -346,9 +355,8 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
   // Decided once on mount: only a bubble that was sent just now plays the send animation.
   const [fresh] = useState(() => Date.now() - new Date(at).getTime() < 3000)
   return (
-    <div className={cn("flex w-full flex-col gap-3", fresh && "chat-message-send-enter")}>
-      <div className="flex w-full justify-end">
-        <div className="group flex max-w-[80%] flex-col items-end gap-px">
+    <div className={cn("flex w-full justify-end", fresh && "chat-message-send-enter")}>
+      <div className="group relative flex max-w-[80%] flex-col items-end gap-px">
           {files.length > 0 && (
             <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-2 self-end">
               {files.map((p, i) =>
@@ -385,13 +393,12 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
               <Markdown text={text} variant="user" style={TEXT} />
             </div>
           )}
-          <div className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45" style={META}>
+          <div className="absolute top-full right-0 flex items-center justify-end gap-2 pt-1 pr-0.5 font-system-ui font-normal whitespace-nowrap text-muted-foreground/45" style={META}>
             <p className={cn("tabular-nums", HOVER_REVEAL)}>{clockTime(at)}</p>
             <div className={cn("flex items-center gap-2", HOVER_REVEAL)}>
               <CopyAction text={text} />
             </div>
           </div>
-        </div>
       </div>
     </div>
   )
@@ -471,7 +478,7 @@ const TONE = "text-muted-foreground transition-colors group-hover/tool-row:text-
 type ToolBlock = Extract<Block, { kind: "tool" }>
 type WorkChunk = { kind: "single"; block: Block } | { kind: "tools"; blocks: ToolBlock[] }
 
-function chunkWork(blocks: readonly Block[]): WorkChunk[] {
+function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string, RuntimeTask>): WorkChunk[] {
   const chunks: WorkChunk[] = []
   let tools: ToolBlock[] = []
   const flush = () => {
@@ -480,7 +487,8 @@ function chunkWork(blocks: readonly Block[]): WorkChunk[] {
     tools = []
   }
   for (const block of blocks) {
-    if (block.kind === "tool" && block.complete && !block.isError) {
+    const linkedTask = block.kind === "tool" ? tasksByToolCall.get(block.call.id) : undefined
+    if (block.kind === "tool" && block.complete && !block.isError && (!linkedTask || !isRuntimeTaskActive(linkedTask))) {
       tools.push(block)
     } else {
       flush()
@@ -491,10 +499,11 @@ function chunkWork(blocks: readonly Block[]): WorkChunk[] {
   return chunks
 }
 
-function WorkList({ blocks }: { blocks: readonly Block[] }) {
-  return chunkWork(blocks).map((chunk) =>
+function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[] }) {
+  const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
+  return chunkWork(blocks, tasksByToolCall).map((chunk) =>
     chunk.kind === "single" ? (
-      <WorkRow key={chunk.block.id} block={chunk.block} />
+      <WorkRow key={chunk.block.id} block={chunk.block} task={chunk.block.kind === "tool" ? tasksByToolCall.get(chunk.block.call.id) : undefined} />
     ) : (
       <ToolGroupRow key={`${chunk.blocks[0]!.id}:${chunk.blocks.at(-1)!.id}`} blocks={chunk.blocks} />
     ),
@@ -530,10 +539,10 @@ function ToolGroupRow({ blocks }: { blocks: ToolBlock[] }) {
   )
 }
 
-function WorkRow({ block }: { block: Block }) {
+function WorkRow({ block, task }: { block: Block; task?: RuntimeTask }) {
   switch (block.kind) {
     case "tool":
-      return <ToolRow block={block} />
+      return <ToolRow block={block} task={task} />
     case "assistant":
       return <AssistantWorkRow block={block} />
     case "approval":
@@ -568,9 +577,10 @@ function WorkRow({ block }: { block: Block }) {
   }
 }
 
-function ToolRow({ block }: { block: Extract<Block, { kind: "tool" }> }) {
+function ToolRow({ block, task }: { block: Extract<Block, { kind: "tool" }>; task?: RuntimeTask }) {
   const [open, setOpen] = useState(false)
-  const activity = toolLine(block.call, block.complete)
+  const active = !!task && isRuntimeTaskActive(task)
+  const activity = toolLine(block.call, block.complete && !active)
   const visual = toolVisualKind(block.call, activity)
   const out = outputText(block.output, block.stream)
   const canOpen = out.trim().length > 0
@@ -589,8 +599,8 @@ function ToolRow({ block }: { block: Extract<Block, { kind: "tool" }> }) {
           {workIcon(visual, block.isError)}
         </span>
         <div className="min-w-0 overflow-hidden">
-          <p className={cn("truncate leading-6", tone, !block.complete && "shimmer")} style={CHAT_FONT}>
-            <span data-work-entry-display-text>{workLabel(activity, block.call.name, block.complete, block.isError)}</span>
+          <p className={cn("truncate leading-6", tone, (!block.complete || active) && "shimmer")} style={CHAT_FONT}>
+            <span data-work-entry-display-text>{workLabel(activity, block.call.name, block.complete && !active, block.isError)}</span>
           </p>
         </div>
         {canOpen && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}

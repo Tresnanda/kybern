@@ -14,7 +14,7 @@ registerHooks({
   },
 })
 
-const { groupTurns } = await import("./src/state/transcript.ts")
+const { groupTurns, shouldRevealLiveText } = await import("./src/state/transcript.ts")
 
 const user = {
   kind: "user",
@@ -62,4 +62,10 @@ test("OMP reasoning stays in work after its combined assistant message settles",
   assert.equal(group.work[0]?.kind, "assistant")
   assert.equal(group.work[0]?.id, "reasoning:assistant-1")
   assert.equal(group.work[0]?.thinking, assistant.thinking)
+})
+
+test("a tiny partial token keeps the live thinking state instead of flashing a stalled answer", () => {
+  assert.equal(shouldRevealLiveText("I", false), false)
+  assert.equal(shouldRevealLiveText("The sub", false), true)
+  assert.equal(shouldRevealLiveText("Done.", true), true)
 })

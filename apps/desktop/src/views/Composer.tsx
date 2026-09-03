@@ -750,7 +750,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
               <div data-chat-composer-actions="right" className="flex shrink-0 items-center gap-1">
                 {provider && (
-                  <Menu>
+                  <Menu onOpenChange={(open) => open && canReloadModels && void reloadModels()}>
                     <Tooltip>
                       <TooltipTrigger
                         render={

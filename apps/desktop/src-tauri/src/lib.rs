@@ -3,12 +3,12 @@
 //! endpoint to the webview.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use kybern_client::{Client, Endpoint};
 use kybern_protocol::PROTOCOL_VERSION;
-use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, Empty};
+use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, DaemonShutdown, Empty};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -59,6 +59,35 @@ fn ensure_compatible(info: &DaemonInfo) -> Result<()> {
         log::warn!("using compatible kybernd {} with desktop {}", info.version, env!("CARGO_PKG_VERSION"));
     }
     Ok(())
+}
+
+fn daemon_needs_restart(info: &DaemonInfo, binary_modified: Option<SystemTime>) -> bool {
+    if info.protocol_version != PROTOCOL_VERSION || info.version != env!("CARGO_PKG_VERSION") {
+        return true;
+    }
+    let Some(modified_ms) =
+        binary_modified.and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|duration| i64::try_from(duration.as_millis()).ok())
+    else {
+        return false;
+    };
+    modified_ms > info.started_at.timestamp_millis()
+}
+
+async fn stop_daemon(endpoint: &Endpoint) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let client = Client::connect(endpoint).await?;
+        client.call::<DaemonShutdown>(Empty {}).await
+    })
+    .await
+    .context("timed out while stopping the stale daemon")??;
+
+    for _ in 0..100 {
+        if daemon_info(endpoint).await.is_none() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Err(anyhow!("the stale daemon did not stop in time"))
 }
 
 fn daemon_binary() -> Result<PathBuf> {
@@ -121,8 +150,21 @@ async fn endpoint() -> Result<EndpointInfo, String> {
         let _guard = ENDPOINT_LOCK.lock().await;
         if let Ok(ep) = resolve() {
             if let Some(info) = daemon_info(&ep).await {
-                ensure_compatible(&info)?;
-                return Ok(EndpointInfo { http_base: http_base(&ep.url), url: ep.url, token: ep.token, spawned: false });
+                let externally_managed = std::env::var_os("KYBERN_URL").is_some();
+                let binary = (!externally_managed).then(daemon_binary).transpose()?;
+                let binary_modified = binary.as_ref().and_then(|path| std::fs::metadata(path).ok()?.modified().ok());
+                if !externally_managed && daemon_needs_restart(&info, binary_modified) {
+                    log::info!(
+                        "restarting stale kybernd {} (started {}) from {}",
+                        info.version,
+                        info.started_at,
+                        binary.as_ref().map_or_else(|| "the bundled daemon".into(), |path| path.display().to_string())
+                    );
+                    stop_daemon(&ep).await?;
+                } else {
+                    ensure_compatible(&info)?;
+                    return Ok(EndpointInfo { http_base: http_base(&ep.url), url: ep.url, token: ep.token, spawned: false });
+                }
             }
         }
         if std::env::var_os("KYBERN_URL").is_some() {
@@ -170,4 +212,43 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![endpoint, data_dir_path])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::daemon_needs_restart;
+    use kybern_protocol::PROTOCOL_VERSION;
+    use kybern_protocol::methods::DaemonInfo;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    fn daemon(version: &str) -> DaemonInfo {
+        DaemonInfo {
+            version: version.into(),
+            protocol_version: PROTOCOL_VERSION,
+            environment_id: "test".into(),
+            hostname: "test".into(),
+            os: "test".into(),
+            arch: "test".into(),
+            data_dir: "/tmp/kybern-test".into(),
+            scopes: vec![],
+            started_at: "2026-09-04T00:00:00Z".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn restarts_when_the_local_daemon_binary_was_rebuilt() {
+        let rebuilt = UNIX_EPOCH + Duration::from_secs(1_788_480_001);
+        assert!(daemon_needs_restart(&daemon(env!("CARGO_PKG_VERSION")), Some(rebuilt)));
+    }
+
+    #[test]
+    fn keeps_the_daemon_started_after_the_local_binary() {
+        let older_binary = UNIX_EPOCH + Duration::from_secs(1_788_479_999);
+        assert!(!daemon_needs_restart(&daemon(env!("CARGO_PKG_VERSION")), Some(older_binary)));
+    }
+
+    #[test]
+    fn restarts_a_different_daemon_version_even_without_metadata() {
+        assert!(daemon_needs_restart(&daemon("0.0.0-stale"), None));
+    }
 }

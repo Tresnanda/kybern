@@ -53,10 +53,12 @@ spawns `kybernd` from its own directory or `PATH` when none is reachable.
 
 The desktop package scripts build and stage `kybernd` as a Tauri sidecar; use
 `pnpm tauri ...` rather than calling the Tauri CLI directly. Daemons outlive
-desktop windows. After rebuilding daemon or driver code, run
-`./target/debug/kybern --data-dir /tmp/kyb stop-daemon` from the repository root
-before relaunching against that data directory; the next launch must report a
-new `started_at`.
+desktop windows. For an app-managed local endpoint, the desktop restarts a
+daemon whose version is incompatible or whose binary is older than the staged
+binary. Explicit `KYBERN_URL` endpoints remain externally managed and are never
+stopped by the app. `pnpm build` only builds the web frontend; use the Tauri
+wrapper when daemon or driver changes must be included: `pnpm tauri dev` or
+`pnpm tauri build`.
 
 ## Tests and checks
 
@@ -115,7 +117,9 @@ There is no GUI test harness. Launch the app against a scratch daemon, drive
 state from the CLI (`kybern send <thread> --detach ...`, `kybern approvals allow`,
 `kybern terminal send ...`) or with `cliclick`/`osascript`, and screenshot only
 the app window by id (`screencapture -l <id>`), never the full screen. See
-`docs/design.md` for what "right" looks like.
+`docs/design.md` for what "right" looks like. Run one Kybern UI at a time: close
+the packaged app before launching `pnpm tauri dev`, and target the dev process's
+window id rather than opening the installed app by bundle name.
 
 ## Data directory
 
