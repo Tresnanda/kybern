@@ -141,7 +141,7 @@ export function ThreadSidebar() {
               </div>
             </div>
             {projectList.length === 0 ? (
-              <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">No projects yet</div>
+              <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">No projects yet. Add a folder to see its threads here.</div>
             ) : (
               <SidebarMenu className="gap-3">
                 {projectList.map((p) => (

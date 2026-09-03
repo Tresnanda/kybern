@@ -43,12 +43,12 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
         <TooltipPopup side="bottom">Toggle sidebar ({mod}B)</TooltipPopup>
       </Tooltip>
       {isTauri() && (
-        <div className="-ms-1 flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag] ms-0">
-          <Button variant="ghost" size="icon-sm" className="size-8 rounded-lg" aria-label="Back" onClick={() => history.back()}>
-            <IoIosArrowRoundBack className="size-6" />
+        <div className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]">
+          <Button variant="ghost" size="icon-xs" className="size-7" aria-label="Back" onClick={() => history.back()}>
+            <IoIosArrowRoundBack className="size-5" />
           </Button>
-          <Button variant="ghost" size="icon-sm" className="size-8 rounded-lg" aria-label="Forward" onClick={() => history.forward()}>
-            <IoIosArrowRoundForward className="size-6" />
+          <Button variant="ghost" size="icon-xs" className="size-7" aria-label="Forward" onClick={() => history.forward()}>
+            <IoIosArrowRoundForward className="size-5" />
           </Button>
         </div>
       )}
@@ -80,7 +80,7 @@ export function DockToggle() {
           />
         }
       >
-        <PanelRightCloseIcon className="size-3.5 shrink-0 opacity-70 size-4" />
+        <PanelRightCloseIcon className="size-4 shrink-0 opacity-70" />
       </TooltipTrigger>
       <TooltipPopup side="bottom">{rightOpen ? "Close right sidebar" : "Open right sidebar"}</TooltipPopup>
     </Tooltip>
@@ -105,7 +105,7 @@ export function EnvironmentToggle() {
           />
         }
       >
-        <WindowIcon className="size-3.5 shrink-0 opacity-70 size-4" />
+        <WindowIcon className="size-4 shrink-0 opacity-70" />
       </TooltipTrigger>
       <TooltipPopup side="bottom">Environment</TooltipPopup>
     </Tooltip>

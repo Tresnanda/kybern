@@ -647,7 +647,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           type="button"
                           variant="prominent"
                           size="icon-xs"
-                          className="sm:size-[26px]"
+                          className="sm:size-[26px] disabled:opacity-35"
                           aria-label="Stop generation"
                           title="Stop the current response. On Mac, press Ctrl+C to interrupt."
                           onClick={onStop}
@@ -667,7 +667,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           type="button"
                           variant="prominent"
                           size="icon-xs"
-                          className="size-7 rounded-full sm:size-7"
+                          className="size-7 rounded-full sm:size-7 disabled:opacity-35"
                           aria-label={sending ? "Sending" : "Send message"}
                           disabled={!canSend}
                           onClick={() => void submit()}

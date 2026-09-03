@@ -150,6 +150,16 @@ const SURFACE_UNDER_BASE_ALPHA: Record<ThemeVariant, number> = {
   dark: 0.16,
   light: 0.04,
 };
+/** Mix of seed surface kept when the macOS shell is translucent. Higher = heavier sidebar. */
+const SIDEBAR_TRANSLUCENT_MIX: Record<ThemeVariant, number> = {
+  dark: 0.86,
+  light: 0.8,
+};
+/** Dark thread/settings pane lift toward white. 0 keeps the seed surface. */
+const CONTENT_SURFACE_LIFT: Record<ThemeVariant, number> = {
+  dark: 0.08,
+  light: 0,
+};
 const SURFACE_UNDER_CONTRAST_STEP: Record<ThemeVariant, number> = {
   dark: 0.0015,
   light: 0.0012,
@@ -701,13 +711,10 @@ export function buildThemeCssVariables(
       ? "translucent"
       : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
-  // Codex paints the app sidebar with the PRIMARY surface (--color-background-surface,
-  // mapped through --color-token-side-bar-background), not the darker "under" surface.
-  // The under-surface is reserved for the window body behind the content (see
-  // --app-shell-background / --background). Sourcing the sidebar from the primary
-  // surface keeps its pure color matching Codex in both light and dark.
-  const sidebarSurface = readCodexVariable("--color-background-surface");
-  const settingsSurface = readCodexVariable("--color-background-surface");
+  const seedSurface = readCodexVariable("--color-background-surface");
+  const contentLift = CONTENT_SURFACE_LIFT[variant];
+  const contentSurface =
+    contentLift > 0 ? mixHex(seedSurface, "#ffffff", contentLift) : seedSurface;
   const composerSurface =
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
@@ -750,17 +757,12 @@ export function buildThemeCssVariables(
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
-    // Translucent light mode raises the white share above the old 48% so the
-    // frost doesn't read grey; dark keeps the raw surface thinned over the vibrancy.
+    // Sidebar keeps the unlifted seed (heavier mix when translucent); thread/settings use the lifted content surface.
     "--app-sidebar-surface":
       material === "translucent"
-        ? variant === "dark"
-          ? `color-mix(in srgb, ${sidebarSurface} 56%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} 68%, transparent)`
-        : sidebarSurface,
-    // Always opaque so the settings page background matches the chat surface exactly,
-    // regardless of window material.
-    "--app-settings-surface": settingsSurface,
+        ? `color-mix(in srgb, ${seedSurface} ${Math.round(SIDEBAR_TRANSLUCENT_MIX[variant] * 100)}%, transparent)`
+        : seedSurface,
+    "--app-settings-surface": contentSurface,
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),
     "--card": readCodexVariable("--color-background-panel"),
@@ -783,7 +785,8 @@ export function buildThemeCssVariables(
     "--ring": readCodexVariable("--color-border-focus"),
     "--secondary": readCodexVariable("--color-background-button-secondary"),
     "--secondary-foreground": readCodexVariable("--color-text-button-secondary"),
-    "--sidebar": readCodexVariable("--color-background-surface"),
+    "--sidebar": seedSurface,
+    "--color-background-surface": contentSurface,
     "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
