@@ -33,8 +33,8 @@ import {
 } from "@/lib/synara/icons"
 import { openExternal, openPath, revealInFinder } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import type { GitStatus, ThreadId } from "@/protocol"
-import { errorText, loadDiff, rpc } from "@/state/rpc"
+import type { ThreadId } from "@/protocol"
+import { errorText, loadDiff, loadGitStatus, rpc } from "@/state/rpc"
 import { diffKey, useStore } from "@/state/store"
 
 /** Chat content is inset by this much while the panel is docked (288px card + 24px gutters). */
@@ -146,9 +146,8 @@ export function EnvironmentPanel({ threadId }: { threadId: ThreadId }) {
   const thread = useStore((s) => s.threads[threadId])
   const project = useStore((s) => (thread ? s.projects[thread.project_id] : undefined))
   const diff = useStore((s) => s.diffs[diffKey(threadId)])
-  const lastSeq = useStore((s) => s.transcripts[threadId]?.lastSeq)
-  const blocks = useStore((s) => s.transcripts[threadId]?.blocks)
-  const [git, setGit] = useState<GitStatus | null>(null)
+  const blocks = useStore((s) => open ? s.transcripts[threadId]?.blocks : undefined)
+  const git = useStore((s) => s.gitStatuses[threadId] ?? null)
   const [busy, setBusy] = useState<"commit" | "pr" | null>(null)
   const [hidden, setHidden] = useLocalStorage<Partial<Record<Section, boolean>>>("kybern.env.hidden", {})
   const [recapOpen, setRecapOpen] = useLocalStorage("kybern.env.recap", true)
@@ -156,11 +155,8 @@ export function EnvironmentPanel({ threadId }: { threadId: ThreadId }) {
   useEffect(() => {
     if (!open) return
     void loadDiff(threadId)
-    rpc()
-      .call("git.status", { thread_id: threadId })
-      .then(setGit)
-      .catch(() => setGit(null))
-  }, [threadId, lastSeq, open])
+    void loadGitStatus(threadId)
+  }, [threadId, open])
 
   const recap = useMemo(() => {
     if (!blocks) return ""
@@ -182,7 +178,7 @@ export function EnvironmentPanel({ threadId }: { threadId: ThreadId }) {
       const r = await rpc().call("git.commit", { thread_id: threadId })
       toast("Committed", { description: r.message })
       void loadDiff(threadId)
-      setGit(await rpc().call("git.status", { thread_id: threadId }))
+      void loadGitStatus(threadId)
     } catch (e) {
       toast.error("Unable to commit", { description: errorText(e) })
     } finally {
@@ -194,7 +190,10 @@ export function EnvironmentPanel({ threadId }: { threadId: ThreadId }) {
     try {
       const p = await rpc().call("github.pr.create", { thread_id: threadId })
       toast("Pull request opened", { description: p.title, action: { label: "Open", onClick: () => void openExternal(p.url) } })
-      setGit((g) => (g ? { ...g, pull_request: p } : g))
+      useStore.getState().set((state) => {
+        const current = state.gitStatuses[threadId]
+        return current ? { gitStatuses: { ...state.gitStatuses, [threadId]: { ...current, pull_request: p } } } : {}
+      })
     } catch (e) {
       toast.error("Unable to create pull request", { description: errorText(e) })
     } finally {

@@ -3,7 +3,7 @@
 // file viewer with a breadcrumb header, syntax highlighting and a markdown
 // preview switch.
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { FileTree, FileTreeFile, FileTreeFolder } from "@/components/beui/file-tree"
@@ -23,12 +23,16 @@ import { basename } from "@/lib/format"
 import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon, FolderIcon } from "@/lib/synara/icons"
 import { revealInFinder } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { countLines, shouldHighlightSource } from "@/lib/workload"
 import type { FileEntry, FilesReadResult, ProjectId } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
 
-const SEARCH_DEBOUNCE_MS = 120
+const SEARCH_DEBOUNCE_MS = 200
 const SEARCH_LIMIT = 80
+const FILE_READ_MAX_BYTES = 256 * 1024
+const MARKDOWN_PREVIEW_MAX_BYTES = 96 * 1024
+const MARKDOWN_PREVIEW_MAX_LINES = 2_000
 const ROW = "flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left font-system-ui text-[length:var(--app-font-size-ui,12px)] text-foreground/85 outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)]"
 
 function formatBytes(n: number): string {
@@ -44,7 +48,7 @@ function parentDirs(path: string): string[] {
   return out
 }
 
-export function ExplorerPane({ projectId }: { projectId: ProjectId }) {
+export const ExplorerPane = memo(function ExplorerPane({ projectId, active }: { projectId: ProjectId; active: boolean }) {
   const project = useStore((s) => s.projects[projectId])
   const selected = useStore((s) => s.explorerFile[projectId] ?? null)
   const set = useStore((s) => s.set)
@@ -76,15 +80,20 @@ export function ExplorerPane({ projectId }: { projectId: ProjectId }) {
     requested.current = new Set()
     setListings({})
     setExpanded([])
-    load("")
-  }, [projectId, load])
+  }, [projectId])
 
   useEffect(() => {
+    if (active) load("")
+  }, [active, load])
+
+  useEffect(() => {
+    if (!active) return
     const id = setTimeout(() => setDebounced(query.trim()), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(id)
-  }, [query])
+  }, [active, query])
 
   useEffect(() => {
+    if (!active) return
     if (!debounced) {
       setResults(null)
       return
@@ -97,7 +106,7 @@ export function ExplorerPane({ projectId }: { projectId: ProjectId }) {
     return () => {
       live = false
     }
-  }, [debounced, projectId])
+  }, [active, debounced, projectId])
 
   const select = useCallback(
     (path: string | null) => {
@@ -117,26 +126,33 @@ export function ExplorerPane({ projectId }: { projectId: ProjectId }) {
     [load, select],
   )
 
-  const onExpandedChange = (ids: string[]) => {
+  const onExpandedChange = useCallback((ids: string[]) => {
     setExpanded(ids)
     for (const id of ids) load(id)
-  }
+  }, [load])
 
-  const renderDir = (dir: string): React.ReactNode => {
-    const entries = listings[dir]
-    if (entries === "loading" || entries === undefined) return <FileTreeFile value={`${dir}/…loading`} name="Loading…" disabled icon={<Spinner size={12} />} />
-    if (entries === "error") return <FileTreeFile value={`${dir}/…error`} name="Could not read folder" disabled />
-    if (entries.length === 0) return <FileTreeFile value={`${dir}/…empty`} name="Empty folder" disabled />
-    return entries.map((e) =>
-      e.kind === "directory" ? (
-        <FileTreeFolder key={e.path} value={e.path} name={e.name}>
-          {expanded.includes(e.path) ? renderDir(e.path) : <FileTreeFile value={`${e.path}/…`} name="" disabled className="hidden" />}
+  const expandedSet = useMemo(() => new Set(expanded), [expanded])
+  const treeNodes = useMemo(() => {
+    const renderDir = (dir: string): React.ReactNode => {
+      const entries = listings[dir]
+      if (entries === "loading" || entries === undefined) return <FileTreeFile value={`${dir}/…loading`} name="Loading…" disabled icon={<Spinner size={12} />} />
+      if (entries === "error") return <FileTreeFile value={`${dir}/…error`} name="Could not read folder" disabled />
+      if (entries.length === 0) return <FileTreeFile value={`${dir}/…empty`} name="Empty folder" disabled />
+      return entries.map((entry) => entry.kind === "directory" ? (
+        <FileTreeFolder key={entry.path} value={entry.path} name={entry.name}>
+          {expandedSet.has(entry.path) ? renderDir(entry.path) : <FileTreeFile value={`${entry.path}/…`} name="" disabled className="hidden" />}
         </FileTreeFolder>
       ) : (
-        <FileTreeFile key={e.path} value={e.path} name={e.name} icon={<FileEntryIcon pathValue={e.path} kind="file" className="size-3.5" />} />
-      ),
-    )
-  }
+        <FileTreeFile key={entry.path} value={entry.path} name={entry.name} icon={<FileEntryIcon pathValue={entry.path} kind="file" className="size-3.5" />} />
+      ))
+    }
+    return renderDir("")
+  }, [expandedSet, listings])
+
+  const onTreeValueChange = useCallback((value: string) => {
+    if (value.includes("/…")) return
+    if (findEntry(listings, value)?.kind !== "directory") select(value)
+  }, [listings, select])
 
   const root = listings[""]
   const column = useResize({ initial: 240, min: 176, max: 520, side: "left", storageKey: "kybern.explorer.width" })
@@ -174,31 +190,28 @@ export function ExplorerPane({ projectId }: { projectId: ProjectId }) {
           ) : (
             <FileTree
               value={selected}
-              onValueChange={(v) => {
-                if (v.includes("/…")) return
-                const isDir = findEntry(listings, v)?.kind === "directory"
-                if (!isDir) select(v)
-              }}
+              onValueChange={onTreeValueChange}
               expandedIds={expanded}
               onExpandedChange={onExpandedChange}
               ariaLabel={`${project?.name ?? "Project"} files`}
+              virtualize
               className="gap-px"
             >
-              {renderDir("")}
+              {treeNodes}
             </FileTree>
           )}
         </div>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1">
         {selected ? (
-          <FileViewer key={`${projectId}:${selected}`} projectId={projectId} path={selected} projectName={project?.name ?? "Project"} projectPath={project?.path ?? ""} />
+          <FileViewer key={`${projectId}:${selected}`} projectId={projectId} path={selected} projectName={project?.name ?? "Project"} projectPath={project?.path ?? ""} active={active} />
         ) : (
           <div className="flex w-full items-center justify-center px-5 text-center text-xs text-muted-foreground/70">Select a file from the tree to view it.</div>
         )}
       </div>
     </div>
   )
-}
+})
 
 function findEntry(listings: Record<string, FileEntry[] | "loading" | "error">, path: string): FileEntry | undefined {
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
@@ -220,7 +233,7 @@ function LoadingRows() {
   )
 }
 
-function FileViewer({ projectId, path, projectName, projectPath }: { projectId: ProjectId; path: string; projectName: string; projectPath: string }) {
+const FileViewer = memo(function FileViewer({ projectId, path, projectName, projectPath, active }: { projectId: ProjectId; path: string; projectName: string; projectPath: string; active: boolean }) {
   const dark = useIsDark()
   const [file, setFile] = useState<FilesReadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -231,31 +244,37 @@ function FileViewer({ projectId, path, projectName, projectPath }: { projectId: 
   const dirs = path.slice(0, path.length - name.length).split("/").filter(Boolean)
 
   useEffect(() => {
+    if (!active) return
     let live = true
     setFile(null)
     setError(null)
     setHtml(null)
     rpc()
-      .call("files.read", { project_id: projectId, path })
+      .call("files.read", { project_id: projectId, path, max_bytes: FILE_READ_MAX_BYTES })
       .then((r) => live && setFile(r))
       .catch((e) => live && setError(errorText(e)))
     return () => {
       live = false
     }
-  }, [projectId, path])
+  }, [active, projectId, path])
 
   useEffect(() => {
-    if (!file || file.binary || !file.content) return
+    if (!active || !file || file.binary || !file.content || !shouldHighlightSource(file.content)) return
     let live = true
-    highlightToHtml(file.content, languageForPath(path), dark)
-      .then((h) => live && setHtml(h))
-      .catch(() => live && setHtml(null))
+    const timer = window.setTimeout(() => {
+      highlightToHtml(file.content, languageForPath(path), dark)
+        .then((h) => live && setHtml(h))
+        .catch(() => live && setHtml(null))
+    }, 0)
     return () => {
       live = false
+      window.clearTimeout(timer)
     }
-  }, [file, path, dark])
+  }, [active, file, path, dark])
 
-  const lineCount = file?.content ? file.content.split("\n").length : 0
+  const lineCount = useMemo(() => countLines(file?.content ?? ""), [file?.content])
+  const canPreviewMarkdown = !file || (file.content.length <= MARKDOWN_PREVIEW_MAX_BYTES && lineCount <= MARKDOWN_PREVIEW_MAX_LINES)
+  const showPreview = preview && canPreviewMarkdown
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
@@ -290,16 +309,17 @@ function FileViewer({ projectId, path, projectName, projectPath }: { projectId: 
                       <button
                         type="button"
                         role="radio"
-                        aria-checked={preview === rendered}
+                        aria-checked={showPreview === rendered}
                         aria-label={label}
+                        disabled={rendered && !canPreviewMarkdown}
                         onClick={() => setPreview(rendered)}
-                        className={cn("inline-flex size-6 items-center justify-center rounded-[5px] text-muted-foreground transition-colors", preview === rendered && "bg-[var(--color-background-surface)] text-foreground shadow-sm")}
+                        className={cn("inline-flex size-6 items-center justify-center rounded-[5px] text-muted-foreground transition-colors disabled:opacity-35", showPreview === rendered && "bg-[var(--color-background-surface)] text-foreground shadow-sm")}
                       />
                     }
                   >
                     <Icon className="size-3.5" />
                   </TooltipTrigger>
-                  <TooltipPopup side="bottom">{label}</TooltipPopup>
+                  <TooltipPopup side="bottom">{rendered && !canPreviewMarkdown ? "Preview unavailable for large files" : label}</TooltipPopup>
                 </Tooltip>
               ))}
             </div>
@@ -353,7 +373,7 @@ function FileViewer({ projectId, path, projectName, projectPath }: { projectId: 
             Reveal in Finder
           </Button>
         </div>
-      ) : isMarkdown && preview ? (
+      ) : isMarkdown && showPreview ? (
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="mx-auto w-full max-w-[46rem] px-5 py-4">
             <Markdown text={file.content} style={{ fontSize: 12, lineHeight: "19.5px" }} />
@@ -373,4 +393,4 @@ function FileViewer({ projectId, path, projectName, projectPath }: { projectId: 
       )}
     </div>
   )
-}
+})

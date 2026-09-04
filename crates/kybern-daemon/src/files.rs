@@ -1,15 +1,48 @@
 //! Project file listing for @mentions: `git ls-files` where there is a
 //! repository (so ignores apply), a bounded walk otherwise.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
 const MAX_FILES: usize = 20_000;
+const INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
 const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".next", "dist", "build", ".venv", "venv", "__pycache__", ".cache"];
 
+struct CachedIndex {
+    loaded_at: Instant,
+    files: Arc<Vec<String>>,
+}
+
+type IndexSlot = Arc<tokio::sync::Mutex<Option<CachedIndex>>>;
+
+fn index_slots() -> &'static tokio::sync::Mutex<HashMap<PathBuf, IndexSlot>> {
+    static SLOTS: OnceLock<tokio::sync::Mutex<HashMap<PathBuf, IndexSlot>>> = OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
 /// Relative paths of files under `root`.
-pub async fn list(root: &Path) -> Result<Vec<String>> {
+pub async fn list(root: &Path) -> Result<Arc<Vec<String>>> {
+    let slot = {
+        let mut slots = index_slots().lock().await;
+        slots.entry(root.to_path_buf()).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None))).clone()
+    };
+    let mut cached = slot.lock().await;
+    if let Some(index) = cached.as_ref()
+        && index.loaded_at.elapsed() < INDEX_CACHE_TTL
+    {
+        return Ok(Arc::clone(&index.files));
+    }
+
+    let files = Arc::new(list_uncached(root).await?);
+    *cached = Some(CachedIndex { loaded_at: Instant::now(), files: Arc::clone(&files) });
+    Ok(files)
+}
+
+async fn list_uncached(root: &Path) -> Result<Vec<String>> {
     let git = tokio::process::Command::new("git")
         .args(["-C"])
         .arg(root)
@@ -55,10 +88,10 @@ fn walk(root: &Path) -> Vec<String> {
 
 /// Score paths against a query: file-name prefix, then file-name contains,
 /// then a subsequence match on the whole path. Shorter paths win ties.
-pub fn rank(files: Vec<String>, query: &str, limit: usize) -> Vec<String> {
+pub fn rank(files: &[String], query: &str, limit: usize) -> Vec<String> {
     let query = query.trim().to_ascii_lowercase();
-    let mut scored: Vec<(u32, usize, String)> = files
-        .into_iter()
+    let mut scored: Vec<(u32, usize, &str)> = files
+        .iter()
         .filter_map(|path| {
             let lower = path.to_ascii_lowercase();
             let name = lower.rsplit('/').next().unwrap_or(&lower).to_string();
@@ -75,11 +108,11 @@ pub fn rank(files: Vec<String>, query: &str, limit: usize) -> Vec<String> {
             } else {
                 return None;
             };
-            Some((score, path.len(), path))
+            Some((score, path.len(), path.as_str()))
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    scored.into_iter().take(limit).map(|(_, _, path)| path).collect()
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+    scored.into_iter().take(limit).map(|(_, _, path)| path.to_string()).collect()
 }
 
 /// Resolve `rel` under `root`, refusing anything that escapes the project.
@@ -185,25 +218,38 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::rank;
 
     #[test]
     fn ranks_file_name_matches_first() {
         let files = vec!["src/views/sidebar.rs".into(), "docs/side-notes.md".into(), "src/app.rs".into(), "README.md".into()];
-        let ranked = rank(files, "side", 10);
+        let ranked = rank(&files, "side", 10);
         assert_eq!(ranked, vec!["docs/side-notes.md", "src/views/sidebar.rs"]);
     }
 
     #[test]
     fn subsequence_matches_paths() {
         let files = vec!["crates/kybern-app/src/views/composer.rs".into(), "Cargo.toml".into()];
-        let ranked = rank(files, "kacomp", 10);
+        let ranked = rank(&files, "kacomp", 10);
         assert_eq!(ranked, vec!["crates/kybern-app/src/views/composer.rs"]);
     }
 
     #[test]
     fn empty_query_keeps_short_paths_first() {
         let files = vec!["src/very/deep/file.rs".into(), "a.rs".into()];
-        assert_eq!(rank(files, "", 10), vec!["a.rs", "src/very/deep/file.rs"]);
+        assert_eq!(rank(&files, "", 10), vec!["a.rs", "src/very/deep/file.rs"]);
+    }
+
+    #[tokio::test]
+    async fn reuses_a_recent_project_file_index() {
+        let dir = std::env::temp_dir().join(format!("kybern-file-cache-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("one.txt"), "one").unwrap();
+        let first = super::list(&dir).await.unwrap();
+        let second = super::list(&dir).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

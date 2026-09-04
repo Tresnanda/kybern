@@ -2,7 +2,7 @@
 // collapse control, and panes kept mounted underneath. The Changes pane
 // combines the Environment card rows with the diff file list.
 
-import { useEffect, useState } from "react"
+import { memo, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { Spinner } from "@/components/kybern/bits"
@@ -18,8 +18,8 @@ import { plural } from "@/lib/format"
 import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, WorkflowIcon, XIcon } from "@/lib/synara/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import type { Diff, GitStatus, ThreadId } from "@/protocol"
-import { errorText, loadDiff, loadFileDiff, rpc } from "@/state/rpc"
+import type { Diff, ThreadId } from "@/protocol"
+import { errorText, loadDiff, loadFileDiff, loadGitStatus, rpc } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore, type RightTab } from "@/state/store"
 
 import { ActivityPane } from "./Activity"
@@ -35,15 +35,14 @@ const ENV_ROW =
 const ENV_ICON = "size-4 shrink-0 text-[var(--color-text-foreground)]"
 const ENV_LABEL = "font-normal text-muted-foreground/40"
 const ENV_SECTION_LABEL = `${ENV_LABEL} text-[length:var(--app-font-size-ui-sm,11px)] px-2 py-1`
-const DIFF_FILES_BATCH = 100
+const DIFF_FILES_BATCH = 50
 
 export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const tab = useStore((s) => s.rightTab)
   const set = useStore((s) => s.set)
   const diff = useStore((s) => (threadId ? s.diffs[diffKey(threadId)] : undefined))
   const projectId = useStore((s) => (threadId ? s.threads[threadId]?.project_id : undefined) ?? (s.selected.kind === "draft" ? s.selected.draft.projectId : undefined))
-  const adds = diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0
-  const dels = diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0
+  const [adds, dels] = useMemo(() => [diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0, diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0], [diff])
   const activeTasks = useStore((s) => (threadId ? (s.runtimeTasks[threadId] ?? []).filter(isRuntimeTaskActive).length : 0))
 
   return (
@@ -106,10 +105,10 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
               <ActivityPane threadId={threadId} />
             </div>
             <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "changes" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "changes"}>
-              <Changes key={threadId} threadId={threadId} />
+              <Changes key={threadId} threadId={threadId} active={tab === "changes"} />
             </div>
             <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "explorer" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "explorer"}>
-              {projectId && <ExplorerPane projectId={projectId} />}
+              {projectId && <ExplorerPane projectId={projectId} active={tab === "explorer"} />}
             </div>
             <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "terminal" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "terminal"}>
               <TerminalWorkspace threadId={threadId} active={tab === "terminal"} />
@@ -131,22 +130,21 @@ function DockTab({ active, onClick, icon, label, children }: { active: boolean; 
   )
 }
 
-function Changes({ threadId }: { threadId: ThreadId }) {
+const Changes = memo(function Changes({ threadId, active }: { threadId: ThreadId; active: boolean }) {
   const thread = useStore((s) => s.threads[threadId])
   const project = useStore((s) => (thread ? s.projects[thread.project_id] : undefined))
   const diff = useStore((s) => s.diffs[diffKey(threadId)])
-  const [git, setGit] = useState<GitStatus | null>(null)
+  const git = useStore((s) => s.gitStatuses[threadId] ?? null)
   const [busy, setBusy] = useState<"commit" | "pr" | null>(null)
   const [visibleCount, setVisibleCount] = useState(DIFF_FILES_BATCH)
-  const lastSeq = useStore((s) => s.transcripts[threadId]?.lastSeq)
 
   useEffect(() => {
+    if (!active) return
     void loadDiff(threadId)
-    rpc()
-      .call("git.status", { thread_id: threadId })
-      .then(setGit)
-      .catch(() => setGit(null))
-  }, [threadId, lastSeq])
+    void loadGitStatus(threadId)
+  }, [active, threadId])
+
+  if (!active) return null
 
   const files = diff?.files ?? []
   const visibleFiles = files.slice(0, visibleCount)
@@ -157,6 +155,7 @@ function Changes({ threadId }: { threadId: ThreadId }) {
       const r = await rpc().call("git.commit", { thread_id: threadId })
       toast("Committed", { description: r.message })
       void loadDiff(threadId)
+      void loadGitStatus(threadId)
     } catch (e) {
       toast.error("Unable to commit", { description: errorText(e) })
     } finally {
@@ -168,7 +167,10 @@ function Changes({ threadId }: { threadId: ThreadId }) {
     try {
       const p = await rpc().call("github.pr.create", { thread_id: threadId })
       toast("Pull request opened", { description: p.title, action: { label: "Open", onClick: () => void openExternal(p.url) } })
-      setGit((g) => (g ? { ...g, pull_request: p } : g))
+      useStore.getState().set((state) => {
+        const current = state.gitStatuses[threadId]
+        return current ? { gitStatuses: { ...state.gitStatuses, [threadId]: { ...current, pull_request: p } } } : {}
+      })
     } catch (e) {
       toast.error("Unable to create pull request", { description: errorText(e) })
     } finally {
@@ -243,7 +245,7 @@ function Changes({ threadId }: { threadId: ThreadId }) {
           </div>
           <div className="h-full min-h-0 overflow-auto px-2 pb-2">
             {visibleFiles.map((file) => (
-              <LazyFileDiffCard key={file.path} threadId={threadId} change={file} />
+              <LazyFileDiffCard key={`${diff?.to}:${file.path}`} threadId={threadId} change={file} />
             ))}
             {visibleCount < files.length && (
               <button
@@ -259,7 +261,7 @@ function Changes({ threadId }: { threadId: ThreadId }) {
       )}
     </div>
   )
-}
+})
 
 function fileChangeShell(change: Diff["files"][number]): FileDiff {
   return {
@@ -279,6 +281,7 @@ function LazyFileDiffCard({ threadId, change }: { threadId: ThreadId; change: Di
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [truncated, setTruncated] = useState(false)
 
   const onOpenChange = (next: boolean) => {
     setOpen(next)
@@ -289,13 +292,14 @@ function LazyFileDiffCard({ threadId, change }: { threadId: ThreadId; change: Di
       .then((diff) => {
         const parsed = parseUnifiedDiff(diff.patch)
         setFile(parsed.find((candidate) => candidate.path === change.path) ?? fileChangeShell(change))
+        setTruncated(!!diff.patch_truncated)
         setLoaded(true)
       })
       .catch(() => setFailed(true))
       .finally(() => setLoading(false))
   }
 
-  return <FileDiffCard file={file} open={open} onOpenChange={onOpenChange} loading={loading} error={failed} className="mb-2 first:mt-2 last:mb-0" />
+  return <FileDiffCard file={file} open={open} onOpenChange={onOpenChange} loading={loading} error={failed} truncated={truncated} className="mb-2 first:mt-2 last:mb-0" />
 }
 
 function EnvRow({ icon, label, trailing, onClick, disabled }: { icon: React.ReactNode; label: string; trailing?: React.ReactNode; onClick?: () => void; disabled?: boolean }) {

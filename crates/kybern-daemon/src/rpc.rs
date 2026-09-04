@@ -310,7 +310,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let root = std::path::PathBuf::from(&project.path);
             let files = crate::files::list(&root).await.map_err(internal)?;
             let total = files.len() as u32;
-            let files = crate::files::rank(files, &p.query, p.limit as usize);
+            let files = crate::files::rank(&files, &p.query, p.limit as usize);
             ok(FilesSearchResult { files, total })
         }
         FilesList::NAME => {

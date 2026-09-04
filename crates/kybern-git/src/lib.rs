@@ -15,6 +15,9 @@ use tokio::process::Command;
 
 pub const AUTHOR_NAME: &str = "kybern";
 pub const AUTHOR_EMAIL: &str = "checkpoint@kybern.local";
+/// Keep a single diff response bounded so JSON parsing and rendering cannot
+/// monopolize a desktop client's main thread. Metadata is never truncated.
+pub const MAX_PATCH_BYTES: usize = 1024 * 1024;
 
 /// One local branch from `for-each-ref`.
 #[derive(Debug, Clone)]
@@ -182,7 +185,8 @@ impl Repo {
         let numstat_args = args("--numstat");
         let status_args = args("--name-status");
         let (numstat, status) = tokio::try_join!(self.git(&numstat_args), self.git(&status_args))?;
-        let patch = if include_patch { self.git(&args("--no-color")).await? } else { String::new() };
+        let mut patch = if include_patch { self.git(&args("--no-color")).await? } else { String::new() };
+        let patch_truncated = truncate_utf8(&mut patch, MAX_PATCH_BYTES);
 
         let mut files: Vec<FileChange> = Vec::new();
         for line in status.lines() {
@@ -217,7 +221,7 @@ impl Repo {
                 }
             }
         }
-        Ok(Diff { from: from.into(), to: to.into(), files, patch })
+        Ok(Diff { from: from.into(), to: to.into(), files, patch, patch_truncated })
     }
 
     // ---- worktrees ----
@@ -241,6 +245,18 @@ impl Repo {
         args.push(&p);
         self.git(&args).await.map(|_| ())
     }
+}
+
+fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
+    if value.len() <= max_bytes {
+        return false;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    true
 }
 
 pub fn checkpoint_ref(thread_id: &str, turn_id: &str, which: &str) -> String {
@@ -312,6 +328,25 @@ mod tests {
         assert_eq!(file.files[0].path, "a.txt");
         assert!(file.patch.contains("+two"));
         assert!(!file.patch.contains("b.txt"));
+        assert!(!file.patch_truncated);
+    }
+
+    #[tokio::test]
+    async fn oversized_patch_is_transport_bounded_without_losing_stats() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("large.txt"), "before\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+
+        let before = repo.snapshot("before").await.unwrap();
+        let contents = (0..30_000).map(|line| format!("{line:05} {}\n", "x".repeat(48))).collect::<String>();
+        std::fs::write(dir.path().join("large.txt"), contents).unwrap();
+        let after = repo.snapshot("after").await.unwrap();
+
+        let diff = repo.diff_with_options(&before, &after, true, Some("large.txt")).await.unwrap();
+        assert_eq!(diff.patch.len(), MAX_PATCH_BYTES);
+        assert!(diff.patch_truncated);
+        assert_eq!(diff.files[0].additions, 30_000);
     }
 
     #[tokio::test]

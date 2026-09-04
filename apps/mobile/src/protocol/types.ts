@@ -314,6 +314,7 @@ export interface Diff {
   to: string;
   files: FileChange[];
   patch: string;
+  patch_truncated?: boolean;
 }
 
 // ---- events ----

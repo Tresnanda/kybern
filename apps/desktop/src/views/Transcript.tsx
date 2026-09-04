@@ -50,7 +50,7 @@ import {
 } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from "@/protocol"
-import { errorText, revertTo } from "@/state/rpc"
+import { errorText, loadFileDiff, revertTo } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, groupTurns, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
@@ -1072,14 +1072,9 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   const [reverting, setReverting] = useState(false)
   const [openFiles, setOpenFiles] = useState<Record<string, boolean>>({})
   const set = useStore((s) => s.set)
-  const parsed = useMemo(() => {
-    const m = new Map<string, FileDiff>()
-    for (const f of parseUnifiedDiff(diff.patch)) m.set(f.path, f)
-    return m
-  }, [diff.patch])
   const toggleFile = (path: string) => setOpenFiles((o) => ({ ...o, [path]: !o[path] }))
   const fileFor = (f: Diff["files"][number]): FileDiff =>
-    parsed.get(f.path) ?? { path: f.path, oldPath: f.old_path ?? null, status: f.status === "added" ? "added" : f.status === "deleted" ? "deleted" : "modified", binary: f.binary, hunks: [], additions: f.additions, deletions: f.deletions }
+    ({ path: f.path, oldPath: f.old_path ?? null, status: f.status === "added" ? "added" : f.status === "deleted" ? "deleted" : "modified", binary: f.binary, hunks: [], additions: f.additions, deletions: f.deletions })
   const adds = diff.files.reduce((n, f) => n + f.additions, 0)
   const dels = diff.files.reduce((n, f) => n + f.deletions, 0)
   const head = diff.files.slice(0, MAX_VISIBLE_CHANGED_FILES)
@@ -1140,11 +1135,11 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
       </div>
       <DisclosureRegion open={expanded}>
         {head.map((f, i) => (
-          <EditedFileRow key={f.path} file={fileFor(f)} first={i === 0} open={!!openFiles[f.path]} onToggle={() => toggleFile(f.path)} onReview={review} />
+          <EditedFileRow key={f.path} file={fileFor(f)} threadId={threadId} turnId={turnId} first={i === 0} open={!!openFiles[f.path]} onToggle={() => toggleFile(f.path)} onReview={review} />
         ))}
         <DisclosureRegion open={showAll}>
           {rest.map((f) => (
-            <EditedFileRow key={f.path} file={fileFor(f)} open={!!openFiles[f.path]} onToggle={() => toggleFile(f.path)} onReview={review} />
+            <EditedFileRow key={f.path} file={fileFor(f)} threadId={threadId} turnId={turnId} open={!!openFiles[f.path]} onToggle={() => toggleFile(f.path)} onReview={review} />
           ))}
         </DisclosureRegion>
         {rest.length > 0 && (
@@ -1164,7 +1159,26 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
 }
 
 /** A changed file: click the row to unfold its diff in place; the trailing button opens the dock. */
-function EditedFileRow({ file, first, open, onToggle, onReview }: { file: FileDiff; first?: boolean; open: boolean; onToggle: () => void; onReview: () => void }) {
+function EditedFileRow({ file, threadId, turnId, first, open, onToggle, onReview }: { file: FileDiff; threadId: ThreadId; turnId: string; first?: boolean; open: boolean; onToggle: () => void; onReview: () => void }) {
+  const [loadedFile, setLoadedFile] = useState<FileDiff | null>(file.binary ? file : null)
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [truncated, setTruncated] = useState(false)
+
+  const toggle = () => {
+    onToggle()
+    if (open || loadedFile || loading || file.binary) return
+    setLoading(true)
+    setFailed(false)
+    void loadFileDiff(threadId, file.path, turnId)
+      .then((result) => {
+        setLoadedFile(parseUnifiedDiff(result.patch).find((candidate) => candidate.path === file.path) ?? file)
+        setTruncated(!!result.patch_truncated)
+      })
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false))
+  }
+
   return (
     <div className={cn("border-t border-[color:var(--color-border-light)]", first && "border-t-0")}>
       <div
@@ -1175,7 +1189,7 @@ function EditedFileRow({ file, first, open, onToggle, onReview }: { file: FileDi
           type="button"
           aria-expanded={open}
           aria-label={`${open ? "Hide" : "Show"} changes to ${file.path}`}
-          onClick={onToggle}
+          onClick={toggle}
           className="group/file-row flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent py-1 pl-3 text-left focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none"
         >
           <DisclosureChevron open={open} className="text-muted-foreground/60" />
@@ -1199,7 +1213,13 @@ function EditedFileRow({ file, first, open, onToggle, onReview }: { file: FileDi
       </div>
       <DisclosureRegion open={open}>
         <div className="border-t border-[color:var(--color-border-light)] bg-[var(--background)]">
-          <FileDiffBody file={file} />
+          {loading ? (
+            <p className="shimmer px-3 py-2 font-system-ui text-[11px] text-muted-foreground/75">Loading changes…</p>
+          ) : failed ? (
+            <p className="px-3 py-2 font-system-ui text-[11px] text-destructive">Unable to load this file’s changes.</p>
+          ) : loadedFile ? (
+            <FileDiffBody file={loadedFile} truncated={truncated} />
+          ) : null}
         </div>
       </DisclosureRegion>
     </div>

@@ -644,4 +644,7 @@ pub struct Diff {
     pub files: Vec<FileChange>,
     /// Unified diff text (`git diff --no-color`), empty when nothing changed.
     pub patch: String,
+    /// True when an oversized patch was cut to the daemon's transport limit.
+    #[serde(default)]
+    pub patch_truncated: bool,
 }

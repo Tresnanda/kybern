@@ -6,6 +6,7 @@ import {
   Children,
   Fragment,
   useCallback,
+  useLayoutEffect,
   isValidElement,
   useMemo,
   useRef,
@@ -16,6 +17,7 @@ import {
 import { SharedLayoutBg } from "@/components/beui/shared-layout-bg";
 import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@/lib/beui/ease";
 import { cn } from "@/lib/utils";
+import { virtualRange } from "@/lib/workload";
 
 type FileTreeItem = {
   value: string;
@@ -61,6 +63,8 @@ export interface FileTreeProps {
   onExpandedChange?: (expandedIds: string[]) => void;
   ariaLabel?: string;
   indent?: number;
+  /** Window fixed-height rows when the tree grows beyond the viewport. */
+  virtualize?: boolean;
   className?: string;
   classNames?: FileTreeClassNames;
 }
@@ -87,6 +91,9 @@ export function FileTreeFile(_props: FileTreeFileProps) {
 
 const ROW_ENTER = { duration: 0.22, ease: EASE_OUT } as const;
 const BRANCH_DRAW = { duration: 0.3, ease: EASE_OUT } as const;
+const ROW_HEIGHT = 29; // 28px row + the Explorer's 1px flex gap.
+const WINDOW_THRESHOLD = 100;
+const ANIMATION_THRESHOLD = 150;
 
 function flattenItems(
   items: FileTreeItem[],
@@ -208,6 +215,7 @@ export function FileTree({
   onExpandedChange,
   ariaLabel = "Files",
   indent = 14,
+  virtualize = false,
   className,
   classNames,
 }: FileTreeProps) {
@@ -228,21 +236,81 @@ export function FileTree({
   );
   const items = useMemo(() => itemsFromChildren(children), [children]);
   const rows = useMemo(() => flattenItems(items, expanded), [expanded, items]);
+  const rowIndexes = useMemo(
+    () => new Map(rows.map((row, index) => [row.item.value, index])),
+    [rows],
+  );
+  const shouldWindow = virtualize && rows.length > WINDOW_THRESHOLD;
+  const reduceRows = reduce || shouldWindow || rows.length > ANIMATION_THRESHOLD;
+  const rootRef = useRef<HTMLElement | null>(null);
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: ROW_HEIGHT * 24 });
+
+  useLayoutEffect(() => {
+    if (!shouldWindow) {
+      scrollerRef.current = null;
+      return;
+    }
+    const root = rootRef.current;
+    const scroller = root?.parentElement;
+    if (!root || !scroller) return;
+    scrollerRef.current = scroller;
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const next = {
+          scrollTop: Math.max(0, scroller.getBoundingClientRect().top - root.getBoundingClientRect().top),
+          height: scroller.clientHeight,
+        };
+        setViewport((current) => current.scrollTop === next.scrollTop && current.height === next.height ? current : next);
+      });
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(scroller);
+    scroller.addEventListener("scroll", update, { passive: true });
+    update();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+      scroller.removeEventListener("scroll", update);
+      if (scrollerRef.current === scroller) scrollerRef.current = null;
+    };
+  }, [rows.length, shouldWindow]);
+
+  const range = shouldWindow
+    ? virtualRange(rows.length, viewport.scrollTop, viewport.height, ROW_HEIGHT)
+    : { start: 0, end: rows.length, before: 0, after: 0 };
+  const visibleRows = rows.slice(range.start, range.end);
 
   // Keep a real row tabbable in the first commit and immediately after a
   // collapse removes the previously focused descendant.
   const focusedRow =
-    focusedId !== null && rows.some(({ item }) => item.value === focusedId)
+    focusedId !== null && rowIndexes.has(focusedId)
       ? focusedId
       : (rows[0]?.item.value ?? null);
+  const tabbableRow = visibleRows.some(({ item }) => item.value === focusedRow)
+    ? focusedRow
+    : (visibleRows[0]?.item.value ?? null);
   if (focusedId !== focusedRow) setFocusedId(focusedRow);
 
   const focusRow = useCallback((id: string) => {
     setFocusedId(id);
     const row = rowRefs.current.get(id);
-    if (row) row.focus();
-    else requestAnimationFrame(() => rowRefs.current.get(id)?.focus());
-  }, []);
+    if (row) {
+      row.focus();
+      row.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    const index = rowIndexes.get(id);
+    const root = rootRef.current;
+    const scroller = scrollerRef.current;
+    if (index !== undefined && root && scroller) {
+      const rootOffset = scroller.scrollTop + root.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop = rootOffset + index * ROW_HEIGHT;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => rowRefs.current.get(id)?.focus()));
+  }, [rowIndexes]);
 
   const selectItem = useCallback(
     (item: FileTreeItem) => {
@@ -273,7 +341,7 @@ export function FileTree({
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>, row: FlatFileTreeItem) => {
-      const index = rows.findIndex(({ item }) => item.value === row.item.value);
+      const index = rowIndexes.get(row.item.value) ?? -1;
       const previous = rows[index - 1];
       const next = rows[index + 1];
       const isFolder = row.item.type === "folder";
@@ -307,11 +375,12 @@ export function FileTree({
         if (isFolder) toggleFolder(row.item.value);
       }
     },
-    [expanded, focusRow, rows, selectItem, toggleFolder],
+    [expanded, focusRow, rowIndexes, rows, selectItem, toggleFolder],
   );
 
   return (
     <SharedLayoutBg
+      ref={rootRef}
       role="tree"
       aria-label={ariaLabel}
       aria-multiselectable="false"
@@ -319,28 +388,29 @@ export function FileTree({
       pillClassName="rounded-md bg-[var(--color-background-elevated-secondary)]"
       pillContainerClassName="inset-y-auto top-0 h-7"
       className={cn("min-w-0", className, classNames?.tree)}
+      style={{ paddingTop: range.before, paddingBottom: range.after }}
     >
-      {rows.map((row) => {
+      {visibleRows.map((row) => {
           const isFolder = row.item.type === "folder";
           const isOpen = isFolder && expanded.has(row.item.value);
           const isSelected = selectedId === row.item.value;
 
           return (
             <motion.div
-              layout={reduce ? false : "position"}
+              layout={reduceRows ? false : "position"}
               key={row.item.value}
-              initial={reduce ? false : { opacity: 0, y: -6 }}
+              initial={reduceRows ? false : { opacity: 0, y: -6 }}
               animate={{
                 opacity: row.item.disabled ? 0.42 : 1,
                 y: 0,
-                transition: reduce
+                transition: reduceRows
                   ? { duration: 0 }
                   : {
                       ...ROW_ENTER,
                       delay: Math.min(row.position * 0.025, 0.1),
                     },
               }}
-              transition={reduce ? { duration: 0 } : SPRING_LAYOUT}
+              transition={reduceRows ? { duration: 0 } : SPRING_LAYOUT}
             >
               <button
                 ref={(node) => {
@@ -355,7 +425,7 @@ export function FileTree({
                 aria-selected={isSelected}
                 aria-expanded={isFolder ? isOpen : undefined}
                 aria-disabled={row.item.disabled || undefined}
-                tabIndex={focusedRow === row.item.value ? 0 : -1}
+                tabIndex={tabbableRow === row.item.value ? 0 : -1}
                 onFocus={() => setFocusedId(row.item.value)}
                 onKeyDown={(event) => handleKeyDown(event, row)}
                 onClick={() => {
@@ -376,10 +446,10 @@ export function FileTree({
                 {row.depth > 0 ? (
                   <motion.span
                     aria-hidden="true"
-                    initial={reduce ? false : { opacity: 0, scaleY: 0 }}
+                    initial={reduceRows ? false : { opacity: 0, scaleY: 0 }}
                     animate={{ opacity: 1, scaleY: 1 }}
                     exit={{ opacity: 0, scaleY: 0 }}
-                    transition={reduce ? { duration: 0 } : BRANCH_DRAW}
+                    transition={reduceRows ? { duration: 0 } : BRANCH_DRAW}
                     className="absolute top-0 bottom-0 w-px origin-top bg-border/70"
                     style={{ left: 13 + (row.depth - 1) * indent }}
                   />
@@ -388,7 +458,7 @@ export function FileTree({
                 <motion.span
                   aria-hidden="true"
                   animate={{ rotate: isOpen ? 90 : 0 }}
-                  transition={reduce ? { duration: 0 } : SPRING_SWAP}
+                  transition={reduceRows ? { duration: 0 } : SPRING_SWAP}
                   className={cn(
                     "relative z-10 grid size-4 shrink-0 place-items-center",
                     !isFolder && "opacity-0",
@@ -409,7 +479,7 @@ export function FileTree({
                     <DefaultIcon
                       item={row.item}
                       open={isOpen}
-                      reduce={reduce}
+                      reduce={reduceRows}
                     />
                   )}
                 </span>

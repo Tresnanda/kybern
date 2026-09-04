@@ -2,7 +2,7 @@
 // with refresh, state filter pills and a project filter, rows grouped by
 // project with a state glyph, title, meta line and a relative timestamp.
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 
 import { Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/synara/button"
@@ -11,6 +11,7 @@ import { IconButton } from "@/components/synara/icon-button"
 import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuTrigger } from "@/components/synara/menu"
 import { relativeTime } from "@/lib/format"
+import { mapWithConcurrency } from "@/lib/workload"
 import { CentralIcon } from "@/lib/synara/central-icons"
 import { CheckIcon, FilterIcon, GitPullRequestIcon, RefreshCwIcon } from "@/lib/synara/icons"
 import { openExternal } from "@/lib/tauri"
@@ -28,6 +29,10 @@ const FILTERS: [Filter, string][] = [
   ["closed", "Closed"],
   ["all", "All"],
 ]
+const PR_PROJECT_CONCURRENCY = 3
+const PR_ROWS_BATCH = 100
+const PR_CACHE_TTL_MS = 30_000
+const prCache = new Map<string, { expiresAt: number; pullRequests: PullRequest[] }>()
 
 interface Row {
   pr: PullRequest
@@ -42,40 +47,61 @@ export function PullRequests() {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [query, setQuery] = useState("")
+  const [visibleCount, setVisibleCount] = useState(PR_ROWS_BATCH)
+  const loadVersion = useRef(0)
+  const deferredQuery = useDeferredValue(query)
 
   const targets = useMemo(() => Object.values(projects).filter((p) => p.is_git && (!projectId || p.id === projectId)), [projects, projectId])
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
+    const version = ++loadVersion.current
     setPending(true)
     setError(null)
+    let firstError: string | null = null
     try {
-      const results = await Promise.all(
-        targets.map((project) =>
-          rpc()
-            .call("github.pr.list", { project_id: project.id, state: filter, limit: 30 })
-            .then((r) => r.pull_requests.map((pr) => ({ pr, project })))
-            .catch((e: unknown) => {
-              // Projects without a GitHub remote simply have no pull requests.
-              const text = errorText(e)
-              if (!/no git remotes|not a git repository|could not find|no such remote/i.test(text)) setError(text.replace(/^gh pr list[^:]*: /, ""))
-              return [] as Row[]
-            }),
-        ),
-      )
+      const results = await mapWithConcurrency(targets, PR_PROJECT_CONCURRENCY, (project) => {
+        const cacheKey = `${project.id}:${filter}`
+        const cached = prCache.get(cacheKey)
+        if (!force && cached && cached.expiresAt > Date.now()) {
+          return Promise.resolve(cached.pullRequests.map((pr) => ({ pr, project })))
+        }
+        return rpc()
+          .call("github.pr.list", { project_id: project.id, state: filter, limit: 30 })
+          .then((r) => {
+            prCache.set(cacheKey, {
+              expiresAt: Date.now() + PR_CACHE_TTL_MS,
+              pullRequests: r.pull_requests,
+            })
+            return r.pull_requests.map((pr) => ({ pr, project }))
+          })
+          .catch((e: unknown) => {
+            // Projects without a GitHub remote simply have no pull requests.
+            const text = errorText(e)
+            if (!firstError && !/no git remotes|not a git repository|could not find|no such remote/i.test(text)) {
+              firstError = text.replace(/^gh pr list[^:]*: /, "")
+            }
+            return [] as Row[]
+          })
+      })
+      if (version !== loadVersion.current) return
+      setError(firstError)
       setRows(results.flat().sort((a, b) => b.pr.updated_at.localeCompare(a.pr.updated_at)))
     } finally {
-      setPending(false)
+      if (version === loadVersion.current) setPending(false)
     }
   }, [targets, filter])
 
   useEffect(() => {
-    void load()
+    void load(false)
   }, [load])
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase()
+  useEffect(() => setVisibleCount(PR_ROWS_BATCH), [deferredQuery, filter, projectId])
+
+  const matching = useMemo(() => {
+    const q = deferredQuery.trim().toLowerCase()
     return (rows ?? []).filter((r) => !q || r.pr.title.toLowerCase().includes(q) || r.pr.head.toLowerCase().includes(q) || String(r.pr.number).includes(q))
-  }, [rows, query])
+  }, [rows, deferredQuery])
+  const visible = useMemo(() => matching.slice(0, visibleCount), [matching, visibleCount])
 
   const groups = useMemo(() => {
     const m = new Map<ProjectId, Row[]>()
@@ -87,7 +113,7 @@ export function PullRequests() {
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
       <SurfaceHeader
         trailing={
-          <Button size="icon-sm" variant="ghost" aria-label="Refresh" onClick={() => void load()} disabled={pending}>
+          <Button size="icon-sm" variant="ghost" aria-label="Refresh" onClick={() => void load(true)} disabled={pending}>
             <RefreshCwIcon className={cn("size-4", pending && "animate-spin")} />
           </Button>
         }
@@ -193,6 +219,11 @@ export function PullRequests() {
             <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
               <Spinner size={12} /> Refreshing
             </div>
+          )}
+          {visibleCount < matching.length && (
+            <button type="button" onClick={() => setVisibleCount((count) => count + PR_ROWS_BATCH)} className="flex w-full items-center justify-center rounded-md border border-[color:var(--color-border)] px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground">
+              Show {Math.min(PR_ROWS_BATCH, matching.length - visibleCount)} more of {matching.length} pull requests
+            </button>
           )}
         </div>
       </main>

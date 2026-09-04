@@ -3,7 +3,7 @@
 // diff background tokens. Shared by the dock and the inline "Edited N files"
 // card in the transcript.
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
 import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
 import { DiffStatLabel } from "@/components/synara/chat/DiffStatLabel"
@@ -17,6 +17,7 @@ const ADD_NUM_BG = "bg-[color-mix(in_srgb,var(--background)_88%,var(--success))]
 const DEL_BG = "bg-[color-mix(in_srgb,var(--background)_92%,var(--destructive))]"
 const DEL_NUM_BG = "bg-[color-mix(in_srgb,var(--background)_88%,var(--destructive))]"
 const SEP_BG = "bg-[color-mix(in_srgb,var(--background)_95%,var(--foreground))]"
+const DIFF_LINES_BATCH = 600
 
 export function FileDiffHeader({ file, open, onToggle, trailing }: { file: FileDiff; open?: boolean; onToggle?: () => void; trailing?: React.ReactNode }) {
   const name = basename(file.path)
@@ -80,19 +81,43 @@ function HunkRows({ hunk, first }: { hunk: DiffHunk; first: boolean }) {
   )
 }
 
-export function FileDiffBody({ file }: { file: FileDiff }) {
+export function FileDiffBody({ file, truncated = false }: { file: FileDiff; truncated?: boolean }) {
+  const [visibleLines, setVisibleLines] = useState(DIFF_LINES_BATCH)
+  const totalLines = useMemo(() => file.hunks.reduce((total, hunk) => total + hunk.lines.length, 0), [file.hunks])
+  const visibleHunks = useMemo(() => {
+    let remaining = visibleLines
+    const hunks: DiffHunk[] = []
+    for (const hunk of file.hunks) {
+      if (remaining <= 0) break
+      const lines = hunk.lines.slice(0, remaining)
+      hunks.push(lines.length === hunk.lines.length ? hunk : { ...hunk, lines })
+      remaining -= lines.length
+    }
+    return hunks
+  }, [file.hunks, visibleLines])
+
   if (file.binary) return <p className="px-3 py-2 text-[11px] text-muted-foreground/75">Binary file changed.</p>
   if (file.hunks.length === 0) return <p className="px-3 py-2 text-[11px] text-muted-foreground/75">No textual changes.</p>
   return (
-    <div className="selectable overflow-x-auto">
-      <table className="w-full border-collapse font-chat-code text-[length:var(--app-font-size-chat-code,11px)] leading-[1.65] text-foreground">
-        <tbody>
-          {file.hunks.map((h, i) => (
-            <HunkRows key={i} hunk={h} first={i === 0} />
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="selectable overflow-x-auto">
+        <table className="w-full border-collapse font-chat-code text-[length:var(--app-font-size-chat-code,11px)] leading-[1.65] text-foreground">
+          <tbody>
+            {visibleHunks.map((h, i) => (
+              <HunkRows key={i} hunk={h} first={i === 0} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {visibleLines < totalLines && (
+        <button type="button" onClick={() => setVisibleLines((count) => count + DIFF_LINES_BATCH)} className="flex w-full items-center justify-center border-t border-[color:var(--color-border-light)] px-3 py-2 font-system-ui text-[11px] text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground">
+          Show {Math.min(DIFF_LINES_BATCH, totalLines - visibleLines)} more lines
+        </button>
+      )}
+      {truncated && (
+        <p className="border-t border-[color:var(--color-border-light)] px-3 py-2 font-system-ui text-[11px] text-muted-foreground/75">Large diff truncated at 1 MiB. Open the repository in your editor for the full patch.</p>
+      )}
+    </>
   )
 }
 
@@ -104,6 +129,7 @@ export function FileDiffCard({
   onOpenChange,
   loading = false,
   error = false,
+  truncated = false,
   className,
 }: {
   file: FileDiff
@@ -112,6 +138,7 @@ export function FileDiffCard({
   onOpenChange?: (open: boolean) => void
   loading?: boolean
   error?: boolean
+  truncated?: boolean
   className?: string
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
@@ -130,7 +157,7 @@ export function FileDiffCard({
         ) : error ? (
           <p className="px-3 py-2 text-[11px] text-destructive">Unable to load this file’s changes.</p>
         ) : (
-          <FileDiffBody file={file} />
+          <FileDiffBody file={file} truncated={truncated} />
         ))}
     </div>
   )

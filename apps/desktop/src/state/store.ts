@@ -6,6 +6,7 @@ import { reloadOnHotUpdate } from "@/lib/hot"
 import type {
   DaemonInfo,
   Diff,
+  GitStatus,
   Project,
   ProviderKind,
   ProviderStatus,
@@ -59,6 +60,8 @@ export interface AppState {
   threadActivity: Record<ThreadId, ThreadActivitySummary>
   /** `threadId:turnId` → diff, filled lazily for "Edited N files" cards and the changes panel. */
   diffs: Record<string, Diff>
+  /** Shared git status snapshots so the dock and Environment panel do not duplicate `git`/`gh` work. */
+  gitStatuses: Record<ThreadId, GitStatus>
   selected: { kind: "thread"; id: ThreadId } | { kind: "draft"; draft: Draft } | { kind: "pulls" } | { kind: "none" }
   sidebarOpen: boolean
   rightOpen: boolean
@@ -109,6 +112,7 @@ export const useStore = create<Store>()((set, get) => ({
   runtimeTasks: {},
   threadActivity: {},
   diffs: {},
+  gitStatuses: {},
   selected: { kind: "none" },
   sidebarOpen: true,
   rightOpen: false,

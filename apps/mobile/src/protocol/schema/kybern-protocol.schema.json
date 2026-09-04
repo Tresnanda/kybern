@@ -3527,6 +3527,11 @@
         "patch": {
           "description": "Unified diff text (`git diff --no-color`), empty when nothing changed.",
           "type": "string"
+        },
+        "patch_truncated": {
+          "description": "True when an oversized patch was cut to the daemon's transport limit.",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -7999,6 +8004,11 @@
           "patch": {
             "description": "Unified diff text (`git diff --no-color`), empty when nothing changed.",
             "type": "string"
+          },
+          "patch_truncated": {
+            "description": "True when an oversized patch was cut to the daemon's transport limit.",
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [

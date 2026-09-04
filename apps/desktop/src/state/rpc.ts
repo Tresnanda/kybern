@@ -5,11 +5,13 @@ import { toast } from "sonner"
 import { reloadOnHotUpdate } from "@/lib/hot"
 
 import { isWindowFocused, notify, resolveEndpoint } from "@/lib/tauri"
+import { diffSummaryRequest, mapWithConcurrency } from "@/lib/workload"
 import {
   KybernClient,
   type ApprovalDecision,
   type ApprovalId,
   type Diff,
+  type GitStatus,
   type PermissionMode,
   type ProjectId,
   type ProviderKind,
@@ -29,6 +31,8 @@ let client: KybernClient | null = null
 let httpBase = ""
 let token = ""
 const diffLoads = new Map<string, Promise<void>>()
+const fileDiffLoads = new Map<string, Promise<Diff>>()
+const gitStatusLoads = new Map<ThreadId, Promise<GitStatus | null>>()
 
 export function rpc(): KybernClient {
   if (!client) throw new Error("Not connected")
@@ -118,9 +122,8 @@ async function loadCheckpoints(id: ThreadId) {
     const r = await rpc().call("threads.checkpoints", { thread_id: id })
     useStore.getState().updateTranscript(id, (t) => ({ ...t, checkpoints: r.checkpoints }))
     const have = useStore.getState().diffs
-    for (const c of r.checkpoints) {
-      if (c.after && !have[diffKey(id, c.turn_id)]) void loadDiff(id, c.turn_id)
-    }
+    const missing = r.checkpoints.filter((checkpoint) => checkpoint.after && !have[diffKey(id, checkpoint.turn_id)])
+    void mapWithConcurrency(missing, 2, (checkpoint) => loadDiff(id, checkpoint.turn_id))
   } catch {
     // non-git projects have none
   }
@@ -139,6 +142,9 @@ function onEvent(ev: ThreadEvent) {
   if (ev.kind === "turn_completed" || ev.kind === "turn_failed") {
     void loadDiff(ev.thread_id, ev.turn_id ?? undefined)
     void loadDiff(ev.thread_id)
+    const current = useStore.getState()
+    const visible = current.selected.kind === "thread" && current.selected.id === ev.thread_id
+    if (visible && (current.envOpen || (current.rightOpen && current.rightTab === "changes"))) void loadGitStatus(ev.thread_id)
     void announce(ev)
     void flushQueue(ev.thread_id)
   }
@@ -158,18 +164,13 @@ async function announce(ev: ThreadEvent) {
 }
 
 export function loadDiff(threadId: ThreadId, turnId?: TurnId): Promise<void> {
-  const includePatch = !!turnId
-  const requestKey = `${diffKey(threadId, turnId)}:${includePatch ? "patch" : "stat"}`
+  const requestKey = `${diffKey(threadId, turnId)}:stat`
   const pending = diffLoads.get(requestKey)
   if (pending) return pending
 
   const request = (async () => {
     try {
-      const d = await rpc().call("threads.diff", {
-        thread_id: threadId,
-        ...(turnId ? { turn_id: turnId } : {}),
-        include_patch: includePatch,
-      })
+      const d = await rpc().call("threads.diff", diffSummaryRequest(threadId, turnId))
       useStore.getState().set((s) => ({ diffs: { ...s.diffs, [diffKey(threadId, turnId)]: d } }))
     } catch {
       // no git, no diff
@@ -182,12 +183,42 @@ export function loadDiff(threadId: ThreadId, turnId?: TurnId): Promise<void> {
 }
 
 export function loadFileDiff(threadId: ThreadId, path: string, turnId?: TurnId): Promise<Diff> {
-  return rpc().call("threads.diff", {
+  const requestKey = `${diffKey(threadId, turnId)}:${path}`
+  const pending = fileDiffLoads.get(requestKey)
+  if (pending) return pending
+
+  const request = rpc().call("threads.diff", {
     thread_id: threadId,
     ...(turnId ? { turn_id: turnId } : {}),
     include_patch: true,
     path,
   })
+  fileDiffLoads.set(requestKey, request)
+  void request.then(
+    () => fileDiffLoads.delete(requestKey),
+    () => fileDiffLoads.delete(requestKey),
+  )
+  return request
+}
+
+/** Coalesce the relatively expensive status snapshot (which can invoke `gh`). */
+export function loadGitStatus(threadId: ThreadId): Promise<GitStatus | null> {
+  const pending = gitStatusLoads.get(threadId)
+  if (pending) return pending
+
+  const request = (async () => {
+    try {
+      const status = await rpc().call("git.status", { thread_id: threadId })
+      useStore.getState().set((state) => ({ gitStatuses: { ...state.gitStatuses, [threadId]: status } }))
+      return status
+    } catch {
+      return null
+    } finally {
+      gitStatusLoads.delete(threadId)
+    }
+  })()
+  gitStatusLoads.set(threadId, request)
+  return request
 }
 
 // ---- actions ----

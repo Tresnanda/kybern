@@ -502,6 +502,9 @@ async fn main() -> Result<()> {
                 }
                 if !stat && !d.patch.is_empty() {
                     println!("\n{}", d.patch);
+                    if d.patch_truncated {
+                        eprintln!("\n(diff output truncated at 1 MiB; use git diff for the full patch)");
+                    }
                 }
             }
         }

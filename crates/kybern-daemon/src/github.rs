@@ -8,6 +8,9 @@ use kybern_git::Repo;
 use kybern_protocol::methods::{BranchInfo, GitBranchesResult, GitStatus, PullRequest};
 use serde_json::Value;
 use tokio::process::Command;
+use tokio::sync::OnceCell;
+
+static GH_AVAILABLE: OnceCell<bool> = OnceCell::const_new();
 
 async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(program)
@@ -45,7 +48,7 @@ pub async fn branches(cwd: &Path) -> Result<GitBranchesResult> {
 }
 
 pub async fn gh_available() -> bool {
-    Command::new("gh").arg("--version").output().await.is_ok_and(|o| o.status.success())
+    *GH_AVAILABLE.get_or_init(|| async { Command::new("gh").arg("--version").output().await.is_ok_and(|o| o.status.success()) }).await
 }
 
 pub async fn status(cwd: &Path) -> Result<GitStatus> {
