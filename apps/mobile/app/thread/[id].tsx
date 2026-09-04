@@ -163,8 +163,9 @@ export default function ThreadScreen() {
 function entryKey(e: TranscriptEntry, i: number): string {
   switch (e.role) {
     case "user":
-    case "assistant":
       return `${e.role}:${e.id}`;
+    case "assistant":
+      return `assistant:${e.id}#${e.segment ?? 0}`;
     case "tool_call":
       return `tool:${e.call.id}`;
     case "turn_summary":

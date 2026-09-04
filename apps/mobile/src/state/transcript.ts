@@ -68,45 +68,65 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
 
     case "assistant_text_delta":
     case "assistant_thinking_delta": {
-      const idx = next.entries.findIndex((e) => e.role === "assistant" && e.id === ev.message_id);
       const isText = ev.kind === "assistant_text_delta";
-      if (idx === -1) {
+      // The open segment is only the tail entry: once a tool call lands after it,
+      // the next delta opens a new segment there instead of folding post-tool
+      // prose above the tool. Mirrors `project_transcript`.
+      const last = next.entries[next.entries.length - 1];
+      if (last && last.role === "assistant" && last.id === ev.message_id) {
+        const updated: TranscriptEntry = isText
+          ? { ...last, text: last.text + ev.delta }
+          : { ...last, thinking: (last.thinking ?? "") + ev.delta };
+        next.entries = replaceAt(next.entries, next.entries.length - 1, updated);
+      } else {
         next.entries = [
           ...next.entries,
           {
             role: "assistant",
             id: ev.message_id,
             turn_id: turnId,
+            segment: nextSegment(next.entries, ev.message_id),
             text: isText ? ev.delta : "",
             thinking: isText ? null : ev.delta,
             at: ev.at,
             complete: false,
           },
         ];
-      } else {
-        const cur = next.entries[idx];
-        if (cur && cur.role === "assistant") {
-          const updated: TranscriptEntry = isText
-            ? { ...cur, text: cur.text + ev.delta }
-            : { ...cur, thinking: (cur.thinking ?? "") + ev.delta };
-          next.entries = replaceAt(next.entries, idx, updated);
-        }
       }
       break;
     }
 
     case "assistant_message_completed": {
-      const idx = next.entries.findIndex((e) => e.role === "assistant" && e.id === ev.message_id);
-      const entry: TranscriptEntry = {
-        role: "assistant",
-        id: ev.message_id,
-        turn_id: turnId,
-        text: ev.text,
-        thinking: ev.thinking,
-        at: ev.at,
-        complete: true,
-      };
-      next.entries = idx === -1 ? [...next.entries, entry] : replaceAt(next.entries, idx, entry);
+      const idxs = next.entries.flatMap((e, i) => (e.role === "assistant" && e.id === ev.message_id ? [i] : []));
+      if (idxs.length === 0) {
+        next.entries = [
+          ...next.entries,
+          {
+            role: "assistant",
+            id: ev.message_id,
+            turn_id: turnId,
+            segment: nextSegment(next.entries, ev.message_id),
+            text: ev.text,
+            thinking: ev.thinking,
+            at: ev.at,
+            complete: true,
+          },
+        ];
+      } else if (idxs.length === 1) {
+        const i = idxs[0]!;
+        const cur = next.entries[i]!;
+        if (cur.role === "assistant") {
+          next.entries = replaceAt(next.entries, i, { ...cur, text: ev.text, thinking: ev.thinking, complete: true });
+        }
+      } else {
+        // Interleaved across tools: keep the streamed slices in place; finalize each.
+        const first = idxs[0]!;
+        next.entries = next.entries.map((e, i) =>
+          idxs.includes(i) && e.role === "assistant"
+            ? { ...e, complete: true, thinking: i === first && ev.thinking != null ? ev.thinking : e.thinking }
+            : e,
+        );
+      }
       break;
     }
 
@@ -200,4 +220,11 @@ function replaceAt<T>(arr: T[], idx: number, value: T): T[] {
   const out = arr.slice();
   out[idx] = value;
   return out;
+}
+
+/** Next unused segment index for `messageId` (0 when it has no entries yet). */
+function nextSegment(entries: TranscriptEntry[], messageId: string): number {
+  let max = -1;
+  for (const e of entries) if (e.role === "assistant" && e.id === messageId && (e.segment ?? 0) > max) max = e.segment ?? 0;
+  return max + 1;
 }

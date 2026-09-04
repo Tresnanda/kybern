@@ -21,7 +21,19 @@ import type {
 
 export type Block =
   | { kind: "user"; id: string; turnId: TurnId; at: string; message: UserMessage }
-  | { kind: "assistant"; id: string; turnId: TurnId; at: string; text: string; thinking: string; complete: boolean }
+  | {
+      kind: "assistant"
+      id: string
+      turnId: TurnId
+      at: string
+      /** The provider message id this segment belongs to. */
+      messageId: string
+      /** Segment index within `messageId`; the fold splits text at row-making events. */
+      segment: number
+      text: string
+      thinking: string
+      complete: boolean
+    }
   | {
       kind: "tool"
       id: string
@@ -83,8 +95,10 @@ function entryToBlock(e: TranscriptEntry): Block | null {
       return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, approval: e.approval, decision: e.decision ?? null }
     case "user":
       return { kind: "user", id: e.id, turnId: e.turn_id, at: e.at, message: e.message }
-    case "assistant":
-      return { kind: "assistant", id: e.id, turnId: e.turn_id, at: e.at, text: e.text, thinking: e.thinking ?? "", complete: e.complete }
+    case "assistant": {
+      const segment = e.segment ?? 0
+      return { kind: "assistant", id: `${e.id}#${segment}`, turnId: e.turn_id, at: e.at, messageId: e.id, segment, text: e.text, thinking: e.thinking ?? "", complete: e.complete }
+    }
     case "tool_call":
       return {
         kind: "tool",
@@ -124,9 +138,17 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
   let checkpoints = state.checkpoints
   let thread = state.thread
 
-  const upsert = (id: string, make: () => Block, update: (b: Block) => Block) => {
-    const idx = findLast(blocks, id)
-    blocks = idx === -1 ? [...blocks, make()] : replaceAt(blocks, idx, update(blocks[idx]!))
+  // The open segment for a message is only the tail block: once a tool call or
+  // approval lands after it, the next delta opens a new segment there instead of
+  // folding post-tool prose back above the tool. Mirrors `project_transcript`.
+  const openSegment = (messageId: string): number => {
+    const last = blocks[blocks.length - 1]
+    return last && last.kind === "assistant" && last.messageId === messageId ? blocks.length - 1 : -1
+  }
+  const newSegment = (messageId: string, make: (segment: number) => Block) => {
+    let max = -1
+    for (const b of blocks) if (b.kind === "assistant" && b.messageId === messageId && b.segment > max) max = b.segment
+    blocks = [...blocks, make(max + 1)]
   }
 
   switch (ev.kind) {
@@ -140,27 +162,46 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "turn_started":
       blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, message: ev.message }]
       break
-    case "assistant_text_delta":
-      upsert(
-        ev.message_id,
-        () => ({ kind: "assistant", id: ev.message_id, turnId, at, text: ev.delta, thinking: "", complete: false }),
-        (b) => (b.kind === "assistant" ? { ...b, text: b.text + ev.delta } : b),
-      )
+    case "assistant_text_delta": {
+      const idx = openSegment(ev.message_id)
+      if (idx !== -1) {
+        const b = blocks[idx]!
+        if (b.kind === "assistant") blocks = replaceAt(blocks, idx, { ...b, text: b.text + ev.delta })
+      } else {
+        newSegment(ev.message_id, (segment) => ({ kind: "assistant", id: `${ev.message_id}#${segment}`, turnId, at, messageId: ev.message_id, segment, text: ev.delta, thinking: "", complete: false }))
+      }
       break
-    case "assistant_thinking_delta":
-      upsert(
-        ev.message_id,
-        () => ({ kind: "assistant", id: ev.message_id, turnId, at, text: "", thinking: ev.delta, complete: false }),
-        (b) => (b.kind === "assistant" ? { ...b, thinking: b.thinking + ev.delta } : b),
-      )
+    }
+    case "assistant_thinking_delta": {
+      const idx = openSegment(ev.message_id)
+      if (idx !== -1) {
+        const b = blocks[idx]!
+        if (b.kind === "assistant") blocks = replaceAt(blocks, idx, { ...b, thinking: b.thinking + ev.delta })
+      } else {
+        newSegment(ev.message_id, (segment) => ({ kind: "assistant", id: `${ev.message_id}#${segment}`, turnId, at, messageId: ev.message_id, segment, text: "", thinking: ev.delta, complete: false }))
+      }
       break
-    case "assistant_message_completed":
-      upsert(
-        ev.message_id,
-        () => ({ kind: "assistant", id: ev.message_id, turnId, at, text: ev.text, thinking: ev.thinking ?? "", complete: true }),
-        (b) => (b.kind === "assistant" ? { ...b, text: ev.text, thinking: ev.thinking ?? b.thinking, complete: true } : b),
-      )
+    }
+    case "assistant_message_completed": {
+      const idxs = blocks.flatMap((b, i) => (b.kind === "assistant" && b.messageId === ev.message_id ? [i] : []))
+      if (idxs.length === 0) {
+        newSegment(ev.message_id, (segment) => ({ kind: "assistant", id: `${ev.message_id}#${segment}`, turnId, at, messageId: ev.message_id, segment, text: ev.text, thinking: ev.thinking ?? "", complete: true }))
+      } else if (idxs.length === 1) {
+        const i = idxs[0]!
+        const b = blocks[i]!
+        if (b.kind === "assistant") blocks = replaceAt(blocks, i, { ...b, text: ev.text, thinking: ev.thinking ?? b.thinking, complete: true })
+      } else {
+        // Interleaved across tools: keep the streamed slices in place (rewriting
+        // them here would re-fold the answer above its tools); just finalize.
+        const first = idxs[0]!
+        blocks = blocks.map((b, i) =>
+          idxs.includes(i) && b.kind === "assistant"
+            ? { ...b, complete: true, thinking: i === first && ev.thinking != null ? ev.thinking : b.thinking }
+            : b,
+        )
+      }
       break
+    }
     case "tool_call_started":
       blocks = [
         ...blocks,
@@ -265,10 +306,14 @@ export interface TurnGroup {
   user: Extract<Block, { kind: "user" }> | null
   /** Tool calls, thinking, notices and intermediate assistant text, in order. */
   work: Block[]
-  /** Final assistant message of the turn (last complete assistant block). */
+  /** Final assistant message of the settled turn (last assistant segment with text). */
   answer: Extract<Block, { kind: "assistant" }> | null
-  /** While the turn runs: the assistant text currently streaming at the tail. */
-  answerLive: Extract<Block, { kind: "assistant" }> | null
+  /**
+   * While the turn runs, the id of the tail assistant segment still streaming —
+   * the one work row that reveals its text at the smooth cadence. Segments are
+   * born in order, so this is always the last block; it never moves or flips.
+   */
+  liveAnswerId: string | null
   approvals: Extract<Block, { kind: "approval" }>[]
   end: Extract<Block, { kind: "turn_end" }> | null
   reverted: Extract<Block, { kind: "reverted" }> | null
@@ -360,7 +405,7 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
   const get = (turnId: TurnId) => {
     let g = byId.get(turnId)
     if (!g) {
-      g = { turnId, user: null, work: [], answer: null, answerLive: null, approvals: [], end: null, reverted: null, running: false }
+      g = { turnId, user: null, work: [], answer: null, liveAnswerId: null, approvals: [], end: null, reverted: null, running: false }
       byId.set(turnId, g)
       groups.push(g)
     }
@@ -407,35 +452,12 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
     }
     g.running = !g.end && !!g.user
     if (g.running) {
-      // The live answer is the last assistant block that has streamed text — it
-      // is not always the final work entry. When a provider keeps one message id
-      // across a tool call (Claude's interleaved preamble → tool → answer), the
-      // post-tool answer folds back into the block that opened before the tool,
-      // so that block sits ahead of the now-complete tool. Promote it only once
-      // nothing after it is still working, so a genuine preamble sitting before a
-      // running tool stays muted work instead of masquerading as the answer.
-      let liveIdx = -1
-      for (let i = g.work.length - 1; i >= 0; i--) {
-        const w = g.work[i]!
-        if (w.kind === "assistant" && w.text.trim()) {
-          liveIdx = i
-          break
-        }
-      }
-      const busyAfter =
-        liveIdx !== -1 &&
-        g.work
-          .slice(liveIdx + 1)
-          .some((w) => (w.kind === "tool" && !w.complete) || (w.kind === "approval" && !w.decision))
-      if (liveIdx !== -1 && !busyAfter) {
-        const { answer, reasoning } = splitAssistantForPresentation(g.work[liveIdx] as AssistantBlock)
-        g.answerLive = answer
-        g.work = [
-          ...g.work.slice(0, liveIdx),
-          ...(reasoning ? [reasoning] : []),
-          ...g.work.slice(liveIdx + 1),
-        ]
-      }
+      // Segments are born in tool order, so the assistant text streaming right
+      // now is simply the tail block. Reveal that one at the smooth cadence; it
+      // stays in place as tools land after it, so there is no promotion, no
+      // brightness flip, and no repositioning.
+      const tail = g.work.at(-1)
+      g.liveAnswerId = tail?.kind === "assistant" && !tail.complete && tail.text.trim() ? tail.id : null
     }
   }
   return groups

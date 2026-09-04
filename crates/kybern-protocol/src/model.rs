@@ -516,6 +516,14 @@ pub enum TranscriptEntry {
     Assistant {
         id: MessageId,
         turn_id: TurnId,
+        /// Segment index within one `message_id`. A provider can keep a single
+        /// message id across a tool call (Claude streams preamble → tool →
+        /// answer under one id); the projection splits the text at each
+        /// row-making event so post-tool prose is its own entry, ordered after
+        /// the tool. `0` is the first/only segment. `(id, segment)` is the
+        /// stable identity a client keys on.
+        #[serde(default)]
+        segment: u32,
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thinking: Option<String>,

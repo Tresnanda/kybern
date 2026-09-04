@@ -106,50 +106,89 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             }
             EventPayload::AssistantTextDelta { message_id, delta } => {
                 let Some(turn_id) = turn_id else { continue };
-                match find_assistant(&mut out, *message_id) {
-                    Some(TranscriptEntry::Assistant { text, .. }) => text.push_str(delta),
-                    _ => out.push(TranscriptEntry::Assistant {
+                // Continue the open tail segment; if a row-making entry (a tool
+                // call, an approval) landed since the last delta, the tail is no
+                // longer this message, so start a fresh segment there instead of
+                // folding post-tool prose back above the tool that produced it.
+                if let Some(TranscriptEntry::Assistant { text, .. }) = tail_open_assistant(&mut out, *message_id) {
+                    text.push_str(delta);
+                } else {
+                    let segment = next_segment(&out, *message_id);
+                    out.push(TranscriptEntry::Assistant {
                         id: *message_id,
                         turn_id,
+                        segment,
                         text: delta.clone(),
                         thinking: None,
                         at: ev.at,
                         complete: false,
-                    }),
+                    });
                 }
             }
             EventPayload::AssistantThinkingDelta { message_id, delta } => {
                 let Some(turn_id) = turn_id else { continue };
-                match find_assistant(&mut out, *message_id) {
-                    Some(TranscriptEntry::Assistant { thinking, .. }) => thinking.get_or_insert_with(String::new).push_str(delta),
-                    _ => out.push(TranscriptEntry::Assistant {
+                if let Some(TranscriptEntry::Assistant { thinking, .. }) = tail_open_assistant(&mut out, *message_id) {
+                    thinking.get_or_insert_with(String::new).push_str(delta);
+                } else {
+                    let segment = next_segment(&out, *message_id);
+                    out.push(TranscriptEntry::Assistant {
                         id: *message_id,
                         turn_id,
+                        segment,
                         text: String::new(),
                         thinking: Some(delta.clone()),
                         at: ev.at,
                         complete: false,
-                    }),
+                    });
                 }
             }
             EventPayload::AssistantMessageCompleted { message_id, text, thinking } => {
                 let Some(turn_id) = turn_id else { continue };
-                match find_assistant(&mut out, *message_id) {
-                    Some(TranscriptEntry::Assistant { text: t, thinking: th, complete, .. }) => {
-                        *t = text.clone();
-                        if thinking.is_some() {
-                            *th = thinking.clone();
-                        }
-                        *complete = true;
-                    }
-                    _ => out.push(TranscriptEntry::Assistant {
+                let segments: Vec<usize> = out
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| matches!(e, TranscriptEntry::Assistant { id, .. } if *id == *message_id))
+                    .map(|(i, _)| i)
+                    .collect();
+                match segments.as_slice() {
+                    // A provider that emits a whole message at once (no deltas):
+                    // materialize it as one segment at the tail.
+                    [] => out.push(TranscriptEntry::Assistant {
                         id: *message_id,
                         turn_id,
+                        segment: next_segment(&out, *message_id),
                         text: text.clone(),
                         thinking: thinking.clone(),
                         at: ev.at,
                         complete: true,
                     }),
+                    // One segment: the completed text is authoritative, so adopt
+                    // it (covers harnesses whose final text corrects the deltas).
+                    &[only] => {
+                        if let TranscriptEntry::Assistant { text: t, thinking: th, complete, .. } = &mut out[only] {
+                            *t = text.clone();
+                            if thinking.is_some() {
+                                *th = thinking.clone();
+                            }
+                            *complete = true;
+                        }
+                    }
+                    // Interleaved across tools: keep the streamed slices in place
+                    // (rewriting them here would re-fold the answer above its
+                    // tools); just finalize and attach thinking to the first.
+                    many => {
+                        for &i in many {
+                            if let TranscriptEntry::Assistant { complete, .. } = &mut out[i] {
+                                *complete = true;
+                            }
+                        }
+                        if thinking.is_some()
+                            && let Some(&first) = many.first()
+                            && let TranscriptEntry::Assistant { thinking: th, .. } = &mut out[first]
+                        {
+                            *th = thinking.clone();
+                        }
+                    }
                 }
             }
             EventPayload::ToolCallStarted { call } => {
@@ -224,8 +263,25 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
     out
 }
 
-fn find_assistant(out: &mut [TranscriptEntry], id: MessageId) -> Option<&mut TranscriptEntry> {
-    out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::Assistant { id: i, .. } if *i == id))
+/// The open segment for `id` is only the tail entry: once any other entry (a
+/// tool call, an approval, or another message) has been pushed after it, the
+/// segment is closed and the next delta must open a new one.
+fn tail_open_assistant(out: &mut [TranscriptEntry], id: MessageId) -> Option<&mut TranscriptEntry> {
+    match out.last_mut() {
+        Some(e @ TranscriptEntry::Assistant { .. }) => matches!(e, TranscriptEntry::Assistant { id: i, .. } if *i == id).then_some(e),
+        _ => None,
+    }
+}
+
+/// Next unused segment index for `id` (0 when it has no entries yet).
+fn next_segment(out: &[TranscriptEntry], id: MessageId) -> u32 {
+    out.iter()
+        .filter_map(|e| match e {
+            TranscriptEntry::Assistant { id: i, segment, .. } if *i == id => Some(*segment),
+            _ => None,
+        })
+        .max()
+        .map_or(0, |m| m + 1)
 }
 
 fn mark_turn_complete(out: &mut [TranscriptEntry], turn: TurnId) {
@@ -311,6 +367,38 @@ mod tests {
         assert_eq!(summary.active_agents, 0);
         assert_eq!(summary.active_processes, 1);
         assert_eq!(summary.active_monitors, 1);
+    }
+
+    #[test]
+    fn interleaved_assistant_text_splits_into_segments_around_tools() {
+        let thread_id = Uuid::from_u128(1);
+        let turn_id = Uuid::from_u128(2);
+        let message_id = Uuid::from_u128(3);
+        let at = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+        let ev = |seq, payload| ThreadEvent { seq, thread_id, turn_id: Some(turn_id), at, payload };
+        let tool = ToolCall { id: "call-1".into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None };
+
+        // One message id spans preamble → tool → answer (Claude's interleaving).
+        let events = vec![
+            ev(1, EventPayload::AssistantTextDelta { message_id, delta: "Let me look. ".into() }),
+            ev(2, EventPayload::ToolCallStarted { call: tool.clone() }),
+            ev(3, EventPayload::ToolCallCompleted { tool_call_id: "call-1".into(), output: serde_json::Value::Null, is_error: false }),
+            ev(4, EventPayload::AssistantTextDelta { message_id, delta: "Here is the answer.".into() }),
+            ev(5, EventPayload::AssistantMessageCompleted { message_id, text: "Let me look. Here is the answer.".into(), thinking: None }),
+        ];
+
+        let rendered: Vec<String> = project_transcript(&events)
+            .iter()
+            .map(|e| match e {
+                TranscriptEntry::Assistant { segment, text, complete, .. } => format!("assistant#{segment}:{text}:{complete}"),
+                TranscriptEntry::ToolCall { call, .. } => format!("tool:{}", call.id),
+                _ => "other".into(),
+            })
+            .collect();
+
+        // The post-tool answer is its own segment ordered AFTER the tool, never
+        // folded back above it; both segments finalize.
+        assert_eq!(rendered, vec!["assistant#0:Let me look. :true", "tool:call-1", "assistant#1:Here is the answer.:true"],);
     }
 
     #[test]

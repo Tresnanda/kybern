@@ -3,7 +3,7 @@
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useDeferredValue, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -461,10 +461,6 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
     )
   const settled = !group.running
   const open = group.running || !!expanded
-  const streaming = group.running && !!group.answerLive && shouldRevealLiveText(group.answerLive.text, group.answerLive.complete)
-  // Reveal the live answer at a steady cadence instead of in raw network bursts,
-  // so every harness streams smoothly. Settled text renders in full (snaps).
-  const smoothedAnswer = useSmoothStream(group.answerLive?.text ?? "", group.running, group.answerLive?.complete ?? false)
 
   return (
     <>
@@ -479,20 +475,15 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           <WorkingHeader since={group.user?.at ?? ""} />
           {hasWork && (
             <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
-              <WorkList blocks={group.work} tasks={launchedTasks} onOpenAgentActivity={onOpenAgentActivity} />
+              {/* Live turn: assistant prose renders bright and in place (the tail
+                  segment reveals at the smooth cadence); tools stay inline. */}
+              <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveAnswerId} onOpenAgentActivity={onOpenAgentActivity} />
               <RuntimeTaskTranscriptRows tasks={transcriptTasks} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
-          {!streaming && !hasLiveWork && (
+          {!hasLiveWork && (
             <div className="shimmer mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
               Thinking
-            </div>
-          )}
-          {streaming && group.answerLive && (
-            <div className="group/assistant mt-2 min-w-0 py-0.5" data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
-              <div data-slot="message-content">
-                <Markdown text={smoothedAnswer} style={TEXT} />
-              </div>
             </div>
           )}
         </div>
@@ -804,21 +795,27 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
   return chunks
 }
 
-function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; onOpenAgentActivity: OpenAgentActivity }) {
+function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, tone = "muted", liveTextId = null, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; tone?: WorkTone; liveTextId?: string | null; onOpenAgentActivity: OpenAgentActivity }) {
   const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
   const hierarchy = buildWorkHierarchy(blocks)
-  return <WorkRows blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
+  return <WorkRows blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
 }
+
+type WorkTone = "bright" | "muted"
 
 function WorkRows({
   blocks,
   tasksByToolCall,
   childrenByParent,
+  tone = "muted",
+  liveTextId = null,
   onOpenAgentActivity,
 }: {
   blocks: readonly Block[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
+  tone?: WorkTone
+  liveTextId?: string | null
   onOpenAgentActivity: OpenAgentActivity
 }) {
   return chunkWork(blocks, tasksByToolCall).map((chunk) =>
@@ -829,6 +826,8 @@ function WorkRows({
         task={chunk.block.kind === "tool" ? tasksByToolCall.get(chunk.block.call.id) : undefined}
         tasksByToolCall={tasksByToolCall}
         childrenByParent={childrenByParent}
+        tone={tone}
+        live={chunk.block.kind === "assistant" && chunk.block.id === liveTextId}
         onOpenAgentActivity={onOpenAgentActivity}
       />
     ) : (
@@ -904,19 +903,23 @@ function WorkRow({
   task,
   tasksByToolCall,
   childrenByParent,
+  tone = "muted",
+  live = false,
   onOpenAgentActivity,
 }: {
   block: Block
   task?: RuntimeTask
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
+  tone?: WorkTone
+  live?: boolean
   onOpenAgentActivity: OpenAgentActivity
 }) {
   switch (block.kind) {
     case "tool":
       return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
     case "assistant":
-      return <AssistantWorkRow block={block} />
+      return <AssistantWorkRow block={block} tone={tone} live={live} />
     case "approval":
       return (
         <div className="rounded-lg py-1">
@@ -1037,13 +1040,19 @@ function ToolRow({
   )
 }
 
-function AssistantWorkRow({ block }: { block: Extract<Block, { kind: "assistant" }> }) {
+function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extract<Block, { kind: "assistant" }>; tone?: WorkTone; live?: boolean }) {
   const [open, setOpen] = useState(false)
   // Smooth the reasoning stream too, but only while it is both live and expanded.
   const thinking = useSmoothStream(block.thinking, !block.complete && open)
+  // The tail segment reveals its text at the smooth cadence; every other segment
+  // (settled, or an earlier segment now behind a tool) renders in full. Parse the
+  // deferred value so the markdown re-parse trails the reveal instead of thrashing.
+  const revealed = useSmoothStream(block.text, live && !block.complete, block.complete)
+  const bodyText = useDeferredValue(revealed)
   const hasThinking = block.thinking.trim().length > 0
   const hasText = block.text.trim().length > 0
-  if (!hasThinking && !hasText) return null
+  const showText = hasText && (!live || block.complete || shouldRevealLiveText(block.text, block.complete))
+  if (!hasThinking && !showText) return null
   return (
     <>
       {hasThinking && (
@@ -1066,11 +1075,15 @@ function AssistantWorkRow({ block }: { block: Extract<Block, { kind: "assistant"
           </DisclosureRegion>
         </div>
       )}
-      {hasText && (
+      {showText && (
         <div className="chat-message-segment flex flex-col gap-1.5 pr-[2px] pl-[2px]">
-          <div className="text-muted-foreground">
-            <Markdown text={block.text} className="[&_*]:text-muted-foreground" style={TEXT} />
-          </div>
+          {tone === "bright" ? (
+            <Markdown text={bodyText} style={TEXT} />
+          ) : (
+            <div className="text-muted-foreground">
+              <Markdown text={bodyText} className="[&_*]:text-muted-foreground" style={TEXT} />
+            </div>
+          )}
         </div>
       )}
     </>

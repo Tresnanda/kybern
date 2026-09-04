@@ -2763,6 +2763,13 @@
               "type": "string",
               "format": "uuid"
             },
+            "segment": {
+              "description": "Segment index within one `message_id`. A provider can keep a single\nmessage id across a tool call (Claude streams preamble → tool →\nanswer under one id); the projection splits the text at each\nrow-making event so post-tool prose is its own entry, ordered after\nthe tool. `0` is the first/only segment. `(id, segment)` is the\nstable identity a client keys on.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "default": 0
+            },
             "text": {
               "type": "string"
             },
@@ -5768,6 +5775,13 @@
                   "turn_id": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "segment": {
+                    "description": "Segment index within one `message_id`. A provider can keep a single\nmessage id across a tool call (Claude streams preamble → tool →\nanswer under one id); the projection splits the text at each\nrow-making event so post-tool prose is its own entry, ordered after\nthe tool. `0` is the first/only segment. `(id, segment)` is the\nstable identity a client keys on.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "default": 0
                   },
                   "text": {
                     "type": "string"

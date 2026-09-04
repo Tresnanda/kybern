@@ -264,6 +264,9 @@ export type TranscriptEntry =
       role: "assistant";
       id: MessageId;
       turn_id: TurnId;
+      /** Segment index within one `message_id`; the projection splits text at
+       * each row-making event so post-tool prose is its own entry. 0 = only. */
+      segment?: number;
       text: string;
       thinking?: string | null;
       at: DateTime;
