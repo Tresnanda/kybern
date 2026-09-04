@@ -5,6 +5,7 @@ import { buildStructuredTextParts } from "./src/lib/composerTokens.ts"
 import { getAttachmentIconName, getFileIconName } from "./src/lib/synara/fileIcons.ts"
 import {
   humanizeToolName,
+  isAgentLaunchTool,
   runtimeActivityPrompt,
   runtimeActivityResult,
   summarizeToolCalls,
@@ -128,6 +129,14 @@ test("work summaries distinguish delegation from work run by the main agent", ()
     ])?.label,
     "Ran 1 command and delegated 1 task"
   )
+})
+
+test("focused agent navigation distinguishes launches from coordination calls", () => {
+  assert.equal(isAgentLaunchTool(call("Agent", { prompt: "Inspect parity" })), true)
+  assert.equal(isAgentLaunchTool(call("collaboration.spawn_agent", { task: "Inspect parity" })), true)
+  assert.equal(isAgentLaunchTool(call("other", { title: "Task: inspect parity" })), true)
+  assert.equal(isAgentLaunchTool(call("send_message_to_agent", { message: "Keep going" })), false)
+  assert.equal(isAgentLaunchTool(call("wait_agent", {})), false)
 })
 
 test("focused activity keeps the full delegated prompt across provider wrappers", () => {

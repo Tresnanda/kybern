@@ -22,7 +22,7 @@ import {
   getChatTranscriptTextStyle,
 } from "@/components/synara/chat/chatTypography"
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
-import { runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
+import { isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useTicker } from "@/lib/hooks"
 import { MessageScroller } from "@/components/beui/message-scroller"
 import {
@@ -87,6 +87,15 @@ interface AgentActivityDetail {
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
 }
 
+interface SettledWorkPresentation {
+  agentBlocks: ToolBlock[]
+  agentTasks: RuntimeTask[]
+  disclosureBlocks: Block[]
+  disclosureTasks: RuntimeTask[]
+  tasksByToolCall: ReadonlyMap<string, RuntimeTask>
+  childrenByParent: ReadonlyMap<string, ToolBlock[]>
+}
+
 /** Formats a duration the way Synara's formatClockDuration does. */
 function clockDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -108,6 +117,33 @@ function runtimeTaskStatusLabel(task: RuntimeTask): string {
   if (task.status === "failed") return "Failed"
   if (task.status === "stopped") return "Stopped"
   return "Interrupted"
+}
+
+function isAgentLaunchBlock(block: ToolBlock, task?: RuntimeTask): boolean {
+  return task?.kind === "agent" || isAgentLaunchTool(block.call)
+}
+
+function settledWorkPresentation(blocks: readonly Block[], tasks: readonly RuntimeTask[], transcriptTasks: readonly RuntimeTask[]): SettledWorkPresentation {
+  const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
+  const hierarchy = buildWorkHierarchy(blocks)
+  const agentBlocks: ToolBlock[] = []
+  const disclosureBlocks: Block[] = []
+  for (const block of hierarchy.roots) {
+    if (block.kind === "tool" && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) agentBlocks.push(block)
+    else disclosureBlocks.push(block)
+  }
+
+  // Child runtime tasks belong in their parent's focused Activity section.
+  const taskIds = new Set(tasks.map((task) => task.id))
+  const rootTasks = transcriptTasks.filter((task) => !task.parent_id || !taskIds.has(task.parent_id))
+  return {
+    agentBlocks,
+    agentTasks: rootTasks.filter((task) => task.kind === "agent"),
+    disclosureBlocks,
+    disclosureTasks: rootTasks.filter((task) => task.kind !== "agent"),
+    tasksByToolCall,
+    childrenByParent: hierarchy.childrenByParent,
+  }
 }
 
 function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonly RuntimeTask[], target: AgentActivitySelection): AgentActivityDetail | null {
@@ -396,10 +432,17 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
         (task) =>
           !task.tool_call_id ||
           !group.work.some((block) => block.kind === "tool" && block.call.id === task.tool_call_id),
-      ),
+    ),
     [group.work, launchedTasks],
   )
+  const settledWork = useMemo(
+    () => settledWorkPresentation(group.work, launchedTasks, transcriptTasks),
+    [group.work, launchedTasks, transcriptTasks],
+  )
   const hasWork = group.work.length > 0 || launchedTasks.length > 0
+  const hasPrimaryAgentActivity = settledWork.agentBlocks.length > 0 || settledWork.agentTasks.length > 0
+  const hasDisclosedWork = settledWork.disclosureBlocks.length > 0 || settledWork.disclosureTasks.length > 0
+  const hasSettledActivity = hasPrimaryAgentActivity || hasDisclosedWork
   const hasLiveWork =
     launchedTasks.some(isRuntimeTaskActive) ||
     group.work.some(
@@ -446,24 +489,42 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
 
       {settled && (
         <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
-          {hasWork && (
+          {hasSettledActivity && (
             <div className="mb-3">
-              <div className="group/collapsed-work">
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() => toggle(group.turnId)}
-                  className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground transition-colors duration-200 hover:text-foreground"
-                  style={CHAT_FONT}
-                >
-                  <span>{group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : "Details"}</span>
-                  <DisclosureChevron open={open} className="text-muted-foreground/70" />
-                </button>
-                <DisclosureRegion open={open} contentClassName="mb-2.5 space-y-1.5">
-                  <WorkList blocks={group.work} tasks={launchedTasks} onOpenAgentActivity={onOpenAgentActivity} />
-                  <RuntimeTaskTranscriptRows tasks={transcriptTasks} onOpenAgentActivity={onOpenAgentActivity} />
-                </DisclosureRegion>
-              </div>
+              {hasPrimaryAgentActivity && (
+                <div data-primary-agent-activity="true" className={cn("space-y-0.5", hasDisclosedWork ? "mb-1" : "pb-2")}>
+                  <WorkRows
+                    blocks={settledWork.agentBlocks}
+                    tasksByToolCall={settledWork.tasksByToolCall}
+                    childrenByParent={settledWork.childrenByParent}
+                    onOpenAgentActivity={onOpenAgentActivity}
+                  />
+                  <RuntimeTaskTranscriptRows tasks={settledWork.agentTasks} onOpenAgentActivity={onOpenAgentActivity} />
+                </div>
+              )}
+              {hasDisclosedWork && (
+                <div className="group/collapsed-work">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() => toggle(group.turnId)}
+                    className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground transition-colors duration-200 hover:text-foreground"
+                    style={CHAT_FONT}
+                  >
+                    <span>{group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : "Details"}</span>
+                    <DisclosureChevron open={open} className="text-muted-foreground/70" />
+                  </button>
+                  <DisclosureRegion open={open} contentClassName="mb-2.5 space-y-1.5">
+                    <WorkRows
+                      blocks={settledWork.disclosureBlocks}
+                      tasksByToolCall={settledWork.tasksByToolCall}
+                      childrenByParent={settledWork.childrenByParent}
+                      onOpenAgentActivity={onOpenAgentActivity}
+                    />
+                    <RuntimeTaskTranscriptRows tasks={settledWork.disclosureTasks} onOpenAgentActivity={onOpenAgentActivity} />
+                  </DisclosureRegion>
+                </div>
+              )}
               <div className="h-px w-full bg-border" />
             </div>
           )}
@@ -530,6 +591,7 @@ function RuntimeTaskTranscriptRows({ tasks, onOpenAgentActivity }: { tasks: Runt
         key={task.id}
         type="button"
         title={task.title}
+        data-agent-launch-row={task.kind === "agent" ? "true" : undefined}
         onClick={() => {
           if (task.kind === "agent") {
             onOpenAgentActivity({ kind: "task", turnId: task.origin_turn_id, taskId: task.id })
@@ -543,9 +605,10 @@ function RuntimeTaskTranscriptRows({ tasks, onOpenAgentActivity }: { tasks: Runt
           {task.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
         </span>
         <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
-          Started {noun} · {task.title}
+          {task.kind === "agent" ? `${active ? "Delegating" : "Delegated"} ${task.title}` : `Started ${noun} · ${task.title}`}
         </span>
         <span className={cn("shrink-0 font-system-ui text-[11px] tabular-nums", task.status === "failed" ? "text-destructive" : "text-muted-foreground/55")}>{status}</span>
+        {task.kind === "agent" && <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/task-row:text-foreground" />}
       </button>
     )
   })
@@ -898,7 +961,7 @@ function ToolRow({
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
   const hasOutput = out.trim().length > 0
-  const opensFocusedActivity = activity.kind === "delegate" || task?.kind === "agent"
+  const opensFocusedActivity = isAgentLaunchBlock(block, task)
   const canExpand = !opensFocusedActivity && (hasChildActivity || hasOutput)
   const canOpen = opensFocusedActivity || canExpand
   const tone = block.isError
@@ -908,6 +971,7 @@ function ToolRow({
     <div className="rounded-lg py-1">
       <button
         type="button"
+        data-agent-launch-row={opensFocusedActivity ? "true" : undefined}
         onClick={() => {
           if (opensFocusedActivity) {
             onOpenAgentActivity({ kind: "tool", turnId: block.turnId, toolCallId: block.call.id })

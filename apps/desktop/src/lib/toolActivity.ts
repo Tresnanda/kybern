@@ -68,12 +68,15 @@ const SEARCH_TOOLS = new Set([
 const LIST_TOOLS = new Set(["list", "listfiles", "ls"])
 const FETCH_TOOLS = new Set(["webfetch", "fetch", "urlfetch", "httpfetch"])
 const WEB_SEARCH_TOOLS = new Set(["websearch", "searchweb", "webrun"])
-const DELEGATE_TOOLS = new Set([
+const AGENT_LAUNCH_TOOLS = new Set([
   "task",
   "agent",
   "subagent",
   "delegate",
   "spawnagent",
+])
+const DELEGATE_TOOLS = new Set([
+  ...AGENT_LAUNCH_TOOLS,
   "sendmessagetoagent",
   "followuptask",
   "waitagent",
@@ -281,6 +284,16 @@ function leafToolName(name: string): string {
 
 function matchesTool(set: ReadonlySet<string>, tool: string, leaf: string): boolean {
   return set.has(tool) || set.has(leaf)
+}
+
+/** True only for a call that creates agent work, not follow-up or wait calls. */
+export function isAgentLaunchTool(call: ToolCall): boolean {
+  const tool = normalized(call.name)
+  const leaf = leafToolName(call.name)
+  if (matchesTool(AGENT_LAUNCH_TOOLS, tool, leaf)) return true
+  if (tool !== "other" && tool !== "tool") return false
+  const title = normalized(inputString(call.input, ["title"]) ?? "")
+  return ["task", "agent", "subagent", "delegate", "spawnagent"].some((prefix) => title.startsWith(prefix))
 }
 
 function compactPath(value: string | undefined): string {

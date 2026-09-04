@@ -16,10 +16,13 @@ Runtime activity has three levels of visibility:
 3. The Activity dock shows active and recent items, hierarchy, elapsed time,
    usage or process metrics, and provider-supported controls.
 
-The transcript records one stable launch row in the originating turn. When a
-provider also attributes child tool calls to that launch, the client nests them
-inside the row instead of counting them as work by the main agent. Unattributed
-or malformed relationships stay at the root; Kybern never guesses ownership.
+The transcript records one stable launch row in the originating turn. Agent
+launches remain visible after the turn settles, while ordinary execution history
+folds under **Worked for…**, so opening an agent never requires expanding the
+secondary work log first. When a provider also attributes child tool calls to
+that launch, the client nests them inside the row instead of counting them as
+work by the main agent. Unattributed or malformed relationships stay at the root;
+Kybern never guesses ownership.
 Opening an agent launch replaces the transcript with a focused detail view:
 Prompt, Result, and Activity remain separate, and nested agents can be opened
 without losing the parent or transcript scroll position. These sections read
