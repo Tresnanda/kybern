@@ -407,11 +407,34 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
     }
     g.running = !g.end && !!g.user
     if (g.running) {
-      const last = g.work[g.work.length - 1]
-      if (last && last.kind === "assistant" && last.text.trim()) {
-        const { answer, reasoning } = splitAssistantForPresentation(last)
+      // The live answer is the last assistant block that has streamed text — it
+      // is not always the final work entry. When a provider keeps one message id
+      // across a tool call (Claude's interleaved preamble → tool → answer), the
+      // post-tool answer folds back into the block that opened before the tool,
+      // so that block sits ahead of the now-complete tool. Promote it only once
+      // nothing after it is still working, so a genuine preamble sitting before a
+      // running tool stays muted work instead of masquerading as the answer.
+      let liveIdx = -1
+      for (let i = g.work.length - 1; i >= 0; i--) {
+        const w = g.work[i]!
+        if (w.kind === "assistant" && w.text.trim()) {
+          liveIdx = i
+          break
+        }
+      }
+      const busyAfter =
+        liveIdx !== -1 &&
+        g.work
+          .slice(liveIdx + 1)
+          .some((w) => (w.kind === "tool" && !w.complete) || (w.kind === "approval" && !w.decision))
+      if (liveIdx !== -1 && !busyAfter) {
+        const { answer, reasoning } = splitAssistantForPresentation(g.work[liveIdx] as AssistantBlock)
         g.answerLive = answer
-        g.work = [...g.work.slice(0, -1), ...(reasoning ? [reasoning] : [])]
+        g.work = [
+          ...g.work.slice(0, liveIdx),
+          ...(reasoning ? [reasoning] : []),
+          ...g.work.slice(liveIdx + 1),
+        ]
       }
     }
   }

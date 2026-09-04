@@ -64,6 +64,52 @@ test("OMP reasoning stays in work after its combined assistant message settles",
   assert.equal(group.work[0]?.thinking, assistant.thinking)
 })
 
+test("the streaming answer stays the live answer even after a completed tool call", () => {
+  // Claude keeps one message id across preamble → tool → answer, so the post-tool
+  // answer folds back into a block that opened before the (now complete) tool.
+  const tool = {
+    kind: "tool",
+    id: "tool:read-1",
+    turnId: "turn-1",
+    at: "2026-09-03T00:00:01Z",
+    call: { id: "read-1", name: "Read", input: {}, parent_id: null },
+    stream: "",
+    output: null,
+    isError: false,
+    complete: true,
+  }
+  const [group] = groupTurns([user, { ...assistant, thinking: "" }, tool])
+
+  // The final text renders as the live answer (foreground), not muted work.
+  assert.equal(group.answerLive?.text, assistant.text)
+  assert.deepEqual(
+    group.work.map((b) => b.id),
+    ["tool:read-1"],
+  )
+})
+
+test("a preamble before a still-running tool stays muted work, not the answer", () => {
+  const runningTool = {
+    kind: "tool",
+    id: "tool:read-1",
+    turnId: "turn-1",
+    at: "2026-09-03T00:00:01Z",
+    call: { id: "read-1", name: "Read", input: {}, parent_id: null },
+    stream: "",
+    output: null,
+    isError: false,
+    complete: false,
+  }
+  const preamble = { ...assistant, thinking: "", text: "Let me check the files." }
+  const [group] = groupTurns([user, preamble, runningTool])
+
+  assert.equal(group.answerLive, null)
+  assert.deepEqual(
+    group.work.map((b) => b.id),
+    ["assistant-1", "tool:read-1"],
+  )
+})
+
 test("a tiny partial token keeps the live thinking state instead of flashing a stalled answer", () => {
   assert.equal(shouldRevealLiveText("I", false), false)
   assert.equal(shouldRevealLiveText("The sub", false), true)
