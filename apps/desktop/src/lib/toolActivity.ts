@@ -849,7 +849,7 @@ function summaryPhrase(category: SummaryCategory, count: number): string {
     case "search":
       return `ran ${count} ${plural("search", "searches")}`
     case "agent":
-      return `ran ${count} agent ${plural("task")}`
+      return `delegated ${count} ${plural("task")}`
     case "tool":
       return `used ${count} ${plural("tool")}`
   }

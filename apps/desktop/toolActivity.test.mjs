@@ -110,6 +110,24 @@ test("OpenCode, pi, omp, and Cursor input shapes normalize as file reads", () =>
   )
 })
 
+test("work summaries distinguish delegation from work run by the main agent", () => {
+  assert.equal(
+    summarizeToolCalls([
+      {
+        call: call("Bash", { command: "cargo test" }),
+        complete: true,
+        isError: false,
+      },
+      {
+        call: call("Agent", { description: "Inspect harness parity" }),
+        complete: true,
+        isError: false,
+      },
+    ])?.label,
+    "Ran 1 command and delegated 1 task"
+  )
+})
+
 test("Cursor titles remain useful when ACP marks the tool kind as other", () => {
   assert.deepEqual(
     toolLine(call("other", { title: "Reading RTK.md", raw: {} }), false),

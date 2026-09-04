@@ -50,7 +50,7 @@ import { cn } from "@/lib/utils"
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from "@/protocol"
 import { errorText, revertTo } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
-import { groupTurns, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
+import { buildWorkHierarchy, groupTurns, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
 const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
@@ -501,19 +501,60 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
 
 function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[] }) {
   const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
+  const hierarchy = buildWorkHierarchy(blocks)
+  return <WorkRows blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} />
+}
+
+function WorkRows({
+  blocks,
+  tasksByToolCall,
+  childrenByParent,
+}: {
+  blocks: readonly Block[]
+  tasksByToolCall: ReadonlyMap<string, RuntimeTask>
+  childrenByParent: ReadonlyMap<string, ToolBlock[]>
+}) {
   return chunkWork(blocks, tasksByToolCall).map((chunk) =>
     chunk.kind === "single" ? (
-      <WorkRow key={chunk.block.id} block={chunk.block} task={chunk.block.kind === "tool" ? tasksByToolCall.get(chunk.block.call.id) : undefined} />
+      <WorkRow
+        key={chunk.block.id}
+        block={chunk.block}
+        task={chunk.block.kind === "tool" ? tasksByToolCall.get(chunk.block.call.id) : undefined}
+        tasksByToolCall={tasksByToolCall}
+        childrenByParent={childrenByParent}
+      />
     ) : (
-      <ToolGroupRow key={`${chunk.blocks[0]!.id}:${chunk.blocks.at(-1)!.id}`} blocks={chunk.blocks} />
+      <ToolGroupRow
+        key={`${chunk.blocks[0]!.id}:${chunk.blocks.at(-1)!.id}`}
+        blocks={chunk.blocks}
+        tasksByToolCall={tasksByToolCall}
+        childrenByParent={childrenByParent}
+      />
     ),
   )
 }
 
-function ToolGroupRow({ blocks }: { blocks: ToolBlock[] }) {
+function ToolGroupRow({
+  blocks,
+  tasksByToolCall,
+  childrenByParent,
+}: {
+  blocks: ToolBlock[]
+  tasksByToolCall: ReadonlyMap<string, RuntimeTask>
+  childrenByParent: ReadonlyMap<string, ToolBlock[]>
+}) {
   const [open, setOpen] = useState(false)
   const summary = summarizeToolCalls(blocks.map((block) => ({ call: block.call, complete: block.complete, isError: block.isError })))
-  if (!summary) return blocks.map((block) => <ToolRow key={block.id} block={block} />)
+  if (!summary)
+    return blocks.map((block) => (
+      <ToolRow
+        key={block.id}
+        block={block}
+        task={tasksByToolCall.get(block.call.id)}
+        tasksByToolCall={tasksByToolCall}
+        childrenByParent={childrenByParent}
+      />
+    ))
   return (
     <div className="py-1">
       <button
@@ -532,17 +573,33 @@ function ToolGroupRow({ blocks }: { blocks: ToolBlock[] }) {
       </button>
       <DisclosureRegion open={open} contentClassName="ms-5 mt-0.5 space-y-0.5 ps-0.5">
         {blocks.map((block) => (
-          <ToolRow key={block.id} block={block} />
+          <ToolRow
+            key={block.id}
+            block={block}
+            task={tasksByToolCall.get(block.call.id)}
+            tasksByToolCall={tasksByToolCall}
+            childrenByParent={childrenByParent}
+          />
         ))}
       </DisclosureRegion>
     </div>
   )
 }
 
-function WorkRow({ block, task }: { block: Block; task?: RuntimeTask }) {
+function WorkRow({
+  block,
+  task,
+  tasksByToolCall,
+  childrenByParent,
+}: {
+  block: Block
+  task?: RuntimeTask
+  tasksByToolCall: ReadonlyMap<string, RuntimeTask>
+  childrenByParent: ReadonlyMap<string, ToolBlock[]>
+}) {
   switch (block.kind) {
     case "tool":
-      return <ToolRow block={block} task={task} />
+      return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} />
     case "assistant":
       return <AssistantWorkRow block={block} />
     case "approval":
@@ -577,13 +634,26 @@ function WorkRow({ block, task }: { block: Block; task?: RuntimeTask }) {
   }
 }
 
-function ToolRow({ block, task }: { block: Extract<Block, { kind: "tool" }>; task?: RuntimeTask }) {
+function ToolRow({
+  block,
+  task,
+  tasksByToolCall,
+  childrenByParent,
+}: {
+  block: Extract<Block, { kind: "tool" }>
+  task?: RuntimeTask
+  tasksByToolCall: ReadonlyMap<string, RuntimeTask>
+  childrenByParent: ReadonlyMap<string, ToolBlock[]>
+}) {
   const [open, setOpen] = useState(false)
   const active = !!task && isRuntimeTaskActive(task)
   const activity = toolLine(block.call, block.complete && !active)
   const visual = toolVisualKind(block.call, activity)
   const out = outputText(block.output, block.stream)
-  const canOpen = out.trim().length > 0
+  const childBlocks = childrenByParent.get(block.call.id) ?? []
+  const hasChildActivity = childBlocks.length > 0
+  const hasOutput = out.trim().length > 0
+  const canOpen = hasChildActivity || hasOutput
   const tone = block.isError
     ? "text-destructive/80 transition-colors group-hover/tool-row:text-destructive group-focus-visible/tool-row:text-destructive"
     : TONE
@@ -606,15 +676,30 @@ function ToolRow({ block, task }: { block: Extract<Block, { kind: "tool" }>; tas
         {canOpen && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
       </button>
       {canOpen && (
-        <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ms-[1.375rem]">
-          <pre
-            className={cn(
-              "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
-              block.isError ? "text-destructive/90" : "text-foreground/92",
-            )}
-          >
-            {out}
-          </pre>
+        <DisclosureRegion open={open} contentClassName="ms-[1.375rem] min-w-0 pt-1.5">
+          {hasChildActivity && (
+            <section aria-label={activity.kind === "delegate" ? "Subagent activity" : "Nested activity"} className={cn("min-w-0", hasOutput && "pb-2.5")}>
+              <p className="pb-0.5 font-system-ui text-[11px] leading-5 text-muted-foreground/45">
+                {activity.kind === "delegate" ? "Subagent activity" : "Nested activity"}
+              </p>
+              <div className="space-y-0.5">
+                <WorkRows blocks={childBlocks} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} />
+              </div>
+            </section>
+          )}
+          {hasOutput && (
+            <section aria-label={hasChildActivity ? "Result" : undefined}>
+              {hasChildActivity && <p className="pb-1 font-system-ui text-[11px] leading-5 text-muted-foreground/45">Result</p>}
+              <pre
+                className={cn(
+                  "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
+                  block.isError ? "text-destructive/90" : "text-foreground/92",
+                )}
+              >
+                {out}
+              </pre>
+            </section>
+          )}
         </DisclosureRegion>
       )}
     </div>

@@ -276,6 +276,59 @@ export interface TurnGroup {
 }
 
 type AssistantBlock = Extract<Block, { kind: "assistant" }>
+type ToolBlock = Extract<Block, { kind: "tool" }>
+
+export interface WorkHierarchy {
+  roots: Block[]
+  childrenByParent: Map<string, ToolBlock[]>
+}
+
+/**
+ * Keep provider-owned tool activity beneath the tool that launched it. Unknown
+ * parents remain at the root so a partial or older transcript never hides work.
+ */
+export function buildWorkHierarchy(blocks: readonly Block[]): WorkHierarchy {
+  const toolIds = new Set(
+    blocks.flatMap((block) => (block.kind === "tool" ? [block.call.id] : [])),
+  )
+  const toolParents = new Map(
+    blocks.flatMap((block) => {
+      if (block.kind !== "tool") return []
+      const parentId = block.call.parent_id
+      return parentId && parentId !== block.call.id && toolIds.has(parentId)
+        ? [[block.call.id, parentId] as const]
+        : []
+    }),
+  )
+  const roots: Block[] = []
+  const childrenByParent = new Map<string, ToolBlock[]>()
+
+  for (const block of blocks) {
+    if (block.kind !== "tool") {
+      roots.push(block)
+      continue
+    }
+
+    const parentId = block.call.parent_id
+    const ancestors = new Set([block.call.id])
+    let ancestorId = parentId ?? undefined
+    while (ancestorId && !ancestors.has(ancestorId)) {
+      ancestors.add(ancestorId)
+      ancestorId = toolParents.get(ancestorId)
+    }
+    const cyclic = ancestorId !== undefined
+
+    if (!parentId || parentId === block.call.id || !toolIds.has(parentId) || cyclic) {
+      roots.push(block)
+      continue
+    }
+    const children = childrenByParent.get(parentId) ?? []
+    children.push(block)
+    childrenByParent.set(parentId, children)
+  }
+
+  return { roots, childrenByParent }
+}
 
 /**
  * A provider can emit a single token and then spend seconds preparing the
