@@ -92,7 +92,7 @@ html[data-thread-pointer-dragging="true"] * {
 .thread-drop-scrim {
   background: color-mix(
     in srgb,
-    var(--color-background-surface) 42%,
+    var(--color-background-surface) 22%,
     transparent
   );
 }
@@ -109,14 +109,16 @@ html[data-thread-pointer-dragging="true"] * {
   background:
     linear-gradient(
       180deg,
-      color-mix(in srgb, var(--color-background-accent) 72%, transparent),
-      color-mix(in srgb, var(--color-background-accent) 48%, transparent)
+      color-mix(in srgb, var(--color-background-accent) 18%, transparent),
+      color-mix(in srgb, var(--color-background-accent) 8%, transparent)
     ),
     color-mix(
       in srgb,
-      var(--color-background-surface) 92%,
-      var(--color-background-accent)
+      var(--color-background-surface) 38%,
+      transparent
     );
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
   box-shadow:
     inset 0 0 0 1px
       color-mix(in srgb, var(--color-border-focus) 64%, transparent),
