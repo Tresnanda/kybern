@@ -23,6 +23,7 @@ import type {
 import { emptyThreadState, type ThreadState } from "./transcript"
 import {
   canSplitPane,
+  closeSplitViewPane,
   collectSplitThreadIds,
   createSplitView,
   findThreadPane,
@@ -30,9 +31,7 @@ import {
   persistSplitView,
   readPersistedSplitView,
   reconcileSplitView,
-  removeThreadPane,
   replacePaneThread,
-  resolveDefaultFocusPaneId,
   resolveFocusedThreadPane,
   setSplitNodeRatio,
   splitThreadPane,
@@ -340,37 +339,25 @@ export const useStore = create<Store>()((set, get) => ({
     })
   },
   closeSplitPane: (paneId) => {
-    const splitView = get().splitView
-    if (!splitView || !findThreadPane(splitView.root, paneId)) return false
-    const root = removeThreadPane(splitView.root, paneId)
-    if (!root) {
-      persistSplitView(null)
-      set({ splitView: null, selected: { kind: "none" } })
-      return true
-    }
-    if (root.kind === "leaf") {
-      persistSplitView(null)
-      set({
-        splitView: null,
-        selected: root.threadId
-          ? { kind: "thread", id: root.threadId }
-          : { kind: "none" },
-      })
-      return true
-    }
+    const state = get()
+    const splitView = state.splitView
+    if (!splitView) return false
+    const closed = findThreadPane(splitView.root, paneId)
+    const result = closeSplitViewPane(splitView, paneId)
+    if (!result) return false
 
-    const previousFocus = findThreadPane(root, splitView.focusedPaneId)
-    const focusedPaneId = previousFocus
-      ? previousFocus.id
-      : resolveDefaultFocusPaneId(root)
-    const focused = findThreadPane(root, focusedPaneId)
-    const next = { root, focusedPaneId }
-    persistSplitView(next)
+    const fallbackProjectId =
+      (closed?.threadId
+        ? state.threads[closed.threadId]?.project_id
+        : undefined) ?? Object.keys(state.projects)[0]
+    persistSplitView(result.splitView)
     set({
-      splitView: next,
-      selected: focused?.threadId
-        ? { kind: "thread", id: focused.threadId }
-        : { kind: "none" },
+      splitView: result.splitView,
+      selected: result.threadId
+        ? { kind: "thread", id: result.threadId }
+        : fallbackProjectId
+          ? { kind: "draft", draft: { projectId: fallbackProjectId } }
+          : { kind: "none" },
     })
     return true
   },
@@ -419,7 +406,13 @@ export const useStore = create<Store>()((set, get) => ({
       state.selected.kind === "thread" &&
       state.selected.id === threadId
     ) {
-      set({ selected: { kind: "none" } })
+      const projectId =
+        state.threads[threadId]?.project_id ?? Object.keys(state.projects)[0]
+      set({
+        selected: projectId
+          ? { kind: "draft", draft: { projectId } }
+          : { kind: "none" },
+      })
     }
   },
   reconcileSplitThreads: (threadIds) => {

@@ -1,29 +1,51 @@
 // VS Code-style edge drop zones for arranging sidebar threads into split panes.
 
 import {
+  useCallback,
+  useEffect,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
   type ReactNode,
 } from "react"
 
 import { cn } from "@/lib/utils"
+import {
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+} from "@/lib/synara/icons"
 import type { ThreadId } from "@/protocol"
 import type { SplitDirection, SplitSide } from "@/state/splitView"
 
 import {
   dropZoneAt,
-  hasThreadDrag,
-  readThreadDrag,
   splitForZone,
+  subscribeThreadPointerDrag,
+  subscribeThreadPointerDrop,
   type DropZone,
+  type ThreadPointerDrag,
 } from "./chatPaneDrag"
 
+const ALLOW_EVERY_DIRECTION = () => true
+
 const ZONE_CLASS: Record<DropZone, string> = {
-  top: "inset-x-0 top-0 h-1/2",
-  bottom: "inset-x-0 bottom-0 h-1/2",
-  left: "inset-y-0 left-0 w-1/2",
-  right: "inset-y-0 right-0 w-1/2",
+  top: "inset-x-2 top-2 h-[calc(50%_-_0.75rem)]",
+  bottom: "inset-x-2 bottom-2 h-[calc(50%_-_0.75rem)]",
+  left: "inset-y-2 left-2 w-[calc(50%_-_0.75rem)]",
+  right: "inset-y-2 right-2 w-[calc(50%_-_0.75rem)]",
+}
+
+const DIVIDER_CLASS: Record<DropZone, string> = {
+  top: "inset-x-2 top-1/2 h-px",
+  bottom: "inset-x-2 top-1/2 h-px",
+  left: "inset-y-2 left-1/2 w-px",
+  right: "inset-y-2 left-1/2 w-px",
+}
+
+const DROP_LABEL: Record<DropZone, string> = {
+  top: "Split above",
+  bottom: "Split below",
+  left: "Split left",
+  right: "Split right",
 }
 
 export function ChatPaneDropOverlay({
@@ -31,7 +53,7 @@ export function ChatPaneDropOverlay({
   className,
   excludedThreadIds,
   wholePaneDrop = false,
-  canDropInDirection = () => true,
+  canDropInDirection = ALLOW_EVERY_DIRECTION,
   onDropThread,
 }: {
   children: ReactNode
@@ -48,62 +70,80 @@ export function ChatPaneDropOverlay({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [zone, setZone] = useState<DropZone | null>(null)
+  const [lastZone, setLastZone] = useState<DropZone>("right")
 
-  const zoneFor = (event: ReactDragEvent<HTMLDivElement>): DropZone | null => {
-    const threadId = readThreadDrag(event)
-    if (threadId && excludedThreadIds?.has(threadId)) return null
+  const showZone = useCallback((next: DropZone | null) => {
+    if (next) setLastZone(next)
+    setZone((current) => (current === next ? current : next))
+  }, [])
+
+  const zoneFor = useCallback((drag: ThreadPointerDrag): DropZone | null => {
+    if (excludedThreadIds?.has(drag.threadId)) return null
     const rect = ref.current?.getBoundingClientRect()
     return rect
-      ? dropZoneAt(rect, event.clientX, event.clientY, canDropInDirection)
+      ? dropZoneAt(rect, drag.clientX, drag.clientY, canDropInDirection)
       : null
-  }
+  }, [canDropInDirection, excludedThreadIds])
 
-  const update = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!hasThreadDrag(event)) return
-    event.preventDefault()
-    event.stopPropagation()
-    const next = zoneFor(event)
-    event.dataTransfer.dropEffect = next ? "move" : "none"
-    setZone((current) => (current === next ? current : next))
-  }
+  useEffect(
+    () =>
+      subscribeThreadPointerDrag((drag) => {
+        showZone(drag ? zoneFor(drag) : null)
+      }),
+    [showZone, zoneFor]
+  )
+
+  useEffect(
+    () =>
+      subscribeThreadPointerDrop((drop) => {
+        const next = zoneFor(drop)
+        showZone(null)
+        if (!next) return
+        onDropThread({ threadId: drop.threadId, ...splitForZone(next) })
+      }),
+    [onDropThread, showZone, zoneFor]
+  )
 
   return (
     <div
       ref={ref}
+      data-thread-drop-surface="true"
       className={cn("relative flex min-h-0 min-w-0 flex-1", className)}
-      onDragEnter={update}
-      onDragOver={update}
-      onDragLeave={(event) => {
-        if (!hasThreadDrag(event)) return
-        const related = event.relatedTarget as Node | null
-        if (related && event.currentTarget.contains(related)) return
-        setZone(null)
-      }}
-      onDrop={(event) => {
-        if (!hasThreadDrag(event)) return
-        event.preventDefault()
-        event.stopPropagation()
-        const threadId = readThreadDrag(event)
-        const next = zoneFor(event)
-        setZone(null)
-        if (!threadId || !next || excludedThreadIds?.has(threadId)) return
-        onDropThread({ threadId, ...splitForZone(next) })
-      }}
     >
       {children}
       <div
-        className="pointer-events-none absolute inset-0 z-50"
+        data-active={zone !== null}
+        data-thread-drop-preview={zone ?? undefined}
+        className="thread-drop-overlay pointer-events-none absolute inset-0 z-50 overflow-hidden"
         aria-hidden="true"
       >
-        {zone && (
+        <div className="thread-drop-scrim absolute inset-0" />
+        {!wholePaneDrop && (
           <div
-            data-thread-drop-zone={zone}
             className={cn(
-              "absolute m-1 rounded-md bg-info/12 ring-1 ring-info/55 ring-inset",
-              wholePaneDrop ? "inset-0" : ZONE_CLASS[zone]
+              "thread-drop-divider absolute",
+              DIVIDER_CLASS[lastZone]
             )}
           />
         )}
+        <div
+          data-thread-drop-zone={lastZone}
+          className={cn(
+            "thread-drop-target absolute flex items-center justify-center rounded-[10px]",
+            wholePaneDrop ? "inset-2" : ZONE_CLASS[lastZone]
+          )}
+        >
+          <div className="thread-drop-label inline-flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-lg px-3 py-2 text-[length:var(--app-font-size-ui,12px)] leading-none font-medium whitespace-nowrap text-foreground">
+            {wholePaneDrop ? (
+              <SquareSplitVertical className="size-4 shrink-0" />
+            ) : lastZone === "left" || lastZone === "right" ? (
+              <SquareSplitVertical className="size-4 shrink-0" />
+            ) : (
+              <SquareSplitHorizontal className="size-4 shrink-0" />
+            )}
+            <span>{wholePaneDrop ? "Open here" : DROP_LABEL[lastZone]}</span>
+          </div>
+        </div>
       </div>
     </div>
   )

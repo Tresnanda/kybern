@@ -9,7 +9,10 @@ import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
 import { ProviderMark } from "@/components/kybern/bits"
-import { beginThreadDrag } from "@/components/kybern/chatPaneDrag"
+import {
+  beginThreadPointerDrag,
+  consumeThreadPointerDragClick,
+} from "@/components/kybern/chatPaneDrag"
 import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
 import { SidebarIconButton } from "@/components/synara/SidebarIconButton"
 import { ThreadRunningSpinner } from "@/components/synara/ThreadRunningSpinner"
@@ -401,15 +404,22 @@ function ThreadRow({ thread }: { thread: Thread }) {
         <div
           role="button"
           tabIndex={0}
-          draggable={!renaming}
-          onClick={open}
+          onClick={(event) => {
+            if (consumeThreadPointerDragClick(thread.id)) {
+              event.preventDefault()
+              return
+            }
+            open()
+          }}
           onKeyDown={(e) => e.key === "Enter" && open()}
-          onDragStart={(event) => beginThreadDrag(event, thread.id)}
+          onPointerDown={(event) => {
+            if (!renaming) beginThreadPointerDrag(event, thread.id)
+          }}
           data-active={selected || undefined}
           aria-current={selected ? "page" : undefined}
           className={cn(
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
-            "flex min-w-0 items-center gap-2 overflow-hidden rounded-md pl-8 text-sidebar-foreground outline-hidden",
+            "flex min-w-0 cursor-grab items-center gap-2 overflow-hidden rounded-md pl-8 text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
             "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]",
             hasGlyph || thread.pinned ? "pr-[1.75rem]" : "pr-2",
             selected ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, inSplit && "bg-sidebar-accent/55"),

@@ -1,14 +1,20 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { dropZoneAt } from "./src/components/kybern/chatPaneDrag.ts"
+import {
+  dropZoneAt,
+  hasCrossedThreadDragThreshold,
+  splitForZone,
+} from "./src/components/kybern/chatPaneDrag.ts"
 import {
   SPLIT_RATIO_MAX,
   SPLIT_RATIO_MIN,
   canSplitPane,
   clampSplitRatio,
+  closeSplitViewPane,
   collectThreadPanes,
   createSplitView,
+  findThreadPaneByThreadId,
   reconcileSplitView,
   removeThreadPane,
   splitThreadPane,
@@ -83,6 +89,38 @@ test("closing a pane collapses its parent into the surviving sibling", () => {
   assert.equal(remaining?.threadId, "thread-a")
 })
 
+test("closing a three-pane layout preserves the final visible thread", () => {
+  const view = createSplitView({
+    sourceThreadId: "thread-a",
+    threadId: "thread-b",
+    direction: "horizontal",
+  })
+  const nested = splitThreadPane({
+    root: view.root,
+    targetPaneId: view.root.second.id,
+    threadId: "thread-c",
+    direction: "vertical",
+  })
+  assert.ok(nested)
+
+  const threePaneView = {
+    root: nested.root,
+    focusedPaneId: nested.addedPaneId,
+  }
+  const withoutC = closeSplitViewPane(threePaneView, nested.addedPaneId)
+  assert.ok(withoutC?.splitView)
+  assert.equal(withoutC.threadId, "thread-b")
+
+  const paneB = findThreadPaneByThreadId(
+    withoutC.splitView.root,
+    "thread-b"
+  )
+  assert.ok(paneB)
+  const onlyA = closeSplitViewPane(withoutC.splitView, paneB.id)
+  assert.equal(onlyA?.splitView, null)
+  assert.equal(onlyA?.threadId, "thread-a")
+})
+
 test("restored layouts clear missing and duplicate threads", () => {
   const view = createSplitView({
     sourceThreadId: "thread-a",
@@ -117,4 +155,29 @@ test("thread drops choose intuitive edges and respect allowed directions", () =>
     "bottom"
   )
   assert.equal(dropZoneAt(widePane, 550, 350, () => false), null)
+})
+
+test("every drop preview maps to the matching split side", () => {
+  assert.deepEqual(splitForZone("left"), {
+    direction: "horizontal",
+    side: "first",
+  })
+  assert.deepEqual(splitForZone("right"), {
+    direction: "horizontal",
+    side: "second",
+  })
+  assert.deepEqual(splitForZone("top"), {
+    direction: "vertical",
+    side: "first",
+  })
+  assert.deepEqual(splitForZone("bottom"), {
+    direction: "vertical",
+    side: "second",
+  })
+})
+
+test("thread dragging waits for deliberate pointer movement", () => {
+  assert.equal(hasCrossedThreadDragThreshold(10, 10, 13, 13), false)
+  assert.equal(hasCrossedThreadDragThreshold(10, 10, 16, 10), true)
+  assert.equal(hasCrossedThreadDragThreshold(10, 10, 10, 3), true)
 })

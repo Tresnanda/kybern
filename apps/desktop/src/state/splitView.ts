@@ -211,6 +211,45 @@ export function removeThreadPane(root: Pane, id: PaneId): Pane | null {
   return root
 }
 
+export interface ClosedSplitPane {
+  splitView: SplitView | null
+  threadId: ThreadId | null
+}
+
+/** Close one pane and resolve the exact thread that should own the surface. */
+export function closeSplitViewPane(
+  splitView: SplitView,
+  paneId: PaneId
+): ClosedSplitPane | null {
+  if (!findThreadPane(splitView.root, paneId)) return null
+  const parent = findParentSplit(splitView.root, paneId)
+  const sibling = parent
+    ? parent.first.id === paneId
+      ? parent.second
+      : parent.first
+    : null
+  const siblingFocusPaneId = sibling
+    ? resolveDefaultFocusPaneId(sibling)
+    : null
+  const root = removeThreadPane(splitView.root, paneId)
+  if (!root) return { splitView: null, threadId: null }
+  if (root.kind === "leaf") {
+    return { splitView: null, threadId: root.threadId }
+  }
+
+  const previousFocus = findThreadPane(root, splitView.focusedPaneId)
+  const focusedPaneId = previousFocus
+    ? previousFocus.id
+    : siblingFocusPaneId && findThreadPane(root, siblingFocusPaneId)
+      ? siblingFocusPaneId
+    : resolveDefaultFocusPaneId(root)
+  const focused = findThreadPane(root, focusedPaneId)
+  return {
+    splitView: { root, focusedPaneId },
+    threadId: focused?.threadId ?? null,
+  }
+}
+
 export function resolveFocusedThreadPane(
   splitView: SplitView
 ): ThreadPane | null {

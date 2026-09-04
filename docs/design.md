@@ -28,10 +28,13 @@ UI reuses those before inventing anything.
    navigates messages. Threads can split left/right or top/bottom into a
    persisted binary layout, capped at a 2×2 grid. `⌘\` opens a split to the
    right and `⌘⇧\` opens one below; sidebar threads can also be dragged onto a
-   pane edge. The focused pane owns keyboard actions, approvals, and floating
-   controls. The message-navigation rail stays in the single-thread reading
-   view and yields that space in constrained panes. Closing a pane collapses
-   its parent into the remaining sibling.
+   pane edge. During that drag, the destination half appears as a labeled
+   pane preview with the future divider in place, following the pointer
+   without layout lag. The focused pane owns keyboard actions, approvals, and
+   floating controls. The message-navigation rail stays in the single-thread
+   reading view and yields that space in constrained panes. Closing a pane
+   collapses its parent into the remaining sibling; an empty final pane returns
+   to the current project's draft instead of leaving a blank surface.
 3. **Composer** floats over the transcript on a frosted 1.2rem squircle:
    14px editor, then a footer with +, permission mode (Full access in
    orange), the model/effort picker and the ink-filled send circle. Queued

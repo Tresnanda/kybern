@@ -7,7 +7,9 @@ import { reloadOnHotUpdate } from "@/lib/hot"
 import { isWindowFocused, notify, resolveEndpoint } from "@/lib/tauri"
 import { diffSummaryRequest, mapWithConcurrency } from "@/lib/workload"
 import {
+  codes,
   KybernClient,
+  RpcCallError,
   type ApprovalDecision,
   type ApprovalId,
   type Diff,
@@ -34,6 +36,7 @@ let token = ""
 const diffLoads = new Map<string, Promise<void>>()
 const fileDiffLoads = new Map<string, Promise<Diff>>()
 const gitStatusLoads = new Map<ThreadId, Promise<GitStatus | null>>()
+const threadLoads = new Map<ThreadId, Promise<void>>()
 
 export function rpc(): KybernClient {
   if (!client) throw new Error("Not connected")
@@ -104,18 +107,53 @@ async function loadAll(): Promise<void> {
   }
 }
 
-export async function loadThread(id: ThreadId): Promise<void> {
-  const res = await rpc().call("threads.get", { thread_id: id })
-  const store = useStore.getState()
-  store.set((state) => {
-    const tasks = mergeRuntimeTasks(state.runtimeTasks[id] ?? [], res.runtime_tasks ?? [])
-    return {
-      runtimeTasks: { ...state.runtimeTasks, [id]: tasks },
-      threadActivity: { ...state.threadActivity, [id]: summarizeRuntimeTasks(id, tasks) },
+export function loadThread(id: ThreadId): Promise<void> {
+  const pending = threadLoads.get(id)
+  if (pending) return pending
+
+  const request = (async () => {
+    try {
+      const res = await rpc().call("threads.get", { thread_id: id })
+      const store = useStore.getState()
+      store.set((state) => {
+        const tasks = mergeRuntimeTasks(
+          state.runtimeTasks[id] ?? [],
+          res.runtime_tasks ?? []
+        )
+        return {
+          runtimeTasks: { ...state.runtimeTasks, [id]: tasks },
+          threadActivity: {
+            ...state.threadActivity,
+            [id]: summarizeRuntimeTasks(id, tasks),
+          },
+        }
+      })
+      store.updateTranscript(id, (prev) => seedFromGet(res, prev))
+      void loadCheckpoints(id)
+    } catch (error) {
+      const store = useStore.getState()
+      if (error instanceof RpcCallError && error.code === codes.NOT_FOUND) {
+        store.set((state) => {
+          const threads = { ...state.threads }
+          delete threads[id]
+          return { threads }
+        })
+        store.removeThreadFromSplit(id)
+        toast("Thread is no longer available")
+      } else if (store.connection.state === "open") {
+        toast.error("Unable to load thread", {
+          id: `thread-load:${id}`,
+          description: errorText(error),
+        })
+      }
     }
+  })()
+
+  threadLoads.set(id, request)
+  void request.finally(() => {
+    if (threadLoads.get(id) === request) threadLoads.delete(id)
   })
-  store.updateTranscript(id, (prev) => seedFromGet(res, prev))
-  void loadCheckpoints(id)
+  return request
 }
 
 export async function refreshProviders(projectId?: ProjectId) {

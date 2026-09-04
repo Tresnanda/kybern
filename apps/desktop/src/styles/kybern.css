@@ -69,6 +69,81 @@ body {
     color-mix(in srgb, var(--color-border-focus) 28%, transparent);
 }
 
+/* A thread drag previews the resulting geometry, not just the drop target.
+   Position changes follow the pointer immediately; only material/opacity ease. */
+.thread-drop-overlay {
+  --split-preview-duration: 150ms;
+  --split-preview-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  opacity: 0;
+  transition-property: opacity;
+  transition-duration: var(--split-preview-duration);
+  transition-timing-function: var(--split-preview-ease);
+}
+.thread-drop-overlay[data-active="true"] {
+  opacity: 1;
+}
+html[data-thread-pointer-dragging="true"],
+html[data-thread-pointer-dragging="true"] * {
+  cursor: grabbing !important;
+}
+[data-thread-drag-source="true"] {
+  opacity: 0.58;
+}
+.thread-drop-scrim {
+  background: color-mix(
+    in srgb,
+    var(--color-background-surface) 42%,
+    transparent
+  );
+}
+.thread-drop-divider {
+  background: color-mix(
+    in srgb,
+    var(--color-border-focus) 58%,
+    var(--app-surface-divider)
+  );
+  box-shadow: 0 0 14px
+    color-mix(in srgb, var(--color-border-focus) 18%, transparent);
+}
+.thread-drop-target {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-background-accent) 72%, transparent),
+      color-mix(in srgb, var(--color-background-accent) 48%, transparent)
+    ),
+    color-mix(
+      in srgb,
+      var(--color-background-surface) 92%,
+      var(--color-background-accent)
+    );
+  box-shadow:
+    inset 0 0 0 1px
+      color-mix(in srgb, var(--color-border-focus) 64%, transparent),
+    0 12px 36px color-mix(in srgb, black 12%, transparent);
+  transform: scale(0.985);
+  transition-property: transform;
+  transition-duration: var(--split-preview-duration);
+  transition-timing-function: var(--split-preview-ease);
+}
+.thread-drop-overlay[data-active="true"] .thread-drop-target {
+  transform: scale(1);
+}
+.thread-drop-label {
+  border: 1px solid
+    color-mix(in srgb, var(--color-border-focus) 42%, var(--color-border));
+  background: color-mix(
+    in srgb,
+    var(--color-background-elevated-primary-opaque) 88%,
+    transparent
+  );
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 7%, transparent) inset,
+    0 8px 24px color-mix(in srgb, black 16%, transparent);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
 /* Text states swap: blurred rise between two labels in one slot. */
 .t-text-swap {
   display: inline-grid;
@@ -163,5 +238,17 @@ body {
   }
   .split-thread-pane::after {
     transition: none;
+  }
+  .thread-drop-overlay,
+  .thread-drop-target {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .thread-drop-label {
+    background: var(--color-background-elevated-primary-opaque);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
