@@ -492,9 +492,12 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
       {settled && (
         <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
           {hasSettledActivity && (
-            <div className="mb-3">
+            // One work block: delegated agents stay visible (harness-parity), the
+            // routine execution history folds under a "Worked for Ns" row that
+            // shares the same gutter, then a hairline separates work from answer.
+            <div className="mb-3 space-y-0.5" data-timeline-row-kind="settled-work">
               {hasPrimaryAgentActivity && (
-                <div data-primary-agent-activity="true" className={cn("space-y-0.5", hasDisclosedWork ? "mb-1" : "pb-2")}>
+                <div data-primary-agent-activity="true" className="space-y-0.5">
                   <WorkRows
                     blocks={settledWork.agentBlocks}
                     tasksByToolCall={settledWork.tasksByToolCall}
@@ -505,18 +508,22 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                 </div>
               )}
               {hasDisclosedWork && (
-                <div className="group/collapsed-work">
+                <div className="group/collapsed-work py-1">
                   <button
                     type="button"
                     aria-expanded={open}
                     onClick={() => toggle(group.turnId)}
-                    className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground transition-colors duration-200 hover:text-foreground"
-                    style={CHAT_FONT}
+                    className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
                   >
-                    <span>{group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : "Details"}</span>
-                    <DisclosureChevron open={open} className="text-muted-foreground/70" />
+                    <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
+                      <HammerIcon className="size-3.5" />
+                    </span>
+                    <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
+                      {group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : "Worked"}
+                    </span>
+                    <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
                   </button>
-                  <DisclosureRegion open={open} contentClassName="mb-2.5 space-y-1.5">
+                  <DisclosureRegion open={open} contentClassName="ms-5 mt-0.5 space-y-0.5 ps-0.5">
                     <WorkRows
                       blocks={settledWork.disclosureBlocks}
                       tasksByToolCall={settledWork.tasksByToolCall}
@@ -527,7 +534,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                   </DisclosureRegion>
                 </div>
               )}
-              <div className="h-px w-full bg-border" />
+              <div className="mt-1 h-px w-full bg-border" />
             </div>
           )}
 
