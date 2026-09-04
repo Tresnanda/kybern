@@ -453,13 +453,13 @@ impl PiSession {
                     Some("text_delta") => {
                         if let Some(d) = ev.get("delta").and_then(|d| d.as_str()) {
                             self.state.lock().await.current_text.push_str(d);
-                            self.emit(DriverEvent::TextDelta { message_id, delta: d.to_string() }).await;
+                            self.emit(DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta: d.to_string() }).await;
                         }
                     }
                     Some("thinking_delta") => {
                         if let Some(d) = ev.get("delta").and_then(|d| d.as_str()) {
                             self.state.lock().await.current_thinking.push_str(d);
-                            self.emit(DriverEvent::ThinkingDelta { message_id, delta: d.to_string() }).await;
+                            self.emit(DriverEvent::ThinkingDelta { message_id, origin: EventOrigin::Root, delta: d.to_string() }).await;
                         }
                     }
                     _ => {}
@@ -501,6 +501,7 @@ impl PiSession {
                 if !text.is_empty() || !thinking.is_empty() {
                     self.emit(DriverEvent::MessageCompleted {
                         message_id,
+                        origin: EventOrigin::Root,
                         text,
                         thinking: if thinking.is_empty() { None } else { Some(thinking) },
                     })

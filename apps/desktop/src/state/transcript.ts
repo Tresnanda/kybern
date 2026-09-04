@@ -6,8 +6,10 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
   Checkpoint,
+  EventOrigin,
   JsonValue,
   NoticeLevel,
+  RuntimeTask,
   StopReason,
   Thread,
   ThreadEvent,
@@ -20,15 +22,17 @@ import type {
 } from "@/protocol"
 
 export type Block =
-  | { kind: "user"; id: string; turnId: TurnId; at: string; message: UserMessage }
+  | { kind: "user"; id: string; turnId: TurnId; at: string; seq: number; message: UserMessage }
   | {
       kind: "assistant"
       id: string
       turnId: TurnId
       at: string
-      /** The provider message id this segment belongs to. */
+      seq: number
+      origin: EventOrigin
+      /** Canonical provider message id shared by its ordered render segments. */
       messageId: string
-      /** Segment index within `messageId`; the fold splits text at row-making events. */
+      /** Stable render segment opened after a row-making event. */
       segment: number
       text: string
       thinking: string
@@ -39,26 +43,31 @@ export type Block =
       id: string
       turnId: TurnId
       at: string
+      seq: number
+      origin: EventOrigin
       call: ToolCall
       stream: string
       output: JsonValue | null
       isError: boolean
       complete: boolean
     }
-  | { kind: "approval"; id: string; turnId: TurnId; at: string; approval: ApprovalRequest; decision: ApprovalDecision | null }
-  | { kind: "notice"; id: string; turnId: TurnId; at: string; level: NoticeLevel; text: string }
+  | { kind: "runtime_task"; id: string; turnId: TurnId; at: string; seq: number; task: RuntimeTask }
+  | { kind: "approval"; id: string; turnId: TurnId; at: string; seq: number; approval: ApprovalRequest; decision: ApprovalDecision | null }
+  | { kind: "notice"; id: string; turnId: TurnId; at: string; seq: number; level: NoticeLevel; text: string }
   | {
       kind: "turn_end"
       id: string
       turnId: TurnId
       at: string
+      seq: number
       stopReason: StopReason
       usage: Usage
       costUsd: number | null
       durationMs: number
+      terminalMessageId: string | null
       error: string | null
     }
-  | { kind: "reverted"; id: string; turnId: TurnId; at: string; commit: string }
+  | { kind: "reverted"; id: string; turnId: TurnId; at: string; seq: number; commit: string }
 
 export interface ThreadState {
   thread: Thread | null
@@ -92,12 +101,14 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
     case "approval":
-      return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, approval: e.approval, decision: e.decision ?? null }
+      return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null }
     case "user":
-      return { kind: "user", id: e.id, turnId: e.turn_id, at: e.at, message: e.message }
+      return { kind: "user", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, message: e.message }
     case "assistant": {
+      const origin = e.origin ?? ROOT_ORIGIN
+      if (origin.kind !== "root") return null
       const segment = e.segment ?? 0
-      return { kind: "assistant", id: `${e.id}#${segment}`, turnId: e.turn_id, at: e.at, messageId: e.id, segment, text: e.text, thinking: e.thinking ?? "", complete: e.complete }
+      return { kind: "assistant", id: `${e.id}#${segment}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, origin, messageId: e.id, segment, text: e.text, thinking: e.thinking ?? "", complete: e.complete }
     }
     case "tool_call":
       return {
@@ -105,22 +116,32 @@ function entryToBlock(e: TranscriptEntry): Block | null {
         id: `tool:${e.call.id}`,
         turnId: e.turn_id,
         at: e.at,
+        seq: e.seq ?? 0,
+        origin: e.origin ?? ROOT_ORIGIN,
         call: e.call,
         stream: "",
         output: e.output ?? null,
         isError: e.is_error,
         complete: e.complete,
       }
+    case "runtime_task":
+      return { kind: "runtime_task", id: `task:${e.task.id}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? e.task.started_seq ?? 0, task: e.task }
+    case "notice":
+      return { kind: "notice", id: `notice:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, level: e.level, text: e.text }
+    case "reverted":
+      return { kind: "reverted", id: `revert:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, commit: e.commit }
     case "turn_summary":
       return {
         kind: "turn_end",
         id: `end:${e.turn_id}`,
         turnId: e.turn_id,
-        at: "",
+        at: e.at,
+        seq: e.seq ?? 0,
         stopReason: e.stop_reason,
         usage: e.usage,
         costUsd: e.cost_usd ?? null,
         durationMs: e.duration_ms,
+        terminalMessageId: e.terminal_message_id ?? null,
         error: e.error ?? null,
       }
     default:
@@ -128,28 +149,22 @@ function entryToBlock(e: TranscriptEntry): Block | null {
   }
 }
 
+const ROOT_ORIGIN = { kind: "root" } as const satisfies EventOrigin
+
 /** Fold one event. Returns the same object when nothing changed. */
 export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
   if (ev.seq <= state.lastSeq) return state
-  const turnId = ev.turn_id ?? ""
   const at = ev.at
   let blocks = state.blocks
+  // Claude Code can finish a provisional foreground result while a background
+  // agent is still running, then resume the root assistant from an internal
+  // task notification. Older daemons persisted that continuation without a
+  // turn id. Recover it onto the most recent turn instead of creating a second
+  // anonymous "Worked" group.
+  const turnId = ev.turn_id ?? (isAssistantEvent(ev) ? latestTurnId(blocks) : "")
   let pending = state.pendingApprovals
   let checkpoints = state.checkpoints
   let thread = state.thread
-
-  // The open segment for a message is only the tail block: once a tool call or
-  // approval lands after it, the next delta opens a new segment there instead of
-  // folding post-tool prose back above the tool. Mirrors `project_transcript`.
-  const openSegment = (messageId: string): number => {
-    const last = blocks[blocks.length - 1]
-    return last && last.kind === "assistant" && last.messageId === messageId ? blocks.length - 1 : -1
-  }
-  const newSegment = (messageId: string, make: (segment: number) => Block) => {
-    let max = -1
-    for (const b of blocks) if (b.kind === "assistant" && b.messageId === messageId && b.segment > max) max = b.segment
-    blocks = [...blocks, make(max + 1)]
-  }
 
   switch (ev.kind) {
     case "thread_created":
@@ -160,44 +175,65 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       if (thread) thread = { ...thread, status: "archived" }
       break
     case "turn_started":
-      blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, message: ev.message }]
+      blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
       break
     case "assistant_text_delta": {
-      const idx = openSegment(ev.message_id)
+      const origin = ev.origin ?? ROOT_ORIGIN
+      if (origin.kind !== "root") break
+      const messageId = ev.turn_id == null ? continuationMessageId(blocks, turnId, ev.message_id) : ev.message_id
+      const idx = findOpenAssistantSegment(blocks, messageId, origin)
       if (idx !== -1) {
         const b = blocks[idx]!
         if (b.kind === "assistant") blocks = replaceAt(blocks, idx, { ...b, text: b.text + ev.delta })
       } else {
-        newSegment(ev.message_id, (segment) => ({ kind: "assistant", id: `${ev.message_id}#${segment}`, turnId, at, messageId: ev.message_id, segment, text: ev.delta, thinking: "", complete: false }))
+        const segment = nextAssistantSegment(blocks, messageId, origin)
+        blocks = [...blocks, { kind: "assistant", id: `${messageId}#${segment}`, turnId, at, seq: ev.seq, origin, messageId, segment, text: ev.delta, thinking: "", complete: false }]
       }
       break
     }
     case "assistant_thinking_delta": {
-      const idx = openSegment(ev.message_id)
+      const origin = ev.origin ?? ROOT_ORIGIN
+      if (origin.kind !== "root") break
+      const messageId = ev.turn_id == null ? continuationMessageId(blocks, turnId, ev.message_id) : ev.message_id
+      const idx = findOpenAssistantSegment(blocks, messageId, origin)
       if (idx !== -1) {
         const b = blocks[idx]!
         if (b.kind === "assistant") blocks = replaceAt(blocks, idx, { ...b, thinking: b.thinking + ev.delta })
       } else {
-        newSegment(ev.message_id, (segment) => ({ kind: "assistant", id: `${ev.message_id}#${segment}`, turnId, at, messageId: ev.message_id, segment, text: "", thinking: ev.delta, complete: false }))
+        const segment = nextAssistantSegment(blocks, messageId, origin)
+        blocks = [...blocks, { kind: "assistant", id: `${messageId}#${segment}`, turnId, at, seq: ev.seq, origin, messageId, segment, text: "", thinking: ev.delta, complete: false }]
       }
       break
     }
     case "assistant_message_completed": {
-      const idxs = blocks.flatMap((b, i) => (b.kind === "assistant" && b.messageId === ev.message_id ? [i] : []))
-      if (idxs.length === 0) {
-        newSegment(ev.message_id, (segment) => ({ kind: "assistant", id: `${ev.message_id}#${segment}`, turnId, at, messageId: ev.message_id, segment, text: ev.text, thinking: ev.thinking ?? "", complete: true }))
-      } else if (idxs.length === 1) {
-        const i = idxs[0]!
-        const b = blocks[i]!
-        if (b.kind === "assistant") blocks = replaceAt(blocks, i, { ...b, text: ev.text, thinking: ev.thinking ?? b.thinking, complete: true })
+      const origin = ev.origin ?? ROOT_ORIGIN
+      if (origin.kind !== "root") break
+      const messageId = ev.turn_id == null ? continuationMessageId(blocks, turnId, ev.message_id) : ev.message_id
+      let indices = assistantSegmentIndices(blocks, messageId, origin)
+      if (indices.length === 0) {
+        const segment = nextAssistantSegment(blocks, messageId, origin)
+        blocks = [...blocks, { kind: "assistant", id: `${messageId}#${segment}`, turnId, at, seq: ev.seq, origin, messageId, segment, text: ev.text, thinking: ev.thinking ?? "", complete: true }]
       } else {
-        // Interleaved across tools: keep the streamed slices in place (rewriting
-        // them here would re-fold the answer above its tools); just finalize.
-        const first = idxs[0]!
-        blocks = blocks.map((b, i) =>
-          idxs.includes(i) && b.kind === "assistant"
-            ? { ...b, complete: true, thinking: i === first && ev.thinking != null ? ev.thinking : b.thinking }
-            : b,
+        const lastIsTail = indices.at(-1) === blocks.length - 1
+        const streamedText = indices.map((index) => {
+          const block = blocks[index]
+          return block?.kind === "assistant" ? block.text : ""
+        }).join("")
+        const streamedThinking = indices.map((index) => {
+          const block = blocks[index]
+          return block?.kind === "assistant" ? block.thinking : ""
+        }).join("")
+        const trailingText = !lastIsTail && ev.text.startsWith(streamedText) ? ev.text.slice(streamedText.length) : ""
+        const trailingThinking = !lastIsTail && ev.thinking?.startsWith(streamedThinking) ? ev.thinking.slice(streamedThinking.length) : ""
+        if (trailingText || trailingThinking) {
+          const segment = nextAssistantSegment(blocks, messageId, origin)
+          blocks = [...blocks, { kind: "assistant", id: `${messageId}#${segment}`, turnId, at, seq: ev.seq, origin, messageId, segment, text: trailingText, thinking: trailingThinking, complete: true }]
+          indices = [...indices, blocks.length - 1]
+        }
+        blocks = reconcileAssistantField(blocks, indices, ev.text, "text")
+        if (ev.thinking != null) blocks = reconcileAssistantField(blocks, indices, ev.thinking, "thinking")
+        blocks = blocks.map((block, index) =>
+          indices.includes(index) && block.kind === "assistant" ? { ...block, complete: true } : block,
         )
       }
       break
@@ -205,7 +241,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "tool_call_started":
       blocks = [
         ...blocks,
-        { kind: "tool", id: `tool:${ev.call.id}`, turnId, at, call: ev.call, stream: "", output: null, isError: false, complete: false },
+        { kind: "tool", id: `tool:${ev.call.id}`, turnId, at, seq: ev.seq, origin: ev.origin ?? ROOT_ORIGIN, call: ev.call, stream: "", output: null, isError: false, complete: false },
       ]
       break
     case "tool_call_output_delta": {
@@ -220,9 +256,27 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, output: ev.output, isError: ev.is_error, complete: true })
       break
     }
+    case "runtime_task_started":
+    case "runtime_task_updated":
+    case "runtime_task_completed": {
+      const idx = findLast(blocks, `task:${ev.task.id}`)
+      const current = blocks[idx]
+      const startedSeq = current?.kind === "runtime_task"
+        ? current.task.started_seq || current.seq
+        : ev.task.started_seq || ev.seq
+      const task = { ...ev.task, started_seq: startedSeq, updated_seq: ev.seq }
+      if (current?.kind === "runtime_task") {
+        if (isActiveRuntimeStatus(current.task.status) || !isActiveRuntimeStatus(task.status)) {
+          blocks = replaceAt(blocks, idx, { ...current, task })
+        }
+      } else {
+        blocks = [...blocks, { kind: "runtime_task", id: `task:${task.id}`, turnId: task.origin_turn_id || turnId, at: task.started_at || at, seq: startedSeq, task }]
+      }
+      break
+    }
     case "approval_requested":
       if (!pending.some((a) => a.id === ev.approval.id)) pending = [...pending, ev.approval]
-      blocks = [...blocks, { kind: "approval", id: `approval:${ev.approval.id}`, turnId, at, approval: ev.approval, decision: null }]
+      blocks = [...blocks, { kind: "approval", id: `approval:${ev.approval.id}`, turnId, at, seq: ev.seq, approval: ev.approval, decision: null }]
       break
     case "approval_resolved": {
       pending = pending.filter((a) => a.id !== ev.approval_id)
@@ -239,10 +293,12 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
           id: `end:${turnId}`,
           turnId,
           at,
+          seq: ev.seq,
           stopReason: ev.stop_reason,
           usage: ev.usage,
           costUsd: ev.cost_usd,
           durationMs: ev.duration_ms,
+          terminalMessageId: ev.terminal_message_id ?? null,
           error: null,
         },
       ]
@@ -255,16 +311,18 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
           id: `end:${turnId}`,
           turnId,
           at,
+          seq: ev.seq,
           stopReason: "error",
           usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 },
           costUsd: null,
           durationMs: 0,
+          terminalMessageId: null,
           error: ev.error,
         },
       ]
       break
     case "provider_notice":
-      blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, level: ev.level, text: ev.text }]
+      blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: ev.level, text: ev.text }]
       break
     case "checkpoint_updated": {
       const i = checkpoints.findIndex((c) => c.turn_id === ev.checkpoint.turn_id)
@@ -272,7 +330,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       break
     }
     case "workspace_reverted":
-      blocks = [...blocks, { kind: "reverted", id: `revert:${ev.seq}`, turnId, at, commit: ev.commit }]
+      blocks = [...blocks, { kind: "reverted", id: `revert:${ev.seq}`, turnId, at, seq: ev.seq, commit: ev.commit }]
       break
     case "provider_session_bound":
       break
@@ -280,6 +338,112 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       break
   }
   return { thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
+}
+
+function isAssistantEvent(ev: ThreadEvent): boolean {
+  return ev.kind === "assistant_text_delta" || ev.kind === "assistant_thinking_delta" || ev.kind === "assistant_message_completed"
+}
+
+function latestTurnId(blocks: readonly Block[]): TurnId {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const turnId = blocks[index]?.turnId
+    if (turnId) return turnId
+  }
+  return ""
+}
+
+/**
+ * Some historical Claude continuation chunks were assigned a fresh id per
+ * delta after the daemon had already cleared its active turn. While such a
+ * continuation is open, keep using its first id so the completed message can
+ * reconcile the streamed chunks instead of duplicating them.
+ */
+function continuationMessageId(blocks: readonly Block[], turnId: TurnId, incoming: string): string {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]
+    if (block?.kind === "turn_end" && block.turnId === turnId) break
+    if (block?.kind === "assistant" && block.turnId === turnId && !block.complete) return block.messageId
+  }
+  return incoming
+}
+
+function findOpenAssistantSegment(blocks: readonly Block[], messageId: string, origin: EventOrigin): number {
+  const index = blocks.length - 1
+  const block = blocks[index]
+  return block?.kind === "assistant" && !block.complete && block.messageId === messageId && sameOrigin(block.origin, origin)
+    ? index
+    : -1
+}
+
+function nextAssistantSegment(blocks: readonly Block[], messageId: string, origin: EventOrigin): number {
+  let max = -1
+  for (const block of blocks) {
+    if (block.kind === "assistant" && block.messageId === messageId && sameOrigin(block.origin, origin)) {
+      max = Math.max(max, block.segment)
+    }
+  }
+  return max + 1
+}
+
+function assistantSegmentIndices(blocks: readonly Block[], messageId: string, origin: EventOrigin): number[] {
+  return blocks.flatMap((block, index) =>
+    block.kind === "assistant" && block.messageId === messageId && sameOrigin(block.origin, origin) ? [index] : [],
+  )
+}
+
+function sameOrigin(left: EventOrigin, right: EventOrigin): boolean {
+  return left.kind === right.kind &&
+    (left.kind === "root" ||
+      (right.kind === "agent" && left.task_id === right.task_id && left.provider_thread_id === right.provider_thread_id))
+}
+
+function reconcileAssistantField(
+  blocks: Block[],
+  indices: readonly number[],
+  canonical: string,
+  field: "text" | "thinking",
+): Block[] {
+  const pieces = indices.map((index) => {
+    const block = blocks[index]
+    return block?.kind === "assistant" ? block[field] : ""
+  })
+  const streamed = pieces.join("")
+  if (streamed === canonical) return blocks
+
+  let commonPrefix = 0
+  const streamedChars = Array.from(streamed)
+  const canonicalChars = Array.from(canonical)
+  for (let position = 0; position < streamedChars.length; position++) {
+    if (streamedChars[position] !== canonicalChars[position]) break
+    commonPrefix += streamedChars[position]!.length
+  }
+
+  let targetPosition = field === "thinking" ? 0 : indices.length - 1
+  if (streamed.length > 0) {
+    let consumed = 0
+    const found = pieces.findIndex((piece) => {
+      const contains = commonPrefix < consumed + piece.length
+      consumed += piece.length
+      return contains
+    })
+    if (found !== -1) targetPosition = found
+  }
+  const consumedBefore = pieces.slice(0, targetPosition).reduce((total, piece) => total + piece.length, 0)
+  const keep = Math.min(Math.max(0, commonPrefix - consumedBefore), pieces[targetPosition]?.length ?? 0)
+  const replacement = `${pieces[targetPosition]?.slice(0, keep) ?? ""}${canonical.slice(commonPrefix)}`
+
+  const next = blocks.slice()
+  indices.forEach((index, position) => {
+    const block = next[index]
+    if (block?.kind !== "assistant") return
+    const value = position < targetPosition ? pieces[position]! : position === targetPosition ? replacement : ""
+    next[index] = { ...block, [field]: value }
+  })
+  return next
+}
+
+function isActiveRuntimeStatus(status: RuntimeTask["status"]): boolean {
+  return status === "pending" || status === "running" || status === "waiting" || status === "stopping"
 }
 
 function finishTurn(blocks: Block[], turnId: TurnId): Block[] {
@@ -306,14 +470,10 @@ export interface TurnGroup {
   user: Extract<Block, { kind: "user" }> | null
   /** Tool calls, thinking, notices and intermediate assistant text, in order. */
   work: Block[]
-  /** Final assistant message of the settled turn (last assistant segment with text). */
+  /** Whole terminal root message. It is deliberately absent until settlement. */
   answer: Extract<Block, { kind: "assistant" }> | null
-  /**
-   * While the turn runs, the id of the tail assistant segment still streaming —
-   * the one work row that reveals its text at the smooth cadence. Segments are
-   * born in order, so this is always the last block; it never moves or flips.
-   */
-  liveAnswerId: string | null
+  /** Tail segment currently receiving root text, rendered in place while live. */
+  liveTextId: string | null
   approvals: Extract<Block, { kind: "approval" }>[]
   end: Extract<Block, { kind: "turn_end" }> | null
   reverted: Extract<Block, { kind: "reverted" }> | null
@@ -322,10 +482,13 @@ export interface TurnGroup {
 
 type AssistantBlock = Extract<Block, { kind: "assistant" }>
 type ToolBlock = Extract<Block, { kind: "tool" }>
+type RuntimeTaskBlock = Extract<Block, { kind: "runtime_task" }>
 
 export interface WorkHierarchy {
   roots: Block[]
   childrenByParent: Map<string, ToolBlock[]>
+  agentOwnedByTask: Map<string, ToolBlock[]>
+  taskChildrenByParent: Map<string, RuntimeTaskBlock[]>
 }
 
 /**
@@ -347,8 +510,23 @@ export function buildWorkHierarchy(blocks: readonly Block[]): WorkHierarchy {
   )
   const roots: Block[] = []
   const childrenByParent = new Map<string, ToolBlock[]>()
+  const agentOwnedByTask = new Map<string, ToolBlock[]>()
+  const taskIds = new Set(blocks.flatMap((block) => (block.kind === "runtime_task" ? [block.task.id] : [])))
+  const taskChildrenByParent = new Map<string, RuntimeTaskBlock[]>()
 
   for (const block of blocks) {
+    if (block.kind === "runtime_task") {
+      if (block.task.tool_call_id && toolIds.has(block.task.tool_call_id)) continue
+      const parentId = block.task.parent_id
+      if (parentId && parentId !== block.task.id && taskIds.has(parentId)) {
+        const children = taskChildrenByParent.get(parentId) ?? []
+        children.push(block)
+        taskChildrenByParent.set(parentId, children)
+      } else {
+        roots.push(block)
+      }
+      continue
+    }
     if (block.kind !== "tool") {
       roots.push(block)
       continue
@@ -364,6 +542,12 @@ export function buildWorkHierarchy(blocks: readonly Block[]): WorkHierarchy {
     const cyclic = ancestorId !== undefined
 
     if (!parentId || parentId === block.call.id || !toolIds.has(parentId) || cyclic) {
+      if (block.origin?.kind === "agent") {
+        const owned = agentOwnedByTask.get(block.origin.task_id) ?? []
+        owned.push(block)
+        agentOwnedByTask.set(block.origin.task_id, owned)
+        continue
+      }
       roots.push(block)
       continue
     }
@@ -372,7 +556,7 @@ export function buildWorkHierarchy(blocks: readonly Block[]): WorkHierarchy {
     childrenByParent.set(parentId, children)
   }
 
-  return { roots, childrenByParent }
+  return { roots, childrenByParent, agentOwnedByTask, taskChildrenByParent }
 }
 
 /**
@@ -399,13 +583,30 @@ function splitAssistantForPresentation(block: AssistantBlock): {
   }
 }
 
+/**
+ * Rejoin the segments of one message (a provider may split its text across tool
+ * calls) into a single block, concatenating text and thinking in order. Raw
+ * concatenation reconstructs the original message exactly, so an inline code
+ * span or word cut by a tool boundary is made whole again.
+ */
+function joinSegments(segs: AssistantBlock[]): AssistantBlock {
+  const last = segs[segs.length - 1]!
+  return {
+    ...last,
+    id: `answer:${last.messageId}`,
+    text: segs.map((s) => s.text).join(""),
+    thinking: segs.map((s) => s.thinking).join(""),
+    complete: segs.every((s) => s.complete),
+  }
+}
+
 export function groupTurns(blocks: Block[]): TurnGroup[] {
   const groups: TurnGroup[] = []
   const byId = new Map<string, TurnGroup>()
   const get = (turnId: TurnId) => {
     let g = byId.get(turnId)
     if (!g) {
-      g = { turnId, user: null, work: [], answer: null, liveAnswerId: null, approvals: [], end: null, reverted: null, running: false }
+      g = { turnId, user: null, work: [], answer: null, liveTextId: null, approvals: [], end: null, reverted: null, running: false }
       byId.set(turnId, g)
       groups.push(g)
     }
@@ -432,32 +633,34 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
     }
   }
   for (const g of groups) {
-    // The answer is the last assistant block with text; everything before it is "work".
-    let answerIdx = -1
-    for (let i = g.work.length - 1; i >= 0 && g.end; i--) {
-      const w = g.work[i]!
-      if (w.kind === "assistant" && w.text.trim()) {
-        answerIdx = i
-        break
+    g.running = !g.end && !!g.user
+    // A final answer is a lifecycle fact, not a guess based on whichever
+    // assistant message happened to arrive last. Until TurnCompleted, every
+    // root message remains chronological narration in `work`.
+    let termId = g.end?.terminalMessageId ?? null
+    if (termId === null) {
+      for (let i = g.work.length - 1; i >= 0 && g.end; i--) {
+        const w = g.work[i]!
+        if (w.kind === "assistant" && w.text.trim()) {
+          termId = w.messageId
+          break
+        }
       }
     }
-    if (answerIdx !== -1) {
-      const { answer, reasoning } = splitAssistantForPresentation(g.work[answerIdx] as AssistantBlock)
+    if (termId !== null) {
+      const segs = g.work.filter((w): w is AssistantBlock => w.kind === "assistant" && w.messageId === termId)
+      const { answer, reasoning } = splitAssistantForPresentation(joinSegments(segs))
       g.answer = answer
-      g.work = [
-        ...g.work.slice(0, answerIdx),
-        ...(reasoning ? [reasoning] : []),
-        ...g.work.slice(answerIdx + 1),
-      ]
+      // Drop the joined segments from work, keeping the reasoning where the
+      // message began so its collapsible thinking stays in reading order.
+      const firstIdx = g.work.findIndex((w) => w.kind === "assistant" && w.messageId === termId)
+      g.work = g.work.flatMap((w, i) =>
+        w.kind === "assistant" && w.messageId === termId ? (i === firstIdx && reasoning ? [reasoning] : []) : [w],
+      )
     }
-    g.running = !g.end && !!g.user
     if (g.running) {
-      // Segments are born in tool order, so the assistant text streaming right
-      // now is simply the tail block. Reveal that one at the smooth cadence; it
-      // stays in place as tools land after it, so there is no promotion, no
-      // brightness flip, and no repositioning.
       const tail = g.work.at(-1)
-      g.liveAnswerId = tail?.kind === "assistant" && !tail.complete && tail.text.trim() ? tail.id : null
+      g.liveTextId = tail?.kind === "assistant" && !tail.complete && tail.text.trim() ? tail.id : null
     }
   }
   return groups

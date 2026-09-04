@@ -129,6 +129,12 @@ expression: schema_for!(ThreadEvent)
           "type": "string",
           "format": "uuid"
         },
+        "origin": {
+          "$ref": "#/$defs/EventOrigin",
+          "default": {
+            "kind": "root"
+          }
+        },
         "delta": {
           "type": "string"
         },
@@ -150,6 +156,12 @@ expression: schema_for!(ThreadEvent)
           "type": "string",
           "format": "uuid"
         },
+        "origin": {
+          "$ref": "#/$defs/EventOrigin",
+          "default": {
+            "kind": "root"
+          }
+        },
         "delta": {
           "type": "string"
         },
@@ -170,6 +182,12 @@ expression: schema_for!(ThreadEvent)
         "message_id": {
           "type": "string",
           "format": "uuid"
+        },
+        "origin": {
+          "$ref": "#/$defs/EventOrigin",
+          "default": {
+            "kind": "root"
+          }
         },
         "text": {
           "type": "string"
@@ -196,6 +214,12 @@ expression: schema_for!(ThreadEvent)
       "properties": {
         "call": {
           "$ref": "#/$defs/ToolCall"
+        },
+        "origin": {
+          "$ref": "#/$defs/EventOrigin",
+          "default": {
+            "kind": "root"
+          }
         },
         "kind": {
           "type": "string",
@@ -357,6 +381,14 @@ expression: schema_for!(ThreadEvent)
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "terminal_message_id": {
+          "description": "Durable identity of the terminal non-empty root assistant message.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
         },
         "kind": {
           "type": "string",
@@ -741,6 +773,45 @@ expression: schema_for!(ThreadEvent)
         }
       ]
     },
+    "EventOrigin": {
+      "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "root"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "provider_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ]
+        }
+      ]
+    },
     "ToolCall": {
       "description": "A tool invocation as shown in the transcript.",
       "type": "object",
@@ -780,6 +851,18 @@ expression: schema_for!(ThreadEvent)
           "description": "Kybern turn that launched this task. Background work can outlive it.",
           "type": "string",
           "format": "uuid"
+        },
+        "started_seq": {
+          "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "updated_seq": {
+          "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
         },
         "kind": {
           "$ref": "#/$defs/RuntimeTaskKind"

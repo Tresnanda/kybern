@@ -151,15 +151,18 @@ pub enum DriverEvent {
     },
     TextDelta {
         message_id: String,
+        origin: EventOrigin,
         delta: String,
     },
     ThinkingDelta {
         message_id: String,
+        origin: EventOrigin,
         delta: String,
     },
     /// Full text of an assistant message once the provider finalizes it.
     MessageCompleted {
         message_id: String,
+        origin: EventOrigin,
         text: String,
         thinking: Option<String>,
     },

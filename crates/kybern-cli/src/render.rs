@@ -75,6 +75,9 @@ pub fn transcript(r: &ThreadsGetResult) {
                 };
                 println!("  ? {}  ({d})", approval.summary);
             }
+            TranscriptEntry::RuntimeTask { task, .. } => println!("  ↳ {}  ({:?})", task.title, task.status),
+            TranscriptEntry::Notice { text, .. } => println!("  ! {text}"),
+            TranscriptEntry::Reverted { commit, .. } => println!("  ↶ reverted to {commit}"),
             TranscriptEntry::TurnSummary { usage, cost_usd, duration_ms, error, stop_reason, .. } => {
                 let cost = cost_usd.map(|c| format!("  ${c:.4}")).unwrap_or_default();
                 match error {
@@ -128,7 +131,7 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
                 stdout.flush()?;
                 line_open = true;
             }
-            EventPayload::ToolCallStarted { call } if !json => {
+            EventPayload::ToolCallStarted { call, .. } if !json => {
                 if line_open {
                     println!();
                     line_open = false;
@@ -150,7 +153,7 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
                 }
                 eprintln!("  [{level:?}] {text}");
             }
-            EventPayload::TurnCompleted { usage, cost_usd, duration_ms, stop_reason } => {
+            EventPayload::TurnCompleted { usage, cost_usd, duration_ms, stop_reason, .. } => {
                 if !json {
                     if line_open {
                         println!();
@@ -223,7 +226,7 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
                 .unwrap_or_default();
             let short = match &en.event.payload {
                 EventPayload::AssistantTextDelta { delta, .. } => delta.replace('\n', "⏎"),
-                EventPayload::ToolCallStarted { call } => call.name.clone(),
+                EventPayload::ToolCallStarted { call, .. } => call.name.clone(),
                 EventPayload::ApprovalRequested { approval } => approval.summary.clone(),
                 EventPayload::TurnFailed { error } => error.clone(),
                 EventPayload::ThreadUpdated { thread } => format!("{:?} {}", thread.status, thread.title),

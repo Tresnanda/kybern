@@ -41,19 +41,27 @@ pub enum EventPayload {
     },
     AssistantTextDelta {
         message_id: MessageId,
+        #[serde(default)]
+        origin: EventOrigin,
         delta: String,
     },
     AssistantThinkingDelta {
         message_id: MessageId,
+        #[serde(default)]
+        origin: EventOrigin,
         delta: String,
     },
     AssistantMessageCompleted {
         message_id: MessageId,
+        #[serde(default)]
+        origin: EventOrigin,
         text: String,
         thinking: Option<String>,
     },
     ToolCallStarted {
         call: ToolCall,
+        #[serde(default)]
+        origin: EventOrigin,
     },
     ToolCallOutputDelta {
         tool_call_id: String,
@@ -88,6 +96,9 @@ pub enum EventPayload {
         usage: Usage,
         cost_usd: Option<f64>,
         duration_ms: u64,
+        /// Durable identity of the terminal non-empty root assistant message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_message_id: Option<MessageId>,
     },
     TurnFailed {
         error: String,

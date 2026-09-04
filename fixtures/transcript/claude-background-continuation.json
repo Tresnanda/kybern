@@ -1,0 +1,117 @@
+[
+  {
+    "seq": 1,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "turn_id": "00000000-0000-0000-0000-000000000012",
+    "at": "2026-09-04T16:16:43Z",
+    "kind": "turn_started",
+    "message_id": "00000000-0000-0000-0000-000000000013",
+    "message": { "parts": [{ "type": "text", "text": "Exercise a background-agent continuation." }] }
+  },
+  {
+    "seq": 2,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "turn_id": "00000000-0000-0000-0000-000000000012",
+    "at": "2026-09-04T16:16:55Z",
+    "kind": "assistant_message_completed",
+    "message_id": "00000000-0000-0000-0000-000000000014",
+    "origin": { "kind": "root" },
+    "text": "Holding for the last agent.",
+    "thinking": null
+  },
+  {
+    "seq": 3,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "turn_id": "00000000-0000-0000-0000-000000000012",
+    "at": "2026-09-04T16:17:00Z",
+    "kind": "runtime_task_started",
+    "task": {
+      "id": "claude-agent-1",
+      "thread_id": "00000000-0000-0000-0000-000000000011",
+      "origin_turn_id": "00000000-0000-0000-0000-000000000012",
+      "started_seq": 3,
+      "updated_seq": 3,
+      "kind": "agent",
+      "status": "running",
+      "title": "Explore subscriptions",
+      "provider_type": "local_agent",
+      "backgrounded": true,
+      "stats": {},
+      "capabilities": { "stop": true, "background": false },
+      "started_at": "2026-09-04T16:17:00Z",
+      "updated_at": "2026-09-04T16:17:00Z"
+    }
+  },
+  {
+    "seq": 4,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "turn_id": "00000000-0000-0000-0000-000000000012",
+    "at": "2026-09-04T16:18:08Z",
+    "kind": "turn_completed",
+    "stop_reason": "completed",
+    "usage": { "input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 0, "cache_write_tokens": 0 },
+    "cost_usd": null,
+    "duration_ms": 85000
+  },
+  {
+    "seq": 5,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "turn_id": "00000000-0000-0000-0000-000000000012",
+    "at": "2026-09-04T16:18:16Z",
+    "kind": "runtime_task_completed",
+    "task": {
+      "id": "claude-agent-1",
+      "thread_id": "00000000-0000-0000-0000-000000000011",
+      "origin_turn_id": "00000000-0000-0000-0000-000000000012",
+      "started_seq": 3,
+      "updated_seq": 5,
+      "kind": "agent",
+      "status": "completed",
+      "title": "Explore subscriptions",
+      "provider_type": "local_agent",
+      "backgrounded": true,
+      "stats": {},
+      "capabilities": { "stop": false, "background": false },
+      "started_at": "2026-09-04T16:17:00Z",
+      "updated_at": "2026-09-04T16:18:16Z",
+      "completed_at": "2026-09-04T16:18:16Z"
+    }
+  },
+  {
+    "seq": 6,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "at": "2026-09-04T16:18:18Z",
+    "kind": "assistant_thinking_delta",
+    "message_id": "00000000-0000-0000-0000-000000000015",
+    "origin": { "kind": "root" },
+    "delta": ""
+  },
+  {
+    "seq": 7,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "at": "2026-09-04T16:18:25Z",
+    "kind": "assistant_text_delta",
+    "message_id": "00000000-0000-0000-0000-000000000016",
+    "origin": { "kind": "root" },
+    "delta": "Both subagents are back — "
+  },
+  {
+    "seq": 8,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "at": "2026-09-04T16:18:31Z",
+    "kind": "assistant_text_delta",
+    "message_id": "00000000-0000-0000-0000-000000000017",
+    "origin": { "kind": "root" },
+    "delta": "this is the final answer."
+  },
+  {
+    "seq": 9,
+    "thread_id": "00000000-0000-0000-0000-000000000011",
+    "at": "2026-09-04T16:18:33Z",
+    "kind": "assistant_message_completed",
+    "message_id": "00000000-0000-0000-0000-000000000018",
+    "origin": { "kind": "root" },
+    "text": "Both subagents are back — this is the final answer.",
+    "thinking": ""
+  }
+]

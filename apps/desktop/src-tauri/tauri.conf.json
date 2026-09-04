@@ -28,7 +28,7 @@
         "transparent": true,
         "windowEffects": {
           "effects": ["underWindowBackground"],
-          "state": "followsWindowActiveState",
+          "state": "active",
           "radius": 0
         }
       }

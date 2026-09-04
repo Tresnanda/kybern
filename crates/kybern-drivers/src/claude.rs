@@ -617,12 +617,12 @@ impl ClaudeSession {
                 match delta.get("type").and_then(|t| t.as_str()) {
                     Some("text_delta") => {
                         if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                            self.emit(DriverEvent::TextDelta { message_id, delta: text.to_string() }).await;
+                            self.emit(DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta: text.to_string() }).await;
                         }
                     }
                     Some("thinking_delta") => {
                         if let Some(text) = delta.get("thinking").and_then(|t| t.as_str()) {
-                            self.emit(DriverEvent::ThinkingDelta { message_id, delta: text.to_string() }).await;
+                            self.emit(DriverEvent::ThinkingDelta { message_id, origin: EventOrigin::Root, delta: text.to_string() }).await;
                         }
                     }
                     _ => {}
@@ -655,7 +655,13 @@ impl ClaudeSession {
                     let full = acc.clone();
                     let thinking = st.thinking.get(&message_id).cloned();
                     drop(st);
-                    self.emit(DriverEvent::MessageCompleted { message_id: message_id.clone(), text: full, thinking }).await;
+                    self.emit(DriverEvent::MessageCompleted {
+                        message_id: message_id.clone(),
+                        origin: EventOrigin::Root,
+                        text: full,
+                        thinking,
+                    })
+                    .await;
                 }
                 "thinking" if parent.is_none() => {
                     let text = block.get("thinking").and_then(|t| t.as_str()).unwrap_or("");

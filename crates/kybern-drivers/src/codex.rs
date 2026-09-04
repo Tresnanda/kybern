@@ -423,6 +423,46 @@ enum ApprovalKind {
     FileChange,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildNotificationRoute {
+    /// Fold the notification into the child's compact runtime-task lifecycle.
+    Activity,
+    /// Child prose/output is deliberately kept out of the root transcript.
+    Drop,
+    /// The method is not child-owned; let the normal root handler inspect it.
+    Root,
+}
+
+fn child_notification_route(method: &str) -> ChildNotificationRoute {
+    match method {
+        "turn/started"
+        | "turn/completed"
+        | "thread/status/changed"
+        | "thread/tokenUsage/updated"
+        | "thread/closed"
+        | "item/started"
+        | "item/completed"
+        | "error" => ChildNotificationRoute::Activity,
+        "item/agentMessage/delta"
+        | "item/reasoning/summaryTextDelta"
+        | "item/reasoning/textDelta"
+        | "item/commandExecution/outputDelta"
+        | "turn/plan/updated"
+        | "thread/name/updated" => ChildNotificationRoute::Drop,
+        _ => ChildNotificationRoute::Root,
+    }
+}
+
+fn should_register_subagent(
+    root_thread_id: Option<&str>,
+    known_subagents: &HashMap<String, Option<String>>,
+    thread_id: &str,
+    parent_id: Option<&str>,
+) -> bool {
+    thread_id != root_thread_id.unwrap_or_default()
+        && parent_id.is_some_and(|parent| Some(parent) == root_thread_id || known_subagents.contains_key(parent))
+}
+
 struct Handle(Arc<CodexSession>);
 
 impl CodexSession {
@@ -648,8 +688,7 @@ impl CodexSession {
         let parent_id = spawn.get("parent_thread_id").or_else(|| spawn.get("parentThreadId")).and_then(Value::as_str).map(str::to_string);
         let known_parent = {
             let state = self.state.lock().await;
-            parent_id.as_deref() == state.thread_id.as_deref()
-                || parent_id.as_ref().is_some_and(|parent| state.subagents.contains_key(parent))
+            should_register_subagent(state.thread_id.as_deref(), &state.subagents, &thread_id, parent_id.as_deref())
         };
         if !known_parent {
             return;
@@ -830,6 +869,35 @@ impl CodexSession {
                 };
                 self.emit(if terminal { DriverEvent::RuntimeTaskCompleted(update) } else { DriverEvent::RuntimeTaskUpdated(update) }).await;
             }
+            "thread/closed" => {
+                self.state.lock().await.subagents.remove(thread_id);
+                self.emit(DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate {
+                    id: thread_id.to_string(),
+                    status: Some(RuntimeTaskStatus::Completed),
+                    detail: None,
+                    backgrounded: None,
+                    last_tool_name: None,
+                    usage: None,
+                    stats: None,
+                    capabilities: Some(RuntimeTaskCapabilities::default()),
+                }))
+                .await;
+            }
+            "error" => {
+                let message = p.pointer("/error/message").and_then(Value::as_str).unwrap_or("Subagent failed").to_string();
+                let retrying = p.get("willRetry").and_then(Value::as_bool).unwrap_or(false);
+                let update = DriverRuntimeTaskUpdate {
+                    id: thread_id.to_string(),
+                    status: Some(if retrying { RuntimeTaskStatus::Running } else { RuntimeTaskStatus::Failed }),
+                    detail: Some(if retrying { format!("{message} (retrying)") } else { message }),
+                    backgrounded: None,
+                    last_tool_name: None,
+                    usage: None,
+                    stats: None,
+                    capabilities: Some(RuntimeTaskCapabilities { stop: retrying, background: false }),
+                };
+                self.emit(if retrying { DriverEvent::RuntimeTaskUpdated(update) } else { DriverEvent::RuntimeTaskCompleted(update) }).await;
+            }
             _ => {}
         }
     }
@@ -843,8 +911,14 @@ impl CodexSession {
         if let Some(thread_id) = p.get("threadId").and_then(Value::as_str)
             && root_thread_id.as_deref() != Some(thread_id)
         {
-            self.handle_subagent_notification(thread_id, method, p).await;
-            return;
+            match child_notification_route(method) {
+                ChildNotificationRoute::Activity => {
+                    self.handle_subagent_notification(thread_id, method, p).await;
+                    return;
+                }
+                ChildNotificationRoute::Drop => return,
+                ChildNotificationRoute::Root => {}
+            }
         }
         match method {
             "turn/started" => {
@@ -856,13 +930,19 @@ impl CodexSession {
             "item/completed" => self.handle_item(&p["item"], true).await,
             "item/agentMessage/delta" => {
                 if let (Some(id), Some(delta)) = (p.get("itemId").and_then(|i| i.as_str()), p.get("delta").and_then(|d| d.as_str())) {
-                    self.emit(DriverEvent::TextDelta { message_id: id.to_string(), delta: delta.to_string() }).await;
+                    self.emit(DriverEvent::TextDelta { message_id: id.to_string(), origin: EventOrigin::Root, delta: delta.to_string() })
+                        .await;
                 }
             }
             "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
                 if let (Some(id), Some(delta)) = (p.get("itemId").and_then(|i| i.as_str()), p.get("delta").and_then(|d| d.as_str())) {
                     // Attribute reasoning to the turn's current message stream under the reasoning item id.
-                    self.emit(DriverEvent::ThinkingDelta { message_id: id.to_string(), delta: delta.to_string() }).await;
+                    self.emit(DriverEvent::ThinkingDelta {
+                        message_id: id.to_string(),
+                        origin: EventOrigin::Root,
+                        delta: delta.to_string(),
+                    })
+                    .await;
                 }
             }
             "item/commandExecution/outputDelta" => {
@@ -970,7 +1050,7 @@ impl CodexSession {
             "agentMessage" => {
                 if completed {
                     let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
-                    self.emit(DriverEvent::MessageCompleted { message_id: id, text, thinking: None }).await;
+                    self.emit(DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
             }
             "reasoning" => {
@@ -1409,7 +1489,12 @@ impl AgentSession for Handle {
 
 #[cfg(test)]
 mod tests {
-    use super::{codex_agent_status, codex_background_process, input_items, process_stats_changed};
+    use std::collections::HashMap;
+
+    use super::{
+        ChildNotificationRoute, child_notification_route, codex_agent_status, codex_background_process, input_items, process_stats_changed,
+        should_register_subagent,
+    };
     use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStats, RuntimeTaskStatus, UserMessage};
     use serde_json::json;
 
@@ -1454,5 +1539,30 @@ mod tests {
         let meaningful = RuntimeTaskStats { cpu_percent: Some(3.0), rss_kb: Some(5120), ..Default::default() };
         assert!(!process_stats_changed(&before, &noise));
         assert!(process_stats_changed(&before, &meaningful));
+    }
+
+    #[test]
+    fn registers_only_descendants_of_the_root_thread() {
+        let mut known = HashMap::new();
+        assert!(!should_register_subagent(Some("root"), &known, "root", Some("root")));
+        assert!(!should_register_subagent(Some("root"), &known, "unrelated", Some("elsewhere")));
+        assert!(should_register_subagent(Some("root"), &known, "child", Some("root")));
+
+        known.insert("child".to_string(), None);
+        assert!(should_register_subagent(Some("root"), &known, "grandchild", Some("child")));
+    }
+
+    #[test]
+    fn routes_child_lifecycle_without_leaking_child_prose() {
+        assert_eq!(child_notification_route("turn/started"), ChildNotificationRoute::Activity);
+        assert_eq!(child_notification_route("item/started"), ChildNotificationRoute::Activity);
+        assert_eq!(child_notification_route("error"), ChildNotificationRoute::Activity);
+
+        assert_eq!(child_notification_route("item/agentMessage/delta"), ChildNotificationRoute::Drop);
+        assert_eq!(child_notification_route("item/reasoning/textDelta"), ChildNotificationRoute::Drop);
+        assert_eq!(child_notification_route("item/commandExecution/outputDelta"), ChildNotificationRoute::Drop);
+
+        assert_eq!(child_notification_route("serverRequest/resolved"), ChildNotificationRoute::Root);
+        assert_eq!(child_notification_route("future/method"), ChildNotificationRoute::Root);
     }
 }

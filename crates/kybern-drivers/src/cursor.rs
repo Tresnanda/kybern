@@ -293,7 +293,7 @@ async fn run_connection(
                                 }
                                 format!("m{}", s.0)
                             };
-                            let _ = ev.send(DriverEvent::TextDelta { message_id: id, delta: t.text }).await;
+                            let _ = ev.send(DriverEvent::TextDelta { message_id: id, origin: EventOrigin::Root, delta: t.text }).await;
                         }
                     }
                     SessionUpdate::AgentThoughtChunk(c) => {
@@ -306,7 +306,7 @@ async fn run_connection(
                                 }
                                 format!("m{}", s.0)
                             };
-                            let _ = ev.send(DriverEvent::ThinkingDelta { message_id: id, delta: t.text }).await;
+                            let _ = ev.send(DriverEvent::ThinkingDelta { message_id: id, origin: EventOrigin::Root, delta: t.text }).await;
                         }
                     }
                     SessionUpdate::ToolCall(tc) => {

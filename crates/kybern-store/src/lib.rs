@@ -339,15 +339,19 @@ impl Store {
     // ---- events ----
 
     /// Append an event, assigning its `seq`. Also bumps the thread's `last_seq`.
-    pub fn event_append(&self, thread_id: ThreadId, turn_id: Option<TurnId>, payload: EventPayload) -> Result<ThreadEvent> {
+    pub fn event_append(&self, thread_id: ThreadId, turn_id: Option<TurnId>, mut payload: EventPayload) -> Result<ThreadEvent> {
         self.with(|c| {
             let at = Utc::now();
             let kind = serde_json::to_value(&payload)?.get("kind").and_then(|k| k.as_str()).unwrap_or("unknown").to_string();
+            let serialized = serde_json::to_string(&payload)?;
             c.execute(
                 "INSERT INTO events(thread_id, turn_id, at, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![thread_id.to_string(), turn_id.map(|t| t.to_string()), at.to_rfc3339(), kind, serde_json::to_string(&payload)?,],
+                params![thread_id.to_string(), turn_id.map(|t| t.to_string()), at.to_rfc3339(), kind, serialized],
             )?;
             let seq = c.last_insert_rowid();
+            if stamp_runtime_task_sequence(&mut payload, seq) {
+                c.execute("UPDATE events SET payload = ?2 WHERE seq = ?1", params![seq, serde_json::to_string(&payload)?])?;
+            }
             c.execute(
                 "UPDATE threads SET last_seq = ?2, updated_at = ?3 WHERE id = ?1",
                 params![thread_id.to_string(), seq, at.to_rfc3339()],
@@ -560,6 +564,23 @@ impl Store {
             Ok(())
         })
     }
+}
+
+/// Runtime tasks are created before SQLite assigns the enclosing event's
+/// sequence. Stamp the durable launch/update anchors into the payload inside
+/// the same store lock, then persist and broadcast that canonical snapshot.
+fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> bool {
+    let task = match payload {
+        EventPayload::RuntimeTaskStarted { task }
+        | EventPayload::RuntimeTaskUpdated { task }
+        | EventPayload::RuntimeTaskCompleted { task } => task,
+        _ => return false,
+    };
+    if task.started_seq == 0 {
+        task.started_seq = seq;
+    }
+    task.updated_seq = seq;
+    true
 }
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,

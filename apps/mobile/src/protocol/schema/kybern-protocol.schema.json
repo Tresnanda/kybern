@@ -275,6 +275,12 @@
               "type": "string",
               "format": "uuid"
             },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
+            },
             "delta": {
               "type": "string"
             },
@@ -296,6 +302,12 @@
               "type": "string",
               "format": "uuid"
             },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
+            },
             "delta": {
               "type": "string"
             },
@@ -316,6 +328,12 @@
             "message_id": {
               "type": "string",
               "format": "uuid"
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
             },
             "text": {
               "type": "string"
@@ -342,6 +360,12 @@
           "properties": {
             "call": {
               "$ref": "#/$defs/ToolCall"
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
             },
             "kind": {
               "type": "string",
@@ -503,6 +527,14 @@
               "type": "integer",
               "format": "uint64",
               "minimum": 0
+            },
+            "terminal_message_id": {
+              "description": "Durable identity of the terminal non-empty root assistant message.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
             },
             "kind": {
               "type": "string",
@@ -887,6 +919,45 @@
             }
           ]
         },
+        "EventOrigin": {
+          "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "root"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string"
+                },
+                "provider_thread_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "agent"
+                }
+              },
+              "required": [
+                "kind",
+                "task_id"
+              ]
+            }
+          ]
+        },
         "ToolCall": {
           "description": "A tool invocation as shown in the transcript.",
           "type": "object",
@@ -926,6 +997,18 @@
               "description": "Kybern turn that launched this task. Background work can outlive it.",
               "type": "string",
               "format": "uuid"
+            },
+            "started_seq": {
+              "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "updated_seq": {
+              "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+              "type": "integer",
+              "format": "int64",
+              "default": 0
             },
             "kind": {
               "$ref": "#/$defs/RuntimeTaskKind"
@@ -1461,6 +1544,12 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "origin": {
+                  "$ref": "#/$defs/EventOrigin",
+                  "default": {
+                    "kind": "root"
+                  }
+                },
                 "delta": {
                   "type": "string"
                 },
@@ -1482,6 +1571,12 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "origin": {
+                  "$ref": "#/$defs/EventOrigin",
+                  "default": {
+                    "kind": "root"
+                  }
+                },
                 "delta": {
                   "type": "string"
                 },
@@ -1502,6 +1597,12 @@
                 "message_id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "origin": {
+                  "$ref": "#/$defs/EventOrigin",
+                  "default": {
+                    "kind": "root"
+                  }
                 },
                 "text": {
                   "type": "string"
@@ -1528,6 +1629,12 @@
               "properties": {
                 "call": {
                   "$ref": "#/$defs/ToolCall"
+                },
+                "origin": {
+                  "$ref": "#/$defs/EventOrigin",
+                  "default": {
+                    "kind": "root"
+                  }
                 },
                 "kind": {
                   "type": "string",
@@ -1689,6 +1796,14 @@
                   "type": "integer",
                   "format": "uint64",
                   "minimum": 0
+                },
+                "terminal_message_id": {
+                  "description": "Durable identity of the terminal non-empty root assistant message.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
                 },
                 "kind": {
                   "type": "string",
@@ -2073,6 +2188,45 @@
             }
           ]
         },
+        "EventOrigin": {
+          "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "root"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string"
+                },
+                "provider_thread_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "agent"
+                }
+              },
+              "required": [
+                "kind",
+                "task_id"
+              ]
+            }
+          ]
+        },
         "ToolCall": {
           "description": "A tool invocation as shown in the transcript.",
           "type": "object",
@@ -2112,6 +2266,18 @@
               "description": "Kybern turn that launched this task. Background work can outlive it.",
               "type": "string",
               "format": "uuid"
+            },
+            "started_seq": {
+              "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "updated_seq": {
+              "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+              "type": "integer",
+              "format": "int64",
+              "default": 0
             },
             "kind": {
               "$ref": "#/$defs/RuntimeTaskKind"
@@ -2732,6 +2898,11 @@
               "type": "string",
               "format": "uuid"
             },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
             "message": {
               "$ref": "#/$defs/UserMessage"
             },
@@ -2762,6 +2933,17 @@
             "turn_id": {
               "type": "string",
               "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
             },
             "segment": {
               "description": "Segment index within one `message_id`. A provider can keep a single\nmessage id across a tool call (Claude streams preamble → tool →\nanswer under one id); the projection splits the text at each\nrow-making event so post-tool prose is its own entry, ordered after\nthe tool. `0` is the first/only segment. `(id, segment)` is the\nstable identity a client keys on.",
@@ -2807,6 +2989,17 @@
               "type": "string",
               "format": "uuid"
             },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
+            },
             "call": {
               "$ref": "#/$defs/ToolCall"
             },
@@ -2842,6 +3035,11 @@
               "type": "string",
               "format": "uuid"
             },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
             "approval": {
               "$ref": "#/$defs/ApprovalRequest"
             },
@@ -2873,6 +3071,11 @@
               "type": "string",
               "format": "uuid"
             },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
             "stop_reason": {
               "$ref": "#/$defs/StopReason"
             },
@@ -2891,6 +3094,17 @@
               "format": "uint64",
               "minimum": 0
             },
+            "terminal_message_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
             "error": {
               "type": [
                 "string",
@@ -2907,7 +3121,106 @@
             "turn_id",
             "stop_reason",
             "usage",
-            "duration_ms"
+            "duration_ms",
+            "at"
+          ]
+        },
+        {
+          "description": "Stable launch row for a provider-owned task. Later snapshots update the\ntask in place; `seq` remains the first event that made it visible.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "task": {
+              "$ref": "#/$defs/RuntimeTask"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "runtime_task"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "task",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "level": {
+              "$ref": "#/$defs/NoticeLevel"
+            },
+            "text": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "notice"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "level",
+            "text",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "commit": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "reverted"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "commit",
+            "at"
           ]
         }
       ],
@@ -3035,6 +3348,45 @@
                 "type",
                 "name",
                 "path"
+              ]
+            }
+          ]
+        },
+        "EventOrigin": {
+          "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "root"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string"
+                },
+                "provider_thread_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "agent"
+                }
+              },
+              "required": [
+                "kind",
+                "task_id"
               ]
             }
           ]
@@ -3202,6 +3554,232 @@
           "required": [
             "input_tokens",
             "output_tokens"
+          ]
+        },
+        "RuntimeTask": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "Provider-stable task, child-thread, tool-call, or process id.",
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "origin_turn_id": {
+              "description": "Kybern turn that launched this task. Background work can outlive it.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "started_seq": {
+              "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "updated_seq": {
+              "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "kind": {
+              "$ref": "#/$defs/RuntimeTaskKind"
+            },
+            "status": {
+              "$ref": "#/$defs/RuntimeTaskStatus"
+            },
+            "title": {
+              "type": "string"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "provider_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool_call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "provider_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "backgrounded": {
+              "type": "boolean",
+              "default": false
+            },
+            "last_tool_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stats": {
+              "$ref": "#/$defs/RuntimeTaskStats",
+              "default": {}
+            },
+            "capabilities": {
+              "$ref": "#/$defs/RuntimeTaskCapabilities",
+              "default": {
+                "stop": false,
+                "background": false
+              }
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "completed_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "thread_id",
+            "origin_turn_id",
+            "kind",
+            "status",
+            "title",
+            "started_at",
+            "updated_at"
+          ]
+        },
+        "RuntimeTaskKind": {
+          "description": "A durable unit of work started by the provider while handling a thread.\n\nProviders expose different names for these (subagent, task, background\ncommand, monitor). Kybern preserves the provider type while normalizing the\nlifecycle so every client can render the same activity surface.",
+          "type": "string",
+          "enum": [
+            "agent",
+            "process",
+            "monitor"
+          ]
+        },
+        "RuntimeTaskStatus": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "running",
+            "waiting",
+            "stopping",
+            "completed",
+            "failed",
+            "stopped",
+            "interrupted"
+          ]
+        },
+        "RuntimeTaskStats": {
+          "type": "object",
+          "properties": {
+            "token_count": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "tool_uses": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "duration_ms": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "cpu_percent": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rss_kb": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            }
+          }
+        },
+        "RuntimeTaskCapabilities": {
+          "type": "object",
+          "properties": {
+            "stop": {
+              "description": "The provider exposes a targeted stop operation for this task.",
+              "type": "boolean",
+              "default": false
+            },
+            "background": {
+              "description": "The provider can detach this foreground task without interrupting it.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "NoticeLevel": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
           ]
         }
       }
@@ -4005,6 +4583,18 @@
           "description": "Kybern turn that launched this task. Background work can outlive it.",
           "type": "string",
           "format": "uuid"
+        },
+        "started_seq": {
+          "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "updated_seq": {
+          "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
         },
         "kind": {
           "$ref": "#/$defs/RuntimeTaskKind"
@@ -5745,6 +6335,11 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
                   "message": {
                     "$ref": "#/$defs/UserMessage"
                   },
@@ -5775,6 +6370,17 @@
                   "turn_id": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin",
+                    "default": {
+                      "kind": "root"
+                    }
                   },
                   "segment": {
                     "description": "Segment index within one `message_id`. A provider can keep a single\nmessage id across a tool call (Claude streams preamble → tool →\nanswer under one id); the projection splits the text at each\nrow-making event so post-tool prose is its own entry, ordered after\nthe tool. `0` is the first/only segment. `(id, segment)` is the\nstable identity a client keys on.",
@@ -5820,6 +6426,17 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin",
+                    "default": {
+                      "kind": "root"
+                    }
+                  },
                   "call": {
                     "$ref": "#/$defs/ToolCall"
                   },
@@ -5855,6 +6472,11 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
                   "approval": {
                     "$ref": "#/$defs/ApprovalRequest"
                   },
@@ -5886,6 +6508,11 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
                   "stop_reason": {
                     "$ref": "#/$defs/StopReason"
                   },
@@ -5904,6 +6531,17 @@
                     "format": "uint64",
                     "minimum": 0
                   },
+                  "terminal_message_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid"
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
                   "error": {
                     "type": [
                       "string",
@@ -5920,7 +6558,106 @@
                   "turn_id",
                   "stop_reason",
                   "usage",
-                  "duration_ms"
+                  "duration_ms",
+                  "at"
+                ]
+              },
+              {
+                "description": "Stable launch row for a provider-owned task. Later snapshots update the\ntask in place; `seq` remains the first event that made it visible.",
+                "type": "object",
+                "properties": {
+                  "turn_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
+                  "task": {
+                    "$ref": "#/$defs/RuntimeTask"
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "role": {
+                    "type": "string",
+                    "const": "runtime_task"
+                  }
+                },
+                "required": [
+                  "role",
+                  "turn_id",
+                  "task",
+                  "at"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "turn_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
+                  "level": {
+                    "$ref": "#/$defs/NoticeLevel"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "role": {
+                    "type": "string",
+                    "const": "notice"
+                  }
+                },
+                "required": [
+                  "role",
+                  "turn_id",
+                  "level",
+                  "text",
+                  "at"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "turn_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64",
+                    "default": 0
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "role": {
+                    "type": "string",
+                    "const": "reverted"
+                  }
+                },
+                "required": [
+                  "role",
+                  "turn_id",
+                  "commit",
+                  "at"
                 ]
               }
             ]
@@ -6048,6 +6785,45 @@
                   "type",
                   "name",
                   "path"
+                ]
+              }
+            ]
+          },
+          "EventOrigin": {
+            "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "root"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "provider_thread_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "agent"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "task_id"
                 ]
               }
             ]
@@ -6232,6 +7008,18 @@
                 "description": "Kybern turn that launched this task. Background work can outlive it.",
                 "type": "string",
                 "format": "uuid"
+              },
+              "started_seq": {
+                "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+                "type": "integer",
+                "format": "int64",
+                "default": 0
+              },
+              "updated_seq": {
+                "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+                "type": "integer",
+                "format": "int64",
+                "default": 0
               },
               "kind": {
                 "$ref": "#/$defs/RuntimeTaskKind"
@@ -6422,6 +7210,14 @@
                 "default": false
               }
             }
+          },
+          "NoticeLevel": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ]
           }
         }
       }
@@ -6944,6 +7740,18 @@
                 "type": "string",
                 "format": "uuid"
               },
+              "started_seq": {
+                "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+                "type": "integer",
+                "format": "int64",
+                "default": 0
+              },
+              "updated_seq": {
+                "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+                "type": "integer",
+                "format": "int64",
+                "default": 0
+              },
               "kind": {
                 "$ref": "#/$defs/RuntimeTaskKind"
               },
@@ -7207,6 +8015,18 @@
             "type": "string",
             "format": "uuid"
           },
+          "started_seq": {
+            "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+            "type": "integer",
+            "format": "int64",
+            "default": 0
+          },
+          "updated_seq": {
+            "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+            "type": "integer",
+            "format": "int64",
+            "default": 0
+          },
           "kind": {
             "$ref": "#/$defs/RuntimeTaskKind"
           },
@@ -7469,6 +8289,18 @@
             "description": "Kybern turn that launched this task. Background work can outlive it.",
             "type": "string",
             "format": "uuid"
+          },
+          "started_seq": {
+            "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+            "type": "integer",
+            "format": "int64",
+            "default": 0
+          },
+          "updated_seq": {
+            "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+            "type": "integer",
+            "format": "int64",
+            "default": 0
           },
           "kind": {
             "$ref": "#/$defs/RuntimeTaskKind"
@@ -10296,6 +11128,12 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin",
+                    "default": {
+                      "kind": "root"
+                    }
+                  },
                   "delta": {
                     "type": "string"
                   },
@@ -10317,6 +11155,12 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin",
+                    "default": {
+                      "kind": "root"
+                    }
+                  },
                   "delta": {
                     "type": "string"
                   },
@@ -10337,6 +11181,12 @@
                   "message_id": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin",
+                    "default": {
+                      "kind": "root"
+                    }
                   },
                   "text": {
                     "type": "string"
@@ -10363,6 +11213,12 @@
                 "properties": {
                   "call": {
                     "$ref": "#/$defs/ToolCall"
+                  },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin",
+                    "default": {
+                      "kind": "root"
+                    }
                   },
                   "kind": {
                     "type": "string",
@@ -10524,6 +11380,14 @@
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 0
+                  },
+                  "terminal_message_id": {
+                    "description": "Durable identity of the terminal non-empty root assistant message.",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid"
                   },
                   "kind": {
                     "type": "string",
@@ -10908,6 +11772,45 @@
               }
             ]
           },
+          "EventOrigin": {
+            "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "root"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "provider_thread_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "agent"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "task_id"
+                ]
+              }
+            ]
+          },
           "ToolCall": {
             "description": "A tool invocation as shown in the transcript.",
             "type": "object",
@@ -10947,6 +11850,18 @@
                 "description": "Kybern turn that launched this task. Background work can outlive it.",
                 "type": "string",
                 "format": "uuid"
+              },
+              "started_seq": {
+                "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+                "type": "integer",
+                "format": "int64",
+                "default": 0
+              },
+              "updated_seq": {
+                "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+                "type": "integer",
+                "format": "int64",
+                "default": 0
               },
               "kind": {
                 "$ref": "#/$defs/RuntimeTaskKind"

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::event::NoticeLevel;
+
 pub type ProjectId = Uuid;
 pub type ThreadId = Uuid;
 pub type TurnId = Uuid;
@@ -371,6 +373,27 @@ impl RuntimeTaskStatus {
     }
 }
 
+/// Ownership of provider output after it has been normalized by a driver.
+/// Root output is eligible for the parent transcript; agent-owned output is
+/// retained as activity metadata and must never be promoted to the root answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EventOrigin {
+    #[default]
+    Root,
+    Agent {
+        task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_thread_id: Option<String>,
+    },
+}
+
+impl EventOrigin {
+    pub fn is_root(&self) -> bool {
+        matches!(self, Self::Root)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RuntimeTaskCapabilities {
     /// The provider exposes a targeted stop operation for this task.
@@ -402,6 +425,14 @@ pub struct RuntimeTask {
     pub thread_id: ThreadId,
     /// Kybern turn that launched this task. Background work can outlive it.
     pub origin_turn_id: TurnId,
+    /// Event sequence that first anchored this task in the transcript. Older
+    /// stored payloads use zero and are repaired by the event projector.
+    #[serde(default)]
+    pub started_seq: EventSeq,
+    /// Sequence of the latest accepted task snapshot. Progress updates change
+    /// this value without changing `started_seq` or the row's visual position.
+    #[serde(default)]
+    pub updated_seq: EventSeq,
     pub kind: RuntimeTaskKind,
     pub status: RuntimeTaskStatus,
     pub title: String,
@@ -510,12 +541,18 @@ pub enum TranscriptEntry {
     User {
         id: MessageId,
         turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
         message: UserMessage,
         at: DateTime<Utc>,
     },
     Assistant {
         id: MessageId,
         turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        #[serde(default)]
+        origin: EventOrigin,
         /// Segment index within one `message_id`. A provider can keep a single
         /// message id across a tool call (Claude streams preamble → tool →
         /// answer under one id); the projection splits the text at each
@@ -532,6 +569,10 @@ pub enum TranscriptEntry {
     },
     ToolCall {
         turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        #[serde(default)]
+        origin: EventOrigin,
         call: ToolCall,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<Value>,
@@ -541,19 +582,50 @@ pub enum TranscriptEntry {
     },
     Approval {
         turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
         approval: ApprovalRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decision: Option<ApprovalDecision>,
     },
     TurnSummary {
         turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
         stop_reason: StopReason,
         usage: Usage,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cost_usd: Option<f64>,
         duration_ms: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_message_id: Option<MessageId>,
+        at: DateTime<Utc>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+    },
+    /// Stable launch row for a provider-owned task. Later snapshots update the
+    /// task in place; `seq` remains the first event that made it visible.
+    RuntimeTask {
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        task: RuntimeTask,
+        at: DateTime<Utc>,
+    },
+    Notice {
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        level: NoticeLevel,
+        text: String,
+        at: DateTime<Utc>,
+    },
+    Reverted {
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        commit: String,
+        at: DateTime<Utc>,
     },
 }
 

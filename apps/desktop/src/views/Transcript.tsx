@@ -59,7 +59,7 @@ const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
 const META = getChatMessageFooterTextStyle()
 const EMPTY_RUNTIME_TASKS: RuntimeTask[] = []
 // No horizontal inset: message edges sit exactly on the composer's edges.
-const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)] transition-colors duration-500"
+const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]"
 const HOVER_REVEAL =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
 
@@ -88,10 +88,8 @@ interface AgentActivityDetail {
 }
 
 interface SettledWorkPresentation {
-  agentBlocks: ToolBlock[]
-  agentTasks: RuntimeTask[]
+  agentBlocks: Block[]
   disclosureBlocks: Block[]
-  disclosureTasks: RuntimeTask[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
 }
@@ -123,24 +121,22 @@ function isAgentLaunchBlock(block: ToolBlock, task?: RuntimeTask): boolean {
   return task?.kind === "agent" || isAgentLaunchTool(block.call)
 }
 
-function settledWorkPresentation(blocks: readonly Block[], tasks: readonly RuntimeTask[], transcriptTasks: readonly RuntimeTask[]): SettledWorkPresentation {
+function settledWorkPresentation(blocks: readonly Block[], tasks: readonly RuntimeTask[]): SettledWorkPresentation {
   const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
   const hierarchy = buildWorkHierarchy(blocks)
-  const agentBlocks: ToolBlock[] = []
+  const agentBlocks: Block[] = []
   const disclosureBlocks: Block[] = []
   for (const block of hierarchy.roots) {
-    if (block.kind === "tool" && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) agentBlocks.push(block)
+    if (
+      (block.kind === "tool" && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) ||
+      (block.kind === "runtime_task" && block.task.kind === "agent")
+    ) agentBlocks.push(block)
     else disclosureBlocks.push(block)
   }
 
-  // Child runtime tasks belong in their parent's focused Activity section.
-  const taskIds = new Set(tasks.map((task) => task.id))
-  const rootTasks = transcriptTasks.filter((task) => !task.parent_id || !taskIds.has(task.parent_id))
   return {
     agentBlocks,
-    agentTasks: rootTasks.filter((task) => task.kind === "agent"),
     disclosureBlocks,
-    disclosureTasks: rootTasks.filter((task) => task.kind !== "agent"),
     tasksByToolCall,
     childrenByParent: hierarchy.childrenByParent,
   }
@@ -158,7 +154,10 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
   if (!task && !block) return null
 
   const hierarchy = buildWorkHierarchy(group?.work ?? [])
-  const childBlocks = block ? (hierarchy.childrenByParent.get(block.call.id) ?? []) : []
+  const childBlocks = [
+    ...(block ? (hierarchy.childrenByParent.get(block.call.id) ?? []) : []),
+    ...(task ? (hierarchy.agentOwnedByTask.get(task.id) ?? []) : []),
+  ].filter((candidate, index, all) => all.findIndex((other) => other.id === candidate.id) === index)
   const representedToolCalls = new Set(childBlocks.map((child) => child.call.id))
   const childTasks = task
     ? tasks.filter((candidate) => candidate.parent_id === task.id && (!candidate.tool_call_id || !representedToolCalls.has(candidate.tool_call_id)))
@@ -168,8 +167,11 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     ...childTasks.map((child): AgentActivityEntry => ({ kind: "task", task: child, navigable: true })),
     ...(task ? [{ kind: "task", task, navigable: false } satisfies AgentActivityEntry] : []),
   ].sort((a, b) => {
-    const left = Date.parse(a.kind === "tool" ? a.block.at : a.task.updated_at)
-    const right = Date.parse(b.kind === "tool" ? b.block.at : b.task.updated_at)
+    const leftSeq = a.kind === "tool" ? a.block.seq : a.task.started_seq
+    const rightSeq = b.kind === "tool" ? b.block.seq : b.task.started_seq
+    if (leftSeq > 0 && rightSeq > 0 && leftSeq !== rightSeq) return leftSeq - rightSeq
+    const left = Date.parse(a.kind === "tool" ? a.block.at : a.task.started_at)
+    const right = Date.parse(b.kind === "tool" ? b.block.at : b.task.started_at)
     return (Number.isFinite(left) ? left : 0) - (Number.isFinite(right) ? right : 0)
   })
   const activity = block ? toolLine(block.call, block.complete && !(task && isRuntimeTaskActive(task))) : null
@@ -434,29 +436,21 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
     () => runtimeTasks.filter((task) => task.origin_turn_id === group.turnId),
     [group.turnId, runtimeTasks],
   )
-  const transcriptTasks = useMemo(
-    () =>
-      launchedTasks.filter(
-        (task) =>
-          !task.tool_call_id ||
-          !group.work.some((block) => block.kind === "tool" && block.call.id === task.tool_call_id),
-    ),
+  const settledWork = useMemo(
+    () => settledWorkPresentation(group.work, launchedTasks),
     [group.work, launchedTasks],
   )
-  const settledWork = useMemo(
-    () => settledWorkPresentation(group.work, launchedTasks, transcriptTasks),
-    [group.work, launchedTasks, transcriptTasks],
-  )
-  const hasWork = group.work.length > 0 || launchedTasks.length > 0
-  const hasPrimaryAgentActivity = settledWork.agentBlocks.length > 0 || settledWork.agentTasks.length > 0
-  const hasDisclosedWork = settledWork.disclosureBlocks.length > 0 || settledWork.disclosureTasks.length > 0
+  const hasWork = group.work.length > 0
+  const hasPrimaryAgentActivity = settledWork.agentBlocks.length > 0
+  const hasDisclosedWork = settledWork.disclosureBlocks.length > 0
   const hasSettledActivity = hasPrimaryAgentActivity || hasDisclosedWork
   const hasLiveWork =
     launchedTasks.some(isRuntimeTaskActive) ||
     group.work.some(
       (block) =>
         (block.kind === "tool" && !block.complete) ||
-        (block.kind === "assistant" && !block.complete && (!!block.text.trim() || !!block.thinking.trim())) ||
+        (block.kind === "runtime_task" && isRuntimeTaskActive(block.task)) ||
+        (block.kind === "assistant" && !block.complete && (!!block.thinking.trim() || shouldRevealLiveText(block.text, block.complete))) ||
         (block.kind === "approval" && !block.decision),
     )
   const settled = !group.running
@@ -475,10 +469,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           <WorkingHeader since={group.user?.at ?? ""} />
           {hasWork && (
             <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
-              {/* Live turn: assistant prose renders bright and in place (the tail
-                  segment reveals at the smooth cadence); tools stay inline. */}
-              <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveAnswerId} onOpenAgentActivity={onOpenAgentActivity} />
-              <RuntimeTaskTranscriptRows tasks={transcriptTasks} onOpenAgentActivity={onOpenAgentActivity} />
+              {/* Every live event stays at its sequence position. Only the tail
+                  assistant segment streams; earlier prose never gets reparented. */}
+              <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
           {!hasLiveWork && (
@@ -502,9 +495,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                     blocks={settledWork.agentBlocks}
                     tasksByToolCall={settledWork.tasksByToolCall}
                     childrenByParent={settledWork.childrenByParent}
+                    compact
                     onOpenAgentActivity={onOpenAgentActivity}
                   />
-                  <RuntimeTaskTranscriptRows tasks={settledWork.agentTasks} onOpenAgentActivity={onOpenAgentActivity} />
                 </div>
               )}
               {hasDisclosedWork && (
@@ -528,9 +521,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                       blocks={settledWork.disclosureBlocks}
                       tasksByToolCall={settledWork.tasksByToolCall}
                       childrenByParent={settledWork.childrenByParent}
+                      compact
                       onOpenAgentActivity={onOpenAgentActivity}
                     />
-                    <RuntimeTaskTranscriptRows tasks={settledWork.disclosureTasks} onOpenAgentActivity={onOpenAgentActivity} />
                   </DisclosureRegion>
                 </div>
               )}
@@ -578,49 +571,45 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   )
 })
 
-function RuntimeTaskTranscriptRows({ tasks, onOpenAgentActivity }: { tasks: RuntimeTask[]; onOpenAgentActivity: OpenAgentActivity }) {
+function RuntimeTaskTranscriptRow({ task, onOpenAgentActivity }: { task: RuntimeTask; onOpenAgentActivity: OpenAgentActivity }) {
   const set = useStore((state) => state.set)
-  if (tasks.length === 0) return null
-  return tasks.map((task) => {
-    const active = isRuntimeTaskActive(task)
-    const noun = task.kind === "agent" ? "agent" : task.kind === "process" ? "process" : "monitor"
-    const status = active
-      ? task.status === "waiting"
-        ? "Monitoring"
-        : task.status === "stopping"
-          ? "Stopping"
-          : "Active"
-      : task.status === "failed"
-        ? "Failed"
-        : task.status === "stopped" || task.status === "interrupted"
-          ? "Stopped"
-          : "Completed"
-    return (
-      <button
-        key={task.id}
-        type="button"
-        title={task.title}
-        data-agent-launch-row={task.kind === "agent" ? "true" : undefined}
-        onClick={() => {
-          if (task.kind === "agent") {
-            onOpenAgentActivity({ kind: "task", turnId: task.origin_turn_id, taskId: task.id })
-            return
-          }
-          set({ rightOpen: true, rightTab: "activity" })
-        }}
-        className="group/task-row flex w-full cursor-pointer items-center gap-1.5 py-1 text-start focus-visible:outline-none"
-      >
-        <span className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
-          {task.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
-        </span>
-        <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
-          {task.kind === "agent" ? `${active ? "Delegating" : "Delegated"} ${task.title}` : `Started ${noun} · ${task.title}`}
-        </span>
-        <span className={cn("shrink-0 font-system-ui text-[11px] tabular-nums", task.status === "failed" ? "text-destructive" : "text-muted-foreground/55")}>{status}</span>
-        {task.kind === "agent" && <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/task-row:text-foreground" />}
-      </button>
-    )
-  })
+  const active = isRuntimeTaskActive(task)
+  const noun = task.kind === "agent" ? "agent" : task.kind === "process" ? "process" : "monitor"
+  const status = active
+    ? task.status === "waiting"
+      ? "Monitoring"
+      : task.status === "stopping"
+        ? "Stopping"
+        : "Active"
+    : task.status === "failed"
+      ? "Failed"
+      : task.status === "stopped" || task.status === "interrupted"
+        ? "Stopped"
+        : "Completed"
+  return (
+    <button
+      type="button"
+      title={task.title}
+      data-agent-launch-row={task.kind === "agent" ? "true" : undefined}
+      onClick={() => {
+        if (task.kind === "agent") {
+          onOpenAgentActivity({ kind: "task", turnId: task.origin_turn_id, taskId: task.id })
+          return
+        }
+        set({ rightOpen: true, rightTab: "activity" })
+      }}
+      className="group/task-row flex w-full cursor-pointer items-center gap-1.5 py-1 text-start focus-visible:outline-none"
+    >
+      <span className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
+        {task.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
+      </span>
+      <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
+        {task.kind === "agent" ? `${active ? "Delegating" : "Delegated"} ${task.title}` : `Started ${noun} · ${task.title}`}
+      </span>
+      <span className={cn("shrink-0 font-system-ui text-[11px] tabular-nums", task.status === "failed" ? "text-destructive" : "text-muted-foreground/55")}>{status}</span>
+      {task.kind === "agent" && <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/task-row:text-foreground" />}
+    </button>
+  )
 }
 
 function WorkingHeader({ since }: { since: string }) {
@@ -791,7 +780,13 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
   }
   for (const block of blocks) {
     const linkedTask = block.kind === "tool" ? tasksByToolCall.get(block.call.id) : undefined
-    if (block.kind === "tool" && block.complete && !block.isError && (!linkedTask || !isRuntimeTaskActive(linkedTask))) {
+    if (
+      block.kind === "tool" &&
+      block.complete &&
+      !block.isError &&
+      !isAgentLaunchBlock(block, linkedTask) &&
+      (!linkedTask || !isRuntimeTaskActive(linkedTask))
+    ) {
       tools.push(block)
     } else {
       flush()
@@ -816,6 +811,7 @@ function WorkRows({
   childrenByParent,
   tone = "muted",
   liveTextId = null,
+  compact = false,
   onOpenAgentActivity,
 }: {
   blocks: readonly Block[]
@@ -823,9 +819,11 @@ function WorkRows({
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
   tone?: WorkTone
   liveTextId?: string | null
+  compact?: boolean
   onOpenAgentActivity: OpenAgentActivity
 }) {
-  return chunkWork(blocks, tasksByToolCall).map((chunk) =>
+  const chunks: WorkChunk[] = compact ? chunkWork(blocks, tasksByToolCall) : blocks.map((block) => ({ kind: "single", block }))
+  return chunks.map((chunk) =>
     chunk.kind === "single" ? (
       <WorkRow
         key={chunk.block.id}
@@ -927,6 +925,8 @@ function WorkRow({
       return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
     case "assistant":
       return <AssistantWorkRow block={block} tone={tone} live={live} />
+    case "runtime_task":
+      return <RuntimeTaskTranscriptRow task={block.task} onOpenAgentActivity={onOpenAgentActivity} />
     case "approval":
       return (
         <div className="rounded-lg py-1">
@@ -1001,7 +1001,7 @@ function ToolRow({
           if (canExpand) setOpen((value) => !value)
         }}
         aria-expanded={canExpand ? open : undefined}
-        className={cn("group/tool-row flex w-full items-center gap-1.5 text-start transition-[opacity,translate] duration-200", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
+        className={cn("group/tool-row flex w-full items-center gap-1.5 text-start", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
       >
         <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", tone)}>
           {workIcon(visual, block.isError)}
@@ -1051,9 +1051,8 @@ function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extr
   const [open, setOpen] = useState(false)
   // Smooth the reasoning stream too, but only while it is both live and expanded.
   const thinking = useSmoothStream(block.thinking, !block.complete && open)
-  // The tail segment reveals its text at the smooth cadence; every other segment
-  // (settled, or an earlier segment now behind a tool) renders in full. Parse the
-  // deferred value so the markdown re-parse trails the reveal instead of thrashing.
+  // Smooth only the segment currently receiving deltas. Its keyed row remains
+  // in place when tools or delegated tasks arrive after it.
   const revealed = useSmoothStream(block.text, live && !block.complete, block.complete)
   const bodyText = useDeferredValue(revealed)
   const hasThinking = block.thinking.trim().length > 0

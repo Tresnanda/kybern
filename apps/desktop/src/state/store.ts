@@ -500,6 +500,12 @@ export function sortRuntimeTasks(input: RuntimeTask[]): RuntimeTask[] {
       children.set(parent, [...(children.get(parent) ?? []), task])
     }
     const compare = (left: RuntimeTask, right: RuntimeTask) => {
+      const leftSeq = newestFirst ? left.updated_seq : left.started_seq
+      const rightSeq = newestFirst ? right.updated_seq : right.started_seq
+      const sequence = leftSeq > 0 && rightSeq > 0
+        ? newestFirst ? rightSeq - leftSeq : leftSeq - rightSeq
+        : 0
+      if (sequence) return sequence
       const time = newestFirst ? right.updated_at.localeCompare(left.updated_at) : left.started_at.localeCompare(right.started_at)
       return time || left.id.localeCompare(right.id)
     }
@@ -530,12 +536,18 @@ export function sortRuntimeTasks(input: RuntimeTask[]): RuntimeTask[] {
  * roll back task progress. Terminal evidence wins timestamp ties. */
 export function mergeRuntimeTasks(current: RuntimeTask[], incoming: RuntimeTask[]): RuntimeTask[] {
   const merged = new Map(current.map((task) => [task.id, task]))
-  for (const task of incoming) {
-    const previous = merged.get(task.id)
-    const newer = !previous || task.updated_at > previous.updated_at
+  for (const incomingTask of incoming) {
+    const previous = merged.get(incomingTask.id)
+    const task = previous
+      ? { ...incomingTask, started_seq: previous.started_seq || incomingTask.started_seq }
+      : incomingTask
+    const newerBySequence = !!previous && task.updated_seq > previous.updated_seq
+    const olderBySequence = !!previous && task.updated_seq < previous.updated_seq && (task.updated_seq > 0 || previous.updated_seq > 0)
+    const newer = !previous || newerBySequence || (!olderBySequence && task.updated_seq === previous.updated_seq && task.updated_at > previous.updated_at)
     const tiedAndNotRegressing =
-      !!previous && task.updated_at === previous.updated_at && (isRuntimeTaskActive(previous) || !isRuntimeTaskActive(task))
-    if (newer || tiedAndNotRegressing) merged.set(task.id, task)
+      !!previous && task.updated_seq === previous.updated_seq && task.updated_at === previous.updated_at && (isRuntimeTaskActive(previous) || !isRuntimeTaskActive(task))
+    const terminalRegression = !!previous && !isRuntimeTaskActive(previous) && isRuntimeTaskActive(task)
+    if (!terminalRegression && (newer || tiedAndNotRegressing)) merged.set(task.id, task)
   }
   return sortRuntimeTasks([...merged.values()])
 }

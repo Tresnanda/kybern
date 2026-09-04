@@ -151,7 +151,7 @@ const SURFACE_UNDER_BASE_ALPHA: Record<ThemeVariant, number> = {
   light: 0.04,
 };
 const SIDEBAR_TINT_OPACITY: Record<ThemeVariant, number> = {
-  dark: 0.56,
+  dark: 0.5,
   light: 0.68,
 };
 const CONTENT_SURFACE_LIFT: Record<ThemeVariant, number> = {
@@ -724,10 +724,15 @@ export function buildThemeCssVariables(
       : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
   const seedSurface = readCodexVariable("--color-background-surface");
-  // Codex's sidebar uses the primary app surface as a translucent color wash
-  // over the native material. The panel token is intentionally darker and
-  // leaves the glass looking like a grey overlay instead of window chrome.
+  // The sidebar is a translucent color wash over the native macOS vibrancy.
+  // Washing the very dark page surface (#181818) at high opacity buried the glass
+  // and read as a flat grey overlay. Lift the wash a step toward white so it lands
+  // near a neutral rgb(40,40,40) — light window chrome that lets the material show
+  // through — matching the reference translucent shell (Mustr). Opaque shells keep
+  // the plain surface.
   const sidebarSurface = readCodexVariable("--color-background-surface");
+  const sidebarTintSeed =
+    variant === "dark" ? mixHex(seedSurface, "#ffffff", 0.07) : sidebarSurface;
   const contentLift = CONTENT_SURFACE_LIFT[variant];
   const contentSurface =
     variant === "dark"
@@ -771,15 +776,20 @@ export function buildThemeCssVariables(
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": "var(--app-composer-surface-fill)",
-    "--app-sidebar-backdrop-filter":
-      material === "translucent" ? "blur(8px) saturate(135%)" : "none",
+    // The sidebar sits over the native macOS vibrancy (underWindowBackground),
+    // which already blurs what is behind the window. A CSS backdrop-filter on top
+    // of that only re-blurs the (opaque) content pane to its right — nothing
+    // meaningful — while forcing a full GPU re-blur + WindowServer re-composite of
+    // the sidebar every presented frame, which is what smeared the glass and
+    // shed a drop-shadow edge while dragging. Let the native material do the blur.
+    "--app-sidebar-backdrop-filter": "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
     "--app-sidebar-surface":
       material === "translucent"
-        ? `color-mix(in srgb, ${sidebarSurface} ${Math.round(SIDEBAR_TINT_OPACITY[variant] * 100)}%, transparent)`
+        ? `color-mix(in srgb, ${sidebarTintSeed} ${Math.round(SIDEBAR_TINT_OPACITY[variant] * 100)}%, transparent)`
         : sidebarSurface,
     "--app-settings-surface": contentSurface,
     "--background": readCodexVariable("--color-background-surface-under"),

@@ -184,6 +184,10 @@ export interface Usage {
 export type RuntimeTaskKind = "agent" | "process" | "monitor";
 export type RuntimeTaskStatus = "pending" | "running" | "waiting" | "stopping" | "completed" | "failed" | "stopped" | "interrupted";
 
+export type EventOrigin =
+  | { kind: "root" }
+  | { kind: "agent"; task_id: string; provider_thread_id?: string | null };
+
 export interface RuntimeTaskCapabilities {
   stop: boolean;
   background: boolean;
@@ -201,6 +205,8 @@ export interface RuntimeTask {
   id: string;
   thread_id: ThreadId;
   origin_turn_id: TurnId;
+  started_seq: EventSeq;
+  updated_seq: EventSeq;
   kind: RuntimeTaskKind;
   status: RuntimeTaskStatus;
   title: string;
@@ -259,11 +265,13 @@ export interface ToolCall {
 export type StopReason = "completed" | "interrupted" | "max_turns" | "error";
 
 export type TranscriptEntry =
-  | { role: "user"; id: MessageId; turn_id: TurnId; message: UserMessage; at: DateTime }
+  | { role: "user"; id: MessageId; turn_id: TurnId; seq: EventSeq; message: UserMessage; at: DateTime }
   | {
       role: "assistant";
       id: MessageId;
       turn_id: TurnId;
+      seq: EventSeq;
+      origin: EventOrigin;
       /** Segment index within one `message_id`; the projection splits text at
        * each row-making event so post-tool prose is its own entry. 0 = only. */
       segment?: number;
@@ -275,21 +283,30 @@ export type TranscriptEntry =
   | {
       role: "tool_call";
       turn_id: TurnId;
+      seq: EventSeq;
+      origin: EventOrigin;
       call: ToolCall;
       output?: JsonValue;
       is_error: boolean;
       complete: boolean;
       at: DateTime;
     }
+  | { role: "approval"; turn_id: TurnId; seq: EventSeq; approval: ApprovalRequest; decision?: ApprovalDecision | null }
   | {
       role: "turn_summary";
       turn_id: TurnId;
+      seq: EventSeq;
       stop_reason: StopReason;
       usage: Usage;
       cost_usd?: number | null;
       duration_ms: number;
+      terminal_message_id?: MessageId | null;
+      at: DateTime;
       error?: string | null;
-    };
+    }
+  | { role: "runtime_task"; turn_id: TurnId; seq: EventSeq; task: RuntimeTask; at: DateTime }
+  | { role: "notice"; turn_id: TurnId; seq: EventSeq; level: NoticeLevel; text: string; at: DateTime }
+  | { role: "reverted"; turn_id: TurnId; seq: EventSeq; commit: string; at: DateTime };
 
 export interface Checkpoint {
   thread_id: ThreadId;
@@ -330,10 +347,10 @@ export type EventPayload =
   | { kind: "thread_archived" }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
-  | { kind: "assistant_text_delta"; message_id: MessageId; delta: string }
-  | { kind: "assistant_thinking_delta"; message_id: MessageId; delta: string }
-  | { kind: "assistant_message_completed"; message_id: MessageId; text: string; thinking: string | null }
-  | { kind: "tool_call_started"; call: ToolCall }
+  | { kind: "assistant_text_delta"; message_id: MessageId; origin: EventOrigin; delta: string }
+  | { kind: "assistant_thinking_delta"; message_id: MessageId; origin: EventOrigin; delta: string }
+  | { kind: "assistant_message_completed"; message_id: MessageId; origin: EventOrigin; text: string; thinking: string | null }
+  | { kind: "tool_call_started"; call: ToolCall; origin: EventOrigin }
   | { kind: "tool_call_output_delta"; tool_call_id: string; delta: string }
   | { kind: "tool_call_completed"; tool_call_id: string; output: JsonValue; is_error: boolean }
   | { kind: "runtime_task_started"; task: RuntimeTask }
@@ -347,6 +364,7 @@ export type EventPayload =
       usage: Usage;
       cost_usd: number | null;
       duration_ms: number;
+      terminal_message_id?: MessageId | null;
     }
   | { kind: "turn_failed"; error: string }
   | { kind: "provider_notice"; level: NoticeLevel; text: string; data: JsonValue | null }

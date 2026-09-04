@@ -60,9 +60,47 @@ struct ActiveTurn {
     provider: ProviderKind,
     session_reused: bool,
     first_event_observed: bool,
-    /// Provider message id -> our MessageId, so deltas coalesce.
-    messages: HashMap<String, MessageId>,
+    /// Provider origin + message id -> our MessageId, so root and child ids can
+    /// never collide even if a provider reuses identifiers across threads.
+    messages: HashMap<(EventOrigin, String), MessageId>,
+    /// Logical message currently receiving deltas for each origin. Provider
+    /// item ids are aliases: chunk and completion frames may disagree on them.
+    active_messages: HashMap<EventOrigin, MessageId>,
+    /// Last completed non-empty root message; persisted with TurnCompleted so
+    /// clients never have to guess which assistant row is the final answer.
+    terminal_message_id: Option<MessageId>,
     completed: bool,
+    /// Claude Code may emit a successful foreground `result` while native
+    /// background agents are still active, then resume the root assistant from
+    /// an internal task notification. Hold that provisional result so the
+    /// continuation remains part of this turn and retains stable message ids.
+    pending_completion: Option<PendingTurnCompletion>,
+}
+
+struct PendingTurnCompletion {
+    stop_reason: StopReason,
+    usage: Usage,
+    cost_usd: Option<f64>,
+    duration_ms: u64,
+    anchors: TurnAnchors,
+}
+
+impl PendingTurnCompletion {
+    fn merge(&mut self, stop_reason: StopReason, usage: Usage, cost_usd: Option<f64>, duration_ms: u64, anchors: TurnAnchors) {
+        self.stop_reason = stop_reason;
+        self.usage.add(&usage);
+        self.cost_usd = match (self.cost_usd, cost_usd) {
+            (Some(left), Some(right)) => Some(left + right),
+            (left, right) => left.or(right),
+        };
+        self.duration_ms = self.duration_ms.saturating_add(duration_ms);
+        if anchors.turn_id.is_some() {
+            self.anchors.turn_id = anchors.turn_id;
+        }
+        if anchors.previous_end.is_some() {
+            self.anchors.previous_end = anchors.previous_end;
+        }
+    }
 }
 
 pub const DEFAULT_TITLE: &str = "New thread";
@@ -372,7 +410,10 @@ impl Orchestrator {
                 session_reused,
                 first_event_observed: false,
                 messages: HashMap::new(),
+                active_messages: HashMap::new(),
+                terminal_message_id: None,
                 completed: false,
+                pending_completion: None,
             });
         }
         *live.last_turn_id.lock().await = Some(turn_id);
@@ -860,6 +901,8 @@ impl Orchestrator {
                     id: incoming.id,
                     thread_id,
                     origin_turn_id,
+                    started_seq: 0,
+                    updated_seq: 0,
                     kind: incoming.kind,
                     status: incoming.status,
                     title: incoming.title,
@@ -891,7 +934,14 @@ impl Orchestrator {
         } else {
             EventPayload::RuntimeTaskCompleted { task: task.clone() }
         };
-        self.emit(thread_id, Some(task.origin_turn_id), payload)?;
+        let emitted = self.emit(thread_id, Some(task.origin_turn_id), payload)?;
+        let task = match emitted.payload {
+            EventPayload::RuntimeTaskStarted { task }
+            | EventPayload::RuntimeTaskUpdated { task }
+            | EventPayload::RuntimeTaskCompleted { task } => task,
+            _ => unreachable!("runtime task emission changed payload kind"),
+        };
+        live.tasks.lock().await.insert(task.id.clone(), task.clone());
         if !task.status.is_active() {
             self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
         }
@@ -949,7 +999,14 @@ impl Orchestrator {
         } else {
             EventPayload::RuntimeTaskUpdated { task: task.clone() }
         };
-        self.emit(thread_id, Some(task.origin_turn_id), payload)?;
+        let emitted = self.emit(thread_id, Some(task.origin_turn_id), payload)?;
+        let task = match emitted.payload {
+            EventPayload::RuntimeTaskStarted { task }
+            | EventPayload::RuntimeTaskUpdated { task }
+            | EventPayload::RuntimeTaskCompleted { task } => task,
+            _ => unreachable!("runtime task emission changed payload kind"),
+        };
+        live.tasks.lock().await.insert(task.id.clone(), task.clone());
         if completed || !task.status.is_active() {
             self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
         }
@@ -1052,47 +1109,58 @@ impl Orchestrator {
                 }
                 self.emit(thread_id, turn_id, EventPayload::ProviderSessionBound { session_id, model })?;
             }
-            DriverEvent::TextDelta { message_id, delta } => {
-                let id = map_message(&mut turn_guard, &message_id);
-                self.emit(thread_id, turn_id, EventPayload::AssistantTextDelta { message_id: id, delta })?;
+            DriverEvent::TextDelta { message_id, origin, delta } => {
+                let id = map_message_delta(&mut turn_guard, &origin, &message_id);
+                self.emit(thread_id, turn_id, EventPayload::AssistantTextDelta { message_id: id, origin, delta })?;
             }
-            DriverEvent::ThinkingDelta { message_id, delta } => {
-                let id = map_message(&mut turn_guard, &message_id);
-                self.emit(thread_id, turn_id, EventPayload::AssistantThinkingDelta { message_id: id, delta })?;
+            DriverEvent::ThinkingDelta { message_id, origin, delta } => {
+                let id = map_message_delta(&mut turn_guard, &origin, &message_id);
+                self.emit(thread_id, turn_id, EventPayload::AssistantThinkingDelta { message_id: id, origin, delta })?;
             }
-            DriverEvent::MessageCompleted { message_id, text, thinking } => {
-                let id = map_message(&mut turn_guard, &message_id);
-                self.emit(thread_id, turn_id, EventPayload::AssistantMessageCompleted { message_id: id, text, thinking })?;
+            DriverEvent::MessageCompleted { message_id, origin, text, thinking } => {
+                let id = map_message_completion(&mut turn_guard, &origin, &message_id);
+                if origin.is_root()
+                    && !text.trim().is_empty()
+                    && let Some(turn) = turn_guard.as_mut()
+                {
+                    turn.terminal_message_id = Some(id);
+                }
+                self.emit(thread_id, turn_id, EventPayload::AssistantMessageCompleted { message_id: id, origin, text, thinking })?;
             }
             DriverEvent::ToolStarted(call) => {
-                self.emit(thread_id, turn_id, EventPayload::ToolCallStarted { call: call.clone() })?;
-                if let Some(parent_id) = call.parent_id.as_deref() {
-                    let task_id = live
-                        .tasks
+                let owner = if let Some(parent_id) = call.parent_id.as_deref() {
+                    live.tasks
                         .lock()
                         .await
                         .values()
                         .find(|task| task.id == parent_id || task.tool_call_id.as_deref() == Some(parent_id))
-                        .map(|task| task.id.clone());
-                    if let Some(task_id) = task_id {
-                        let _ = self
-                            .apply_runtime_task_update(
-                                thread_id,
-                                live,
-                                DriverRuntimeTaskUpdate {
-                                    id: task_id,
-                                    status: Some(RuntimeTaskStatus::Running),
-                                    detail: None,
-                                    backgrounded: None,
-                                    last_tool_name: Some(call.name.clone()),
-                                    usage: None,
-                                    stats: None,
-                                    capabilities: None,
-                                },
-                                false,
-                            )
-                            .await?;
-                    }
+                        .cloned()
+                } else {
+                    None
+                };
+                let origin = owner.as_ref().map_or(EventOrigin::Root, |task| EventOrigin::Agent {
+                    task_id: task.id.clone(),
+                    provider_thread_id: task.provider_thread_id.clone(),
+                });
+                self.emit(thread_id, turn_id, EventPayload::ToolCallStarted { call: call.clone(), origin })?;
+                if let Some(task) = owner {
+                    let _ = self
+                        .apply_runtime_task_update(
+                            thread_id,
+                            live,
+                            DriverRuntimeTaskUpdate {
+                                id: task.id,
+                                status: Some(RuntimeTaskStatus::Running),
+                                detail: None,
+                                backgrounded: None,
+                                last_tool_name: Some(call.name.clone()),
+                                usage: None,
+                                stats: None,
+                                capabilities: None,
+                            },
+                            false,
+                        )
+                        .await?;
                 }
                 let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
                 if let Some(task) = generic_runtime_task_for_provider(provider, &call) {
@@ -1160,6 +1228,12 @@ impl Orchestrator {
                         .await;
                     return Ok(());
                 };
+                if let Some(turn) = turn_guard.as_mut() {
+                    // A blocking pause is a real assistant-message boundary.
+                    // Resumed prose gets a new logical identity even when the
+                    // provider reuses its raw item id.
+                    turn.active_messages.remove(&EventOrigin::Root);
+                }
                 let approval = ApprovalRequest {
                     id: Uuid::now_v7(),
                     thread_id,
@@ -1191,6 +1265,53 @@ impl Orchestrator {
             }
             DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
+                let has_active_agents = if turn.provider == ProviderKind::ClaudeCode && stop_reason == StopReason::Completed {
+                    live.tasks
+                        .lock()
+                        .await
+                        .values()
+                        .any(|task| task.origin_turn_id == turn.id && task.kind == RuntimeTaskKind::Agent && task.status.is_active())
+                } else {
+                    false
+                };
+                if has_active_agents {
+                    // The foreground result closes the current assistant
+                    // ordinal even though it does not yet settle the parent
+                    // turn. Claude's task-triggered continuation is a new
+                    // logical message and becomes the eventual terminal row.
+                    turn.active_messages.remove(&EventOrigin::Root);
+                    if let Some(pending) = turn.pending_completion.as_mut() {
+                        pending.merge(stop_reason, usage, cost_usd, duration_ms, anchors);
+                    } else {
+                        turn.pending_completion = Some(PendingTurnCompletion { stop_reason, usage, cost_usd, duration_ms, anchors });
+                    }
+                    tracing::debug!(
+                        thread_id = %thread_id,
+                        turn_id = %turn.id,
+                        "holding Claude's provisional result while background agents finish"
+                    );
+                    return Ok(());
+                }
+
+                let had_pending_completion = turn.pending_completion.is_some();
+                let mut completion = turn.pending_completion.take().unwrap_or(PendingTurnCompletion {
+                    stop_reason,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 0,
+                    anchors: TurnAnchors::default(),
+                });
+                completion.merge(stop_reason, usage, cost_usd, duration_ms, anchors);
+                if !had_pending_completion {
+                    // `completion` began empty above; merge supplied this event.
+                    completion.duration_ms =
+                        if completion.duration_ms == 0 { turn.started.elapsed().as_millis() as u64 } else { completion.duration_ms };
+                } else {
+                    // A resumed Claude turn spans the foreground result, the
+                    // task wait, and the continuation. Present the wall time.
+                    completion.duration_ms = completion.duration_ms.max(turn.started.elapsed().as_millis() as u64);
+                }
+                let PendingTurnCompletion { stop_reason, usage, cost_usd, duration_ms, anchors } = completion;
                 if (anchors.turn_id.is_some() || anchors.previous_end.is_some())
                     && let Ok(Some(mut c)) = self.inner.store.checkpoint_get(turn.id)
                 {
@@ -1199,7 +1320,7 @@ impl Orchestrator {
                     let _ = self.inner.store.checkpoint_upsert(&c);
                 }
                 turn.completed = true;
-                let duration_ms = if duration_ms == 0 { turn.started.elapsed().as_millis() as u64 } else { duration_ms };
+                let terminal_message_id = turn.terminal_message_id;
                 let turn_id = turn.id;
                 *turn_guard = None;
                 drop(turn_guard);
@@ -1221,7 +1342,11 @@ impl Orchestrator {
                 } else {
                     self.checkpoint(&t, turn_id, "after").await;
                 }
-                self.emit(thread_id, Some(turn_id), EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms })?;
+                self.emit(
+                    thread_id,
+                    Some(turn_id),
+                    EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, terminal_message_id },
+                )?;
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
                 self.maybe_generate_title(&t);
@@ -1265,11 +1390,27 @@ impl Orchestrator {
     }
 }
 
-fn map_message(turn: &mut Option<ActiveTurn>, provider_id: &str) -> MessageId {
-    match turn.as_mut() {
-        Some(t) => *t.messages.entry(provider_id.to_string()).or_insert_with(Uuid::now_v7),
-        None => Uuid::now_v7(),
+fn map_message_delta(turn: &mut Option<ActiveTurn>, origin: &EventOrigin, provider_id: &str) -> MessageId {
+    let Some(turn) = turn.as_mut() else { return Uuid::now_v7() };
+    if let Some(active) = turn.active_messages.get(origin).copied() {
+        turn.messages.insert((origin.clone(), provider_id.to_string()), active);
+        return active;
     }
+
+    // A new delta after completion opens a fresh logical message, even if the
+    // provider reused a raw id from an earlier message.
+    let id = Uuid::now_v7();
+    turn.messages.insert((origin.clone(), provider_id.to_string()), id);
+    turn.active_messages.insert(origin.clone(), id);
+    id
+}
+
+fn map_message_completion(turn: &mut Option<ActiveTurn>, origin: &EventOrigin, provider_id: &str) -> MessageId {
+    let Some(turn) = turn.as_mut() else { return Uuid::now_v7() };
+    let key = (origin.clone(), provider_id.to_string());
+    let id = turn.active_messages.remove(origin).or_else(|| turn.messages.get(&key).copied()).unwrap_or_else(Uuid::now_v7);
+    turn.messages.insert(key, id);
+    id
 }
 
 fn merge_task_stats(current: &mut RuntimeTaskStats, update: RuntimeTaskStats) {
@@ -1413,9 +1554,52 @@ pub fn title_from_message(message: &UserMessage) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{generic_runtime_task, generic_runtime_task_for_provider, output_indicates_running};
-    use kybern_protocol::{ProviderKind, RuntimeTaskKind, ToolCall};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    use super::{ActiveTurn, LiveSession, Orchestrator, generic_runtime_task, generic_runtime_task_for_provider, output_indicates_running};
+    use crate::config::Paths;
+    use crate::settings::SettingsStore;
+    use kybern_drivers::registry::DriverRegistry;
+    use kybern_drivers::{AgentSession, DriverEvent, DriverRuntimeTaskUpdate, TurnAnchors};
+    use kybern_protocol::*;
+    use kybern_store::Store;
     use serde_json::json;
+    use tokio::sync::{Mutex, broadcast};
+    use uuid::Uuid;
+
+    struct TestSession;
+
+    #[async_trait::async_trait]
+    impl AgentSession for TestSession {
+        async fn send_message(&self, _message_id: &str, _message: &UserMessage) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn interrupt(&self) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn set_permission_mode(&self, _mode: PermissionMode) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn set_model(&self, _model: &str) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn set_effort(&self, _effort: &str) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn respond_permission(&self, _request_id: &str, _decision: &ApprovalDecision) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn close(&self) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn classifies_native_and_acp_style_subagent_tools() {
@@ -1475,5 +1659,222 @@ mod tests {
         assert!(generic_runtime_task_for_provider(ProviderKind::Omp, &agent).is_none());
         assert!(generic_runtime_task_for_provider(ProviderKind::Pi, &agent).is_some());
         assert!(generic_runtime_task_for_provider(ProviderKind::Cursor, &agent).is_some());
+    }
+
+    #[tokio::test]
+    async fn claude_result_waits_for_background_agents_and_scopes_the_continuation() {
+        let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
+        let paths = Paths::resolve(Some(root.clone())).unwrap();
+        let settings = SettingsStore::load(&paths.settings).unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let now = chrono::Utc::now();
+        let project = Project {
+            id: Uuid::now_v7(),
+            name: "fixture".into(),
+            path: root.to_string_lossy().into_owned(),
+            is_git: false,
+            worktrees_default: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let thread = Thread {
+            id: Uuid::now_v7(),
+            project_id: project.id,
+            title: "Fixture".into(),
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            status: ThreadStatus::Running,
+            worktree: None,
+            cwd: project.path.clone(),
+            provider_session_id: None,
+            pinned: false,
+            created_at: now,
+            updated_at: now,
+            last_seq: 0,
+        };
+        store.thread_upsert(&thread).unwrap();
+        let (events_tx, _) = broadcast::channel(32);
+        let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
+        let turn_id = Uuid::now_v7();
+        orchestrator
+            .emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("test") })
+            .unwrap();
+        let task = RuntimeTask {
+            id: "agent-1".into(),
+            thread_id: thread.id,
+            origin_turn_id: turn_id,
+            started_seq: 2,
+            updated_seq: 2,
+            kind: RuntimeTaskKind::Agent,
+            status: RuntimeTaskStatus::Running,
+            title: "Explore".into(),
+            detail: None,
+            provider_type: Some("local_agent".into()),
+            parent_id: None,
+            tool_call_id: None,
+            provider_thread_id: None,
+            model: None,
+            effort: None,
+            backgrounded: true,
+            last_tool_name: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities::default(),
+            started_at: now,
+            updated_at: now,
+            completed_at: None,
+        };
+        let live = Arc::new(LiveSession {
+            session: Box::new(TestSession),
+            turn: Mutex::new(Some(ActiveTurn {
+                id: turn_id,
+                started: std::time::Instant::now(),
+                startup_started: std::time::Instant::now(),
+                provider: ProviderKind::ClaudeCode,
+                session_reused: false,
+                first_event_observed: false,
+                messages: HashMap::new(),
+                active_messages: HashMap::new(),
+                terminal_message_id: None,
+                completed: false,
+                pending_completion: None,
+            })),
+            last_turn_id: Mutex::new(Some(turn_id)),
+            tasks: Mutex::new(HashMap::from([(task.id.clone(), task)])),
+            deferred_checkpoints: Mutex::new(HashSet::new()),
+            pending: Mutex::new(HashMap::new()),
+        });
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::TextDelta { message_id: "provider-holding".into(), origin: EventOrigin::Root, delta: "Holding.".into() },
+            )
+            .await
+            .unwrap();
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::MessageCompleted {
+                    message_id: "provider-holding".into(),
+                    origin: EventOrigin::Root,
+                    text: "Holding.".into(),
+                    thinking: None,
+                },
+            )
+            .await
+            .unwrap();
+        let first_usage = Usage { input_tokens: 1, output_tokens: 2, cache_read_tokens: 0, cache_write_tokens: 0 };
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: first_usage,
+                    cost_usd: Some(0.1),
+                    duration_ms: 5,
+                    anchors: TurnAnchors::default(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(live.turn.lock().await.as_ref().is_some_and(|turn| turn.pending_completion.is_some()));
+        assert!(
+            !store.events_for_thread(thread.id).unwrap().iter().any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
+        );
+
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status("agent-1", RuntimeTaskStatus::Completed)),
+            )
+            .await
+            .unwrap();
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::TextDelta { message_id: "provider-fragment-1".into(), origin: EventOrigin::Root, delta: "Final ".into() },
+            )
+            .await
+            .unwrap();
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::TextDelta { message_id: "provider-fragment-2".into(), origin: EventOrigin::Root, delta: "answer".into() },
+            )
+            .await
+            .unwrap();
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::MessageCompleted {
+                    message_id: "provider-completion".into(),
+                    origin: EventOrigin::Root,
+                    text: "Final answer".into(),
+                    thinking: None,
+                },
+            )
+            .await
+            .unwrap();
+        orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage { input_tokens: 3, output_tokens: 4, cache_read_tokens: 0, cache_write_tokens: 0 },
+                    cost_usd: Some(0.2),
+                    duration_ms: 7,
+                    anchors: TurnAnchors::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let events = store.events_for_thread(thread.id).unwrap();
+        let response_events = events
+            .iter()
+            .filter(|event| {
+                matches!(event.payload, EventPayload::AssistantTextDelta { .. } | EventPayload::AssistantMessageCompleted { .. })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(response_events.len(), 5);
+        assert!(response_events.iter().all(|event| event.turn_id == Some(turn_id)));
+        let message_ids = response_events
+            .iter()
+            .filter_map(|event| match event.payload {
+                EventPayload::AssistantTextDelta { message_id, .. } | EventPayload::AssistantMessageCompleted { message_id, .. } => {
+                    Some(message_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(message_ids[0], message_ids[1]);
+        assert!(message_ids[2..].windows(2).all(|pair| pair[0] == pair[1]));
+        assert_ne!(message_ids[1], message_ids[2]);
+        let completed = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::TurnCompleted { usage, cost_usd, terminal_message_id, .. } => Some((usage, cost_usd, terminal_message_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].0.input_tokens, 4);
+        assert_eq!(completed[0].0.output_tokens, 6);
+        assert!((completed[0].1.unwrap_or_default() - 0.3).abs() < f64::EPSILON);
+        assert_eq!(*completed[0].2, Some(message_ids[2]));
+        assert!(live.turn.lock().await.is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

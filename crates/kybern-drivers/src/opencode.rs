@@ -643,8 +643,12 @@ impl OpencodeSession {
                     st.parts.get(part_id).map(|i| (i.kind.clone(), i.message_id.clone()))
                 };
                 match info.as_ref().map(|(k, m)| (k.as_str(), m.clone())) {
-                    Some(("text", message_id)) => self.emit(DriverEvent::TextDelta { message_id, delta: delta.to_string() }).await,
-                    Some(("reasoning", message_id)) => self.emit(DriverEvent::ThinkingDelta { message_id, delta: delta.to_string() }).await,
+                    Some(("text", message_id)) => {
+                        self.emit(DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta: delta.to_string() }).await
+                    }
+                    Some(("reasoning", message_id)) => {
+                        self.emit(DriverEvent::ThinkingDelta { message_id, origin: EventOrigin::Root, delta: delta.to_string() }).await
+                    }
                     _ => {}
                 }
             }
@@ -874,7 +878,7 @@ impl OpencodeSession {
                 let synthetic = part.get("synthetic").and_then(|b| b.as_bool()).unwrap_or(false);
                 drop(st);
                 if finished && !synthetic && !text.is_empty() {
-                    self.emit(DriverEvent::MessageCompleted { message_id, text, thinking: None }).await;
+                    self.emit(DriverEvent::MessageCompleted { message_id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
             }
             "reasoning" => {}

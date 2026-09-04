@@ -65,6 +65,14 @@ provider may still mutate the working tree. On daemon recovery, tasks left
 active in the event log become `interrupted`; Kybern does not pretend it still
 owns an unrecovered process or child session.
 
+Claude Code can emit a successful foreground `result` while one of its native
+background agents is still active, then resume the same response after an
+internal task notification. Kybern treats that first result as provisional:
+the parent turn stays active, accounting is accumulated, and the next root
+message starts a new ordinal within the same turn. Only the later result may
+append `TurnCompleted`. Background processes and monitors do not hold this
+boundary because they can intentionally outlive the response.
+
 ### Turn startup contract
 
 The startup path is shared by every harness: reuse or spawn its `AgentSession`,
@@ -123,13 +131,13 @@ actionable failure message.
 ## Reference implementations
 
 This contract was checked against two active desktop-agent implementations on
-2026-09-03:
+2026-09-05:
 
 - [Synara at `562c5fe`](https://github.com/Emanuele-web04/synara/tree/562c5fea77cff1dacb29d5e6216ed94a05f1b6a1)
   models Claude tasks as first-class provider runtime events, offers targeted
   stop and background controls, and keeps a compact task card next to the
   conversation. Kybern follows its capability-gated control boundary.
-- [T3 Code at `fff33f9`](https://github.com/pingdotgg/t3code/tree/fff33f9e851912363c5b1f3ac65598be35eb5f0d)
+- [T3 Code at `7839140`](https://github.com/pingdotgg/t3code/tree/7839140e5e93d3f401d7eb45b86cf1a234eb3609)
   persists task start, progress, and completion events and renders a dedicated
   Agents panel with stable rows and tolerant client-side folding. Kybern follows
   its stable-roster and replay approach while adding background-process control.

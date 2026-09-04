@@ -15,8 +15,7 @@ import { radius, space, type as t, useTheme } from "@/ui/theme";
 
 type Row =
   | { key: string; kind: "entry"; entry: TranscriptEntry }
-  | { key: string; kind: "approval"; approval: ApprovalRequest }
-  | { key: string; kind: "notice"; level: "info" | "warning" | "error"; text: string };
+  | { key: string; kind: "approval"; approval: ApprovalRequest };
 
 export default function ThreadScreen() {
   const th = useTheme();
@@ -80,9 +79,8 @@ export default function ThreadScreen() {
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = state.entries.map((entry, i) => ({ key: entryKey(entry, i), kind: "entry", entry }));
     for (const a of state.pendingApprovals) out.push({ key: `approval:${a.id}`, kind: "approval", approval: a });
-    for (const n of state.notices.slice(-3)) if (n.level !== "info") out.push({ key: `notice:${n.id}`, kind: "notice", level: n.level, text: n.text });
     return out;
-  }, [state.entries, state.pendingApprovals, state.notices]);
+  }, [state.entries, state.pendingApprovals]);
 
   const respond = useCallback(
     async (approval: ApprovalRequest, decision: ApprovalDecision) => {
@@ -168,8 +166,16 @@ function entryKey(e: TranscriptEntry, i: number): string {
       return `assistant:${e.id}#${e.segment ?? 0}`;
     case "tool_call":
       return `tool:${e.call.id}`;
+    case "runtime_task":
+      return `task:${e.task.id}`;
+    case "approval":
+      return `approval-history:${e.approval.id}`;
+    case "notice":
+      return `notice:${e.seq}`;
+    case "reverted":
+      return `reverted:${e.seq}`;
     case "turn_summary":
-      return `summary:${e.turn_id}:${i}`;
+      return `summary:${e.turn_id}`;
     default:
       return `row:${i}`;
   }
@@ -188,12 +194,6 @@ const RowView = React.memo(function RowView({
       return (
         <View style={styles.block}>
           <ApprovalCard approval={row.approval} onRespond={(d) => onRespond(row.approval, d)} />
-        </View>
-      );
-    case "notice":
-      return (
-        <View style={styles.block}>
-          <Caption color={row.level === "error" ? th.failed : th.waiting}>{row.text}</Caption>
         </View>
       );
     case "entry":
@@ -237,6 +237,39 @@ function EntryView({ entry }: { entry: TranscriptEntry }) {
       return (
         <View style={styles.blockTight}>
           <ToolRow entry={entry} />
+        </View>
+      );
+    case "runtime_task": {
+      const active = ["pending", "running", "waiting", "stopping"].includes(entry.task.status);
+      const noun = entry.task.kind === "agent" ? "Agent" : entry.task.kind === "process" ? "Process" : "Monitor";
+      const status = entry.task.status === "pending" ? "starting" : entry.task.status === "running" ? "running" : entry.task.status;
+      return (
+        <View style={styles.blockTight}>
+          <Caption color={entry.task.status === "failed" ? th.failed : active ? th.waiting : th.textTertiary}>
+            {noun} {status} · {entry.task.title}
+          </Caption>
+        </View>
+      );
+    }
+    case "approval":
+      if (!entry.decision) return null;
+      return (
+        <View style={styles.blockTight}>
+          <Caption color={th.textTertiary}>
+            {entry.decision.decision === "deny" ? "Declined" : "Approved"} · {entry.approval.summary || entry.approval.tool_name}
+          </Caption>
+        </View>
+      );
+    case "notice":
+      return (
+        <View style={styles.blockTight}>
+          <Caption color={entry.level === "error" ? th.failed : entry.level === "warning" ? th.waiting : th.textTertiary}>{entry.text}</Caption>
+        </View>
+      );
+    case "reverted":
+      return (
+        <View style={styles.blockTight}>
+          <Caption color={th.textTertiary}>Reverted to before this turn</Caption>
         </View>
       );
     case "turn_summary":
