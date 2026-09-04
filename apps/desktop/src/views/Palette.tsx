@@ -11,7 +11,7 @@ import { Command, CommandCollection, CommandDialog, CommandDialogPopup, CommandE
 import { Kbd, KbdGroup } from "@/components/synara/kbd"
 import { AutocompleteItem } from "@/components/synara/autocomplete"
 import { mod, relativeTime } from "@/lib/format"
-import { FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SunIcon } from "@/lib/synara/icons"
+import { FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
 import { newThread } from "@/state/nav"
 import { loadThread } from "@/state/rpc"
@@ -39,6 +39,7 @@ export function Palette() {
   const set = useStore((s) => s.set)
   const threads = useStore(useShallow(selectRecentThreads))
   const projects = useStore((s) => s.projects)
+  const selected = useStore((s) => s.selected)
   const { theme, setTheme } = useTheme()
   const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
   const close = () => set({ paletteOpen: false })
@@ -73,6 +74,24 @@ export function Palette() {
         ),
         run: () => set((s) => ({ rightOpen: !s.rightOpen })),
       },
+      ...(selected.kind === "thread"
+        ? [
+            {
+              id: "split",
+              label: "Split right",
+              keywords: "split pane thread column",
+              group: "Suggested" as const,
+              icon: <SquareSplitVertical className="size-[15px]" />,
+              meta: (
+                <KbdGroup className="shrink-0">
+                  <Kbd>{mod}</Kbd>
+                  <Kbd>\</Kbd>
+                </KbdGroup>
+              ),
+              run: () => useStore.getState().splitFocusedPane("horizontal"),
+            },
+          ]
+        : []),
       {
         id: "settings",
         label: "Settings",
@@ -130,7 +149,7 @@ export function Palette() {
       { value: "Projects", items: projectItems },
       { value: "Themes", items: themes },
     ].filter((g) => g.items.length > 0)
-  }, [threads, projects, dark, set, setTheme])
+  }, [threads, projects, selected, dark, set, setTheme])
 
   return (
     <CommandDialog open={open} onOpenChange={(o) => set({ paletteOpen: o })}>

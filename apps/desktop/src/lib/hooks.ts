@@ -70,7 +70,10 @@ export function useHotkey(combo: string, handler: Handler, opts: { enabled?: boo
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
       if (wantMod !== mod || wantShift !== e.shiftKey || wantAlt !== e.altKey) return
-      if (e.key.toLowerCase() !== key) return
+      // Shift changes `event.key` for punctuation (for example `\` becomes
+      // `|`), while `event.code` keeps the physical shortcut key stable.
+      const keyMatches = e.key.toLowerCase() === key || (key === "\\" && e.code === "Backslash")
+      if (!keyMatches) return
       if (!opts.allowInInput) {
         const t = e.target as HTMLElement | null
         if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) && !wantMod) return

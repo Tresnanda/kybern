@@ -258,16 +258,18 @@ export function EnvironmentToggle() {
 export function SurfaceHeader({
   minimal,
   environment,
+  showSidebarControls = true,
   children,
   trailing,
 }: {
   minimal?: boolean
   environment?: boolean
+  showSidebarControls?: boolean
   children?: ReactNode
   trailing?: ReactNode
 }) {
   const { open } = useSidebar()
-  const gutter = !open && platform() === "macos"
+  const gutter = showSidebarControls && !open && platform() === "macos"
   return (
     <div
       data-tauri-drag-region="deep"
@@ -285,7 +287,7 @@ export function SurfaceHeader({
             !open ? "gap-4" : "gap-2 sm:gap-3",
           )}
         >
-          <SidebarHeaderNavigationControls />
+          {showSidebarControls && <SidebarHeaderNavigationControls />}
           {!minimal && <div className="flex min-w-0 flex-1 items-center gap-2">{children}</div>}
         </div>
         <div

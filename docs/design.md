@@ -25,12 +25,20 @@ UI reuses those before inventing anything.
    ("Reading `RTK.md`" while live, "Read `RTK.md`" when settled) and expand
    in place. A concrete live tool row replaces the generic "Thinking" fallback.
    "Edited N files" cards unfold their diffs inline. A tick rail on the left
-   navigates messages.
+   navigates messages. Threads can split left/right or top/bottom into a
+   persisted binary layout, capped at a 2×2 grid. `⌘\` opens a split to the
+   right and `⌘⇧\` opens one below; sidebar threads can also be dragged onto a
+   pane edge. The focused pane owns keyboard actions, approvals, and floating
+   controls. The message-navigation rail stays in the single-thread reading
+   view and yields that space in constrained panes. Closing a pane collapses
+   its parent into the remaining sibling.
 3. **Composer** floats over the transcript on a frosted 1.2rem squircle:
    14px editor, then a footer with +, permission mode (Full access in
    orange), the model/effort picker and the ink-filled send circle. Queued
    follow-ups and the approval card stack above it as fused panels. The
-   transcript and composer share one gutter so their edges line up.
+   transcript and composer share one gutter so their edges line up. Inside a
+   split pane that gutter matches the header at 12/20px, the radius tightens
+   to 0.875rem and secondary footer labels collapse before controls overflow.
 4. **Right dock** (42% of the window, min 416px, resizable): surface chips for
    Diff, Terminal and Explorer. Diff renders per-file cards with line numbers.
    Repository-scale diffs load stats first, render files in bounded batches,
@@ -64,7 +72,8 @@ shows through the sidebar.
 - Streaming text appears as it arrives; "Thinking" shimmers.
 - Disclosures animate grid rows over 220ms ease-out; menus scale from their
   trigger; dialogs scale from 0.98.
-- Sent messages rise 3px over 180ms. Panes resize 1:1 with the drag.
+- Sent messages rise 3px over 180ms. Split panes resize 1:1 with the drag,
+  without transitional lag; only the focused-pane outline eases in.
 - Buttons scale to 0.97 on press; the send circle grows to 1.05 on hover.
 
 ## Copy

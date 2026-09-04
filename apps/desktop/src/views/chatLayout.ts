@@ -1,8 +1,8 @@
 /**
  * Transcript, composer and the draft landing share this gutter so their
- * centered 46rem columns line up edge to edge, like Codex. It is wide enough
- * on the left for the message rail (ticks end 36px in) without insetting one
- * side only.
+ * centered 46rem columns line up edge to edge. A split pane overrides the
+ * variable with Synara's compact 12/20px surface gutter; the single-thread
+ * view keeps the wider reading gutter needed by the message rail.
  */
-export const CHAT_COLUMN_GUTTER = "px-14"
+export const CHAT_COLUMN_GUTTER = "px-[var(--thread-chat-gutter,3.5rem)]"
 export const CHAT_COLUMN_GUTTER_PX = 56

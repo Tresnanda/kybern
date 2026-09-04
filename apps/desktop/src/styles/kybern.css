@@ -34,6 +34,41 @@ body {
   -webkit-user-select: text;
 }
 
+/* Split chat uses Synara's compact surface gutter. The transcript, composer,
+   and header now share the same 12/20px edge instead of retaining the roomy
+   single-thread reading inset. */
+.split-thread-pane {
+  --thread-chat-gutter: 0.75rem;
+}
+
+/* A constrained composer needs quieter geometry than the wide reading view. */
+.split-chat-composer {
+  --composer-radius: 0.875rem;
+}
+
+@media (min-width: 640px) {
+  .split-thread-pane {
+    --thread-chat-gutter: 1.25rem;
+  }
+}
+
+/* A split pane keeps its focus cue inside the surface so it never changes layout. */
+.split-thread-pane::after {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  content: "";
+  box-shadow: inset 0 0 0 1px transparent;
+  transition-property: box-shadow;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
+}
+.split-thread-pane[data-focused="true"]::after {
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-border-focus) 28%, transparent);
+}
+
 /* Text states swap: blurred rise between two labels in one slot. */
 .t-text-swap {
   display: inline-grid;
@@ -125,5 +160,8 @@ body {
   }
   .runtime-activity-detail-enter {
     animation: none;
+  }
+  .split-thread-pane::after {
+    transition: none;
   }
 }

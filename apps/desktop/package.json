@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test toolActivity.test.mjs transcript.test.mjs performance.test.mjs",
+    "test": "node --experimental-strip-types --test toolActivity.test.mjs transcript.test.mjs performance.test.mjs splitView.test.mjs",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",

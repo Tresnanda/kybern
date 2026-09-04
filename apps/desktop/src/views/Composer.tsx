@@ -89,6 +89,8 @@ export interface ComposerProps {
   hideFooter?: boolean
   autoFocus?: boolean
   className?: string
+  /** Adapts the footer and surface geometry to a constrained split pane. */
+  surfaceMode?: "single" | "split"
   /** 1..4 typed into an empty composer. Return true when handled. */
   onDigit?: (n: number) => boolean
 }
@@ -203,6 +205,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     hideFooter,
     autoFocus,
     className,
+    surfaceMode = "single",
     onDigit,
   } = props
   const [text, setText] = useState("")
@@ -524,7 +527,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }
 
   return (
-    <ComposerColumnFrame className={className}>
+    <ComposerColumnFrame className={cn(className, surfaceMode === "split" && "split-chat-composer")}>
       <div>{above}</div>
       <div
         className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, menuOpen && "overflow-visible")}
@@ -671,8 +674,21 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           </div>
 
           {!hideFooter && (
-            <div data-chat-composer-footer className={cn("@container", COMPOSER_FOOTER_ROW_CLASS_NAME, "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0")}>
-              <div data-chat-composer-leading className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] sm:min-w-max sm:overflow-visible [&::-webkit-scrollbar]:hidden">
+            <div
+              data-chat-composer-footer
+              className={cn(
+                "@container",
+                COMPOSER_FOOTER_ROW_CLASS_NAME,
+                surfaceMode === "split" ? "min-w-0 flex-nowrap gap-1" : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+              )}
+            >
+              <div
+                data-chat-composer-leading
+                className={cn(
+                  "flex min-w-0 items-center gap-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                  surfaceMode === "split" ? "shrink-0 overflow-visible" : "flex-1 overflow-x-auto sm:min-w-max sm:overflow-visible",
+                )}
+              >
                 <input
                   ref={fileInput}
                   type="file"
@@ -715,7 +731,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     >
                       <span className="inline-flex items-center gap-1.5">
                         <span className="inline-flex size-4 shrink-0 items-center justify-center [&>*]:size-4 [&>*]:shrink-0">{modeInfo.icon}</span>
-                        <span className="truncate leading-none @max-[480px]:sr-only">{modeInfo.label}</span>
+                        <span className={cn("truncate leading-none @max-[480px]:sr-only", surfaceMode === "split" && "sr-only")}>{modeInfo.label}</span>
                       </span>
                     </MenuTrigger>
                     <ComposerPickerMenuPopup align="start" side="top" className="runtime-mode-menu w-[26rem] min-w-[26rem]">
@@ -748,7 +764,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 </Menu>
               </div>
 
-              <div data-chat-composer-actions="right" className="flex shrink-0 items-center gap-1">
+              <div
+                data-chat-composer-actions="right"
+                className={cn("flex items-center gap-1", surfaceMode === "split" ? "min-w-0 flex-1 justify-end" : "shrink-0")}
+              >
                 {provider && (
                   <Menu onOpenChange={(open) => open && canReloadModels && void reloadModels()}>
                     <Tooltip>
@@ -761,7 +780,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 size="sm"
                                 variant="chrome"
                                 aria-label="Change model and reasoning"
-                                className={cn(COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME, "disabled:opacity-100", COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME, COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME)}
+                                title={`${modelLabel ?? PROVIDER_LABEL[provider.kind]}${effortLabel ? `, ${effortLabel} effort` : ""}`}
+                                className={cn(
+                                  COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
+                                  "disabled:opacity-100",
+                                  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+                                  COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
+                                  surfaceMode === "split" && "max-w-full shrink overflow-hidden px-2 sm:px-2",
+                                )}
                               />
                             }
                           />
@@ -771,7 +797,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           <ProviderMark kind={provider.kind} size={14} className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100" />
                           <span className="min-w-0 truncate leading-none text-[var(--color-text-foreground)]">{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
                           {modelLabel && effortLabel && (
-                            <span className={cn("shrink-0 capitalize leading-none", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>{effortLabel}</span>
+                            <span
+                              className={cn(
+                                "shrink-0 capitalize leading-none",
+                                COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                                surfaceMode === "split" && "@max-[620px]:hidden",
+                              )}
+                            >
+                              {effortLabel}
+                            </span>
                           )}
                           {(canPickModel || canReloadModels || canPickProvider) && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
                         </span>
@@ -854,7 +888,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           type="button"
                           variant="prominent"
                           size="icon-xs"
-                          className={COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME}
+                          className={cn(COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME, surfaceMode === "split" && "!size-7 sm:!size-7")}
                           aria-label="Stop generation"
                           title="Stop the current response. On Mac, press Ctrl+C to interrupt."
                           onClick={onStop}
@@ -874,7 +908,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           type="button"
                           variant="prominent"
                           size="icon-xs"
-                          className={COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME}
+                          className={cn(COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME, surfaceMode === "split" && "!size-7 sm:!size-7")}
                           aria-label={sending ? "Sending" : "Send message"}
                           disabled={!canSend}
                           onClick={() => void submit()}

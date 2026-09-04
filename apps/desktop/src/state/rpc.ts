@@ -25,7 +25,8 @@ import {
 } from "@/protocol"
 
 import { applyEvent, seedFromGet } from "./transcript"
-import { diffKey, mergeRuntimeTasks, summarizeRuntimeTasks, useStore } from "./store"
+import { collectSplitThreadIds } from "./splitView"
+import { diffKey, isThreadVisible, mergeRuntimeTasks, summarizeRuntimeTasks, useStore } from "./store"
 
 let client: KybernClient | null = null
 let httpBase = ""
@@ -86,9 +87,15 @@ async function loadAll(): Promise<void> {
       threads: Object.fromEntries(threads.threads.map((t) => [t.id, t])),
       threadActivity: Object.fromEntries((threads.activity ?? []).map((summary) => [summary.thread_id, summary])),
     })
-    const sel = useStore.getState().selected
-    if (sel.kind === "thread") void loadThread(sel.id)
-    else if (sel.kind === "none") {
+    const activeThreadIds = threads.threads.filter((thread) => thread.status !== "archived").map((thread) => thread.id)
+    useStore.getState().reconcileSplitThreads(activeThreadIds)
+
+    const next = useStore.getState()
+    const visibleThreadIds = new Set(collectSplitThreadIds(next.splitView))
+    if (next.selected.kind === "thread") visibleThreadIds.add(next.selected.id)
+    for (const threadId of visibleThreadIds) void loadThread(threadId)
+
+    if (visibleThreadIds.size === 0 && next.selected.kind === "none") {
       const first = projects.projects[0]
       if (first) useStore.getState().selectDraft(first.id)
     }
@@ -143,7 +150,7 @@ function onEvent(ev: ThreadEvent) {
     void loadDiff(ev.thread_id, ev.turn_id ?? undefined)
     void loadDiff(ev.thread_id)
     const current = useStore.getState()
-    const visible = current.selected.kind === "thread" && current.selected.id === ev.thread_id
+    const visible = isThreadVisible(current, ev.thread_id)
     if (visible && (current.envOpen || (current.rightOpen && current.rightTab === "changes"))) void loadGitStatus(ev.thread_id)
     void announce(ev)
     void flushQueue(ev.thread_id)
@@ -155,7 +162,7 @@ async function announce(ev: ThreadEvent) {
   const st = useStore.getState()
   if (st.settings && !st.settings.notifications) return
   const focused = await isWindowFocused()
-  const viewing = st.selected.kind === "thread" && st.selected.id === ev.thread_id
+  const viewing = isThreadVisible(st, ev.thread_id)
   if (focused && viewing) return
   const title = st.threads[ev.thread_id]?.title ?? "Thread"
   if (ev.kind === "approval_requested") await notify(title, `Needs approval: ${ev.approval.summary}`)
@@ -355,9 +362,9 @@ export async function archiveThread(threadId: ThreadId) {
     const threads = { ...st.threads }
     const t = threads[threadId]
     if (t) threads[threadId] = { ...t, status: "archived" }
-    const selected = st.selected.kind === "thread" && st.selected.id === threadId ? ({ kind: "none" } as const) : st.selected
-    return { threads, selected }
+    return { threads }
   })
+  useStore.getState().removeThreadFromSplit(threadId)
 }
 
 export async function revertTo(threadId: ThreadId, turnId: TurnId) {

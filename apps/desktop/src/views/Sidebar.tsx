@@ -9,6 +9,7 @@ import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
 import { ProviderMark } from "@/components/kybern/bits"
+import { beginThreadDrag } from "@/components/kybern/chatPaneDrag"
 import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
 import { SidebarIconButton } from "@/components/synara/SidebarIconButton"
 import { ThreadRunningSpinner } from "@/components/synara/ThreadRunningSpinner"
@@ -37,6 +38,8 @@ import {
   PinIcon,
   SearchIcon,
   SettingsIcon,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
   WorktreeIcon,
 } from "@/lib/synara/icons"
 import { disclosureContentClassName, disclosureShellClassName } from "@/lib/synara/disclosureMotion"
@@ -54,6 +57,7 @@ import { cn } from "@/lib/utils"
 import type { Project, Thread, ThreadActivityState } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
+import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
 import { selectThreadsForProject, useStore } from "@/state/store"
 
 import { SidebarLeadingControls } from "./chrome"
@@ -144,7 +148,7 @@ export function ThreadSidebar() {
           <SidebarGroup className="px-1.5 pt-1 pb-1.5">
             <SidebarMenu className="gap-0.5">
               <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
-              <PrimaryAction icon={<IoIosGitCompare className="size-[15px] shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => set({ selected: { kind: "pulls" } })} />
+              <PrimaryAction icon={<IoIosGitCompare className="size-[15px] shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
               <PrimaryAction icon={<CentralIcon name="analytics" className="size-[15px] shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
             </SidebarMenu>
           </SidebarGroup>
@@ -365,6 +369,7 @@ function StatusGlyph({ status, activity }: { status: Thread["status"]; activity?
 
 function ThreadRow({ thread }: { thread: Thread }) {
   const selected = useStore((s) => s.selected.kind === "thread" && s.selected.id === thread.id)
+  const splitView = useStore((s) => s.splitView)
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
@@ -380,6 +385,15 @@ function ThreadRow({ thread }: { thread: Thread }) {
     else setTitle(thread.title)
   }
   const hasGlyph = thread.status !== "idle" || !!activity
+  const inSplit = !!splitView && !!findThreadPaneByThreadId(splitView.root, thread.id)
+  const focusedPane = splitView ? resolveFocusedThreadPane(splitView) : null
+  const canOpenRight =
+    !inSplit && (!splitView || !focusedPane?.threadId || canSplitPane(splitView.root, focusedPane.id, "horizontal"))
+  const canOpenBelow =
+    !inSplit && (!splitView || !focusedPane?.threadId || canSplitPane(splitView.root, focusedPane.id, "vertical"))
+  const openInSplit = (direction: "horizontal" | "vertical") => {
+    if (useStore.getState().openThreadInSplit(thread.id, direction)) void loadThread(thread.id)
+  }
 
   return (
     <ContextMenu>
@@ -387,15 +401,18 @@ function ThreadRow({ thread }: { thread: Thread }) {
         <div
           role="button"
           tabIndex={0}
+          draggable={!renaming}
           onClick={open}
           onKeyDown={(e) => e.key === "Enter" && open()}
+          onDragStart={(event) => beginThreadDrag(event, thread.id)}
           data-active={selected || undefined}
+          aria-current={selected ? "page" : undefined}
           className={cn(
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
             "flex min-w-0 items-center gap-2 overflow-hidden rounded-md pl-8 text-sidebar-foreground outline-hidden",
             "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]",
             hasGlyph || thread.pinned ? "pr-[1.75rem]" : "pr-2",
-            selected ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+            selected ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, inSplit && "bg-sidebar-accent/55"),
           )}
         >
           <span className="relative inline-flex size-3 shrink-0 items-center justify-center">
@@ -419,7 +436,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
                 className="w-full rounded bg-background px-1 text-[length:var(--app-font-size-ui,12px)] outline-none ring-1 ring-ring"
               />
             ) : (
-              <span className={cn("min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")}>{thread.title || "Untitled"}</span>
+              <span title={thread.title || "Untitled"} className={cn("min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")}>{thread.title || "Untitled"}</span>
             )}
             {thread.status === "awaiting-approval" && <span className="shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-300/90">Pending</span>}
           </div>
@@ -481,6 +498,15 @@ function ThreadRow({ thread }: { thread: Thread }) {
           </ContextMenuItem>
           <ContextMenuItem onClick={() => useStore.getState().set({ handoffThread: thread.id })}>
             <HandoffIcon /> Hand off to another agent
+          </ContextMenuItem>
+        </ContextMenuGroup>
+        <ContextMenuSeparator />
+        <ContextMenuGroup>
+          <ContextMenuItem disabled={!canOpenRight} onClick={() => openInSplit("horizontal")}>
+            <SquareSplitVertical /> Open to the right
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!canOpenBelow} onClick={() => openInSplit("vertical")}>
+            <SquareSplitHorizontal /> Open below
           </ContextMenuItem>
         </ContextMenuGroup>
         <ContextMenuSeparator />

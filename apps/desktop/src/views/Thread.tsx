@@ -12,8 +12,8 @@ import { ComposerChoiceRow } from "@/components/synara/chat/ComposerChoiceRow"
 import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
 import { ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/synara/chat/ComposerStackedPanel"
 import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/synara/chat/ComposerStackedPanelContent"
-import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
-import { PROVIDER_LABEL, basename, toolLine } from "@/lib/format"
+import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/synara/menu"
+import { PROVIDER_LABEL, basename, mod, toolLine } from "@/lib/format"
 import { activeTaskSummary } from "@/lib/runtimeActivity"
 import {
   ArchiveIcon,
@@ -24,6 +24,7 @@ import {
   GitBranchIcon,
   GitPullRequestIcon,
   HandoffIcon,
+  Maximize2,
   NewThreadIcon,
   PaperclipIcon,
   PencilIcon,
@@ -32,9 +33,12 @@ import {
   SettingsIcon,
   SteerIcon,
   StopIcon,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
   TerminalIcon,
   Trash2,
   WorkflowIcon,
+  XIcon,
 } from "@/lib/synara/icons"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/synara/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
@@ -42,6 +46,7 @@ import { cn } from "@/lib/utils"
 import type { ApprovalRequest, JsonValue, RuntimeTask, ThreadId, UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, updateThread } from "@/state/rpc"
+import { canSplitPane, type PaneId } from "@/state/splitView"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
 
 import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/synara/chat/composerPickerStyles"
@@ -55,7 +60,17 @@ import { ChatHeaderButton, ChatHeaderIconButton, SurfaceHeader } from "./chrome"
 const EMPTY: never[] = []
 const EMPTY_TASKS: RuntimeTask[] = []
 
-export function ThreadView({ threadId }: { threadId: ThreadId }) {
+export function ThreadView({
+  threadId,
+  splitPaneId,
+  isFocused = true,
+  showSidebarControls = true,
+}: {
+  threadId: ThreadId
+  splitPaneId?: PaneId
+  isFocused?: boolean
+  showSidebarControls?: boolean
+}) {
   const thread = useStore((s) => s.threads[threadId])
   const loaded = useStore((s) => s.transcripts[threadId]?.loaded)
   const pending = useStore((s) => s.transcripts[threadId]?.pendingApprovals ?? EMPTY)
@@ -64,7 +79,8 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
   const activeTasks = useMemo(() => runtimeTasks.filter(isRuntimeTaskActive), [runtimeTasks])
   const providers = useStore((s) => s.providers)
   const set = useStore((s) => s.set)
-  const envOpen = useStore((s) => s.envOpen)
+  const requestedEnvOpen = useStore((s) => s.envOpen)
+  const envOpen = requestedEnvOpen && isFocused
   const composer = useRef<ComposerHandle>(null)
   const overlay = useRef<HTMLDivElement>(null)
   const [overlayHeight, setOverlayHeight] = useState(120)
@@ -74,8 +90,8 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
   }, [threadId, loaded])
 
   useEffect(() => {
-    composer.current?.focus()
-  }, [threadId])
+    if (isFocused) composer.current?.focus()
+  }, [threadId, isFocused])
 
   // The composer floats over the transcript; keep the scroll inset in sync with its height.
   useLayoutEffect(() => {
@@ -101,6 +117,7 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
   }
 
   useEffect(() => {
+    if (!isFocused) return
     const onKey = (e: KeyboardEvent) => {
       if (!["1", "2", "3", "4"].includes(e.key) || e.metaKey || e.ctrlKey || e.altKey) return
       const t = e.target as HTMLElement | null
@@ -110,7 +127,7 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [approval?.id])
+  }, [approval?.id, isFocused])
 
   const commands = useMemo<SlashCommand[]>(
     () => [
@@ -152,17 +169,21 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
   const placeholder = approval ? "Resolve this approval request to continue" : running ? "Ask for follow-up changes" : undefined
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <Header threadId={threadId} />
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+      <Header threadId={threadId} splitPaneId={splitPaneId} showSidebarControls={showSidebarControls} />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div className={cn("flex min-h-0 flex-1 flex-col", ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)} style={{ paddingRight: envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX : 0 }}>
-          <Transcript threadId={threadId} bottomInset={overlayHeight} />
+          <Transcript threadId={threadId} bottomInset={overlayHeight} surfaceMode={splitPaneId ? "split" : "single"} />
         </div>
-        <EnvironmentPanel threadId={threadId} />
+        <EnvironmentPanel threadId={threadId} open={envOpen} />
         <div
           ref={overlay}
           className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-10 pb-3 sm:pb-4", CHAT_COLUMN_GUTTER, ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)}
-          style={{ paddingRight: envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX + CHAT_COLUMN_GUTTER_PX : undefined }}
+          style={{
+            paddingRight: envOpen
+              ? `calc(${ENVIRONMENT_DOCKED_CONTENT_INSET_PX}px + var(--thread-chat-gutter, ${CHAT_COLUMN_GUTTER_PX}px))`
+              : undefined,
+          }}
         >
           <div className="pointer-events-auto">
             <Composer
@@ -178,6 +199,7 @@ export function ThreadView({ threadId }: { threadId: ThreadId }) {
               providers={providers}
               model={thread.model}
               effort={thread.effort}
+              surfaceMode={splitPaneId ? "split" : "single"}
               onModelChange={(model, effort) => updateThread(threadId, { model, effort }).catch((e) => toast.error("Unable to change model", { description: errorText(e) }))}
               projectId={thread.project_id}
               commands={commands}
@@ -328,9 +350,10 @@ export function ApprovalPanel({ approval, count, onChoose }: { approval: Approva
   )
 }
 
-function Header({ threadId }: { threadId: ThreadId }) {
+function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: ThreadId; splitPaneId?: PaneId; showSidebarControls: boolean }) {
   const thread = useStore((s) => s.threads[threadId])
   const providers = useStore((s) => s.providers)
+  const splitView = useStore((s) => s.splitView)
   const set = useStore((s) => s.set)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState("")
@@ -342,10 +365,18 @@ function Header({ threadId }: { threadId: ThreadId }) {
     if (next && next !== thread.title) updateThread(threadId, { title: next }).catch((e) => toast.error("Unable to rename", { description: errorText(e) }))
   }
   const others = providers.filter((p) => p.available && p.kind !== thread.provider.kind)
+  const splitMode = !!splitPaneId && !!splitView
+  const canSplitRight = !splitView || !splitPaneId || canSplitPane(splitView.root, splitPaneId, "horizontal")
+  const canSplitDown = !splitView || !splitPaneId || canSplitPane(splitView.root, splitPaneId, "vertical")
+  const split = (direction: "horizontal" | "vertical") => {
+    if (splitPaneId) useStore.getState().focusSplitPane(splitPaneId)
+    useStore.getState().splitFocusedPane(direction)
+  }
 
   return (
     <SurfaceHeader
       environment
+      showSidebarControls={showSidebarControls}
       trailing={
         <>
           {others.length > 0 && (
@@ -371,6 +402,27 @@ function Header({ threadId }: { threadId: ThreadId }) {
               <EllipsisIcon className="size-3.5" />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
+              <MenuGroup>
+                <MenuItem disabled={!canSplitRight} onClick={() => split("horizontal")}>
+                  <SquareSplitVertical /> Split right
+                  {!splitMode && <MenuShortcut>{mod}\</MenuShortcut>}
+                </MenuItem>
+                <MenuItem disabled={!canSplitDown} onClick={() => split("vertical")}>
+                  <SquareSplitHorizontal /> Split down
+                  {!splitMode && <MenuShortcut>{mod}⇧\</MenuShortcut>}
+                </MenuItem>
+                {splitMode && (
+                  <>
+                    <MenuItem onClick={() => splitPaneId && useStore.getState().maximizeSplitPane(splitPaneId)}>
+                      <Maximize2 /> Expand this pane
+                    </MenuItem>
+                    <MenuItem onClick={() => splitPaneId && useStore.getState().closeSplitPane(splitPaneId)}>
+                      <XIcon /> Close pane
+                    </MenuItem>
+                  </>
+                )}
+              </MenuGroup>
+              <MenuSeparator />
               <MenuGroup>
                 <MenuItem
                   onClick={() => {
@@ -417,6 +469,7 @@ function Header({ threadId }: { threadId: ThreadId }) {
             ) : (
               <h2
                 data-tauri-drag-region="false"
+                title={thread.title || "Untitled"}
                 onDoubleClick={() => {
                   setTitle(thread.title)
                   setRenaming(true)

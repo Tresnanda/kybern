@@ -21,6 +21,26 @@ import type {
 } from "@/protocol"
 
 import { emptyThreadState, type ThreadState } from "./transcript"
+import {
+  canSplitPane,
+  collectSplitThreadIds,
+  createSplitView,
+  findThreadPane,
+  findThreadPaneByThreadId,
+  persistSplitView,
+  readPersistedSplitView,
+  reconcileSplitView,
+  removeThreadPane,
+  replacePaneThread,
+  resolveDefaultFocusPaneId,
+  resolveFocusedThreadPane,
+  setSplitNodeRatio,
+  splitThreadPane,
+  type PaneId,
+  type SplitDirection,
+  type SplitSide,
+  type SplitView,
+} from "./splitView"
 
 export type Connection = { state: "connecting" } | { state: "open" } | { state: "reconnecting"; detail?: string } | { state: "failed"; detail: string }
 
@@ -63,6 +83,8 @@ export interface AppState {
   /** Shared git status snapshots so the dock and Environment panel do not duplicate `git`/`gh` work. */
   gitStatuses: Record<ThreadId, GitStatus>
   selected: { kind: "thread"; id: ThreadId } | { kind: "draft"; draft: Draft } | { kind: "pulls" } | { kind: "none" }
+  /** Persisted recursive pane tree for showing up to four chat threads together. */
+  splitView: SplitView | null
   sidebarOpen: boolean
   rightOpen: boolean
   rightTab: RightTab
@@ -93,6 +115,26 @@ export interface AppActions {
   updateTranscript: (id: ThreadId, f: (t: ThreadState) => ThreadState) => void
   selectThread: (id: ThreadId) => void
   selectDraft: (projectId: ProjectId) => void
+  selectPulls: () => void
+  splitFocusedPane: (
+    direction: SplitDirection,
+    threadId?: ThreadId,
+    side?: SplitSide
+  ) => boolean
+  openThreadInSplit: (threadId: ThreadId, direction: SplitDirection) => boolean
+  dropThreadOnPane: (
+    paneId: PaneId,
+    threadId: ThreadId,
+    direction: SplitDirection,
+    side: SplitSide
+  ) => boolean
+  focusSplitPane: (paneId: PaneId) => void
+  closeSplitPane: (paneId: PaneId) => boolean
+  maximizeSplitPane: (paneId: PaneId) => boolean
+  setSplitRatio: (splitNodeId: PaneId, ratio: number) => void
+  exitSplitView: () => void
+  removeThreadFromSplit: (threadId: ThreadId) => void
+  reconcileSplitThreads: (threadIds: readonly ThreadId[]) => void
   toggleWork: (turnId: TurnId) => void
   toggleProject: (id: ProjectId) => void
   enqueue: (threadId: ThreadId, message: UserMessage) => void
@@ -114,6 +156,7 @@ export const useStore = create<Store>()((set, get) => ({
   diffs: {},
   gitStatuses: {},
   selected: { kind: "none" },
+  splitView: readPersistedSplitView(),
   sidebarOpen: true,
   rightOpen: false,
   rightTab: "changes",
@@ -140,8 +183,262 @@ export const useStore = create<Store>()((set, get) => ({
       const threads = next.thread && next.thread !== prev.thread ? { ...s.threads, [id]: next.thread } : s.threads
       return { transcripts: { ...s.transcripts, [id]: next }, threads }
     }),
-  selectThread: (id) => set({ selected: { kind: "thread", id } }),
-  selectDraft: (projectId) => set({ selected: { kind: "draft", draft: { projectId } } }),
+  selectThread: (id) =>
+    set((state) => {
+      const splitView = state.splitView
+      if (!splitView) return { selected: { kind: "thread", id } }
+
+      const existing = findThreadPaneByThreadId(splitView.root, id)
+      const target = existing ?? resolveFocusedThreadPane(splitView)
+      if (!target) return { selected: { kind: "thread", id } }
+      const root = existing
+        ? splitView.root
+        : replacePaneThread(splitView.root, target.id, id)
+      const next = { root: root as SplitView["root"], focusedPaneId: target.id }
+      persistSplitView(next)
+      return { selected: { kind: "thread", id }, splitView: next }
+    }),
+  selectDraft: (projectId) => {
+    persistSplitView(null)
+    set({ selected: { kind: "draft", draft: { projectId } }, splitView: null })
+  },
+  selectPulls: () => {
+    persistSplitView(null)
+    set({ selected: { kind: "pulls" }, splitView: null })
+  },
+  splitFocusedPane: (direction, threadId, side = "second") => {
+    const state = get()
+    if (!state.splitView) {
+      if (state.selected.kind !== "thread") return false
+      const addedThreadId =
+        threadId === state.selected.id ? null : (threadId ?? null)
+      const splitView = createSplitView({
+        sourceThreadId: state.selected.id,
+        threadId: addedThreadId,
+        direction,
+        side,
+      })
+      persistSplitView(splitView)
+      set({
+        splitView,
+        selected: addedThreadId
+          ? { kind: "thread", id: addedThreadId }
+          : { kind: "none" },
+      })
+      return true
+    }
+
+    const splitView = state.splitView
+    if (threadId) {
+      const existing = findThreadPaneByThreadId(splitView.root, threadId)
+      if (existing) {
+        const next = { ...splitView, focusedPaneId: existing.id }
+        persistSplitView(next)
+        set({ splitView: next, selected: { kind: "thread", id: threadId } })
+        return true
+      }
+    }
+
+    const target = resolveFocusedThreadPane(splitView)
+    if (!target) return false
+    if (target.threadId === null && threadId) {
+      const next = {
+        root: replacePaneThread(
+          splitView.root,
+          target.id,
+          threadId
+        ) as SplitView["root"],
+        focusedPaneId: target.id,
+      }
+      persistSplitView(next)
+      set({ splitView: next, selected: { kind: "thread", id: threadId } })
+      return true
+    }
+    if (
+      target.threadId === null ||
+      !canSplitPane(splitView.root, target.id, direction)
+    )
+      return false
+
+    const result = splitThreadPane({
+      root: splitView.root,
+      targetPaneId: target.id,
+      direction,
+      threadId: threadId ?? null,
+      side,
+    })
+    if (!result || result.root.kind !== "split") return false
+    const next = { root: result.root, focusedPaneId: result.addedPaneId }
+    persistSplitView(next)
+    set({
+      splitView: next,
+      selected: threadId ? { kind: "thread", id: threadId } : { kind: "none" },
+    })
+    return true
+  },
+  openThreadInSplit: (threadId, direction) => {
+    const state = get()
+    if (state.splitView || state.selected.kind === "thread") {
+      return get().splitFocusedPane(direction, threadId)
+    }
+    const splitView = createSplitView({ sourceThreadId: threadId, direction })
+    persistSplitView(splitView)
+    set({ splitView, selected: { kind: "none" } })
+    return true
+  },
+  dropThreadOnPane: (paneId, threadId, direction, side) => {
+    const splitView = get().splitView
+    if (!splitView) return false
+    const existing = findThreadPaneByThreadId(splitView.root, threadId)
+    if (existing) {
+      const next = { ...splitView, focusedPaneId: existing.id }
+      persistSplitView(next)
+      set({ splitView: next, selected: { kind: "thread", id: threadId } })
+      return true
+    }
+    const target = findThreadPane(splitView.root, paneId)
+    if (!target) return false
+    if (!target.threadId) {
+      const next = {
+        root: replacePaneThread(
+          splitView.root,
+          paneId,
+          threadId
+        ) as SplitView["root"],
+        focusedPaneId: paneId,
+      }
+      persistSplitView(next)
+      set({ splitView: next, selected: { kind: "thread", id: threadId } })
+      return true
+    }
+    if (!canSplitPane(splitView.root, paneId, direction)) return false
+    const result = splitThreadPane({
+      root: splitView.root,
+      targetPaneId: paneId,
+      direction,
+      threadId,
+      side,
+    })
+    if (!result || result.root.kind !== "split") return false
+    const next = { root: result.root, focusedPaneId: result.addedPaneId }
+    persistSplitView(next)
+    set({ splitView: next, selected: { kind: "thread", id: threadId } })
+    return true
+  },
+  focusSplitPane: (paneId) => {
+    const splitView = get().splitView
+    if (!splitView || splitView.focusedPaneId === paneId) return
+    const pane = findThreadPane(splitView.root, paneId)
+    if (!pane) return
+    const next = { ...splitView, focusedPaneId: paneId }
+    persistSplitView(next)
+    set({
+      splitView: next,
+      selected: pane.threadId
+        ? { kind: "thread", id: pane.threadId }
+        : { kind: "none" },
+    })
+  },
+  closeSplitPane: (paneId) => {
+    const splitView = get().splitView
+    if (!splitView || !findThreadPane(splitView.root, paneId)) return false
+    const root = removeThreadPane(splitView.root, paneId)
+    if (!root) {
+      persistSplitView(null)
+      set({ splitView: null, selected: { kind: "none" } })
+      return true
+    }
+    if (root.kind === "leaf") {
+      persistSplitView(null)
+      set({
+        splitView: null,
+        selected: root.threadId
+          ? { kind: "thread", id: root.threadId }
+          : { kind: "none" },
+      })
+      return true
+    }
+
+    const previousFocus = findThreadPane(root, splitView.focusedPaneId)
+    const focusedPaneId = previousFocus
+      ? previousFocus.id
+      : resolveDefaultFocusPaneId(root)
+    const focused = findThreadPane(root, focusedPaneId)
+    const next = { root, focusedPaneId }
+    persistSplitView(next)
+    set({
+      splitView: next,
+      selected: focused?.threadId
+        ? { kind: "thread", id: focused.threadId }
+        : { kind: "none" },
+    })
+    return true
+  },
+  maximizeSplitPane: (paneId) => {
+    const splitView = get().splitView
+    const pane = splitView ? findThreadPane(splitView.root, paneId) : null
+    if (!pane) return false
+    persistSplitView(null)
+    set({
+      splitView: null,
+      selected: pane.threadId
+        ? { kind: "thread", id: pane.threadId }
+        : { kind: "none" },
+    })
+    return true
+  },
+  setSplitRatio: (splitNodeId, ratio) => {
+    const splitView = get().splitView
+    if (!splitView) return
+    const root = setSplitNodeRatio(splitView.root, splitNodeId, ratio)
+    if (root === splitView.root || root.kind !== "split") return
+    const next = { ...splitView, root }
+    persistSplitView(next)
+    set({ splitView: next })
+  },
+  exitSplitView: () => {
+    const splitView = get().splitView
+    if (!splitView) return
+    const focused = resolveFocusedThreadPane(splitView)
+    const fallbackId = collectSplitThreadIds(splitView)[0] ?? null
+    const threadId = focused?.threadId ?? fallbackId
+    persistSplitView(null)
+    set({
+      splitView: null,
+      selected: threadId ? { kind: "thread", id: threadId } : { kind: "none" },
+    })
+  },
+  removeThreadFromSplit: (threadId) => {
+    const state = get()
+    const pane = state.splitView
+      ? findThreadPaneByThreadId(state.splitView.root, threadId)
+      : null
+    if (pane) {
+      get().closeSplitPane(pane.id)
+    } else if (
+      state.selected.kind === "thread" &&
+      state.selected.id === threadId
+    ) {
+      set({ selected: { kind: "none" } })
+    }
+  },
+  reconcileSplitThreads: (threadIds) => {
+    const current = get().splitView
+    if (!current) return
+    const next = reconcileSplitView(current, new Set(threadIds))
+    persistSplitView(next)
+    if (!next) {
+      set({ splitView: null, selected: { kind: "none" } })
+      return
+    }
+    const focused = resolveFocusedThreadPane(next)
+    set({
+      splitView: next,
+      selected: focused?.threadId
+        ? { kind: "thread", id: focused.threadId }
+        : { kind: "none" },
+    })
+  },
   toggleWork: (turnId) => set((s) => ({ expandedWork: { ...s.expandedWork, [turnId]: !s.expandedWork[turnId] } })),
   toggleProject: (id) => set((s) => ({ collapsedProjects: { ...s.collapsedProjects, [id]: !s.collapsedProjects[id] } })),
   enqueue: (threadId, message) =>
@@ -170,6 +467,10 @@ export const selectRecentThreads = (s: AppState): Thread[] =>
 
 export const selectSelectedThread = (s: AppState): Thread | null =>
   s.selected.kind === "thread" ? (s.threads[s.selected.id] ?? null) : null
+
+export const isThreadVisible = (s: AppState, threadId: ThreadId): boolean =>
+  (s.selected.kind === "thread" && s.selected.id === threadId) ||
+  collectSplitThreadIds(s.splitView).includes(threadId)
 
 export const selectAvailableProviders = (s: AppState): ProviderStatus[] => s.providers.filter((p) => p.available)
 

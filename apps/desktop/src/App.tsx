@@ -3,7 +3,9 @@
 
 import { AnimatePresence, motion } from "motion/react"
 import { useEffect, useState } from "react"
+import { toast } from "sonner"
 
+import { ChatPaneDropOverlay } from "@/components/kybern/ChatPaneDropOverlay"
 import { ErrorBoundary } from "@/components/kybern/ErrorBoundary"
 import { Logo, Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/synara/button"
@@ -12,8 +14,9 @@ import { Toaster } from "@/components/ui/sonner"
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import { useHotkey, useResize } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
+import type { ThreadId } from "@/protocol"
 import { newThread } from "@/state/nav"
-import { boot } from "@/state/rpc"
+import { boot, loadThread } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { Draft } from "@/views/Draft"
 import { HandoffDialog } from "@/views/Handoff"
@@ -22,6 +25,7 @@ import { PullRequests } from "@/views/PullRequests"
 import { RightPanel } from "@/views/RightPanel"
 import { SettingsDialog } from "@/views/SettingsDialog"
 import { ThreadSidebar } from "@/views/Sidebar"
+import { SplitThreads } from "@/views/SplitThreads"
 import { ThreadView } from "@/views/Thread"
 import { SurfaceHeader } from "@/views/chrome"
 
@@ -42,6 +46,7 @@ function useDockWidth() {
 
 export default function App() {
   const selected = useStore((s) => s.selected)
+  const splitView = useStore((s) => s.splitView)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const rightOpen = useStore((s) => s.rightOpen)
   const set = useStore((s) => s.set)
@@ -51,6 +56,12 @@ export default function App() {
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })
   useHotkey("mod+n", () => newThread(), { allowInInput: true })
   useHotkey("mod+,", () => set({ settingsOpen: true }), { allowInInput: true })
+  useHotkey("mod+\\", () => {
+    if (!useStore.getState().splitFocusedPane("horizontal")) toast("This pane can’t be split to the right")
+  }, { allowInInput: true })
+  useHotkey("mod+shift+\\", () => {
+    if (!useStore.getState().splitFocusedPane("vertical")) toast("This pane can’t be split below")
+  }, { allowInInput: true })
 
   const threadId = selected.kind === "thread" ? selected.id : null
   const dock = useDockWidth()
@@ -86,10 +97,10 @@ export default function App() {
             <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
               <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <ConnectionBanner />
-                {selected.kind === "thread" ? (
-                  <ErrorBoundary key={selected.id} label="this thread">
-                    <ThreadView threadId={selected.id} />
-                  </ErrorBoundary>
+                {splitView ? (
+                  <SplitThreads splitView={splitView} />
+                ) : selected.kind === "thread" ? (
+                  <SingleThreadSurface threadId={selected.id} />
                 ) : selected.kind === "pulls" ? (
                   <ErrorBoundary label="pull requests">
                     <PullRequests />
@@ -138,6 +149,23 @@ export default function App() {
       </ErrorBoundary>
       <Toaster position="bottom-right" />
     </SidebarProvider>
+  )
+}
+
+function SingleThreadSurface({ threadId }: { threadId: ThreadId }) {
+  return (
+    <ChatPaneDropOverlay
+      className="flex-col"
+      excludedThreadIds={new Set([threadId])}
+      onDropThread={({ threadId: droppedThreadId, direction, side }) => {
+        const state = useStore.getState()
+        if (state.splitFocusedPane(direction, droppedThreadId, side)) void loadThread(droppedThreadId)
+      }}
+    >
+      <ErrorBoundary key={threadId} label="this thread">
+        <ThreadView threadId={threadId} />
+      </ErrorBoundary>
+    </ChatPaneDropOverlay>
   )
 }
 

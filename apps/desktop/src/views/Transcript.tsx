@@ -196,7 +196,15 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
   }
 }
 
-export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bottomInset: number }) {
+export function Transcript({
+  threadId,
+  bottomInset,
+  surfaceMode = "single",
+}: {
+  threadId: ThreadId
+  bottomInset: number
+  surfaceMode?: "single" | "split"
+}) {
   const state = useStore((s) => s.transcripts[threadId])
   const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
   const blocks = state?.blocks
@@ -251,7 +259,7 @@ export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bott
         )}
       >
         <MessageScroller
-          navigation="rail"
+          navigation={surfaceMode === "split" ? undefined : "rail"}
           navigationLabel="Message navigation"
           navigationSide="left"
           followOutput

@@ -140,8 +140,9 @@ function toHttp(url: string): string {
   return m ? `https://${m[1]}/${m[2]}` : url
 }
 
-export function EnvironmentPanel({ threadId }: { threadId: ThreadId }) {
-  const open = useStore((s) => s.envOpen)
+export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: ThreadId; open?: boolean }) {
+  const requestedOpen = useStore((s) => s.envOpen)
+  const open = openOverride ?? requestedOpen
   const set = useStore((s) => s.set)
   const thread = useStore((s) => s.threads[threadId])
   const project = useStore((s) => (thread ? s.projects[thread.project_id] : undefined))
