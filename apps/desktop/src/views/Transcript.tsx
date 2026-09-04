@@ -3,7 +3,7 @@
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useMemo, useRef, useState, type CSSProperties } from "react"
+import { memo, useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -22,7 +22,7 @@ import {
   getChatTranscriptTextStyle,
 } from "@/components/synara/chat/chatTypography"
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
-import { summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
+import { runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useTicker } from "@/lib/hooks"
 import { MessageScroller } from "@/components/beui/message-scroller"
 import {
@@ -31,6 +31,8 @@ import {
   BrainIcon,
   ChangesIcon,
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CopyIcon,
   EyeIcon,
@@ -61,6 +63,30 @@ const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)] tran
 const HOVER_REVEAL =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
 
+type ToolBlock = Extract<Block, { kind: "tool" }>
+type AgentActivityTarget =
+  | { kind: "tool"; turnId: string; toolCallId: string }
+  | { kind: "task"; turnId: string; taskId: string }
+type AgentActivitySelection = AgentActivityTarget & { threadId: ThreadId }
+type OpenAgentActivity = (target: AgentActivityTarget) => void
+type AgentActivityEntry =
+  | { kind: "tool"; block: ToolBlock }
+  | { kind: "task"; task: RuntimeTask; navigable: boolean }
+
+interface AgentActivityDetail {
+  title: string
+  summary: string | null
+  metadata: string
+  kind: RuntimeTask["kind"]
+  prompt: string | null
+  result: string | null
+  resultPending: boolean
+  failed: boolean
+  entries: AgentActivityEntry[]
+  tasksByToolCall: ReadonlyMap<string, RuntimeTask>
+  childrenByParent: ReadonlyMap<string, ToolBlock[]>
+}
+
 /** Formats a duration the way Synara's formatClockDuration does. */
 function clockDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -73,10 +99,85 @@ function clockDuration(ms: number): string {
   return rm ? `${h}h ${rm}m` : `${h}h`
 }
 
+function runtimeTaskStatusLabel(task: RuntimeTask): string {
+  if (task.status === "pending") return "Starting"
+  if (task.status === "running") return task.backgrounded ? "Running in background" : "Running"
+  if (task.status === "waiting") return task.backgrounded ? "Monitoring in background" : "Waiting"
+  if (task.status === "stopping") return "Stopping"
+  if (task.status === "completed") return "Completed"
+  if (task.status === "failed") return "Failed"
+  if (task.status === "stopped") return "Stopped"
+  return "Interrupted"
+}
+
+function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonly RuntimeTask[], target: AgentActivitySelection): AgentActivityDetail | null {
+  const task = target.kind === "task"
+    ? tasks.find((candidate) => candidate.id === target.taskId)
+    : tasks.find((candidate) => candidate.origin_turn_id === target.turnId && candidate.tool_call_id === target.toolCallId)
+  const group = groups.find((candidate) => candidate.turnId === target.turnId)
+  const toolCallId = target.kind === "tool" ? target.toolCallId : task?.tool_call_id
+  const block = toolCallId
+    ? group?.work.find((candidate): candidate is ToolBlock => candidate.kind === "tool" && candidate.call.id === toolCallId)
+    : undefined
+  if (!task && !block) return null
+
+  const hierarchy = buildWorkHierarchy(group?.work ?? [])
+  const childBlocks = block ? (hierarchy.childrenByParent.get(block.call.id) ?? []) : []
+  const representedToolCalls = new Set(childBlocks.map((child) => child.call.id))
+  const childTasks = task
+    ? tasks.filter((candidate) => candidate.parent_id === task.id && (!candidate.tool_call_id || !representedToolCalls.has(candidate.tool_call_id)))
+    : []
+  const entries: AgentActivityEntry[] = [
+    ...childBlocks.map((child): AgentActivityEntry => ({ kind: "tool", block: child })),
+    ...childTasks.map((child): AgentActivityEntry => ({ kind: "task", task: child, navigable: true })),
+    ...(task ? [{ kind: "task", task, navigable: false } satisfies AgentActivityEntry] : []),
+  ].sort((a, b) => {
+    const left = Date.parse(a.kind === "tool" ? a.block.at : a.task.updated_at)
+    const right = Date.parse(b.kind === "tool" ? b.block.at : b.task.updated_at)
+    return (Number.isFinite(left) ? left : 0) - (Number.isFinite(right) ? right : 0)
+  })
+  const activity = block ? toolLine(block.call, block.complete && !(task && isRuntimeTaskActive(task))) : null
+  const kind = task?.kind ?? "agent"
+  const fallbackTitle = kind === "process" ? "Background process" : kind === "monitor" ? "Monitor" : "Delegated task"
+  const title = task?.title || activity?.detail || fallbackTitle
+  const summary = task?.detail && task.detail.trim() !== title.trim() ? task.detail : null
+  const status = task ? runtimeTaskStatusLabel(task) : block?.isError ? "Failed" : block?.complete ? "Completed" : "Working"
+  const metadata = [status, task?.model, task?.backgrounded ? "Background" : null].filter((value): value is string => !!value).join(" · ")
+  const tasksByToolCall = new Map(tasks.flatMap((candidate) => (candidate.tool_call_id ? [[candidate.tool_call_id, candidate] as const] : [])))
+
+  return {
+    title,
+    summary,
+    metadata,
+    kind,
+    prompt: block ? runtimeActivityPrompt(block.call) : null,
+    result: block ? runtimeActivityResult(block.output, block.stream) : null,
+    resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
+    failed: block?.isError || task?.status === "failed",
+    entries,
+    tasksByToolCall,
+    childrenByParent: hierarchy.childrenByParent,
+  }
+}
+
 export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bottomInset: number }) {
   const state = useStore((s) => s.transcripts[threadId])
+  const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
   const blocks = state?.blocks
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks])
+  const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
+  const selectedActivity = agentActivityTrail.at(-1)
+  const agentActivityDetail = useMemo(
+    () => selectedActivity?.threadId === threadId ? resolveAgentActivityDetail(groups, runtimeTasks, selectedActivity) : null,
+    [groups, runtimeTasks, selectedActivity, threadId],
+  )
+  const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
+    const selection: AgentActivitySelection = { ...target, threadId }
+    setAgentActivityTrail((current) => current.at(-1)?.threadId === threadId ? [...current, selection] : [selection])
+  }, [threadId])
+  const closeAgentActivity = useCallback(() => {
+    setAgentActivityTrail((current) => current.at(-1)?.threadId === threadId ? current.slice(0, -1) : [])
+  }, [threadId])
   let latestUserMessageId: string | null = null
   for (let i = groups.length - 1; i >= 0; i--) {
     const user = groups[i]?.user
@@ -104,8 +205,15 @@ export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bott
   }
 
   return (
-    <div data-chat-transcript-pane className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div data-chat-transcript-pane className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div
+        aria-hidden={agentActivityDetail ? true : undefined}
+        inert={agentActivityDetail ? true : undefined}
+        className={cn(
+          "relative flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 ease-out motion-reduce:transition-none",
+          agentActivityDetail && "pointer-events-none opacity-0",
+        )}
+      >
         <MessageScroller
           navigation="rail"
           navigationLabel="Message navigation"
@@ -128,7 +236,7 @@ export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bott
               <p className="text-sm text-muted-foreground/30">Send a message to start the conversation.</p>
             </div>
           ) : (
-            groups.map((g, i) => <Turn key={g.turnId || i} group={g} threadId={threadId} isLast={i === groups.length - 1} />)
+            groups.map((g, i) => <Turn key={g.turnId || i} group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} />)
           )}
         </MessageScroller>
         <div
@@ -151,11 +259,129 @@ export function Transcript({ threadId, bottomInset }: { threadId: ThreadId; bott
           </button>
         </div>
       </div>
+      {agentActivityDetail && (
+        <AgentActivityDetailView detail={agentActivityDetail} bottomInset={bottomInset} onBack={closeAgentActivity} onOpenAgentActivity={openAgentActivity} />
+      )}
     </div>
   )
 }
 
-const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup; threadId: ThreadId; isLast: boolean }) {
+function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActivity }: { detail: AgentActivityDetail; bottomInset: number; onBack: () => void; onOpenAgentActivity: OpenAgentActivity }) {
+  const promptTitle = detail.kind === "process" ? "Command" : detail.kind === "monitor" ? "Request" : "Prompt"
+  const resultTitle = detail.kind === "process" ? "Output" : "Result"
+  const missingPrompt = detail.kind === "process" ? "The command was not exposed by this harness." : "The delegated prompt was not exposed by this harness."
+  const missingResult = detail.resultPending
+    ? detail.kind === "agent" ? "The agent is still working." : "This work is still running."
+    : detail.failed ? "No additional error details were reported." : "This harness did not expose a final result."
+
+  return (
+    <div
+      data-agent-activity-detail="true"
+      data-chat-scroll-container="true"
+      className={cn("runtime-activity-detail-enter absolute inset-0 z-20 overflow-x-hidden overflow-y-auto overscroll-y-contain bg-background py-3 [scrollbar-gutter:stable] sm:py-4", CHAT_COLUMN_GUTTER)}
+      style={{ paddingBottom: bottomInset + 64 }}
+    >
+      <div className={ROW}>
+        <button
+          type="button"
+          data-scroll-anchor-ignore
+          onClick={onBack}
+          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-system-ui text-muted-foreground/70 transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          style={META}
+        >
+          <ChevronLeftIcon className="size-3.5" />
+          <span>Back</span>
+        </button>
+
+        <header className="mt-3 border-b border-border/55 pb-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/45 bg-background/65 text-muted-foreground/60">
+              {detail.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h2 className="min-w-0 truncate font-system-ui text-[18px] leading-6 font-medium text-foreground/92">{detail.title}</h2>
+                <span className="shrink-0 rounded-full border border-border/45 px-2 py-0.5 font-system-ui text-[10px] font-medium text-muted-foreground/56">
+                  {plural(detail.entries.length, "update")}
+                </span>
+              </div>
+              <p className="mt-1 font-system-ui text-muted-foreground/58" style={CHAT_FONT} aria-live="polite">{detail.metadata}</p>
+              {detail.summary && <p className="mt-1 max-w-3xl text-muted-foreground/68" style={CHAT_FONT}>{detail.summary}</p>}
+            </div>
+          </div>
+        </header>
+
+        <AgentActivitySection title={promptTitle}>
+          {detail.prompt ? <Markdown text={detail.prompt} style={TEXT} /> : <AgentActivityEmpty>{missingPrompt}</AgentActivityEmpty>}
+        </AgentActivitySection>
+        <AgentActivitySection title={resultTitle}>
+          {detail.result ? (
+            <div className={cn(detail.failed && "text-destructive/90")}><Markdown text={detail.result} style={TEXT} /></div>
+          ) : <AgentActivityEmpty>{missingResult}</AgentActivityEmpty>}
+        </AgentActivitySection>
+        <AgentActivitySection title="Activity">
+          <AgentActivityEntries entries={detail.entries} tasksByToolCall={detail.tasksByToolCall} childrenByParent={detail.childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
+        </AgentActivitySection>
+      </div>
+    </div>
+  )
+}
+
+function AgentActivitySection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="border-b border-border/45 py-4 last:border-b-0">
+      <h3 className="mb-2 font-system-ui text-[11px] font-medium text-muted-foreground/48">{title}</h3>
+      {children}
+    </section>
+  )
+}
+
+function AgentActivityEmpty({ children }: { children: ReactNode }) {
+  return <p className="font-system-ui text-muted-foreground/52" style={CHAT_FONT}>{children}</p>
+}
+
+function AgentActivityEntries({ entries, tasksByToolCall, childrenByParent, onOpenAgentActivity }: { entries: readonly AgentActivityEntry[]; tasksByToolCall: ReadonlyMap<string, RuntimeTask>; childrenByParent: ReadonlyMap<string, ToolBlock[]>; onOpenAgentActivity: OpenAgentActivity }) {
+  if (entries.length === 0) return <AgentActivityEmpty>No child activity was reported.</AgentActivityEmpty>
+  return (
+    <div className="divide-y divide-border/45">
+      {entries.map((entry) => entry.kind === "tool" ? (
+        <div key={entry.block.id} className="py-2 first:pt-0 last:pb-0">
+          <ToolRow block={entry.block} task={tasksByToolCall.get(entry.block.call.id)} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} showTimestamp />
+        </div>
+      ) : (
+        <RuntimeTaskActivityEntry key={entry.task.id} task={entry.task} navigable={entry.navigable} onOpenAgentActivity={onOpenAgentActivity} />
+      ))}
+    </div>
+  )
+}
+
+function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { task: RuntimeTask; navigable: boolean; onOpenAgentActivity: OpenAgentActivity }) {
+  const noun = task.kind === "agent" ? "Agent" : task.kind === "process" ? "Process" : "Monitor"
+  const detail = task.detail || (task.last_tool_name ? `Using ${task.last_tool_name}` : null)
+  const body = (
+    <>
+      <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+        {task.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate leading-6 text-muted-foreground transition-colors group-hover/tool-row:text-foreground" style={CHAT_FONT}>
+          {noun} {runtimeTaskStatusLabel(task).toLowerCase()}{navigable ? ` · ${task.title}` : ""}
+        </p>
+        {detail && <p className="truncate font-system-ui text-[11px] leading-4 text-muted-foreground/52">{detail}</p>}
+      </div>
+      <time dateTime={task.updated_at} className="shrink-0 font-system-ui text-[11px] tabular-nums text-muted-foreground/38">{clockTime(task.updated_at)}</time>
+      {navigable && <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/tool-row:text-foreground" />}
+    </>
+  )
+  if (!navigable) return <div className="group/tool-row flex min-w-0 items-center gap-1.5 py-3 first:pt-0 last:pb-0">{body}</div>
+  return (
+    <button type="button" onClick={() => onOpenAgentActivity({ kind: "task", turnId: task.origin_turn_id, taskId: task.id })} className="group/tool-row flex w-full min-w-0 cursor-pointer items-center gap-1.5 py-3 text-start first:pt-0 last:pb-0 focus-visible:outline-none">
+      {body}
+    </button>
+  )
+}
+
+const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
@@ -199,8 +425,8 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
           <WorkingHeader since={group.user?.at ?? ""} />
           {hasWork && (
             <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
-              <WorkList blocks={group.work} tasks={launchedTasks} />
-              <RuntimeTaskTranscriptRows tasks={transcriptTasks} />
+              <WorkList blocks={group.work} tasks={launchedTasks} onOpenAgentActivity={onOpenAgentActivity} />
+              <RuntimeTaskTranscriptRows tasks={transcriptTasks} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
           {!streaming && !hasLiveWork && (
@@ -234,8 +460,8 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
                   <DisclosureChevron open={open} className="text-muted-foreground/70" />
                 </button>
                 <DisclosureRegion open={open} contentClassName="mb-2.5 space-y-1.5">
-                  <WorkList blocks={group.work} tasks={launchedTasks} />
-                  <RuntimeTaskTranscriptRows tasks={transcriptTasks} />
+                  <WorkList blocks={group.work} tasks={launchedTasks} onOpenAgentActivity={onOpenAgentActivity} />
+                  <RuntimeTaskTranscriptRows tasks={transcriptTasks} onOpenAgentActivity={onOpenAgentActivity} />
                 </DisclosureRegion>
               </div>
               <div className="h-px w-full bg-border" />
@@ -282,7 +508,7 @@ const Turn = memo(function Turn({ group, threadId, isLast }: { group: TurnGroup;
   )
 })
 
-function RuntimeTaskTranscriptRows({ tasks }: { tasks: RuntimeTask[] }) {
+function RuntimeTaskTranscriptRows({ tasks, onOpenAgentActivity }: { tasks: RuntimeTask[]; onOpenAgentActivity: OpenAgentActivity }) {
   const set = useStore((state) => state.set)
   if (tasks.length === 0) return null
   return tasks.map((task) => {
@@ -304,7 +530,13 @@ function RuntimeTaskTranscriptRows({ tasks }: { tasks: RuntimeTask[] }) {
         key={task.id}
         type="button"
         title={task.title}
-        onClick={() => set({ rightOpen: true, rightTab: "activity" })}
+        onClick={() => {
+          if (task.kind === "agent") {
+            onOpenAgentActivity({ kind: "task", turnId: task.origin_turn_id, taskId: task.id })
+            return
+          }
+          set({ rightOpen: true, rightTab: "activity" })
+        }}
         className="group/task-row flex w-full cursor-pointer items-center gap-1.5 py-1 text-start focus-visible:outline-none"
       >
         <span className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
@@ -475,7 +707,6 @@ function workLabel(
 
 const TONE = "text-muted-foreground transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground"
 
-type ToolBlock = Extract<Block, { kind: "tool" }>
 type WorkChunk = { kind: "single"; block: Block } | { kind: "tools"; blocks: ToolBlock[] }
 
 function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string, RuntimeTask>): WorkChunk[] {
@@ -499,20 +730,22 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
   return chunks
 }
 
-function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[] }) {
+function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; onOpenAgentActivity: OpenAgentActivity }) {
   const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
   const hierarchy = buildWorkHierarchy(blocks)
-  return <WorkRows blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} />
+  return <WorkRows blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
 }
 
 function WorkRows({
   blocks,
   tasksByToolCall,
   childrenByParent,
+  onOpenAgentActivity,
 }: {
   blocks: readonly Block[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
+  onOpenAgentActivity: OpenAgentActivity
 }) {
   return chunkWork(blocks, tasksByToolCall).map((chunk) =>
     chunk.kind === "single" ? (
@@ -522,6 +755,7 @@ function WorkRows({
         task={chunk.block.kind === "tool" ? tasksByToolCall.get(chunk.block.call.id) : undefined}
         tasksByToolCall={tasksByToolCall}
         childrenByParent={childrenByParent}
+        onOpenAgentActivity={onOpenAgentActivity}
       />
     ) : (
       <ToolGroupRow
@@ -529,6 +763,7 @@ function WorkRows({
         blocks={chunk.blocks}
         tasksByToolCall={tasksByToolCall}
         childrenByParent={childrenByParent}
+        onOpenAgentActivity={onOpenAgentActivity}
       />
     ),
   )
@@ -538,10 +773,12 @@ function ToolGroupRow({
   blocks,
   tasksByToolCall,
   childrenByParent,
+  onOpenAgentActivity,
 }: {
   blocks: ToolBlock[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
+  onOpenAgentActivity: OpenAgentActivity
 }) {
   const [open, setOpen] = useState(false)
   const summary = summarizeToolCalls(blocks.map((block) => ({ call: block.call, complete: block.complete, isError: block.isError })))
@@ -553,6 +790,7 @@ function ToolGroupRow({
         task={tasksByToolCall.get(block.call.id)}
         tasksByToolCall={tasksByToolCall}
         childrenByParent={childrenByParent}
+        onOpenAgentActivity={onOpenAgentActivity}
       />
     ))
   return (
@@ -579,6 +817,7 @@ function ToolGroupRow({
             task={tasksByToolCall.get(block.call.id)}
             tasksByToolCall={tasksByToolCall}
             childrenByParent={childrenByParent}
+            onOpenAgentActivity={onOpenAgentActivity}
           />
         ))}
       </DisclosureRegion>
@@ -591,15 +830,17 @@ function WorkRow({
   task,
   tasksByToolCall,
   childrenByParent,
+  onOpenAgentActivity,
 }: {
   block: Block
   task?: RuntimeTask
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
+  onOpenAgentActivity: OpenAgentActivity
 }) {
   switch (block.kind) {
     case "tool":
-      return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} />
+      return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
     case "assistant":
       return <AssistantWorkRow block={block} />
     case "approval":
@@ -639,11 +880,15 @@ function ToolRow({
   task,
   tasksByToolCall,
   childrenByParent,
+  onOpenAgentActivity,
+  showTimestamp = false,
 }: {
   block: Extract<Block, { kind: "tool" }>
   task?: RuntimeTask
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
+  onOpenAgentActivity: OpenAgentActivity
+  showTimestamp?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const active = !!task && isRuntimeTaskActive(task)
@@ -653,7 +898,9 @@ function ToolRow({
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
   const hasOutput = out.trim().length > 0
-  const canOpen = hasChildActivity || hasOutput
+  const opensFocusedActivity = activity.kind === "delegate" || task?.kind === "agent"
+  const canExpand = !opensFocusedActivity && (hasChildActivity || hasOutput)
+  const canOpen = opensFocusedActivity || canExpand
   const tone = block.isError
     ? "text-destructive/80 transition-colors group-hover/tool-row:text-destructive group-focus-visible/tool-row:text-destructive"
     : TONE
@@ -661,21 +908,30 @@ function ToolRow({
     <div className="rounded-lg py-1">
       <button
         type="button"
-        onClick={() => canOpen && setOpen((v) => !v)}
-        aria-expanded={canOpen ? open : undefined}
+        onClick={() => {
+          if (opensFocusedActivity) {
+            onOpenAgentActivity({ kind: "tool", turnId: block.turnId, toolCallId: block.call.id })
+            return
+          }
+          if (canExpand) setOpen((value) => !value)
+        }}
+        aria-expanded={canExpand ? open : undefined}
         className={cn("group/tool-row flex w-full items-center gap-1.5 text-start transition-[opacity,translate] duration-200", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
       >
         <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", tone)}>
           {workIcon(visual, block.isError)}
         </span>
-        <div className="min-w-0 overflow-hidden">
+        <div className="min-w-0 flex-1 overflow-hidden">
           <p className={cn("truncate leading-6", tone, (!block.complete || active) && "shimmer")} style={CHAT_FONT}>
             <span data-work-entry-display-text>{workLabel(activity, block.call.name, block.complete && !active, block.isError)}</span>
           </p>
         </div>
-        {canOpen && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
+        {showTimestamp && <time dateTime={block.at} className="shrink-0 font-system-ui text-[11px] tabular-nums text-muted-foreground/38">{clockTime(block.at)}</time>}
+        {opensFocusedActivity
+          ? <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/tool-row:text-foreground" />
+          : canExpand && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
       </button>
-      {canOpen && (
+      {canExpand && (
         <DisclosureRegion open={open} contentClassName="ms-[1.375rem] min-w-0 pt-1.5">
           {hasChildActivity && (
             <section aria-label={activity.kind === "delegate" ? "Subagent activity" : "Nested activity"} className={cn("min-w-0", hasOutput && "pb-2.5")}>
@@ -683,7 +939,7 @@ function ToolRow({
                 {activity.kind === "delegate" ? "Subagent activity" : "Nested activity"}
               </p>
               <div className="space-y-0.5">
-                <WorkRows blocks={childBlocks} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} />
+                <WorkRows blocks={childBlocks} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
               </div>
             </section>
           )}

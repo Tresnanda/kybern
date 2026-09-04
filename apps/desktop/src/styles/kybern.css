@@ -94,6 +94,21 @@ body {
   }
 }
 
+/* Focused runtime activity replaces the transcript without a jarring panel jump. */
+@keyframes runtime-activity-detail-enter {
+  from {
+    opacity: 0;
+    transform: translateX(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.runtime-activity-detail-enter {
+  animation: runtime-activity-detail-enter 180ms ease-out both;
+}
+
 /* Terminal host */
 .xterm-host .xterm {
   padding: 10px 12px;
@@ -107,5 +122,8 @@ body {
     animation: none;
     color: var(--muted-foreground);
     background: none;
+  }
+  .runtime-activity-detail-enter {
+    animation: none;
   }
 }

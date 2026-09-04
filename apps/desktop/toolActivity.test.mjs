@@ -5,6 +5,8 @@ import { buildStructuredTextParts } from "./src/lib/composerTokens.ts"
 import { getAttachmentIconName, getFileIconName } from "./src/lib/synara/fileIcons.ts"
 import {
   humanizeToolName,
+  runtimeActivityPrompt,
+  runtimeActivityResult,
   summarizeToolCalls,
   toolLine,
   toolVisualKind,
@@ -126,6 +128,30 @@ test("work summaries distinguish delegation from work run by the main agent", ()
     ])?.label,
     "Ran 1 command and delegated 1 task"
   )
+})
+
+test("focused activity keeps the full delegated prompt across provider wrappers", () => {
+  const prompt = "Inspect the repository.\n\nRun the tests and report any failures."
+  assert.equal(runtimeActivityPrompt(call("Agent", { description: "Test", prompt })), prompt)
+  assert.equal(runtimeActivityPrompt(call("task", { raw_input: JSON.stringify({ assignment: prompt }) })), prompt)
+  assert.equal(runtimeActivityPrompt(call("execute", { args: { command: "pnpm test\npnpm typecheck" } })), "pnpm test\npnpm typecheck")
+})
+
+test("focused activity prefers clean structured results over harness metadata", () => {
+  const result = "Verification complete.\n\nAll checks passed."
+  assert.equal(
+    runtimeActivityResult({
+      content: [
+        { type: "text", text: result },
+        { type: "text", text: "agentId: agent-7 (use SendMessage to continue)\n<usage>tokens: 1200</usage>" },
+      ],
+      structured: { status: "completed", content: [{ type: "text", text: result }] },
+    }),
+    result,
+  )
+  assert.equal(runtimeActivityResult({ content: "OpenCode finished" }), "OpenCode finished")
+  assert.equal(runtimeActivityResult({ raw: "Cursor finished" }), "Cursor finished")
+  assert.equal(runtimeActivityResult(null, "streamed result"), "streamed result")
 })
 
 test("Cursor titles remain useful when ACP marks the tool kind as other", () => {

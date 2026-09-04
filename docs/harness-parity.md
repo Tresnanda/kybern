@@ -20,6 +20,12 @@ The transcript records one stable launch row in the originating turn. When a
 provider also attributes child tool calls to that launch, the client nests them
 inside the row instead of counting them as work by the main agent. Unattributed
 or malformed relationships stay at the root; Kybern never guesses ownership.
+Opening an agent launch replaces the transcript with a focused detail view:
+Prompt, Result, and Activity remain separate, and nested agents can be opened
+without losing the parent or transcript scroll position. These sections read
+provider-native tool payloads through shape-tolerant extractors. When a harness
+only exposes lifecycle snapshots, Kybern keeps the same view and says which
+prompt or result detail was not exposed instead of inventing content.
 Streaming progress belongs in Activity so repeated updates do not flood the
 conversation. Approvals remain higher priority than activity cues.
 

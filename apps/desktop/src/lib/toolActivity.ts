@@ -123,6 +123,14 @@ function directString(record: JsonRecord, key: string): string | undefined {
   return undefined
 }
 
+function directText(record: JsonRecord, key: string): string | undefined {
+  const value = record[key]
+  if (typeof value === "string") return value.trim() || undefined
+  if (Array.isArray(value) && value.every((part) => typeof part === "string"))
+    return value.join("\n").trim() || undefined
+  return undefined
+}
+
 /** Provider payloads differ mostly in how deeply they wrap the original tool input. */
 function inputRecords(input: JsonValue): JsonRecord[] {
   const root = asRecord(input)
@@ -157,6 +165,54 @@ function inputString(
     }
   }
   return undefined
+}
+
+function inputText(input: JsonValue, keys: readonly string[]): string | undefined {
+  for (const record of inputRecords(input)) {
+    for (const key of keys) {
+      const value = directText(record, key)
+      if (value) return value
+    }
+  }
+  return undefined
+}
+
+/** Full provider-owned request for a focused agent or managed-process view. */
+export function runtimeActivityPrompt(call: ToolCall): string | null {
+  return inputText(call.input, ["prompt", "task", "instructions", "message", "assignment", "command", "cmd", "description"]) ?? null
+}
+
+function isTransportMetadata(value: string): boolean {
+  const text = value.trim()
+  return /^(?:agent[_ ]?id|task[_ ]?id)\s*:/i.test(text) && (/<usage>/i.test(text) || /\b(?:sendmessage|send_message)\b/i.test(text))
+}
+
+function resultText(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value == null) return null
+  if (typeof value === "string") {
+    const text = value.trim()
+    return text && !isTransportMetadata(text) ? text : null
+  }
+  if (Array.isArray(value)) {
+    const parts = value.map((part) => resultText(part, depth + 1)).filter((part): part is string => !!part)
+    return parts.length > 0 ? parts.join("\n\n") : null
+  }
+  const record = asRecord(value)
+  if (!record) return null
+
+  // Some harnesses include clean structured content beside transport metadata.
+  const structured = resultText(record.structured, depth + 1)
+  if (structured) return structured
+  for (const key of ["final_answer", "finalAnswer", "response", "result", "output", "content", "text", "message", "stdout", "raw"] as const) {
+    const text = resultText(record[key], depth + 1)
+    if (text) return text
+  }
+  return null
+}
+
+/** Readable result across Claude, Codex, OpenCode, pi/OMP, and ACP wrappers. */
+export function runtimeActivityResult(output: JsonValue | null, stream = ""): string | null {
+  return resultText(output) ?? (stream.trim() || null)
 }
 
 function inputQuery(input: JsonValue): string | undefined {
