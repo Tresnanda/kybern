@@ -23,7 +23,7 @@ import {
 } from "@/components/synara/chat/chatTypography"
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
 import { isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
-import { copyText, useTicker } from "@/lib/hooks"
+import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller } from "@/components/beui/message-scroller"
 import {
   ArrowDownIcon,
@@ -462,6 +462,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   const settled = !group.running
   const open = group.running || !!expanded
   const streaming = group.running && !!group.answerLive && shouldRevealLiveText(group.answerLive.text, group.answerLive.complete)
+  // Reveal the live answer at a steady cadence instead of in raw network bursts,
+  // so every harness streams smoothly. Settled text renders in full (snaps).
+  const smoothedAnswer = useSmoothStream(group.answerLive?.text ?? "", group.running, group.answerLive?.complete ?? false)
 
   return (
     <>
@@ -488,7 +491,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           {streaming && group.answerLive && (
             <div className="group/assistant mt-2 min-w-0 py-0.5" data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
               <div data-slot="message-content">
-                <Markdown text={group.answerLive.text} style={TEXT} />
+                <Markdown text={smoothedAnswer} style={TEXT} />
               </div>
             </div>
           )}
@@ -1036,6 +1039,8 @@ function ToolRow({
 
 function AssistantWorkRow({ block }: { block: Extract<Block, { kind: "assistant" }> }) {
   const [open, setOpen] = useState(false)
+  // Smooth the reasoning stream too, but only while it is both live and expanded.
+  const thinking = useSmoothStream(block.thinking, !block.complete && open)
   const hasThinking = block.thinking.trim().length > 0
   const hasText = block.text.trim().length > 0
   if (!hasThinking && !hasText) return null
@@ -1056,7 +1061,7 @@ function AssistantWorkRow({ block }: { block: Extract<Block, { kind: "assistant"
           </button>
           <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ms-7">
             <p className="selectable whitespace-pre-wrap text-muted-foreground" style={TEXT}>
-              {block.thinking}
+              {thinking}
             </p>
           </DisclosureRegion>
         </div>
