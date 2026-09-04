@@ -39,6 +39,9 @@ enum Cmd {
         /// Resolve project-scoped provider settings for this project id or path.
         #[arg(long)]
         project: Option<String>,
+        /// Bypass the daemon's short-lived provider catalog cache.
+        #[arg(long)]
+        refresh: bool,
     },
     /// Manage projects.
     Projects {
@@ -323,12 +326,12 @@ async fn main() -> Result<()> {
                 println!("kybernd stopping");
             }
         }
-        Cmd::Providers { project } => {
+        Cmd::Providers { project, refresh } => {
             let project_id = match project {
                 Some(project) => Some(resolve_project(&client, &project, false).await?),
                 None => None,
             };
-            let r = client.call::<ProvidersList>(ProvidersListParams { project_id }).await?;
+            let r = client.call::<ProvidersList>(ProvidersListParams { project_id, force_refresh: refresh }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::providers(&r.providers) }
         }
         Cmd::Projects { cmd } => match cmd {

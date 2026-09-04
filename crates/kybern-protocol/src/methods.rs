@@ -58,6 +58,9 @@ pub struct ProvidersListParams {
     /// Resolve project-scoped harness settings for this project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
+    /// Bypass the daemon's short-lived provider catalog cache.
+    #[serde(default)]
+    pub force_refresh: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

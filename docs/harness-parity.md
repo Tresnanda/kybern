@@ -65,6 +65,20 @@ provider may still mutate the working tree. On daemon recovery, tasks left
 active in the event log become `interrupted`; Kybern does not pretend it still
 owns an unrecovered process or child session.
 
+### Turn startup contract
+
+The startup path is shared by every harness: reuse or spawn its `AgentSession`,
+capture the before-turn checkpoint, then call `AgentSession::send_message`.
+Optimizations must live at those shared boundaries and must preserve that
+ordering. Provider-specific session pools, speculative prompts before the
+checkpoint, and capability assumptions are not part of the contract.
+
+The daemon emits structured `kybern::turn_startup` timing records for
+`session_ready`, `checkpoint_ready`, `prompt_sent`, and
+`first_provider_event`. Each record includes the provider kind and whether the
+same session was reused, so cold starts and follow-ups can be compared across
+all harnesses without branching the lifecycle.
+
 ## Provider matrix
 
 | Harness | Observation | Targeted stop | Move to background | Notes |
@@ -85,6 +99,12 @@ subsequent lifecycle channel.
 Model selection follows each harness's own effective catalog instead of a
 Kybern-maintained list. Probes inherit the selected project's working directory,
 configured binary, and provider environment.
+
+Catalog discovery is cached briefly by project context and provider settings,
+and concurrent requests are coalesced in the daemon. The desktop explicitly
+bypasses that cache for **Reload models**, and `kybern providers --refresh`
+does the same from the CLI. This cache wraps the generic driver probe interface;
+it does not encode provider-specific startup behavior.
 
 | Harness | Catalog source |
 | --- | --- |

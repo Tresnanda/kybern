@@ -25,6 +25,7 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
   const projects = useStore((s) => s.projects)
   const settings = useStore((s) => s.settings)
   const allProviders = useStore((s) => s.providers)
+  const providersLoading = useStore((s) => s.providersLoading)
   const providers = useStore(useShallow(selectAvailableProviders))
   const set = useStore((s) => s.set)
   const composer = useRef<ComposerHandle>(null)
@@ -128,7 +129,7 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
             projectId={projectId}
             commands={commands}
             disabled={!provider}
-            disabledReason="Install a coding agent first"
+            disabledReason={providersLoading ? "Checking installed coding agents…" : "Install a coding agent first"}
             above={
               <LandingTray>
                 <Menu>

@@ -21,6 +21,7 @@ import type {
 } from "@/protocol"
 
 import { emptyThreadState, type ThreadState } from "./transcript"
+import { advanceSequence } from "./bootstrap"
 import {
   canSplitPane,
   closeSplitViewPane,
@@ -69,6 +70,8 @@ export interface AppState {
   connection: Connection
   info: DaemonInfo | null
   providers: ProviderStatus[]
+  /** Provider discovery runs behind shell hydration and may include network-backed model catalogs. */
+  providersLoading: boolean
   settings: Settings | null
   projects: Record<ProjectId, Project>
   threads: Record<ThreadId, Thread>
@@ -146,6 +149,7 @@ export const useStore = create<Store>()((set, get) => ({
   connection: { state: "connecting" },
   info: null,
   providers: [],
+  providersLoading: true,
   settings: null,
   projects: {},
   threads: {},
@@ -176,8 +180,21 @@ export const useStore = create<Store>()((set, get) => ({
   transcript: (id) => get().transcripts[id] ?? emptyThreadState(),
   updateTranscript: (id, f) =>
     set((s) => {
-      const prev = s.transcripts[id] ?? emptyThreadState()
-      const next = f(prev)
+      const stored = s.transcripts[id]
+      const currentThread = s.threads[id]
+      const prev = stored ?? {
+        ...emptyThreadState(),
+        thread: currentThread ?? null,
+        lastSeq: currentThread?.last_seq ?? 0,
+      }
+      let next = f(prev)
+      // Event payloads can contain the thread projection from immediately
+      // before that event was assigned a sequence. Keep the client projection
+      // at the fold's actual high-water mark so an in-flight snapshot cannot
+      // roll it back later.
+      if (next.thread && next.thread.last_seq < next.lastSeq) {
+        next = { ...next, thread: advanceSequence(next.thread, next.lastSeq) }
+      }
       if (next === prev) return {}
       const threads = next.thread && next.thread !== prev.thread ? { ...s.threads, [id]: next.thread } : s.threads
       return { transcripts: { ...s.transcripts, [id]: next }, threads }

@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use kybern_drivers::registry::DriverRegistry;
-use kybern_protocol::ThreadEvent;
+use kybern_protocol::{ProviderStatus, ThreadEvent};
 use kybern_store::Store;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::access::Pairing;
@@ -27,6 +30,7 @@ pub struct Inner {
     pub orchestrator: Orchestrator,
     pub terminals: TerminalManager,
     pub settings: SettingsStore,
+    pub provider_catalogs: ProviderCatalogCache,
     pub pairing: Pairing,
     pub port: std::sync::atomic::AtomicU16,
     pub bootstrap_token: String,
@@ -43,7 +47,10 @@ impl std::ops::Deref for AppState {
 }
 
 impl AppState {
-    pub async fn init(paths: &Paths) -> Result<Self> {
+    /// Construct daemon state before restart recovery. The desktop cold-start
+    /// handshake binds its socket after this step, then recovery completes
+    /// before axum begins accepting requests.
+    pub fn initialize(paths: &Paths) -> Result<Self> {
         let store = Store::open(&paths.db)?;
         let bootstrap_token = crate::auth::ensure_bootstrap(&store, &paths.token_file)?;
         let environment_id = match store.meta_get("environment_id")? {
@@ -58,7 +65,6 @@ impl AppState {
         let drivers = DriverRegistry::with_defaults();
         let settings = SettingsStore::load(&paths.settings)?;
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone());
-        orchestrator.recover_after_restart().await?;
         Ok(Self {
             inner: Arc::new(Inner {
                 paths: paths.clone(),
@@ -68,6 +74,7 @@ impl AppState {
                 orchestrator,
                 terminals: TerminalManager::default(),
                 settings,
+                provider_catalogs: ProviderCatalogCache::default(),
                 pairing: Pairing::default(),
                 port: std::sync::atomic::AtomicU16::new(0),
                 bootstrap_token,
@@ -76,5 +83,95 @@ impl AppState {
                 shutdown: CancellationToken::new(),
             }),
         })
+    }
+}
+
+const PROVIDER_CATALOG_TTL: Duration = Duration::from_secs(60);
+
+struct CachedProviderCatalog {
+    providers: Vec<ProviderStatus>,
+    refreshed_at: Instant,
+}
+
+/// Keeps expensive, harness-owned model discovery off repeated app boots.
+///
+/// The cache key includes project context and provider settings. A single
+/// refresh lock also coalesces concurrent desktop/CLI requests without adding
+/// any provider-specific policy to the daemon.
+#[derive(Default)]
+pub struct ProviderCatalogCache {
+    entries: Mutex<HashMap<String, CachedProviderCatalog>>,
+    refresh: Mutex<()>,
+}
+
+impl ProviderCatalogCache {
+    pub async fn get_or_refresh<F, Fut>(&self, key: String, force_refresh: bool, refresh: F) -> Vec<ProviderStatus>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Vec<ProviderStatus>>,
+    {
+        if !force_refresh && let Some(providers) = self.fresh(&key).await {
+            return providers;
+        }
+
+        let _refresh = self.refresh.lock().await;
+        if !force_refresh && let Some(providers) = self.fresh(&key).await {
+            return providers;
+        }
+
+        let providers = refresh().await;
+        let mut entries = self.entries.lock().await;
+        entries.retain(|_, entry| entry.refreshed_at.elapsed() < PROVIDER_CATALOG_TTL);
+        entries.insert(key, CachedProviderCatalog { providers: providers.clone(), refreshed_at: Instant::now() });
+        providers
+    }
+
+    async fn fresh(&self, key: &str) -> Option<Vec<ProviderStatus>> {
+        self.entries
+            .lock()
+            .await
+            .get(key)
+            .filter(|entry| entry.refreshed_at.elapsed() < PROVIDER_CATALOG_TTL)
+            .map(|entry| entry.providers.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn provider_catalog_refreshes_are_coalesced() {
+        let cache = ProviderCatalogCache::default();
+        let calls = AtomicUsize::new(0);
+        let load = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            Vec::new()
+        };
+
+        let (first, second) =
+            tokio::join!(cache.get_or_refresh("global".into(), false, load), cache.get_or_refresh("global".into(), false, load));
+
+        assert!(first.is_empty());
+        assert!(second.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn forced_provider_catalog_refresh_bypasses_cache() {
+        let cache = ProviderCatalogCache::default();
+        let calls = AtomicUsize::new(0);
+        let mut load = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        };
+
+        cache.get_or_refresh("global".into(), false, &mut load).await;
+        cache.get_or_refresh("global".into(), true, &mut load).await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

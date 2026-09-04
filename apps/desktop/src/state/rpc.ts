@@ -18,6 +18,7 @@ import {
   type ProjectId,
   type ProviderKind,
   type ProviderInstance,
+  type ProviderStatus,
   type RuntimeTask,
   type SkillInfo,
   type ThreadEvent,
@@ -27,6 +28,7 @@ import {
 } from "@/protocol"
 
 import { applyEvent, seedFromGet } from "./transcript"
+import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
 import { diffKey, isThreadVisible, mergeRuntimeTasks, summarizeRuntimeTasks, useStore } from "./store"
 
@@ -37,6 +39,8 @@ const diffLoads = new Map<string, Promise<void>>()
 const fileDiffLoads = new Map<string, Promise<Diff>>()
 const gitStatusLoads = new Map<ThreadId, Promise<GitStatus | null>>()
 const threadLoads = new Map<ThreadId, Promise<void>>()
+const providerLoads = new Map<string, Promise<ProviderStatus[]>>()
+let hydrationGeneration = 0
 
 export function rpc(): KybernClient {
   if (!client) throw new Error("Not connected")
@@ -60,37 +64,62 @@ export async function boot(): Promise<void> {
     const s = useStore.getState()
     if (status === "open") {
       s.set({ connection: { state: "open" } })
-      void loadAll()
     } else if (status === "reconnecting") {
       s.set({ connection: { state: "reconnecting", detail } })
     } else if (status === "closed") {
       s.set({ connection: { state: "failed", detail: detail ?? "Connection closed" } })
     }
   })
-  client.subscribeEvents({}, onEvent, () => void loadAll())
+  client.subscribeEvents({}, onEvent, () => {
+    const generation = ++hydrationGeneration
+    void loadWorkspace(generation)
+  })
   client.connect()
 }
 
-async function loadAll(): Promise<void> {
+async function loadWorkspace(generation: number): Promise<void> {
   const c = rpc()
-  const s = useStore.getState()
+  void loadProviderCatalog(undefined, false, generation).catch((error) => {
+    if (isCurrentHydration(generation)) {
+      toast.error("Unable to load coding agents", {
+        id: "provider-catalog-load",
+        description: errorText(error),
+      })
+    }
+  })
+
   try {
-    const [info, providers, projects, threads, settings] = await Promise.all([
+    const [info, projects, threads, settings] = await Promise.all([
       c.call("daemon.info", {}),
-      c.call("providers.list", {}),
       c.call("projects.list", {}),
       c.call("threads.list", {}),
       c.call("settings.get", {}),
     ])
-    s.set({
-      info,
-      providers: providers.providers,
-      settings,
-      projects: Object.fromEntries(projects.projects.map((p) => [p.id, p])),
-      threads: Object.fromEntries(threads.threads.map((t) => [t.id, t])),
-      threadActivity: Object.fromEntries((threads.activity ?? []).map((summary) => [summary.thread_id, summary])),
+    if (!isCurrentHydration(generation)) return
+
+    useStore.getState().set((state) => {
+      const mergedThreads = mergeSequencedSnapshot(state.threads, threads.threads)
+      const incomingThreads = new Map(threads.threads.map((thread) => [thread.id, thread]))
+      const incomingActivity = Object.fromEntries((threads.activity ?? []).map((summary) => [summary.thread_id, summary]))
+      const threadActivity = { ...incomingActivity }
+      for (const [threadId, current] of Object.entries(state.threadActivity)) {
+        const currentThread = state.threads[threadId as ThreadId]
+        const incomingThread = incomingThreads.get(threadId as ThreadId)
+        if (!incomingThread || (currentThread && currentThread.last_seq > incomingThread.last_seq)) {
+          threadActivity[threadId as ThreadId] = current
+        }
+      }
+      return {
+        info,
+        settings,
+        projects: Object.fromEntries(projects.projects.map((p) => [p.id, p])),
+        threads: mergedThreads,
+        threadActivity,
+      }
     })
-    const activeThreadIds = threads.threads.filter((thread) => thread.status !== "archived").map((thread) => thread.id)
+    const activeThreadIds = Object.values(useStore.getState().threads)
+      .filter((thread) => thread.status !== "archived")
+      .map((thread) => thread.id)
     useStore.getState().reconcileSplitThreads(activeThreadIds)
 
     const next = useStore.getState()
@@ -103,8 +132,14 @@ async function loadAll(): Promise<void> {
       if (first) useStore.getState().selectDraft(first.id)
     }
   } catch (e) {
-    toast.error("Unable to load workspace", { description: errorText(e) })
+    if (isCurrentHydration(generation)) {
+      toast.error("Unable to load workspace", { description: errorText(e) })
+    }
   }
+}
+
+function isCurrentHydration(generation: number): boolean {
+  return generation === hydrationGeneration && client?.status === "open"
 }
 
 export function loadThread(id: ThreadId): Promise<void> {
@@ -156,10 +191,38 @@ export function loadThread(id: ThreadId): Promise<void> {
   return request
 }
 
-export async function refreshProviders(projectId?: ProjectId) {
-  const result = await rpc().call("providers.list", projectId ? { project_id: projectId } : {})
-  useStore.getState().set({ providers: result.providers })
-  return result.providers
+export function refreshProviders(projectId?: ProjectId): Promise<ProviderStatus[]> {
+  return loadProviderCatalog(projectId, true)
+}
+
+async function loadProviderCatalog(projectId: ProjectId | undefined, forceRefresh: boolean, generation?: number): Promise<ProviderStatus[]> {
+  const requestGeneration = generation ?? hydrationGeneration
+  const key = `${requestGeneration}:${projectId ?? "global"}`
+  const pending = providerLoads.get(key)
+  if (pending) return pending
+
+  if (generation === undefined || isCurrentHydration(generation)) {
+    useStore.getState().set({ providersLoading: true })
+  }
+  const request = (async () => {
+    try {
+      const result = await rpc().call("providers.list", {
+        ...(projectId ? { project_id: projectId } : {}),
+        ...(forceRefresh ? { force_refresh: true } : {}),
+      })
+      if (generation === undefined || isCurrentHydration(generation)) {
+        useStore.getState().set({ providers: result.providers })
+      }
+      return result.providers
+    } finally {
+      providerLoads.delete(key)
+      if (generation === undefined || isCurrentHydration(generation)) {
+        useStore.getState().set({ providersLoading: false })
+      }
+    }
+  })()
+  providerLoads.set(key, request)
+  return request
 }
 
 async function loadCheckpoints(id: ThreadId) {

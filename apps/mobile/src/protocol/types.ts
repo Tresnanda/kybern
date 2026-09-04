@@ -391,6 +391,12 @@ export interface ProvidersListResult {
   providers: ProviderStatus[];
 }
 
+export interface ProvidersListParams {
+  project_id?: ProjectId;
+  /** Bypass the daemon's short-lived provider catalog cache. */
+  force_refresh?: boolean;
+}
+
 export interface ProjectsListResult {
   projects: Project[];
 }
@@ -613,7 +619,7 @@ export interface EventsRangeResult {
 /** Method name → [params, result]. The single place typed calls are derived from. */
 export interface Methods {
   "daemon.info": [Empty, DaemonInfo];
-  "providers.list": [Empty, ProvidersListResult];
+  "providers.list": [ProvidersListParams, ProvidersListResult];
   "projects.list": [Empty, ProjectsListResult];
   "projects.add": [ProjectsAddParams, Project];
   "projects.update": [ProjectsUpdateParams, Project];

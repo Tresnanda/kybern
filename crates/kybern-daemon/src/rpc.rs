@@ -52,36 +52,42 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 })
                 .transpose()?;
             let settings = state.settings.get();
-            let probes = ProviderKind::ALL.into_iter().map(|kind| {
-                let driver = state.drivers.get(kind);
-                let provider_settings = settings.providers.get(&kind).cloned().unwrap_or_default();
-                let context = kybern_drivers::ProbeContext {
-                    binary: provider_settings.binary.map(std::path::PathBuf::from),
-                    cwd: cwd.clone(),
-                    env: provider_settings.env,
-                };
-                async move {
-                    match driver {
-                        Some(driver) => driver.probe_with_context(&context).await,
-                        None => ProviderStatus {
-                            kind,
-                            display_name: kind.display_name().to_string(),
-                            available: false,
-                            binary_path: None,
-                            version: None,
-                            unavailable_reason: Some("driver not implemented yet".into()),
-                            supported_permission_modes: vec![],
-                            supports_fork: false,
-                            supports_model_switch: false,
-                            supports_effort_switch: false,
-                            supported_efforts: vec![],
-                            models: vec![],
-                            instances: vec![],
-                        },
-                    }
-                }
-            });
-            let providers = futures::future::join_all(probes).await;
+            let cache_key = serde_json::to_string(&(p.project_id, cwd.as_ref(), &settings.providers)).map_err(internal)?;
+            let providers = state
+                .provider_catalogs
+                .get_or_refresh(cache_key, p.force_refresh, || async move {
+                    let probes = ProviderKind::ALL.into_iter().map(|kind| {
+                        let driver = state.drivers.get(kind);
+                        let provider_settings = settings.providers.get(&kind).cloned().unwrap_or_default();
+                        let context = kybern_drivers::ProbeContext {
+                            binary: provider_settings.binary.map(std::path::PathBuf::from),
+                            cwd: cwd.clone(),
+                            env: provider_settings.env,
+                        };
+                        async move {
+                            match driver {
+                                Some(driver) => driver.probe_with_context(&context).await,
+                                None => ProviderStatus {
+                                    kind,
+                                    display_name: kind.display_name().to_string(),
+                                    available: false,
+                                    binary_path: None,
+                                    version: None,
+                                    unavailable_reason: Some("driver not implemented yet".into()),
+                                    supported_permission_modes: vec![],
+                                    supports_fork: false,
+                                    supports_model_switch: false,
+                                    supports_effort_switch: false,
+                                    supported_efforts: vec![],
+                                    models: vec![],
+                                    instances: vec![],
+                                },
+                            }
+                        }
+                    });
+                    futures::future::join_all(probes).await
+                })
+                .await;
             ok(ProvidersListResult { providers })
         }
         ProjectsList::NAME => ok(ProjectsListResult { projects: state.store.projects_list().map_err(internal)? }),

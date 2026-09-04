@@ -2,17 +2,23 @@
 //! WebSocket; this crate only resolves (or starts) the daemon and hands the
 //! endpoint to the webview.
 
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use kybern_client::{Client, Endpoint};
 use kybern_protocol::PROTOCOL_VERSION;
 use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, DaemonShutdown, Empty};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 static ENDPOINT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static STARTING_ENDPOINT: tokio::sync::Mutex<Option<StartingEndpoint>> = tokio::sync::Mutex::const_new(None);
+static STARTUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const STARTUP_ANNOUNCEMENT_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_ANNOUNCEMENT_POLL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EndpointInfo {
@@ -23,6 +29,48 @@ pub struct EndpointInfo {
     pub token: String,
     /// True when this process started the daemon.
     pub spawned: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DaemonStartupAnnouncement {
+    port: u16,
+    protocol_version: u32,
+    version: String,
+}
+
+struct StartupAnnouncementFile {
+    path: PathBuf,
+}
+
+struct StartingEndpoint {
+    endpoint: EndpointInfo,
+    announced_at: Instant,
+    child: Option<std::process::Child>,
+}
+
+impl Drop for StartupAnnouncementFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn fresh_starting_endpoint(starting: &mut Option<StartingEndpoint>) -> Result<Option<EndpointInfo>> {
+    match starting {
+        Some(candidate) if candidate.announced_at.elapsed() < STARTUP_ANNOUNCEMENT_TIMEOUT => {
+            if let Some(child) = &mut candidate.child
+                && let Some(status) = child.try_wait()?
+            {
+                *starting = None;
+                return Err(anyhow!("kybernd exited during startup with {status}"));
+            }
+            Ok(Some(candidate.endpoint.clone()))
+        }
+        Some(_) => {
+            *starting = None;
+            Ok(None)
+        }
+        None => Ok(None),
+    }
 }
 
 fn data_dir() -> Option<PathBuf> {
@@ -37,6 +85,38 @@ fn http_base(url: &str) -> String {
     url.replace("ws://", "http://").replace("wss://", "https://").trim_end_matches("/ws").to_string()
 }
 
+fn new_startup_announcement(root: &Path) -> (String, StartupAnnouncementFile) {
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let sequence = STARTUP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let id = format!("{}-{timestamp}-{sequence}", std::process::id());
+    let path = root.join(format!(".desktop-startup-{id}.json"));
+    (id, StartupAnnouncementFile { path })
+}
+
+async fn wait_for_startup_announcement(path: &Path, child: &mut std::process::Child) -> Result<DaemonStartupAnnouncement> {
+    let deadline = tokio::time::Instant::now() + STARTUP_ANNOUNCEMENT_TIMEOUT;
+    let mut last_parse_error = None;
+    loop {
+        match std::fs::read(path) {
+            Ok(contents) => match serde_json::from_slice(&contents) {
+                Ok(announcement) => return Ok(announcement),
+                Err(error) => last_parse_error = Some(error),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).with_context(|| format!("read startup announcement at {}", path.display())),
+        }
+
+        if let Some(status) = child.try_wait()? {
+            return Err(anyhow!("kybernd exited before announcing its startup endpoint with {status}"));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let detail = last_parse_error.map_or_else(String::new, |error| format!(": {error}"));
+            return Err(anyhow!("kybernd did not announce its startup endpoint in time{detail}"));
+        }
+        tokio::time::sleep(STARTUP_ANNOUNCEMENT_POLL).await;
+    }
+}
+
 async fn daemon_info(endpoint: &Endpoint) -> Option<DaemonInfo> {
     tokio::time::timeout(Duration::from_millis(750), async {
         let client = Client::connect(endpoint).await?;
@@ -48,17 +128,34 @@ async fn daemon_info(endpoint: &Endpoint) -> Option<DaemonInfo> {
 }
 
 fn ensure_compatible(info: &DaemonInfo) -> Result<()> {
-    if info.protocol_version != PROTOCOL_VERSION {
-        return Err(anyhow!(
-            "kybernd protocol v{} is incompatible with desktop protocol v{}; stop the existing daemon and reopen kybern",
-            info.protocol_version,
-            PROTOCOL_VERSION
-        ));
-    }
+    ensure_protocol_compatible(info.protocol_version)?;
     if info.version != env!("CARGO_PKG_VERSION") {
         log::warn!("using compatible kybernd {} with desktop {}", info.version, env!("CARGO_PKG_VERSION"));
     }
     Ok(())
+}
+
+fn ensure_protocol_compatible(protocol_version: u32) -> Result<()> {
+    if protocol_version != PROTOCOL_VERSION {
+        return Err(anyhow!(
+            "kybernd protocol v{} is incompatible with desktop protocol v{}; stop the existing daemon and reopen kybern",
+            protocol_version,
+            PROTOCOL_VERSION
+        ));
+    }
+    Ok(())
+}
+
+fn endpoint_from_announcement(announcement: DaemonStartupAnnouncement, token: String) -> Result<EndpointInfo> {
+    ensure_protocol_compatible(announcement.protocol_version)?;
+    if announcement.port == 0 {
+        return Err(anyhow!("kybernd announced an invalid startup port"));
+    }
+    if announcement.version != env!("CARGO_PKG_VERSION") {
+        log::warn!("using compatible kybernd {} with desktop {}", announcement.version, env!("CARGO_PKG_VERSION"));
+    }
+    let url = format!("ws://127.0.0.1:{}/ws", announcement.port);
+    Ok(EndpointInfo { http_base: http_base(&url), url, token, spawned: true })
 }
 
 fn daemon_needs_restart(info: &DaemonInfo, binary_modified: Option<SystemTime>) -> bool {
@@ -109,7 +206,7 @@ fn daemon_binary() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("kybernd not found next to the app or on PATH"))
 }
 
-fn spawn_daemon() -> Result<()> {
+fn spawn_daemon(startup_id: &str) -> Result<std::process::Child> {
     let bin = daemon_binary()?;
     let root = data_dir();
     // Launch the bundled externalBin directly instead of through the shell
@@ -130,15 +227,16 @@ fn spawn_daemon() -> Result<()> {
     if std::env::var_os("KYBERN_PORT").is_none() {
         cmd.arg("--port").arg("0");
     }
+    cmd.arg("--desktop-startup-id").arg(startup_id);
     cmd.stdin(std::process::Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    cmd.spawn().with_context(|| format!("start {}", bin.display()))?;
+    let child = cmd.spawn().with_context(|| format!("start {}", bin.display()))?;
     log::info!("started {}", bin.display());
-    Ok(())
+    Ok(child)
 }
 
 /// Resolve the daemon endpoint, starting `kybernd` when nothing is listening.
@@ -148,6 +246,9 @@ async fn endpoint() -> Result<EndpointInfo, String> {
         // HMR or two frontend callers must not race each other into spawning
         // more than one daemon from this app process.
         let _guard = ENDPOINT_LOCK.lock().await;
+        if let Some(endpoint) = fresh_starting_endpoint(&mut *STARTING_ENDPOINT.lock().await)? {
+            return Ok(endpoint);
+        }
         if let Ok(ep) = resolve() {
             if let Some(info) = daemon_info(&ep).await {
                 let externally_managed = std::env::var_os("KYBERN_URL").is_some();
@@ -170,17 +271,16 @@ async fn endpoint() -> Result<EndpointInfo, String> {
         if std::env::var_os("KYBERN_URL").is_some() {
             return Err(anyhow!("the daemon configured by KYBERN_URL is not reachable or rejected the configured token"));
         }
-        spawn_daemon()?;
-        for _ in 0..100 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            if let Ok(ep) = resolve() {
-                if let Some(info) = daemon_info(&ep).await {
-                    ensure_compatible(&info)?;
-                    return Ok(EndpointInfo { http_base: http_base(&ep.url), url: ep.url, token: ep.token, spawned: true });
-                }
-            }
-        }
-        Err(anyhow!("kybernd started but did not come up in time"))
+        let root = data_dir().context("no data directory for the local daemon")?;
+        std::fs::create_dir_all(&root)?;
+        let (startup_id, startup_file) = new_startup_announcement(&root);
+        let mut child = spawn_daemon(&startup_id)?;
+        let announcement = wait_for_startup_announcement(&startup_file.path, &mut child).await?;
+        let token = resolve()?.token;
+        let endpoint = endpoint_from_announcement(announcement, token)?;
+        *STARTING_ENDPOINT.lock().await =
+            Some(StartingEndpoint { endpoint: endpoint.clone(), announced_at: Instant::now(), child: Some(child) });
+        Ok(endpoint)
     }
     inner().await.map_err(|e| format!("{e:#}"))
 }
@@ -216,7 +316,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::daemon_needs_restart;
+    use super::{
+        DaemonStartupAnnouncement, EndpointInfo, STARTUP_ANNOUNCEMENT_TIMEOUT, StartingEndpoint, daemon_needs_restart,
+        endpoint_from_announcement, fresh_starting_endpoint,
+    };
     use kybern_protocol::PROTOCOL_VERSION;
     use kybern_protocol::methods::DaemonInfo;
     use std::time::{Duration, UNIX_EPOCH};
@@ -250,5 +353,47 @@ mod tests {
     #[test]
     fn restarts_a_different_daemon_version_even_without_metadata() {
         assert!(daemon_needs_restart(&daemon("0.0.0-stale"), None));
+    }
+
+    #[test]
+    fn startup_announcement_builds_the_pre_ready_endpoint() {
+        let endpoint = endpoint_from_announcement(
+            DaemonStartupAnnouncement { port: 43123, protocol_version: PROTOCOL_VERSION, version: env!("CARGO_PKG_VERSION").into() },
+            "kyb_test".into(),
+        )
+        .unwrap();
+
+        assert_eq!(endpoint.url, "ws://127.0.0.1:43123/ws");
+        assert_eq!(endpoint.http_base, "http://127.0.0.1:43123");
+        assert_eq!(endpoint.token, "kyb_test");
+        assert!(endpoint.spawned);
+    }
+
+    #[test]
+    fn startup_announcement_rejects_an_incompatible_protocol() {
+        let error = endpoint_from_announcement(
+            DaemonStartupAnnouncement { port: 43123, protocol_version: PROTOCOL_VERSION + 1, version: env!("CARGO_PKG_VERSION").into() },
+            "kyb_test".into(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("incompatible"));
+    }
+
+    #[test]
+    fn startup_endpoint_is_reused_only_during_the_recovery_window() {
+        let endpoint = EndpointInfo {
+            url: "ws://127.0.0.1:43123/ws".into(),
+            http_base: "http://127.0.0.1:43123".into(),
+            token: "kyb_test".into(),
+            spawned: true,
+        };
+        let mut recent = Some(StartingEndpoint { endpoint: endpoint.clone(), announced_at: std::time::Instant::now(), child: None });
+        assert_eq!(fresh_starting_endpoint(&mut recent).unwrap().unwrap().url, endpoint.url);
+
+        let mut expired =
+            Some(StartingEndpoint { endpoint, announced_at: std::time::Instant::now() - STARTUP_ANNOUNCEMENT_TIMEOUT, child: None });
+        assert!(fresh_starting_endpoint(&mut expired).unwrap().is_none());
+        assert!(expired.is_none());
     }
 }

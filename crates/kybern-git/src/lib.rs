@@ -57,6 +57,18 @@ impl Repo {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     }
 
+    /// Run a Git command where a non-zero status is meaningful output rather
+    /// than a transport failure (for example `update-index --really-refresh`).
+    async fn git_env_allow_nonzero(&self, args: &[&str], env: &[(&str, &str)]) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.workdir).args(args).stdin(Stdio::null());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output().await.context("run git")?;
+        Ok(())
+    }
+
     pub async fn is_repo(path: &Path) -> bool {
         Command::new("git")
             .arg("-C")
@@ -77,6 +89,11 @@ impl Repo {
     pub async fn git_dir(&self) -> Result<PathBuf> {
         let d = self.git(&["rev-parse", "--absolute-git-dir"]).await?;
         Ok(PathBuf::from(d))
+    }
+
+    async fn index_path(&self) -> Result<PathBuf> {
+        let path = PathBuf::from(self.git(&["rev-parse", "--git-path", "index"]).await?);
+        if path.is_absolute() { Ok(path) } else { Ok(self.workdir.join(path)) }
     }
 
     pub async fn head(&self) -> Option<String> {
@@ -119,18 +136,43 @@ impl Repo {
 
     /// Snapshot the working tree into a dangling commit and return its hash.
     pub async fn snapshot(&self, message: &str) -> Result<String> {
-        let git_dir = self.git_dir().await?;
+        let (git_dir, working_index, head) = tokio::join!(self.git_dir(), self.index_path(), self.head());
+        let git_dir = git_dir?;
         let index = git_dir.join(format!("kybern-index-{}", uuid::Uuid::new_v4().simple()));
         let index_str = index.to_string_lossy().to_string();
         let env = [("GIT_INDEX_FILE", index_str.as_str())];
         let result = async {
-            if let Some(head) = self.head().await {
-                self.git_env(&["read-tree", &head], &env).await?;
+            let working_index_metadata = match working_index {
+                Ok(working_index) => match tokio::fs::metadata(&working_index).await {
+                    Ok(metadata) => {
+                        // Seed from the real index so `git add` can reuse its
+                        // stat cache instead of re-hashing the whole worktree.
+                        tokio::fs::copy(&working_index, &index)
+                            .await
+                            .with_context(|| format!("copy git index {}", working_index.display()))?;
+                        Some(metadata)
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(error).with_context(|| format!("stat git index {}", working_index.display())),
+                },
+                Err(_) => None,
+            };
+
+            if working_index_metadata.is_none()
+                && let Some(head) = head.as_deref()
+            {
+                self.git_env(&["read-tree", head], &env).await?;
+            }
+            if let Some(metadata) = working_index_metadata {
+                // Verify racily-clean entries without throwing away the copied
+                // stat cache. A non-zero status only means paths need updating.
+                self.git_env_allow_nonzero(&["update-index", "--really-refresh"], &env).await?;
+                restore_file_times(&index, &metadata)?;
             }
             self.git_env(&["add", "-A", "--", "."], &env).await?;
             let tree = self.git_env(&["write-tree"], &env).await?;
             let mut args = vec!["commit-tree".to_string(), tree, "-m".into(), message.to_string()];
-            if let Some(head) = self.head().await {
+            if let Some(head) = head {
                 args.push("-p".into());
                 args.push(head);
             }
@@ -148,6 +190,9 @@ impl Repo {
         }
         .await;
         let _ = tokio::fs::remove_file(&index).await;
+        let mut lock = index.as_os_str().to_os_string();
+        lock.push(".lock");
+        let _ = tokio::fs::remove_file(PathBuf::from(lock)).await;
         result
     }
 
@@ -245,6 +290,18 @@ impl Repo {
         args.push(&p);
         self.git(&args).await.map(|_| ())
     }
+}
+
+fn restore_file_times(path: &Path, metadata: &std::fs::Metadata) -> Result<()> {
+    let modified = metadata.modified().context("read git index modified time")?;
+    let accessed = metadata.accessed().unwrap_or(modified);
+    let times = std::fs::FileTimes::new().set_accessed(accessed).set_modified(modified);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .with_context(|| format!("open temporary git index {}", path.display()))?
+        .set_times(times)
+        .with_context(|| format!("restore temporary git index times {}", path.display()))
 }
 
 fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
@@ -355,5 +412,24 @@ mod tests {
         std::fs::write(dir.path().join("x"), "1").unwrap();
         let c = repo.snapshot("s").await.unwrap();
         assert_eq!(c.len(), 40);
+    }
+
+    #[tokio::test]
+    async fn snapshot_preserves_staged_and_unstaged_index_state() {
+        let (dir, repo) = init_repo().await;
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "committed\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+
+        std::fs::write(&path, "staged value\n").unwrap();
+        repo.git(&["add", "a.txt"]).await.unwrap();
+        std::fs::write(&path, "working value\n").unwrap();
+        let status_before = repo.git(&["status", "--porcelain=v1"]).await.unwrap();
+
+        let snapshot = repo.snapshot("snapshot").await.unwrap();
+
+        assert_eq!(repo.git(&["status", "--porcelain=v1"]).await.unwrap(), status_before);
+        assert_eq!(repo.git(&["show", &format!("{snapshot}:a.txt")]).await.unwrap(), "working value");
     }
 }

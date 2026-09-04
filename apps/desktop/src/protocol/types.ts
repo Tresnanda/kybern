@@ -749,6 +749,8 @@ export interface PrListResult {
 
 export interface ProvidersListParams {
   project_id?: ProjectId;
+  /** Bypass the daemon's short-lived provider catalog cache. */
+  force_refresh?: boolean;
 }
 
 export interface FilesSearchParams {

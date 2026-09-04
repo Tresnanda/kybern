@@ -8,6 +8,7 @@ import {
   shouldHighlightSource,
   virtualRange,
 } from "./src/lib/workload.ts"
+import { advanceSequence, mergeSequencedSnapshot } from "./src/state/bootstrap.ts"
 
 test("thread and history diff summaries never transfer eager patches", () => {
   assert.deepEqual(diffSummaryRequest("thread-1"), { thread_id: "thread-1", include_patch: false })
@@ -49,4 +50,32 @@ test("the Explorer window renders only nearby fixed-height rows", () => {
     before: 27_776,
     after: 251_216,
   })
+})
+
+test("workspace hydration cannot roll a live thread back to an older snapshot", () => {
+  const live = { id: "thread-1", last_seq: 12, title: "Live" }
+  const stale = { id: "thread-1", last_seq: 9, title: "Stale" }
+  const fresh = { id: "thread-2", last_seq: 4, title: "Fresh" }
+
+  assert.deepEqual(mergeSequencedSnapshot({ "thread-1": live }, [stale, fresh]), {
+    "thread-1": live,
+    "thread-2": fresh,
+  })
+})
+
+test("workspace hydration retains records created after snapshot collection began", () => {
+  const createdLive = { id: "thread-new", last_seq: 21, title: "New" }
+  assert.deepEqual(mergeSequencedSnapshot({ "thread-new": createdLive }, []), {
+    "thread-new": createdLive,
+  })
+})
+
+test("live folds advance stale sequence numbers carried inside event projections", () => {
+  const staleProjection = { id: "thread-1", last_seq: 11, title: "Running" }
+  assert.deepEqual(advanceSequence(staleProjection, 12), {
+    id: "thread-1",
+    last_seq: 12,
+    title: "Running",
+  })
+  assert.equal(advanceSequence(staleProjection, 10), staleProjection)
 })

@@ -4401,6 +4401,11 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "force_refresh": {
+            "description": "Bypass the daemon's short-lived provider catalog cache.",
+            "type": "boolean",
+            "default": false
           }
         }
       },

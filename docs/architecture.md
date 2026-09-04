@@ -38,6 +38,21 @@ to the same threads later.
 | `apps/desktop` | Tauri + React desktop client (crate `kybern-desktop` for the shell). Desktop packages include `kybernd` as a Tauri sidecar but it remains an independent process. |
 | `apps/mobile` | Expo client. |
 
+## Local desktop startup
+
+The React shell renders immediately and begins resolving the local daemon in
+the background. When the desktop must start `kybernd`, it passes a non-secret,
+single-use startup id. The daemon initializes SQLite and the bootstrap token,
+binds its real loopback port, and writes an ephemeral endpoint announcement for
+that desktop process before restart recovery begins. The desktop can therefore
+open its reconnecting WebSocket while recovery is still running.
+
+The bound socket is not served until recovery has completed, and `daemon.port`
+is only published afterward. CLI and mobile discovery therefore retain the
+normal ready-only behavior. Existing and explicitly configured daemons are
+still authenticated and compatibility-checked before their endpoint is handed
+to the renderer.
+
 ## Threads and turns
 
 A thread binds a project (or a worktree of it), a provider instance, a

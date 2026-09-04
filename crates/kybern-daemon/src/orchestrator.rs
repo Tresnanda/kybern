@@ -53,7 +53,13 @@ struct LiveSession {
 
 struct ActiveTurn {
     id: TurnId,
+    /// Time after the harness was ready; retained for provider-reported turn duration fallback.
     started: std::time::Instant,
+    /// Time immediately before `TurnStarted` was persisted, for end-to-end startup timing.
+    startup_started: std::time::Instant,
+    provider: ProviderKind,
+    session_reused: bool,
+    first_event_observed: bool,
     /// Provider message id -> our MessageId, so deltas coalesce.
     messages: HashMap<String, MessageId>,
     completed: bool,
@@ -311,6 +317,7 @@ impl Orchestrator {
         }
         thread.status = ThreadStatus::Running;
         let thread = self.update_thread(thread)?;
+        let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
 
         // The user's intent is persisted and broadcast, so the call returns now
@@ -319,7 +326,7 @@ impl Orchestrator {
         // more; that runs in the background and reports failures as events.
         let this = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = this.start_turn(thread, turn_id, message_id, message).await {
+            if let Err(e) = this.start_turn(thread, turn_id, message_id, message, startup_started).await {
                 tracing::warn!(turn_id = %turn_id, error = %e, "failed to start turn");
             }
         });
@@ -328,8 +335,15 @@ impl Orchestrator {
 
     /// Bring up the session, snapshot the tree and hand the message to the agent.
     /// Failures mark the thread failed and are surfaced as `TurnFailed`.
-    async fn start_turn(&self, thread: Thread, turn_id: TurnId, message_id: MessageId, message: UserMessage) -> Result<()> {
-        let live = match self.ensure_session(&thread).await {
+    async fn start_turn(
+        &self,
+        thread: Thread,
+        turn_id: TurnId,
+        message_id: MessageId,
+        message: UserMessage,
+        startup_started: std::time::Instant,
+    ) -> Result<()> {
+        let (live, session_reused) = match self.ensure_session(&thread).await {
             Ok(live) => live,
             Err(error) => {
                 self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: error.to_string() })?;
@@ -339,12 +353,41 @@ impl Orchestrator {
                 return Err(error);
             }
         };
+        tracing::info!(
+            target: "kybern::turn_startup",
+            thread_id = %thread.id,
+            turn_id = %turn_id,
+            provider = %thread.provider.kind,
+            session_reused,
+            phase = "session_ready",
+            elapsed_ms = startup_started.elapsed().as_millis() as u64,
+        );
         {
             let mut turn = live.turn.lock().await;
-            *turn = Some(ActiveTurn { id: turn_id, started: std::time::Instant::now(), messages: HashMap::new(), completed: false });
+            *turn = Some(ActiveTurn {
+                id: turn_id,
+                started: std::time::Instant::now(),
+                startup_started,
+                provider: thread.provider.kind,
+                session_reused,
+                first_event_observed: false,
+                messages: HashMap::new(),
+                completed: false,
+            });
         }
         *live.last_turn_id.lock().await = Some(turn_id);
+        let checkpoint_started = std::time::Instant::now();
         self.checkpoint(&thread, turn_id, "before").await;
+        tracing::info!(
+            target: "kybern::turn_startup",
+            thread_id = %thread.id,
+            turn_id = %turn_id,
+            provider = %thread.provider.kind,
+            session_reused,
+            phase = "checkpoint_ready",
+            phase_ms = checkpoint_started.elapsed().as_millis() as u64,
+            elapsed_ms = startup_started.elapsed().as_millis() as u64,
+        );
 
         if let Err(e) = live.session.send_message(&message_id.to_string(), &message).await {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -354,6 +397,15 @@ impl Orchestrator {
             *live.turn.lock().await = None;
             return Err(e.into());
         }
+        tracing::info!(
+            target: "kybern::turn_startup",
+            thread_id = %thread.id,
+            turn_id = %turn_id,
+            provider = %thread.provider.kind,
+            session_reused,
+            phase = "prompt_sent",
+            elapsed_ms = startup_started.elapsed().as_millis() as u64,
+        );
         Ok(())
     }
 
@@ -712,12 +764,12 @@ impl Orchestrator {
         Ok((c.before, conversation_rewound))
     }
 
-    async fn ensure_session(&self, thread: &Thread) -> Result<Arc<LiveSession>> {
+    async fn ensure_session(&self, thread: &Thread) -> Result<(Arc<LiveSession>, bool)> {
         if let Some(live) = self.inner.sessions.lock().await.get(&thread.id).cloned() {
-            return Ok(live);
+            return Ok((live, true));
         }
         let rewind = self.inner.pending_rewinds.lock().await.remove(&thread.id);
-        self.spawn_session(thread, rewind).await
+        self.spawn_session(thread, rewind).await.map(|live| (live, false))
     }
 
     async fn spawn_session(&self, thread: &Thread, rewind: Option<RewindPoint>) -> Result<Arc<LiveSession>> {
@@ -962,6 +1014,31 @@ impl Orchestrator {
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
         let mut turn_guard = live.turn.lock().await;
         let turn_id = turn_guard.as_ref().map(|t| t.id);
+        let response_event = matches!(
+            &ev,
+            DriverEvent::TextDelta { .. }
+                | DriverEvent::ThinkingDelta { .. }
+                | DriverEvent::MessageCompleted { .. }
+                | DriverEvent::ToolStarted(_)
+                | DriverEvent::PermissionRequest { .. }
+                | DriverEvent::TurnCompleted { .. }
+                | DriverEvent::TurnFailed { .. }
+        );
+        if response_event
+            && let Some(turn) = turn_guard.as_mut()
+            && !turn.first_event_observed
+        {
+            turn.first_event_observed = true;
+            tracing::info!(
+                target: "kybern::turn_startup",
+                thread_id = %thread_id,
+                turn_id = %turn.id,
+                provider = %turn.provider,
+                session_reused = turn.session_reused,
+                phase = "first_provider_event",
+                elapsed_ms = turn.startup_started.elapsed().as_millis() as u64,
+            );
+        }
         match ev {
             DriverEvent::SessionBound { session_id, model } => {
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;

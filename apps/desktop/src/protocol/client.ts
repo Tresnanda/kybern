@@ -64,8 +64,8 @@ interface EventSubscription {
   lastSeq: number | undefined;
   /** Daemon-side id for the current socket, undefined while (re)subscribing. */
   remoteId: SubscriptionId | undefined;
-  /** Called when a resubscribe completes, with `head_seq`. */
-  onResubscribed?: (headSeq: number) => void;
+  /** Called whenever the daemon has established the subscription. */
+  onSubscribed?: (headSeq: number) => void;
 }
 
 export interface Subscription {
@@ -178,7 +178,7 @@ export class KybernClient {
   subscribeEvents(
     params: EventsSubscribeParams,
     handler: EventHandler,
-    onResubscribed?: (headSeq: number) => void,
+    onSubscribed?: (headSeq: number) => void,
   ): Subscription {
     const localId = this.nextLocalSubId++;
     const sub: EventSubscription = {
@@ -186,10 +186,10 @@ export class KybernClient {
       handler,
       lastSeq: params.after_seq,
       remoteId: undefined,
-      onResubscribed,
+      onSubscribed,
     };
     this.subscriptions.set(localId, sub);
-    if (this._status === "open") void this.issueSubscribe(sub, false);
+    if (this._status === "open") void this.issueSubscribe(sub);
     return {
       unsubscribe: () => {
         this.subscriptions.delete(localId);
@@ -226,7 +226,7 @@ export class KybernClient {
       if (this.ws !== ws) return;
       this.attempt = 0;
       this.setStatus("open");
-      for (const sub of this.subscriptions.values()) void this.issueSubscribe(sub, true);
+      for (const sub of this.subscriptions.values()) void this.issueSubscribe(sub);
     };
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
@@ -324,7 +324,7 @@ export class KybernClient {
     if (handlers) for (const h of handlers) h(n.params);
   }
 
-  private async issueSubscribe(sub: EventSubscription, isResubscribe: boolean): Promise<void> {
+  private async issueSubscribe(sub: EventSubscription): Promise<void> {
     const params: EventsSubscribeParams = { ...sub.params };
     if (sub.lastSeq !== undefined) params.after_seq = sub.lastSeq;
     try {
@@ -335,7 +335,7 @@ export class KybernClient {
       }
       sub.remoteId = res.subscription_id;
       this.byRemoteId.set(res.subscription_id, sub);
-      if (isResubscribe) sub.onResubscribed?.(res.head_seq);
+      sub.onSubscribed?.(res.head_seq);
     } catch {
       // Socket dropped mid-subscribe; onopen will retry.
     }
@@ -348,7 +348,7 @@ export class KybernClient {
       this.byRemoteId.delete(old);
       this.call("events.unsubscribe", { subscription_id: old }).catch(() => {});
     }
-    await this.issueSubscribe(sub, true);
+    await this.issueSubscribe(sub);
   }
 
   private isLive(sub: EventSubscription): boolean {
