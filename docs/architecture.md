@@ -33,7 +33,8 @@ to the same threads later.
 | `kybern-git` | Shells out to `git`. Snapshots use a temporary index so the user's index is never touched and untracked files are included. |
 | `kybern-drivers` | `AgentDriver` (probe, spawn, one-shot) and `AgentSession` (send, interrupt, approvals, mode, model). One native module per agent. |
 | `kybern-daemon` | `kybernd`. axum for HTTP and WebSocket, tokio for everything else. |
-| `kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell; the web app speaks the same protocol from TypeScript (`apps/desktop/src/protocol`). |
+| `kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell. |
+| `packages/kybern-client` | Shared TypeScript wire types, connection lifecycle and endpoint addressing for desktop and mobile. |
 | `kybern-cli` | `kybern`. Also the integration harness for the daemon. |
 | `apps/desktop` | Tauri + React desktop client (crate `kybern-desktop` for the shell). Desktop packages include `kybernd` as a Tauri sidecar but it remains an independent process. |
 | `apps/mobile` | Expo client. |
@@ -44,14 +45,32 @@ The React shell renders immediately and begins resolving the local daemon in
 the background. When the desktop must start `kybernd`, it passes a non-secret,
 single-use startup id. The daemon initializes SQLite and the bootstrap token,
 binds its real loopback port, and writes an ephemeral endpoint announcement for
-that desktop process before restart recovery begins. The desktop can therefore
-open its reconnecting WebSocket while recovery is still running.
+that desktop process before restart recovery begins. The native environment
+resolver waits for recovery and verifies `daemon.info` before handing the
+endpoint and environment identity to the renderer. The shell displays its
+connecting state during this process.
 
 The bound socket is not served until recovery has completed, and `daemon.port`
 is only published afterward. CLI and mobile discovery therefore retain the
 normal ready-only behavior. Existing and explicitly configured daemons are
 still authenticated and compatibility-checked before their endpoint is handed
 to the renderer.
+
+## Remote environments
+
+Each daemon data directory defines an environment. Desktop selection replaces
+the entire workspace with that environment's projects, threads, settings and
+runtime. Native profiles pin the daemon identity and store device credentials
+in the OS credential store. Every workspace store and connection runtime is
+scoped to that identity; async operations capture the originating runtime.
+The shared TypeScript client verifies identity and protocol before publishing
+an open connection, owns reconnects, and replays subscriptions by cursor.
+See [Remote environments](remote-environments.md) for setup and operation.
+
+Queued messages are daemon-owned and persisted transactionally with their
+events. A worker dispatches them when their thread is idle. Message IDs remain
+as deduplication receipts after consumption or cancellation. A failed or
+interrupted turn pauses the queue, and archiving clears pending messages.
 
 ## Threads and turns
 
@@ -123,7 +142,12 @@ pi has no permission system and runs as Full access only.
 Tokens are SHA-256 hashed in SQLite with a scope list. The desktop bootstrap
 token in `daemon.token` carries every scope. Pairing mints a six-digit code
 that `POST /pair` exchanges once for a client-scoped token. Remote clients
-reach the daemon over LAN or Tailscale with the same WebSocket.
+reach the daemon through a private network, TLS proxy or SSH tunnel.
+Desktop and mobile exchange their bearer credential at `POST /session` for a
+30-second, single-use WebSocket ticket. Revoking a device invalidates unused
+tickets and closes its current sockets. Event subscription acknowledgements
+precede replay; replay and live delivery share an ordering gate so clients
+cannot miss events at the transition.
 
 ## Data directory
 
@@ -135,6 +159,7 @@ reach the daemon over LAN or Tailscale with the same WebSocket.
   themes/            JSON themes for the desktop app
   daemon.token       bootstrap bearer token (0600)
   daemon.port        port of the running daemon
+  daemon.listen      bound socket address for local CLI discovery
   worktrees/         per-thread git worktrees
   assets/            uploaded attachments
 ```

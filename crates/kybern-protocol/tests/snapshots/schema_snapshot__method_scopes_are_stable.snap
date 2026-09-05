@@ -10,6 +10,8 @@ expression: scopes
   - "orchestration:read"
 - - projects.list
   - "orchestration:read"
+- - projects.browse
+  - "orchestration:read"
 - - projects.add
   - "orchestration:operate"
 - - projects.update
@@ -27,6 +29,12 @@ expression: scopes
 - - threads.archive
   - "orchestration:operate"
 - - threads.send
+  - "orchestration:operate"
+- - queue.add
+  - "orchestration:operate"
+- - queue.list
+  - "orchestration:read"
+- - queue.remove
   - "orchestration:operate"
 - - threads.interrupt
   - "orchestration:operate"

@@ -119,7 +119,11 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
     [setTabs],
   )
 
-  const closeTab = useCallback((key: string) => setTabs((tabs) => tabs.filter((t) => t.key !== key)), [setTabs])
+  const closeTab = useCallback((key: string) => {
+    const tab = useStore.getState().terminalTabs[threadId]?.find((item) => item.key === key)
+    if (tab?.terminalId) void rpc().call("terminals.close", { terminal_id: tab.terminalId }).catch(() => {})
+    setTabs((tabs) => tabs.filter((t) => t.key !== key))
+  }, [setTabs, threadId])
   const retitle = useCallback((key: string, title: string) => setTabs((tabs) => tabs.map((t) => (t.key === key && t.kind === "shell" ? { ...t, title } : t))), [setTabs])
 
   // The pane always shows a live terminal: open a shell the first time it is used.
@@ -159,7 +163,7 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
                 <>
                   <MenuSeparator />
                   <MenuGroup>
-                    <MenuGroupLabel>Agent CLIs on this Mac</MenuGroupLabel>
+                    <MenuGroupLabel>Agent CLIs in this environment</MenuGroupLabel>
                     {clis.map((c) => (
                       <MenuItem key={c.kind} onClick={() => addTab(c.kind, c.command)}>
                         <ProviderMark kind={c.kind} size={14} className="size-3.5 shrink-0 opacity-100" /> {c.label}
@@ -294,6 +298,9 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       .catch(() => {})
 
     const client = rpc()
+    const ownerStore = useStore
+    let attaching = false
+    let exitTimer: ReturnType<typeof setTimeout> | undefined
     const offOut = client.onNotification(TERMINAL_OUTPUT_NOTIFICATION, (p) => {
       const n = p as TerminalOutputNotification
       if (n.terminal_id === idRef.current) term.write(b64ToBytes(n.data))
@@ -304,7 +311,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       term.write(`\r\n\x1b[2m[process exited${n.exit_code != null ? ` with ${n.exit_code}` : ""}]\x1b[0m\r\n`)
       idRef.current = null
       // A tab whose program ended closes itself, as in Synara's dock.
-      setTimeout(() => onExitRef.current(), 600)
+      exitTimer = setTimeout(() => { if (!disposed) onExitRef.current() }, 600)
     })
     const titleSub = term.onTitleChange((raw) => {
       // Shells announce "user@host:/full/path"; the tab only needs the folder name.
@@ -316,19 +323,47 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       onTitleRef.current(name.length > 32 ? `${name.slice(0, 31)}…` : name)
     })
 
-    client
-      .call("terminals.create", { thread_id: threadId, cwd, cols: term.cols, rows: term.rows, command: tab.command })
-      .then(async (info) => {
+    const attach = async () => {
+      if (disposed || attaching || client.status !== "open") return
+      const startedAt = ownerStore.getState().info?.started_at
+      const saved = ownerStore.getState().terminalTabs[threadId]?.find((item) => item.key === tab.key)
+      if (!saved) return
+      if (saved.daemonStartedAt && saved.daemonStartedAt !== startedAt) {
+        setError("The environment restarted. Open a new terminal tab to start a new process.")
+        return
+      }
+      attaching = true
+      setError(null)
+      setReady(false)
+      // Persist the request identity before sending. Retrying after a lost
+      // acknowledgment attaches to the same PTY instead of launching twice.
+      ownerStore.getState().set((state) => ({ terminalTabs: {
+        ...state.terminalTabs,
+        [threadId]: (state.terminalTabs[threadId] ?? []).map((item) => item.key === tab.key ? { ...item, terminalId: tab.key, daemonStartedAt: startedAt } : item),
+      } }))
+      try {
+        const info = await client.call("terminals.create", { terminal_id: tab.key, thread_id: threadId, cwd, cols: term.cols, rows: term.rows, command: tab.command })
         if (disposed) {
-          client.call("terminals.close", { terminal_id: info.id }).catch(() => {})
+          if (!ownerStore.getState().terminalTabs[threadId]?.some((item) => item.key === tab.key)) {
+            void client.call("terminals.close", { terminal_id: info.id }).catch(() => {})
+          }
           return
         }
         idRef.current = info.id
+        term.reset()
         await client.call("terminals.subscribe", { terminal_id: info.id, replay: true })
-        setReady(true)
-        term.focus()
-      })
-      .catch((e) => setError(errorText(e)))
+        if (!disposed) { setReady(true); if (active) term.focus() }
+      } catch (e) { if (!disposed) setError(errorText(e)) }
+      finally { attaching = false }
+    }
+    const offStatus = client.onStatus((status) => {
+      if (status === "open") void attach()
+      else if (!disposed) setReady(false)
+    })
+    const offLag = client.onNotification("terminal.lagged", (params) => {
+      if ((params as { terminal_id: string }).terminal_id === idRef.current) void attach()
+    })
+    void attach()
 
     const inputSub = term.onData((data) => {
       if (idRef.current) client.call("terminals.input", { terminal_id: idRef.current, data: bytesToB64(data) }).catch(() => {})
@@ -347,7 +382,10 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       titleSub.dispose()
       offOut()
       offExit()
-      if (idRef.current) client.call("terminals.close", { terminal_id: idRef.current }).catch(() => {})
+      offStatus()
+      offLag()
+      clearTimeout(exitTimer)
+      if (idRef.current) client.call("terminals.unsubscribe", { terminal_id: idRef.current }).catch(() => {})
       idRef.current = null
       term.dispose()
       termRef.current = null

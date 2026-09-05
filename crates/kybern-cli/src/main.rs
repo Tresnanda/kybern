@@ -87,6 +87,11 @@ enum Cmd {
     },
     /// Print a thread's transcript.
     Show { thread: String },
+    /// Manage durable follow-ups on this environment.
+    Queue {
+        #[command(subcommand)]
+        cmd: QueueCmd,
+    },
     /// Follow live events for one thread or all threads.
     Watch {
         thread: Option<String>,
@@ -139,6 +144,9 @@ enum Cmd {
     Pair {
         #[arg(long)]
         label: Option<String>,
+        /// Address reachable from the receiving device (e.g. an HTTPS proxy or SSH tunnel).
+        #[arg(long)]
+        address: Option<String>,
     },
     /// List or revoke access tokens.
     Tokens {
@@ -190,8 +198,19 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum QueueCmd {
+    List { thread: Option<String> },
+    Add { thread: String, prompt: Vec<String> },
+    Remove { thread: String, id: String },
+}
+
+#[derive(Subcommand)]
 enum ProjectsCmd {
     List,
+    /// Browse directories on the connected environment.
+    Browse {
+        path: Option<String>,
+    },
     Add {
         path: PathBuf,
         #[arg(long)]
@@ -339,8 +358,14 @@ async fn main() -> Result<()> {
                 let r = client.call::<ProjectsList>(Empty {}).await?;
                 if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::projects(&r.projects) }
             }
+            ProjectsCmd::Browse { path } => {
+                let result = client.call::<ProjectsBrowse>(ProjectsBrowseParams { path }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
             ProjectsCmd::Add { path, name } => {
-                let p = client.call::<ProjectsAdd>(ProjectsAddParams { path: absolute(&path)?, name }).await?;
+                let p = client
+                    .call::<ProjectsAdd>(ProjectsAddParams { path: host_path(&client, &path.to_string_lossy()).await?, name })
+                    .await?;
                 if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  {}  {}", p.id, p.name, p.path) }
             }
             ProjectsCmd::Remove { id } => {
@@ -396,6 +421,22 @@ async fn main() -> Result<()> {
                 render::follow_turn(&client, sub.subscription_id, thread_id, json).await?;
             }
         }
+        Cmd::Queue { cmd } => match cmd {
+            QueueCmd::List { thread } => {
+                let result = client.call::<QueueList>(QueueListParams { thread_id: thread.map(|id| id.parse()).transpose()? }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            QueueCmd::Add { thread, prompt } => {
+                let id = uuid::Uuid::now_v7();
+                client
+                    .call::<QueueAdd>(QueuedMessage { id, thread_id: thread.parse()?, message: UserMessage::text(prompt.join(" ")) })
+                    .await?;
+                println!("{id}");
+            }
+            QueueCmd::Remove { thread, id } => {
+                client.call::<QueueRemove>(QueueRemoveParams { thread_id: thread.parse()?, id: id.parse()? }).await?;
+            }
+        },
         Cmd::Show { thread } => {
             let r = client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.parse()? }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::transcript(&r) }
@@ -530,11 +571,19 @@ async fn main() -> Result<()> {
             let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
         }
-        Cmd::Pair { label } => {
-            let r = client.call::<PairingCreate>(PairingCreateParams { label }).await?;
-            println!("Pairing code: {}   (expires {})", r.code, r.expires_at.format("%H:%M"));
-            for e in r.endpoints {
-                println!("  {e}");
+        Cmd::Pair { label, address } => {
+            // Validate before minting a code, so a typo doesn't waste an invitation.
+            let address = address.map(|value| kybern_client::address::normalize(&value)).transpose()?;
+            let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
+            let mut pairing = client.call::<PairingCreate>(PairingCreateParams { label }).await?;
+            if let Some(address) = address {
+                pairing.endpoints = vec![address];
+            }
+            let report = kybern_client::pairing::PairingReport::new(&pairing, &info.environment_id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.render());
             }
         }
         Cmd::Tokens { cmd } => match cmd.unwrap_or(TokensCmd::List) {
@@ -638,8 +687,14 @@ async fn main() -> Result<()> {
 
 pub(crate) use TerminalCmd as TerminalCommand;
 
-fn absolute(p: &PathBuf) -> Result<String> {
-    Ok(std::fs::canonicalize(p).with_context(|| format!("{} does not exist", p.display()))?.to_string_lossy().to_string())
+async fn host_path(client: &Client, path: &str) -> Result<String> {
+    let explicit = std::env::var_os("KYBERN_URL").is_some() || std::env::args().any(|arg| arg == "--url" || arg.starts_with("--url="));
+    let path = if !explicit && !PathBuf::from(path).is_absolute() && !path.starts_with('~') {
+        std::env::current_dir()?.join(path).to_string_lossy().into_owned()
+    } else {
+        path.into()
+    };
+    Ok(client.call::<ProjectsBrowse>(ProjectsBrowseParams { path: Some(path) }).await?.path)
 }
 
 fn join_prompt(parts: Vec<String>) -> Result<String> {
@@ -654,10 +709,13 @@ async fn resolve_project(client: &Client, key: &str, add_if_missing: bool) -> Re
     if let Ok(id) = key.parse::<ProjectId>() {
         return Ok(id);
     }
-    let path = absolute(&PathBuf::from(key))?;
     let list = client.call::<ProjectsList>(Empty {}).await?;
-    if let Some(p) = list.projects.iter().find(|p| p.path == path || p.name == key) {
+    if let Some(p) = list.projects.iter().find(|p| p.path == key || p.name == key) {
         return Ok(p.id);
+    }
+    let path = host_path(client, key).await?;
+    if let Some(project) = list.projects.iter().find(|project| project.path == path) {
+        return Ok(project.id);
     }
     if add_if_missing {
         let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None }).await?;

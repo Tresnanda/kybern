@@ -1,6 +1,7 @@
 // Owns the single KybernClient for the app and the stored endpoint.
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { AppState } from "react-native";
 import { type ConnectionStatus, type Endpoint, KybernClient } from "@/protocol";
 import { clearEndpoint, loadEndpoint, saveEndpoint } from "./store";
 
@@ -57,6 +58,13 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     };
   }, [start]);
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void clientRef.current?.checkConnection();
+    });
+    return () => subscription.remove();
+  }, []);
+
   const connectTo = useCallback(
     async (ep: Endpoint) => {
       const c = start(ep);
@@ -65,7 +73,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
           if (s === "open") {
             off();
             resolve();
-          } else if (s === "reconnecting" || s === "closed") {
+          } else if (s === "reconnecting" || s === "closed" || s === "failed") {
             off();
             c.close();
             reject(new Error(d ?? "Could not reach the daemon"));
@@ -73,8 +81,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
         });
       });
       // Verify the token actually works before persisting.
-      await c.call("daemon.info", {});
-      await saveEndpoint(ep);
+      const info = await c.call("daemon.info", {});
+      await saveEndpoint({ ...ep, environmentId: info.environment_id });
     },
     [start],
   );

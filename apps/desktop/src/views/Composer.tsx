@@ -42,6 +42,7 @@ import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, Plus
 import { cn } from "@/lib/utils"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
+import { useStore } from "@/state/store"
 
 export interface ComposerHandle {
   focus: () => void
@@ -65,6 +66,8 @@ export interface SlashCommand {
 }
 
 export interface ComposerProps {
+  /** Unique within the selected environment: a thread or project draft. */
+  draftKey?: string
   placeholder?: string
   running?: boolean
   disabled?: boolean
@@ -187,7 +190,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const {
     placeholder = DEFAULT_PLACEHOLDER,
     running,
-    disabled,
+    disabled: disabledByParent,
     disabledReason,
     onSend,
     onStop,
@@ -208,9 +211,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     surfaceMode = "single",
     onDigit,
   } = props
-  const [text, setText] = useState("")
+  const [ownerStore] = useState(() => useStore)
+  const [savedDraft] = useState(() => props.draftKey ? ownerStore.getState().composerDrafts[props.draftKey] : undefined)
+  const connected = useStore((s) => s.connection.state === "open")
+  const disabled = disabledByParent || !connected
+  const [text, setText] = useState(savedDraft?.text ?? "")
   const [caret, setCaret] = useState(0)
-  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [attachments, setAttachments] = useState<Attachment[]>(savedDraft?.attachments ?? [])
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
   const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
@@ -219,12 +226,27 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [skillCatalog, setSkillCatalog] = useState<{ key: string; skills: SkillInfo[] }>({ key: "", skills: [] })
   const [menuSel, setMenuSel] = useState<{ sig: string; index: number }>({ sig: "", index: 0 })
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
-  const mentioned = useRef(new Set<string>())
-  const selectedSkills = useRef(new Map<string, SkillInfo>())
+  const mentioned = useRef(new Set<string>(savedDraft?.mentions ?? []))
+  const selectedSkills = useRef(new Map<string, SkillInfo>((savedDraft?.skills ?? []).map((skill) => [skill.name.toLowerCase(), skill])))
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const menuList = useRef<HTMLDivElement>(null)
   const previewUrls = useRef(new Set<string>())
+
+  useLayoutEffect(() => {
+    const key = props.draftKey
+    if (!key) return
+    ownerStore.getState().set((state) => {
+      const composerDrafts = { ...state.composerDrafts }
+      if (text || attachments.length) {
+        composerDrafts[key] = {
+          text, attachments: attachments.map(({ id, name, media_type, size }) => ({ id, name, media_type, size })),
+          mentions: [...mentioned.current], skills: [...selectedSkills.current.values()],
+        }
+      } else delete composerDrafts[key]
+      return { composerDrafts }
+    })
+  }, [text, attachments, ownerStore, props.draftKey])
 
   useEffect(
     () => () => {
@@ -395,6 +417,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     setSending(true)
     try {
       await onSend({ parts: buildParts() })
+      if (props.draftKey) ownerStore.getState().set((state) => {
+        const composerDrafts = { ...state.composerDrafts }
+        delete composerDrafts[props.draftKey!]
+        return { composerDrafts }
+      })
       setText("")
       for (const attachment of attachments) {
         if (attachment.preview) {
@@ -421,8 +448,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (arr.length === 0) return
     setUploading((n) => n + arr.length)
     for (const f of arr) {
+      if (ownerStore !== useStore) break
       try {
         const info = await uploadFile(f)
+        if (ownerStore !== useStore) break
         const preview = f.type.startsWith("image/") ? URL.createObjectURL(f) : undefined
         if (preview) previewUrls.current.add(preview)
         setAttachments((a) => [...a, { ...info, preview }])
@@ -432,7 +461,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         setUploading((n) => n - 1)
       }
     }
-  }, [])
+  }, [ownerStore])
 
   const removeAttachment = (attachment: Attachment) => {
     if (attachment.preview) {

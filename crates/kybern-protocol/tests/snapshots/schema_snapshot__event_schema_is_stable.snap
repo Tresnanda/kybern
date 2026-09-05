@@ -81,6 +81,39 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "message": {
+          "$ref": "#/$defs/QueuedMessage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "message_queued"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "const": "message_removed"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "message_id": {
           "type": "string",
           "format": "uuid"
@@ -644,6 +677,27 @@ expression: schema_for!(ThreadEvent)
       "required": [
         "path",
         "branch"
+      ]
+    },
+    "QueuedMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "message"
       ]
     },
     "UserMessage": {

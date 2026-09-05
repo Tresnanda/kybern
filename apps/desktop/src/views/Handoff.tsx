@@ -30,7 +30,7 @@ export function HandoffDialog() {
           <DialogDescription>Starts a new thread in the same project. The new agent gets the conversation so far and continues from there.</DialogDescription>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-1 pb-5">
-          {choices.length === 0 && <p className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">No other agent is installed on this Mac.</p>}
+          {choices.length === 0 && <p className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">No other agent is installed in this environment.</p>}
           {choices.map((p) => {
             const model = p.models?.find((m) => m.is_default) ?? p.models?.[0]
             return (

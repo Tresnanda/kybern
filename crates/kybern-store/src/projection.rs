@@ -344,6 +344,8 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             }
             EventPayload::ThreadCreated { .. }
             | EventPayload::ThreadUpdated { .. }
+            | EventPayload::MessageQueued { .. }
+            | EventPayload::MessageRemoved { .. }
             | EventPayload::ThreadArchived
             | EventPayload::ProviderSessionBound { .. }
             | EventPayload::ToolCallOutputDelta { .. }

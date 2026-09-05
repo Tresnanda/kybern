@@ -18,16 +18,42 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/pair", post(pair))
+        .route("/pair", post(pair).options(asset_preflight))
+        .route("/session", post(session).options(asset_preflight))
         .route("/assets", post(upload_asset).options(asset_preflight))
-        .route("/assets/{id}", get(get_asset))
+        .route("/assets/{id}", get(get_asset).options(asset_preflight))
 }
 
-async fn pair(State(state): State<AppState>, Json(req): Json<PairRequest>) -> Response {
-    match state.pairing.redeem(&state.store, &req.code, req.device_name) {
-        Ok((token, scopes)) => Json(PairResponse { token, scopes, environment_id: state.environment_id.clone() }).into_response(),
-        Err(e) => (StatusCode::UNAUTHORIZED, e.to_string()).into_response(),
+async fn pair(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<PairRequest>) -> Response {
+    let origin = allowed_asset_origin(&headers);
+    if headers.contains_key(header::ORIGIN) && origin.is_none() {
+        return (StatusCode::FORBIDDEN, "origin cannot pair").into_response();
     }
+    let response = match state.pairing.redeem(&state.store, &req.code, req.device_name) {
+        Ok((token, scopes)) => Json(PairResponse { token, scopes, environment_id: state.environment_id.clone() }).into_response(),
+        Err(e) if e.is::<crate::access::PairingRateLimited>() => (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNAUTHORIZED, e.to_string()).into_response(),
+    };
+    let mut response = with_asset_cors(response, origin);
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let origin = allowed_asset_origin(&headers);
+    if headers.contains_key(header::ORIGIN) && origin.is_none() {
+        return (StatusCode::FORBIDDEN, "origin cannot connect").into_response();
+    }
+    let response = match bearer(&headers).and_then(|raw| authenticate(&state.store, &raw).ok().flatten()) {
+        Some(principal) => match state.tickets.create(principal) {
+            Ok(ticket) => Json(serde_json::json!({ "ticket": ticket })).into_response(),
+            Err(_) => (StatusCode::TOO_MANY_REQUESTS, "too many pending connections").into_response(),
+        },
+        None => (StatusCode::UNAUTHORIZED, "invalid device credential").into_response(),
+    };
+    let mut response = with_asset_cors(response, origin);
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn bearer(headers: &HeaderMap) -> Option<String> {
@@ -82,7 +108,7 @@ async fn asset_preflight(headers: HeaderMap) -> Response {
 
     let response = StatusCode::NO_CONTENT.into_response();
     let mut response = with_asset_cors(response, origin);
-    response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("POST, OPTIONS"));
+    response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, OPTIONS"));
     response
         .headers_mut()
         .insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("authorization, content-type, x-kybern-filename"));
@@ -90,7 +116,7 @@ async fn asset_preflight(headers: HeaderMap) -> Response {
     response
 }
 
-fn allowed_asset_origin(headers: &HeaderMap) -> Option<HeaderValue> {
+pub(crate) fn allowed_asset_origin(headers: &HeaderMap) -> Option<HeaderValue> {
     let origin = headers.get(header::ORIGIN)?;
     let value = origin.to_str().ok()?;
     let is_tauri = matches!(value, "http://tauri.localhost" | "https://tauri.localhost" | "tauri://localhost");
@@ -109,6 +135,16 @@ fn with_asset_cors(mut response: Response, origin: Option<HeaderValue>) -> Respo
 }
 
 async fn get_asset(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>) -> Response {
+    let origin = allowed_asset_origin(&headers);
+    let mut response = get_asset_inner(state, headers, id).await;
+    if let Some(origin) = origin {
+        response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    }
+    response.headers_mut().insert(header::VARY, HeaderValue::from_static("Origin"));
+    response
+}
+
+async fn get_asset_inner(state: AppState, headers: HeaderMap, id: Uuid) -> Response {
     let Some(raw) = bearer(&headers).or_else(|| headers.get("x-kybern-token").and_then(|v| v.to_str().ok()).map(str::to_string)) else {
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
@@ -159,7 +195,7 @@ mod tests {
         let response = asset_preflight(headers("tauri://localhost")).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(), "tauri://localhost");
-        assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_METHODS).unwrap(), "POST, OPTIONS");
+        assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_METHODS).unwrap(), "GET, POST, OPTIONS");
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_HEADERS).unwrap(), "authorization, content-type, x-kybern-filename");
     }
 }

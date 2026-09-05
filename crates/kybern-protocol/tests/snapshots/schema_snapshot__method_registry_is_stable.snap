@@ -6,6 +6,7 @@ expression: names
 - daemon.shutdown
 - providers.list
 - projects.list
+- projects.browse
 - projects.add
 - projects.update
 - projects.remove
@@ -15,6 +16,9 @@ expression: names
 - threads.update
 - threads.archive
 - threads.send
+- queue.add
+- queue.list
+- queue.remove
 - threads.interrupt
 - tasks.list
 - tasks.stop

@@ -117,6 +117,17 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE threads ADD COLUMN effort TEXT;
     ",
+    // v6: durable follow-ups, including consumed/canceled receipts for retry deduplication.
+    "
+    CREATE TABLE queued_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        payload TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        pending INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX queue_pending ON queued_messages(pending, seq);
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

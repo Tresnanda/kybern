@@ -56,6 +56,7 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "@/lib/synara/sidebarRowStyles"
 import { pickFolder, platform } from "@/lib/tauri"
+import { activeEnvironment } from "@/state/environments"
 import { cn } from "@/lib/utils"
 import type { Project, Thread, ThreadActivityState } from "@/protocol"
 import { newThread } from "@/state/nav"
@@ -64,6 +65,8 @@ import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from
 import { selectThreadsForProject, useStore } from "@/state/store"
 
 import { SidebarLeadingControls } from "./chrome"
+import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
+import { ProjectPicker } from "./ProjectPicker"
 
 const MAX_PROJECT_THREADS = 8
 
@@ -81,13 +84,18 @@ export function ThreadSidebar() {
   const pullsActive = useStore((s) => s.selected.kind === "pulls")
   const selected = useStore((s) => s.selected)
   const mac = platform() === "macos"
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false)
+  const connection = useStore((s) => s.connection)
 
   const onAddProject = async () => {
+    if (connection.state !== "open") { toast("Connect to this environment before adding a project"); return }
+    if (!activeEnvironment()?.local) { setProjectPickerOpen(true); return }
+    const store = useStore
     const path = await pickFolder()
-    if (!path) return
+    if (!path || store !== useStore) return
     try {
       const p = await addProject(path)
-      useStore.getState().selectDraft(p.id)
+      store.getState().selectDraft(p.id)
     } catch (e) {
       toast.error("Unable to add project", { description: errorText(e) })
     }
@@ -147,6 +155,7 @@ export function ThreadSidebar() {
           </div>
         </div>
 
+        <EnvironmentSwitcher />
         <div className="sidebar-surface-enter">
           <SidebarGroup className="px-1.5 pt-1 pb-1.5">
             <SidebarMenu className="gap-0.5">
@@ -178,6 +187,7 @@ export function ThreadSidebar() {
         </div>
       </SidebarContent>
 
+      <ProjectPicker open={projectPickerOpen} onOpenChange={setProjectPickerOpen} />
       <SidebarFooter className="gap-2 border-t border-sidebar-border p-2 font-system-ui">
         <SidebarMenu>
           <SidebarMenuItem>

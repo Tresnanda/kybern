@@ -350,9 +350,9 @@ function parsePane(
   }
 }
 
-export function readPersistedSplitView(): SplitView | null {
+export function readPersistedSplitView(environmentId?: string): SplitView | null {
   try {
-    const raw = globalThis.localStorage?.getItem(SPLIT_VIEW_STORAGE_KEY)
+    const raw = globalThis.localStorage?.getItem(environmentId ? `${SPLIT_VIEW_STORAGE_KEY}:${environmentId}` : SPLIT_VIEW_STORAGE_KEY)
     if (!raw) return null
     const stored = JSON.parse(raw) as { version?: unknown; splitView?: unknown }
     if (
@@ -374,14 +374,15 @@ export function readPersistedSplitView(): SplitView | null {
   }
 }
 
-export function persistSplitView(splitView: SplitView | null): void {
+export function persistSplitView(splitView: SplitView | null, environmentId?: string): void {
+  const key = environmentId ? `${SPLIT_VIEW_STORAGE_KEY}:${environmentId}` : SPLIT_VIEW_STORAGE_KEY
   try {
     if (!splitView) {
-      globalThis.localStorage?.removeItem(SPLIT_VIEW_STORAGE_KEY)
+      globalThis.localStorage?.removeItem(key)
       return
     }
     globalThis.localStorage?.setItem(
-      SPLIT_VIEW_STORAGE_KEY,
+      key,
       JSON.stringify({ version: SPLIT_VIEW_STORAGE_VERSION, splitView })
     )
   } catch {

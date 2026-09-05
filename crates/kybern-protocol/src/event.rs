@@ -30,6 +30,12 @@ pub enum EventPayload {
         thread: Thread,
     },
     ThreadArchived,
+    MessageQueued {
+        message: crate::methods::QueuedMessage,
+    },
+    MessageRemoved {
+        message_id: MessageId,
+    },
     TurnStarted {
         message_id: MessageId,
         message: UserMessage,

@@ -1,3 +1,5 @@
+import { activeRuntime } from "@/state/rpc"
+import { activeEnvironment } from "@/state/environments"
 // Environment panel, to Synara's EnvironmentPanel: a floating w-72 card
 // docked at the right edge of the thread, toggled from the header. Rows use
 // the EnvironmentRow skin; sections can be hidden from the gear menu.
@@ -34,7 +36,7 @@ import {
 import { openExternal, openPath, revealInFinder } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { ThreadId } from "@/protocol"
-import { errorText, loadDiff, loadGitStatus, rpc } from "@/state/rpc"
+import { errorText, loadDiff, loadGitStatus } from "@/state/rpc"
 import { diffKey, useStore } from "@/state/store"
 
 /** Chat content is inset by this much while the panel is docked (288px card + 24px gutters). */
@@ -174,12 +176,13 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
   const cwd = thread?.cwd ?? project?.path ?? ""
 
   const commit = async () => {
+    const runtime = activeRuntime()
     setBusy("commit")
     try {
-      const r = await rpc().call("git.commit", { thread_id: threadId })
+      const r = await runtime.rpc().call("git.commit", { thread_id: threadId })
       toast("Committed", { description: r.message })
-      void loadDiff(threadId)
-      void loadGitStatus(threadId)
+      void runtime.loadDiff(threadId)
+      void runtime.loadGitStatus(threadId)
     } catch (e) {
       toast.error("Unable to commit", { description: errorText(e) })
     } finally {
@@ -187,11 +190,13 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
     }
   }
   const pr = async () => {
+    const runtime = activeRuntime()
+    const owner = useStore
     setBusy("pr")
     try {
-      const p = await rpc().call("github.pr.create", { thread_id: threadId })
+      const p = await runtime.rpc().call("github.pr.create", { thread_id: threadId })
       toast("Pull request opened", { description: p.title, action: { label: "Open", onClick: () => void openExternal(p.url) } })
-      useStore.getState().set((state) => {
+      owner.getState().set((state) => {
         const current = state.gitStatuses[threadId]
         return current ? { gitStatuses: { ...state.gitStatuses, [threadId]: { ...current, pull_request: p } } } : {}
       })
@@ -256,7 +261,7 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
               <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="w-60 min-w-60">
                 <MenuGroup>
                   <MenuGroupLabel>Running in</MenuGroupLabel>
-                  <MenuItem onClick={() => cwd && void revealInFinder(cwd)}>
+                  <MenuItem disabled={!activeEnvironment()?.local} onClick={() => cwd && void revealInFinder(cwd)}>
                     {thread?.worktree ? <WorktreeIcon className="size-3.5 text-muted-foreground" /> : <DeviceLaptopIcon className="size-3.5 text-muted-foreground" />}
                     <span className="min-w-0 flex-1 truncate">{cwd || "Local"}</span>
                     <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
@@ -340,10 +345,10 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
                   <EnvironmentRow render={<button type="button" />} icon={<FolderIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />} label="Open in Finder" trailing={<EnvironmentRowChevron />} disabled={!cwd} />
                   <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="w-44 min-w-44">
                     <MenuGroup>
-                      <MenuItem onClick={() => void revealInFinder(cwd)}>
+                      <MenuItem disabled={!activeEnvironment()?.local} onClick={() => void revealInFinder(cwd)}>
                         <FolderIcon className="size-3.5 text-muted-foreground" /> Reveal in Finder
                       </MenuItem>
-                      <MenuItem onClick={() => void openPath(cwd)}>
+                      <MenuItem disabled={!activeEnvironment()?.local} onClick={() => void openPath(cwd)}>
                         <ArrowUpRightIcon className="size-3.5 text-muted-foreground" /> Open folder
                       </MenuItem>
                       <MenuItem onClick={() => void copyText(cwd)}>

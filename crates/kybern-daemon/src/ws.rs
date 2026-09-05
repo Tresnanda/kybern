@@ -24,16 +24,23 @@ pub async fn upgrade(
     Query(query): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if headers.contains_key(axum::http::header::ORIGIN) && crate::http::allowed_asset_origin(&headers).is_none() {
+        return (StatusCode::FORBIDDEN, "origin cannot connect").into_response();
+    }
     let raw = headers
         .get(AUTH_HEADER)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
         .map(str::to_string)
         .or_else(|| query.get(AUTH_QUERY_PARAM).cloned());
-    let Some(raw) = raw else {
-        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+    let authentication = if let Some(ticket) = query.get("ticket") {
+        state.tickets.redeem(&state.store, ticket)
+    } else if let Some(raw) = raw {
+        authenticate(&state.store, &raw)
+    } else {
+        return (StatusCode::UNAUTHORIZED, "missing credential").into_response();
     };
-    let principal = match authenticate(&state.store, &raw) {
+    let principal = match authentication {
         Ok(Some(p)) => p,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
         Err(e) => {
@@ -53,6 +60,9 @@ struct Subscription {
 pub struct ConnectionCtx {
     pub id: Uuid,
     pub principal: Principal,
+    /// A replay is a single ordered delivery operation. Live events stay in
+    /// the broadcast receiver until acknowledgment and replay are enqueued.
+    delivery: Mutex<()>,
     subs: Mutex<HashMap<SubscriptionId, Subscription>>,
     terminal_subs: Mutex<HashMap<TerminalId, tokio::task::JoinHandle<()>>>,
     out: mpsc::Sender<ServerFrame>,
@@ -69,15 +79,54 @@ impl ConnectionCtx {
         self.subs.lock().await.remove(&id);
     }
 
+    async fn establish_subscription(&self, state: &AppState, request_id: RpcId, params: Value) {
+        use kybern_protocol::methods::{EventsSubscribeParams, EventsSubscribeResult};
+        let params: EventsSubscribeParams = match serde_json::from_value(if params.is_null() { serde_json::json!({}) } else { params }) {
+            Ok(params) => params,
+            Err(e) => {
+                let _ = self.out.send(ServerFrame::Response(RpcResponse::err(request_id, RpcError::invalid_params(e.to_string())))).await;
+                return;
+            }
+        };
+        let _delivery = self.delivery.lock().await;
+        let head_seq = match state.store.events_head_seq() {
+            Ok(head) => head,
+            Err(e) => {
+                let _ = self.out.send(ServerFrame::Response(RpcResponse::err(request_id, RpcError::internal(e.to_string())))).await;
+                return;
+            }
+        };
+        if params.after_seq.is_some_and(|after| after > head_seq) {
+            let _ = self
+                .out
+                .send(ServerFrame::Response(RpcResponse::err(
+                    request_id,
+                    RpcError::invalid_params("Event cursor is ahead of this environment"),
+                )))
+                .await;
+            return;
+        }
+        let subscription_id = self.subscribe(params.thread_id, head_seq).await;
+        let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq }).unwrap();
+        if self.out.send(ServerFrame::Response(RpcResponse::ok(request_id, result))).await.is_err() {
+            return;
+        }
+        if let Some(after) = params.after_seq
+            && self.replay(state, subscription_id, params.thread_id, after, head_seq).await.is_err()
+        {
+            let _ =
+                self.out.send(ServerFrame::Notification(RpcNotification::new("events.lagged", serde_json::json!({ "dropped": 0 })))).await;
+        }
+    }
+
     /// Forward a terminal's output to this connection until it exits or is unsubscribed.
     pub async fn subscribe_terminal(&self, terminal: Arc<crate::terminal::Terminal>, replay: bool) {
         use base64::Engine;
         let id = terminal.info().id;
         self.unsubscribe_terminal(id).await;
-        let mut rx = terminal.events.subscribe();
+        let (mut rx, data) = terminal.subscribe_output(replay);
         let out = self.out.clone();
         if replay {
-            let data = terminal.scrollback();
             if !data.is_empty() {
                 let params = serde_json::to_value(kybern_protocol::methods::TerminalOutputNotification {
                     terminal_id: id,
@@ -136,7 +185,15 @@ impl ConnectionCtx {
                             break;
                         }
                     },
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let _ = out
+                            .send(ServerFrame::Notification(RpcNotification::new(
+                                "terminal.lagged",
+                                serde_json::json!({ "terminal_id": id }),
+                            )))
+                            .await;
+                        break;
+                    }
                     Err(_) => break,
                 }
             }
@@ -182,6 +239,7 @@ impl ConnectionCtx {
     }
 
     async fn deliver_live(&self, ev: &ThreadEvent) {
+        let _delivery = self.delivery.lock().await;
         let targets: Vec<SubscriptionId> = {
             let subs = self.subs.lock().await;
             subs.iter().filter(|(_, s)| s.thread_id.is_none_or(|t| t == ev.thread_id) && ev.seq > s.floor_seq).map(|(id, _)| *id).collect()
@@ -198,11 +256,16 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let ctx = Arc::new(ConnectionCtx {
         id: Uuid::now_v7(),
         principal,
+        delivery: Mutex::new(()),
         subs: Mutex::new(HashMap::new()),
         terminal_subs: Mutex::new(HashMap::new()),
         out: out_tx,
     });
     let mut live = state.events.subscribe();
+    let mut revoked = state.revoked_tokens.subscribe();
+    if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
+        return;
+    }
     tracing::info!(conn = %ctx.id, label = %ctx.principal.label, "client connected");
 
     let writer = tokio::spawn(async move {
@@ -221,6 +284,11 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     loop {
         tokio::select! {
             _ = state.shutdown.cancelled() => break,
+            notice = revoked.recv() => {
+                if matches!(notice, Ok(id) if id == ctx.principal.token_id)
+                    || !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false)
+                { break; }
+            }
             msg = stream.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
@@ -267,6 +335,17 @@ async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
         ClientFrame::Request(r) => r,
         ClientFrame::Notification(_) => return,
     };
+    if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
+        let _ = ctx
+            .out
+            .send(ServerFrame::Response(RpcResponse::err(req.id, RpcError::new(codes::UNAUTHORIZED, "Device access was revoked"))))
+            .await;
+        return;
+    }
+    if req.method == "events.subscribe" && ctx.principal.has(Scope::OrchestrationRead) {
+        ctx.establish_subscription(state, req.id, req.params).await;
+        return;
+    }
     let result = match scope_for(&req.method) {
         None => Err(RpcError::method_not_found(&req.method)),
         Some(Some(scope)) if !ctx.principal.has(scope) => Err(RpcError::forbidden(scope.as_str())),

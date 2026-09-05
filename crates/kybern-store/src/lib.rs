@@ -125,6 +125,10 @@ impl Store {
         })
     }
 
+    pub fn token_is_active(&self, id: Uuid) -> Result<bool> {
+        self.with(|c| Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM tokens WHERE id = ?1 AND revoked = 0)", [id.to_string()], |r| r.get(0))?))
+    }
+
     pub fn token_touch(&self, id: Uuid) -> Result<()> {
         self.with(|c| {
             c.execute("UPDATE tokens SET last_used_at = ?1 WHERE id = ?2", params![Utc::now().to_rfc3339(), id.to_string()])?;
@@ -341,6 +345,8 @@ impl Store {
     /// Append an event, assigning its `seq`. Also bumps the thread's `last_seq`.
     pub fn event_append(&self, thread_id: ThreadId, turn_id: Option<TurnId>, mut payload: EventPayload) -> Result<ThreadEvent> {
         self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let c = &tx;
             let at = Utc::now();
             let kind = serde_json::to_value(&payload)?.get("kind").and_then(|k| k.as_str()).unwrap_or("unknown").to_string();
             let serialized = serde_json::to_string(&payload)?;
@@ -356,7 +362,43 @@ impl Store {
                 "UPDATE threads SET last_seq = ?2, updated_at = ?3 WHERE id = ?1",
                 params![thread_id.to_string(), seq, at.to_rfc3339()],
             )?;
+            match &payload {
+                EventPayload::MessageQueued { message } => {
+                    c.execute(
+                        "INSERT INTO queued_messages(id, thread_id, payload, seq) VALUES (?1, ?2, ?3, ?4)",
+                        params![message.id.to_string(), thread_id.to_string(), serde_json::to_string(message)?, seq],
+                    )?;
+                }
+                EventPayload::MessageRemoved { message_id } | EventPayload::TurnStarted { message_id, .. } => {
+                    c.execute(
+                        "UPDATE queued_messages SET pending = 0 WHERE id = ?1 AND thread_id = ?2",
+                        params![message_id.to_string(), thread_id.to_string()],
+                    )?;
+                }
+                EventPayload::ThreadArchived => {
+                    c.execute("UPDATE queued_messages SET pending = 0 WHERE thread_id = ?1", [thread_id.to_string()])?;
+                }
+                _ => {}
+            }
+            tx.commit()?;
             Ok(ThreadEvent { seq, thread_id, turn_id, at, payload })
+        })
+    }
+
+    pub fn queue_list(&self, thread_id: Option<ThreadId>) -> Result<Vec<methods::QueuedMessage>> {
+        self.with(|c| {
+            let mut st =
+                c.prepare("SELECT payload FROM queued_messages WHERE pending = 1 AND (?1 IS NULL OR thread_id = ?1) ORDER BY seq")?;
+            let rows = st.query_map([thread_id.map(|id| id.to_string())], |r| r.get::<_, String>(0))?;
+            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        })
+    }
+
+    pub fn queue_receipt(&self, id: MessageId) -> Result<Option<methods::QueuedMessage>> {
+        self.with(|c| {
+            let payload: Option<String> =
+                c.query_row("SELECT payload FROM queued_messages WHERE id = ?1", [id.to_string()], |r| r.get(0)).optional()?;
+            payload.map(|payload| Ok(serde_json::from_str(&payload)?)).transpose()
         })
     }
 

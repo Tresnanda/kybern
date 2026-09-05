@@ -19,7 +19,12 @@ struct Pending {
 #[derive(Default)]
 pub struct Pairing {
     codes: Mutex<HashMap<String, Pending>>,
+    attempts: Mutex<Vec<DateTime<Utc>>>,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("Too many pairing attempts. Wait a minute and try again")]
+pub struct PairingRateLimited;
 
 impl Pairing {
     pub fn create(&self, label: Option<String>) -> (String, DateTime<Utc>) {
@@ -39,6 +44,17 @@ impl Pairing {
 
     /// Exchange a code for a new token. Returns the raw token and its scopes.
     pub fn redeem(&self, store: &Store, code: &str, device_name: Option<String>) -> Result<(String, Vec<Scope>)> {
+        // Bound guesses globally as well as code lifetime. This also works
+        // behind private proxies, without trusting spoofable forwarding headers.
+        {
+            let mut attempts = self.attempts.lock().unwrap();
+            let now = Utc::now();
+            attempts.retain(|at| *at > now - Duration::minutes(1));
+            if attempts.len() >= 5 {
+                return Err(PairingRateLimited.into());
+            }
+            attempts.push(now);
+        }
         let pending = {
             let mut codes = self.codes.lock().unwrap();
             codes.retain(|_, p| p.expires_at > Utc::now());
@@ -51,20 +67,81 @@ impl Pairing {
     }
 }
 
-/// Addresses a phone on the same network could use, loopback first.
-pub fn advertised_endpoints(port: u16) -> Vec<String> {
-    let mut out = vec![format!("ws://127.0.0.1:{port}/ws")];
-    if let Ok(output) = std::process::Command::new("ifconfig").output() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        for line in text.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("inet ") {
-                let ip = rest.split_whitespace().next().unwrap_or("");
-                if !ip.is_empty() && ip != "127.0.0.1" && !ip.starts_with("169.254.") {
-                    out.push(format!("ws://{ip}:{port}/ws"));
-                }
-            }
+struct Ticket {
+    principal: crate::auth::Principal,
+    expires_at: DateTime<Utc>,
+}
+
+/// Browser WebSockets cannot set authorization headers. Exchange the device
+/// credential over HTTP for a single-use ticket, never a long-lived URL token.
+#[derive(Default)]
+pub struct Tickets(Mutex<HashMap<String, Ticket>>);
+
+impl Tickets {
+    pub fn create(&self, principal: crate::auth::Principal) -> Result<String> {
+        let mut tickets = self.0.lock().unwrap();
+        tickets.retain(|_, ticket| ticket.expires_at > Utc::now());
+        if tickets.len() >= 1024 {
+            return Err(anyhow!("Too many pending connections; retry shortly"));
         }
+        let raw = crate::auth::generate();
+        tickets.insert(crate::auth::hash(&raw), Ticket { principal, expires_at: Utc::now() + Duration::seconds(30) });
+        Ok(raw)
     }
-    out
+
+    pub fn redeem(&self, store: &Store, raw: &str) -> Result<Option<crate::auth::Principal>> {
+        let Some(ticket) = self.0.lock().unwrap().remove(&crate::auth::hash(raw)) else { return Ok(None) };
+        if ticket.expires_at <= Utc::now() || !store.token_is_active(ticket.principal.token_id)? {
+            return Ok(None);
+        }
+        Ok(Some(ticket.principal))
+    }
+}
+
+/// Explicit advertised URLs take precedence; otherwise discover the current
+/// interfaces and Tailscale proxy for this daemon's actual listener.
+pub async fn endpoints(state: &crate::state::AppState) -> Vec<String> {
+    let configured = state.advertised_urls.read().unwrap().clone();
+    if !configured.is_empty() {
+        return configured;
+    }
+    let bound = *state.listen_addr.read().unwrap();
+    match bound {
+        Some(bound) => crate::discovery::endpoints(bound).await,
+        None => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_limits_guesses_and_expires_codes() {
+        let store = Store::open_in_memory().unwrap();
+        let pairing = Pairing::default();
+        let (code, _) = pairing.create(None);
+        pairing.codes.lock().unwrap().get_mut(&code).unwrap().expires_at = Utc::now() - Duration::seconds(1);
+        assert!(pairing.redeem(&store, &code, None).is_err());
+        for _ in 0..4 {
+            assert!(pairing.redeem(&store, "bad", None).is_err());
+        }
+        assert!(pairing.redeem(&store, "bad", None).unwrap_err().is::<PairingRateLimited>());
+    }
+
+    #[test]
+    fn tickets_expire_and_cannot_revive_revoked_devices() {
+        let store = Store::open_in_memory().unwrap();
+        let pairing = Pairing::default();
+        let (code, _) = pairing.create(None);
+        let (token, _) = pairing.redeem(&store, &code, None).unwrap();
+        let principal = crate::auth::authenticate(&store, &token).unwrap().unwrap();
+        let tickets = Tickets::default();
+        let raw = tickets.create(principal.clone()).unwrap();
+        tickets.0.lock().unwrap().get_mut(&crate::auth::hash(&raw)).unwrap().expires_at = Utc::now() - Duration::seconds(1);
+        assert!(tickets.redeem(&store, &raw).unwrap().is_none());
+        let raw = tickets.create(principal.clone()).unwrap();
+        store.token_revoke(principal.token_id).unwrap();
+        assert!(tickets.redeem(&store, &raw).unwrap().is_none());
+    }
 }

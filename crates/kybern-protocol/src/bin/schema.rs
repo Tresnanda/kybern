@@ -52,6 +52,7 @@ fn main() {
     method::<DaemonShutdown>(&mut methods);
     method::<ProvidersList>(&mut methods);
     method::<ProjectsList>(&mut methods);
+    method::<ProjectsBrowse>(&mut methods);
     method::<ProjectsAdd>(&mut methods);
     method::<ProjectsUpdate>(&mut methods);
     method::<ProjectsRemove>(&mut methods);
@@ -61,6 +62,9 @@ fn main() {
     method::<ThreadsUpdate>(&mut methods);
     method::<ThreadsArchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);
+    method::<QueueAdd>(&mut methods);
+    method::<QueueList>(&mut methods);
+    method::<QueueRemove>(&mut methods);
     method::<ThreadsInterrupt>(&mut methods);
     method::<TasksList>(&mut methods);
     method::<TaskStop>(&mut methods);

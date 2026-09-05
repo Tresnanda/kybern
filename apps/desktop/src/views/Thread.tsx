@@ -45,7 +45,7 @@ import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, JsonValue, RuntimeTask, ThreadId, UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
-import { archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, updateThread } from "@/state/rpc"
+import { archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
 import { canSplitPane, type PaneId } from "@/state/splitView"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
 
@@ -160,7 +160,7 @@ export function ThreadView({
 
   const onSend = async (message: UserMessage) => {
     if (running) {
-      useStore.getState().enqueue(threadId, message)
+      await queueMessage(threadId, message)
       return
     }
     await sendMessage(threadId, message)
@@ -187,6 +187,7 @@ export function ThreadView({
         >
           <div className="pointer-events-auto">
             <Composer
+              draftKey={`thread:${threadId}`}
               ref={composer}
               placeholder={placeholder}
               running={running}
@@ -252,7 +253,13 @@ function messageText(m: UserMessage): string {
 
 function QueuedPanel({ threadId, onEdit }: { threadId: ThreadId; onEdit: (text: string) => void }) {
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
-  const dequeue = useStore((s) => s.dequeue)
+  const connected = useStore((s) => s.connection.state === "open")
+  const remove = async (id: string, edit?: string) => {
+    try {
+      await removeQueuedMessage(threadId, id)
+      if (edit !== undefined) onEdit(edit)
+    } catch (error) { toast.error("Unable to remove follow-up", { description: errorText(error) }) }
+  }
   return (
     <ComposerStackedPanel className="flex flex-col">
       {queued.map((q, i) => {
@@ -267,14 +274,12 @@ function QueuedPanel({ threadId, onEdit }: { threadId: ThreadId; onEdit: (text: 
               <Button
                 variant="subtle"
                 size="chip"
-                onClick={() => {
-                  dequeue(threadId, q.id)
-                  onEdit(text)
-                }}
+                disabled={!connected}
+                onClick={() => void remove(q.id, text)}
               >
                 <PencilIcon /> Edit
               </Button>
-              <IconButton variant="ghost" size="icon-chip" label="Delete queued follow-up" tooltip="Remove" onClick={() => dequeue(threadId, q.id)}>
+              <IconButton variant="ghost" size="icon-chip" label="Delete queued follow-up" tooltip="Remove" disabled={!connected} onClick={() => void remove(q.id)}>
                 <Trash2 />
               </IconButton>
             </div>

@@ -1,7 +1,7 @@
 //! Server-owned pseudo-terminals. Output is retained in a bounded scrollback
 //! and fanned out to subscribed connections as `terminal.output` notifications.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +22,7 @@ pub enum TerminalEvent {
 }
 
 pub struct Terminal {
+    command: Option<Vec<String>>,
     pub info: Mutex<TerminalInfo>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -33,17 +34,31 @@ pub struct Terminal {
 #[derive(Default, Clone)]
 pub struct TerminalManager {
     terminals: Arc<Mutex<HashMap<TerminalId, Arc<Terminal>>>>,
+    issued_ids: Arc<Mutex<HashSet<TerminalId>>>,
+    create_lock: Arc<Mutex<()>>,
 }
 
 impl TerminalManager {
     pub fn create(
         &self,
+        requested_id: Option<TerminalId>,
         thread_id: Option<ThreadId>,
         cwd: String,
         cols: u16,
         rows: u16,
         command: Option<Vec<String>>,
     ) -> Result<Arc<Terminal>> {
+        let _create = self.create_lock.lock().unwrap();
+        let id = requested_id.unwrap_or_else(Uuid::now_v7);
+        if let Some(existing) = self.get(id) {
+            let info = existing.info();
+            anyhow::ensure!(
+                info.thread_id == thread_id && info.cwd == cwd && existing.command == command,
+                "Terminal identity belongs to another request"
+            );
+            return Ok(existing);
+        }
+        anyhow::ensure!(!self.issued_ids.lock().unwrap().contains(&id), "This terminal has closed; open a new terminal tab");
         let pty = native_pty_system();
         let pair = pty.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).context("openpty")?;
 
@@ -64,8 +79,8 @@ impl TerminalManager {
         let writer = pair.master.take_writer().context("pty writer")?;
         let (events, _) = broadcast::channel(4096);
 
-        let id = Uuid::now_v7();
         let terminal = Arc::new(Terminal {
+            command,
             info: Mutex::new(TerminalInfo {
                 id,
                 thread_id,
@@ -84,6 +99,7 @@ impl TerminalManager {
             child: Mutex::new(child),
         });
         self.terminals.lock().unwrap().insert(id, terminal.clone());
+        self.issued_ids.lock().unwrap().insert(id);
 
         // Blocking reader thread: the pty read has no async form.
         let t = terminal.clone();
@@ -105,8 +121,8 @@ impl TerminalManager {
                                     }
                                     sb.push_back(*b);
                                 }
+                                let _ = t.events.send(Arc::new(TerminalEvent::Output(chunk)));
                             }
-                            let _ = t.events.send(Arc::new(TerminalEvent::Output(chunk)));
                         }
                         Err(e) => {
                             tracing::debug!(%e, "pty read ended");
@@ -157,6 +173,15 @@ impl TerminalManager {
 }
 
 impl Terminal {
+    /// Snapshot and live subscription share the producer's scrollback lock so
+    /// bytes appear exactly once across the replay/live boundary.
+    pub fn subscribe_output(&self, replay: bool) -> (broadcast::Receiver<Arc<TerminalEvent>>, Vec<u8>) {
+        let scrollback = self.scrollback.lock().unwrap();
+        let receiver = self.events.subscribe();
+        let bytes = if replay { scrollback.iter().copied().collect() } else { vec![] };
+        (receiver, bytes)
+    }
+
     pub fn write(&self, data: &[u8]) -> Result<()> {
         let mut w = self.writer.lock().unwrap();
         w.write_all(data)?;
@@ -170,10 +195,6 @@ impl Terminal {
         info.cols = cols;
         info.rows = rows;
         Ok(())
-    }
-
-    pub fn scrollback(&self) -> Vec<u8> {
-        self.scrollback.lock().unwrap().iter().copied().collect()
     }
 
     pub fn info(&self) -> TerminalInfo {

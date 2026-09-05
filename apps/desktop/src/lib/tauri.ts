@@ -43,12 +43,16 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 export async function openPath(path: string): Promise<void> {
+  const { activeEnvironment } = await import("@/state/environments")
+  if (!activeEnvironment()?.local) return
   if (!isTauri()) return
   const { openPath: open } = await import("@tauri-apps/plugin-opener")
   return open(path)
 }
 
 export async function revealInFinder(path: string): Promise<void> {
+  const { activeEnvironment } = await import("@/state/environments")
+  if (!activeEnvironment()?.local) return
   if (!isTauri()) return
   const { revealItemInDir } = await import("@tauri-apps/plugin-opener")
   return revealItemInDir(path)

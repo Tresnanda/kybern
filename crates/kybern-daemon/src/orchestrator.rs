@@ -26,6 +26,8 @@ pub struct Orchestrator {
 }
 
 struct Inner {
+    commands: std::sync::Mutex<()>,
+    thread_updates: std::sync::Mutex<()>,
     store: Store,
     drivers: DriverRegistry,
     events: broadcast::Sender<ThreadEvent>,
@@ -115,6 +117,8 @@ impl Orchestrator {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                commands: std::sync::Mutex::new(()),
+                thread_updates: std::sync::Mutex::new(()),
                 store,
                 drivers,
                 events,
@@ -164,7 +168,7 @@ impl Orchestrator {
                 self.emit(t.id, Some(a.turn_id), EventPayload::ApprovalResolved { approval_id: a.id, decision })?;
             }
             self.emit(t.id, last_turn, EventPayload::TurnFailed { error: "daemon restarted while the turn was running".into() })?;
-            t.status = ThreadStatus::Idle;
+            t.status = ThreadStatus::Failed;
             self.update_thread(t)?;
         }
         Ok(())
@@ -186,6 +190,12 @@ impl Orchestrator {
     }
 
     fn update_thread(&self, mut thread: Thread) -> Result<Thread> {
+        let _updates = self.inner.thread_updates.lock().map_err(|_| anyhow!("thread update lock poisoned"))?;
+        // A late provider completion must not unarchive a thread and allow the
+        // daemon queue worker to resume it while its session is being closed.
+        if self.inner.store.thread_get(thread.id)?.is_some_and(|current| current.status == ThreadStatus::Archived) {
+            thread.status = ThreadStatus::Archived;
+        }
         thread.updated_at = Utc::now();
         self.inner.store.thread_upsert(&thread)?;
         let ev = self.emit(thread.id, None, EventPayload::ThreadUpdated { thread: thread.clone() })?;
@@ -328,19 +338,39 @@ impl Orchestrator {
     }
 
     pub async fn archive_thread(&self, thread_id: ThreadId) -> Result<()> {
+        {
+            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+            let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+            t.status = ThreadStatus::Archived;
+            self.update_thread(t)?;
+            self.emit(thread_id, None, EventPayload::ThreadArchived)?;
+        }
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
             let _ = live.session.close().await;
         }
-        let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        t.status = ThreadStatus::Archived;
-        self.inner.store.thread_upsert(&t)?;
-        self.emit(thread_id, None, EventPayload::ThreadArchived)?;
         Ok(())
     }
 
-    pub async fn send(&self, thread_id: ThreadId, mut message: UserMessage) -> Result<(TurnId, MessageId)> {
+    pub async fn send(&self, thread_id: ThreadId, message: UserMessage) -> Result<(TurnId, MessageId)> {
+        self.send_with_id(thread_id, Uuid::now_v7(), message, false).await
+    }
+
+    async fn send_with_id(
+        &self,
+        thread_id: ThreadId,
+        message_id: MessageId,
+        mut message: UserMessage,
+        queued: bool,
+    ) -> Result<(TurnId, MessageId)> {
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        if queued && !self.inner.store.queue_list(Some(thread_id))?.iter().any(|item| item.id == message_id) {
+            return Err(anyhow!("queued message was removed"));
+        }
         self.resolve_attachments(&mut message);
         let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if queued && thread.status != ThreadStatus::Idle {
+            return Err(anyhow!("thread is no longer idle"));
+        }
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             return Err(anyhow!("thread is busy"));
         }
@@ -349,7 +379,6 @@ impl Orchestrator {
         }
 
         let turn_id = Uuid::now_v7();
-        let message_id = Uuid::now_v7();
         if thread.title == DEFAULT_TITLE {
             thread.title = title_from_message(&message);
         }
@@ -369,6 +398,50 @@ impl Orchestrator {
             }
         });
         Ok((turn_id, message_id))
+    }
+
+    pub fn enqueue(&self, message: methods::QueuedMessage) -> Result<()> {
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        let thread = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if thread.status == ThreadStatus::Archived {
+            return Err(anyhow!("thread is archived"));
+        }
+        if let Some(receipt) = self.inner.store.queue_receipt(message.id)? {
+            if serde_json::to_value(receipt)? != serde_json::to_value(&message)? {
+                return Err(anyhow!("message id already belongs to another request"));
+            }
+            return Ok(());
+        }
+        self.emit(message.thread_id, None, EventPayload::MessageQueued { message })?;
+        Ok(())
+    }
+
+    pub fn remove_queued(&self, thread_id: ThreadId, id: MessageId) -> Result<()> {
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        let queued = self.inner.store.queue_list(Some(thread_id))?;
+        if !queued.iter().any(|message| message.id == id) {
+            return Err(anyhow!("follow-up has already started or was removed; refresh the thread"));
+        }
+        self.emit(thread_id, None, EventPayload::MessageRemoved { message_id: id })?;
+        Ok(())
+    }
+
+    /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
+    /// Failed turns retain their queue until the user sends a new successful turn.
+    pub async fn drain_queues(&self) -> Result<()> {
+        for queued in self.inner.store.queue_list(None)? {
+            let Some(thread) = self.inner.store.thread_get(queued.thread_id)? else { continue };
+            if thread.status != ThreadStatus::Idle {
+                continue;
+            }
+            if self.inner.store.runtime_tasks_for_thread(thread.id)?.iter().any(|task| task.status.is_active()) {
+                continue;
+            }
+            if let Err(error) = self.send_with_id(thread.id, queued.id, queued.message, true).await {
+                tracing::debug!(%error, "queue changed before dispatch");
+            }
+        }
+        Ok(())
     }
 
     /// Bring up the session, snapshot the tree and hand the message to the agent.
@@ -391,6 +464,11 @@ impl Orchestrator {
                 return Err(error);
             }
         };
+        if self.inner.store.thread_get(thread.id)?.is_some_and(|current| current.status == ThreadStatus::Archived) {
+            let _ = live.session.close().await;
+            self.inner.sessions.lock().await.remove(&thread.id);
+            return Err(anyhow!("thread was archived during session startup"));
+        }
         tracing::info!(
             target: "kybern::turn_startup",
             thread_id = %thread.id,
@@ -1874,6 +1952,29 @@ mod tests {
         assert!((completed[0].1.unwrap_or_default() - 0.3).abs() < f64::EPSILON);
         assert_eq!(*completed[0].2, Some(message_ids[2]));
         assert!(live.turn.lock().await.is_none());
+
+        orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+        let follow_up = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("next") };
+        orchestrator.enqueue(follow_up.clone()).unwrap();
+        orchestrator.drain_queues().await.unwrap();
+        assert!(store.queue_list(None).unwrap().is_empty());
+        assert!(
+            store
+                .events_for_thread(thread.id)
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::TurnStarted { message_id, .. } if message_id == follow_up.id))
+        );
+        let pending = methods::QueuedMessage { id: Uuid::now_v7(), ..follow_up };
+        orchestrator.enqueue(pending).unwrap();
+        let mut late_completion = store.thread_get(thread.id).unwrap().unwrap();
+        orchestrator.archive_thread(thread.id).await.unwrap();
+        late_completion.status = ThreadStatus::Idle;
+        orchestrator.update_thread(late_completion).unwrap();
+        orchestrator.drain_queues().await.unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Archived);
+        assert!(store.queue_list(None).unwrap().is_empty());
+        orchestrator.shutdown().await;
 
         std::fs::remove_dir_all(root).unwrap();
     }

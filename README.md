@@ -6,8 +6,9 @@ and Cursor, driven through their own protocols, from one Rust daemon and a
 Tauri + React desktop client.
 
 kybern is a reimplementation of the ideas in [T3 Code](https://github.com/pingdotgg/t3code)
-with a Rust daemon at the center so a desktop app, a phone, and a remote
-machine all see the same threads. The desktop client's look follows
+with a Rust daemon on each host. Desktop and mobile clients connect to a
+selected machine, which keeps its own projects, threads, and running agents.
+The desktop client's look follows
 [Synara](https://github.com/Emanuele-web04/synara) (MIT): its stylesheet,
 primitives and icon system are vendored under `apps/desktop/src/components/synara`
 and `apps/desktop/src/lib/synara`.
@@ -30,56 +31,142 @@ built from `main`.
 
 ## Install
 
-Prebuilt binaries for every tagged release live on
-[GitHub Releases](https://github.com/Tresnanda/kybern/releases). The daemon
-(`kybernd`) and CLI (`kybern`) are built by [cargo-dist](https://axodotdev.github.io/cargo-dist/)
-for macOS (Apple silicon + Intel), Linux (x86_64 + arm64, static musl) and
-Windows (x86_64). The desktop app ships as a macOS DMG.
+Choose what this machine will do:
 
-### Daemon and CLI
+| Machine | Install |
+| --- | --- |
+| Your Mac, Windows PC, or Linux desktop | Desktop app. It bundles the local daemon. |
+| VPS or another machine that runs agents | `kybernd` only; optionally `kybern` for administration over SSH. No desktop, Node, or pnpm required. |
+| Phone | The mobile companion is still a source-only scaffold; see [apps/mobile](apps/mobile/README.md). |
 
-macOS / Linux:
+Install and authenticate your coding-agent CLIs on the machine that will run
+work. A VPS keeps its own projects, threads and provider credentials; connecting
+to it does not copy your laptop's projects or credentials.
+
+### Desktop app
+
+**Build from source today.** There is no published release available at the
+time of writing. Install stable Rust, Node 22+, pnpm 11, and the
+[Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), then:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Tresnanda/kybern/releases/latest/download/kybern-daemon-installer.sh | sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Tresnanda/kybern/releases/latest/download/kybern-cli-installer.sh | sh
+git clone https://github.com/Tresnanda/kybern.git
+cd kybern/apps/desktop
+pnpm install --frozen-lockfile
+pnpm tauri build
 ```
 
-Windows (PowerShell):
+Install the generated package under `target/release/bundle/` at the repository
+root. On macOS, open the DMG and drag **kybern.app** into Applications. The build
+bundles `kybernd`; you do not need to install the daemon or CLI separately.
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/Tresnanda/kybern/releases/latest/download/kybern-daemon-installer.ps1 | iex"
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/Tresnanda/kybern/releases/latest/download/kybern-cli-installer.ps1 | iex"
-```
+Tagged releases are configured to publish macOS DMGs to
+[GitHub Releases](https://github.com/Tresnanda/kybern/releases), named
+`kybern-<version>-<arch>-apple-darwin.dmg` (`aarch64` for Apple silicon,
+`x86_64` for Intel). Windows and Linux desktop packages currently require a
+source build.
 
-Both installers put the binary in `~/.cargo/bin` (or `%USERPROFILE%\.cargo\bin`).
-Plain archives (`.tar.xz` / `.zip`) with SHA-256 sums are on the same release page.
-
-### Install on macOS
-
-Download `kybern-<version>-<arch>-apple-darwin.dmg` from the release
-(`aarch64` for Apple silicon, `x86_64` for Intel), open it and drag
-**kybern.app** to Applications. The app bundles its own `kybernd`, so nothing
-else is needed.
-
-The app is signed ad hoc, not with an Apple Developer ID, and it is **not
-notarized**. The first launch is therefore blocked by Gatekeeper. To open it:
-
-1. In Finder, **right-click (or Control-click) kybern.app and choose "Open"**.
-2. Click **Open** in the dialog. macOS remembers the choice; later launches
-   work with a normal double-click.
-
-If macOS reports the app as "damaged" (Sequoia and later do this for some
-unsigned downloads), clear the quarantine flag once and open normally:
+The macOS bundle is signed ad hoc and is not notarized. Follow macOS's
+**Privacy & Security → Open Anyway** flow if it blocks the app you built or
+intentionally downloaded. For an ad-hoc bundle reported as damaged, you can
+remove its quarantine attribute after verifying where it came from:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/kybern.app
 ```
 
-### Windows and Linux desktop app
+### Daemon only: VPS or remote machine
 
-Not packaged yet. Build the desktop app from source (below); Tauri produces
-the platform installer with `kybernd` bundled as a sidecar.
+From a checkout, install the daemon with stable Rust and your platform's native
+build tools. This builds only the Rust host; it does not build the desktop app.
+
+```sh
+git clone https://github.com/Tresnanda/kybern.git
+cd kybern
+cargo install --locked --path crates/kybern-daemon
+```
+
+Cargo normally installs `kybernd` in `~/.cargo/bin`; make sure it is on `PATH`.
+For headless administration and fresh invitations without restarting the daemon,
+also install the optional CLI:
+
+```sh
+cargo install --locked --path crates/kybern-cli
+```
+
+Once binary releases are published, the release page will also provide
+standalone daemon and CLI archives and shell/PowerShell installers. Release
+builds target macOS (Apple silicon/Intel), Linux (x86_64/arm64 musl), and Windows
+(x86_64). Until then, use the source commands above.
+
+#### Connect over Tailscale
+
+With Tailscale installed and connected on the VPS and your desktop or phone,
+configure [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
+on the VPS to forward HTTPS to Kybern:
+
+```sh
+tailscale serve --bg http://127.0.0.1:4173
+kybernd --port 4173 --pair
+```
+
+`kybernd --pair` starts the daemon and prints:
+
+- A six-digit pairing code, valid once for ten minutes.
+- Detected addresses, including a matching Tailscale HTTPS proxy when configured.
+- A complete invitation for each address, containing the code and environment identity.
+
+In the desktop app, choose **Switch environment → Add environment**, enter a
+name, and paste the complete invitation into **Address or pairing invitation**.
+You can also enter its address and code separately. Keep the daemon running.
+Create a separate code for each client.
+
+If the daemon is already running, generate a new invitation over SSH with:
+
+```sh
+kybern pair
+```
+
+Do not start a second daemon against the same data directory. If you installed
+only `kybernd`, its `--pair` option is for startup; use the optional CLI to pair
+more devices while work stays running.
+
+Discovery checks active network interfaces and the installed Tailscale CLI.
+It prefers a matching HTTPS Serve proxy, and lists direct Tailscale, private,
+and public interface addresses only when the daemon listens on them. It never
+opens a firewall, enables Serve, or guesses that a public NAT address accepts
+inbound connections. With the default loopback listener and no proxy, it prints
+local-only addresses and tells you to configure a proxy or SSH tunnel.
+
+#### Connect through an SSH tunnel or another HTTPS proxy
+
+For an SSH tunnel, start the daemon on the VPS:
+
+```sh
+kybernd --port 4173 --pair
+```
+
+On your desktop, keep this tunnel running:
+
+```sh
+ssh -N -L 14173:127.0.0.1:4173 user@your-vps
+```
+
+Use **http://127.0.0.1:14173** and the code printed on the VPS. The tunnel's
+local port belongs to your desktop, so use that address instead of the VPS's
+printed loopback address. A phone needs its own reachable route; it cannot use
+a tunnel running only on your desktop.
+
+For an existing HTTPS reverse proxy, supply its public address explicitly:
+
+```sh
+kybernd --port 4173 --advertise-url https://kybern.example.com --pair
+```
+
+This advertises the URL; it does not configure the proxy or TLS. See the
+[remote environments guide](docs/remote-environments.md) for proxy routes,
+direct interface binding, running the daemon after logout/reboot, device
+revocation, and custom data directories.
 
 ## Build from source
 
@@ -98,6 +185,10 @@ The `pnpm tauri` wrapper builds the daemon for the same profile and target,
 stages the target-triple sidecar expected by Tauri, and then runs the Tauri
 CLI. The standalone daemon and CLI builds remain available for headless and
 remote use.
+
+To connect to another machine, use the desktop environment menu. Each machine
+keeps its own projects and running work. The [remote environments guide](docs/remote-environments.md)
+covers pairing, Tailscale/HTTPS, SSH tunnels, credentials and reconnect behavior.
 
 For development, run the web app with hot reload inside the Tauri window:
 

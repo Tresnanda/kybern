@@ -43,10 +43,10 @@ function Navigator() {
   );
 }
 
-/** `kybern://pair?url=...&token=...` from a QR code or the desktop app. */
+/** `kybern://pair?url=...&code=...&environment=...` from a QR code or the desktop app. */
 function PairingLinkHandler() {
   const url = Linking.useLinkingURL();
-  const { ready, connectTo } = useConnection();
+  const { ready } = useConnection();
   const router = useRouter();
   const handled = useRef<string | null>(null);
 
@@ -55,13 +55,8 @@ function PairingLinkHandler() {
     const pairing = parsePairingUrl(url);
     if (!pairing) return;
     handled.current = url;
-    connectTo(pairing)
-      .then(() => router.replace("/threads"))
-      .catch(() => {
-        // Fall through to the connect screen with the fields prefilled.
-        router.replace({ pathname: "/connect", params: { url: pairing.url, token: pairing.token } });
-      });
-  }, [ready, url, connectTo, router]);
+    router.replace({ pathname: "/connect", params: { url: pairing.url, code: pairing.code, environment: pairing.environmentId } });
+  }, [ready, url, router]);
 
   return null;
 }

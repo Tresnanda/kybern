@@ -77,6 +77,26 @@ pub struct ProjectsListResult {
 }
 method!(ProjectsList, "projects.list", Some(Scope::OrchestrationRead), Empty, ProjectsListResult);
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsBrowseParams {
+    /// Absolute directory on the daemon host. Omit to start in its home directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectDirectory {
+    pub name: String,
+    pub path: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsBrowseResult {
+    pub path: String,
+    pub parent: Option<String>,
+    pub directories: Vec<ProjectDirectory>,
+    pub has_more: bool,
+}
+method!(ProjectsBrowse, "projects.browse", Some(Scope::OrchestrationRead), ProjectsBrowseParams, ProjectsBrowseResult);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectsAddParams {
     pub path: String,
@@ -200,6 +220,31 @@ pub struct ThreadsInterruptParams {
 }
 method!(ThreadsInterrupt, "threads.interrupt", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Empty);
 
+// ---- daemon-owned follow-ups ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QueuedMessage {
+    pub id: MessageId,
+    pub thread_id: ThreadId,
+    pub message: UserMessage,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QueueListParams {
+    pub thread_id: Option<ThreadId>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QueueListResult {
+    pub messages: Vec<QueuedMessage>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QueueRemoveParams {
+    pub thread_id: ThreadId,
+    pub id: MessageId,
+}
+method!(QueueAdd, "queue.add", Some(Scope::OrchestrationOperate), QueuedMessage, Empty);
+method!(QueueList, "queue.list", Some(Scope::OrchestrationRead), QueueListParams, QueueListResult);
+method!(QueueRemove, "queue.remove", Some(Scope::OrchestrationOperate), QueueRemoveParams, Empty);
+
 // ---- provider-owned runtime tasks ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -290,6 +335,9 @@ pub struct TerminalInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalsCreateParams {
+    /// A client-generated identity makes reconnecting creation idempotent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<TerminalId>,
     /// Run in this thread's working directory (worktree or project).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<ThreadId>,
@@ -774,6 +822,7 @@ registry!(
     DaemonShutdown,
     ProvidersList,
     ProjectsList,
+    ProjectsBrowse,
     ProjectsAdd,
     ProjectsUpdate,
     ProjectsRemove,
@@ -783,6 +832,9 @@ registry!(
     ThreadsUpdate,
     ThreadsArchive,
     ThreadsSend,
+    QueueAdd,
+    QueueList,
+    QueueRemove,
     ThreadsInterrupt,
     TasksList,
     TaskStop,

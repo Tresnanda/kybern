@@ -227,6 +227,39 @@
         {
           "type": "object",
           "properties": {
+            "message": {
+              "$ref": "#/$defs/QueuedMessage"
+            },
+            "kind": {
+              "type": "string",
+              "const": "message_queued"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "kind": {
+              "type": "string",
+              "const": "message_removed"
+            }
+          },
+          "required": [
+            "kind",
+            "message_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "message_id": {
               "type": "string",
               "format": "uuid"
@@ -790,6 +823,27 @@
           "required": [
             "path",
             "branch"
+          ]
+        },
+        "QueuedMessage": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "message": {
+              "$ref": "#/$defs/UserMessage"
+            }
+          },
+          "required": [
+            "id",
+            "thread_id",
+            "message"
           ]
         },
         "UserMessage": {
@@ -1496,6 +1550,39 @@
             {
               "type": "object",
               "properties": {
+                "message": {
+                  "$ref": "#/$defs/QueuedMessage"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "message_queued"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "message_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "message_removed"
+                }
+              },
+              "required": [
+                "kind",
+                "message_id"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
                 "message_id": {
                   "type": "string",
                   "format": "uuid"
@@ -2059,6 +2146,27 @@
           "required": [
             "path",
             "branch"
+          ]
+        },
+        "QueuedMessage": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "message": {
+              "$ref": "#/$defs/UserMessage"
+            }
+          },
+          "required": [
+            "id",
+            "thread_id",
+            "message"
           ]
         },
         "UserMessage": {
@@ -5256,6 +5364,71 @@
       }
     },
     {
+      "name": "projects.browse",
+      "scope": "orchestration_read",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ProjectsBrowseParams",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Absolute directory on the daemon host. Omit to start in its home directory.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ProjectsBrowseResult",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "directories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ProjectDirectory"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "directories",
+          "has_more"
+        ],
+        "$defs": {
+          "ProjectDirectory": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "path"
+            ]
+          }
+        }
+      }
+    },
+    {
       "name": "projects.add",
       "scope": "orchestration_operate",
       "params": {
@@ -7664,6 +7837,379 @@
       }
     },
     {
+      "name": "queue.add",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "QueuedMessage",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "thread_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "$ref": "#/$defs/UserMessage"
+          }
+        },
+        "required": [
+          "id",
+          "thread_id",
+          "message"
+        ],
+        "$defs": {
+          "UserMessage": {
+            "type": "object",
+            "properties": {
+              "parts": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ContentPart"
+                }
+              }
+            },
+            "required": [
+              "parts"
+            ]
+          },
+          "ContentPart": {
+            "description": "One piece of a user message.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ]
+              },
+              {
+                "description": "Inline image. `data` is base64 of the raw bytes.",
+                "type": "object",
+                "properties": {
+                  "media_type": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "image"
+                  }
+                },
+                "required": [
+                  "type",
+                  "media_type",
+                  "data"
+                ]
+              },
+              {
+                "description": "Uploaded attachment served by the daemon's HTTP asset route.",
+                "type": "object",
+                "properties": {
+                  "asset_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "media_type": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "attachment"
+                  }
+                },
+                "required": [
+                  "type",
+                  "asset_id",
+                  "name",
+                  "media_type",
+                  "size"
+                ]
+              },
+              {
+                "description": "`@path` mention resolved relative to the thread cwd.",
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "file_mention"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ]
+              },
+              {
+                "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "description": "Canonical `SKILL.md` path returned by the provider catalog. Codex\nrequires it for its structured `skill` turn input; other drivers\nmay use only the name.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "skill"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "path"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      }
+    },
+    {
+      "name": "queue.list",
+      "scope": "orchestration_read",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "QueueListParams",
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "QueueListResult",
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/QueuedMessage"
+            }
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "$defs": {
+          "QueuedMessage": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "thread_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "message": {
+                "$ref": "#/$defs/UserMessage"
+              }
+            },
+            "required": [
+              "id",
+              "thread_id",
+              "message"
+            ]
+          },
+          "UserMessage": {
+            "type": "object",
+            "properties": {
+              "parts": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ContentPart"
+                }
+              }
+            },
+            "required": [
+              "parts"
+            ]
+          },
+          "ContentPart": {
+            "description": "One piece of a user message.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ]
+              },
+              {
+                "description": "Inline image. `data` is base64 of the raw bytes.",
+                "type": "object",
+                "properties": {
+                  "media_type": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "image"
+                  }
+                },
+                "required": [
+                  "type",
+                  "media_type",
+                  "data"
+                ]
+              },
+              {
+                "description": "Uploaded attachment served by the daemon's HTTP asset route.",
+                "type": "object",
+                "properties": {
+                  "asset_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "media_type": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "attachment"
+                  }
+                },
+                "required": [
+                  "type",
+                  "asset_id",
+                  "name",
+                  "media_type",
+                  "size"
+                ]
+              },
+              {
+                "description": "`@path` mention resolved relative to the thread cwd.",
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "file_mention"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ]
+              },
+              {
+                "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "description": "Canonical `SKILL.md` path returned by the provider catalog. Codex\nrequires it for its structured `skill` turn input; other drivers\nmay use only the name.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "skill"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "path"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "queue.remove",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "QueueRemoveParams",
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "thread_id",
+          "id"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      }
+    },
+    {
       "name": "threads.interrupt",
       "scope": "orchestration_operate",
       "params": {
@@ -8971,6 +9517,14 @@
         "title": "TerminalsCreateParams",
         "type": "object",
         "properties": {
+          "terminal_id": {
+            "description": "A client-generated identity makes reconnecting creation idempotent.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "thread_id": {
             "description": "Run in this thread's working directory (worktree or project).",
             "type": [
@@ -11080,6 +11634,39 @@
               {
                 "type": "object",
                 "properties": {
+                  "message": {
+                    "$ref": "#/$defs/QueuedMessage"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "message_queued"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "message_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "message_removed"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message_id"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
                   "message_id": {
                     "type": "string",
                     "format": "uuid"
@@ -11643,6 +12230,27 @@
             "required": [
               "path",
               "branch"
+            ]
+          },
+          "QueuedMessage": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "thread_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "message": {
+                "$ref": "#/$defs/UserMessage"
+              }
+            },
+            "required": [
+              "id",
+              "thread_id",
+              "message"
             ]
           },
           "UserMessage": {

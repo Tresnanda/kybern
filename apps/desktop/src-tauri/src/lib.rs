@@ -13,6 +13,8 @@ use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, DaemonShutdown, Emp
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+mod environments;
+
 static ENDPOINT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static STARTING_ENDPOINT: tokio::sync::Mutex<Option<StartingEndpoint>> = tokio::sync::Mutex::const_new(None);
 static STARTUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -309,7 +311,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![endpoint, data_dir_path])
+        .invoke_handler(tauri::generate_handler![
+            endpoint,
+            data_dir_path,
+            environments::environments_list,
+            environments::environment_open,
+            environments::environment_select,
+            environments::environment_save,
+            environments::environment_remove,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

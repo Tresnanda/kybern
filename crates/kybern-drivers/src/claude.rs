@@ -1087,7 +1087,7 @@ mod tests {
         assert_eq!(update.status, Some(RuntimeTaskStatus::Waiting));
         assert_eq!(update.backgrounded, Some(true));
         assert_eq!(update.detail.as_deref(), Some("Waiting for results"));
-        assert_eq!(update.capabilities.unwrap().background, false);
+        assert!(!update.capabilities.unwrap().background);
 
         let background = claude_background_task(&json!({
             "task_id": "shell-4",

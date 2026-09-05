@@ -18,7 +18,11 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 
+pub mod address;
+pub mod pairing;
+
 pub struct Client {
+    tasks: [tokio::task::JoinHandle<()>; 2],
     next_id: AtomicI64,
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<RpcResponse>>>>,
     out: mpsc::Sender<String>,
@@ -40,8 +44,13 @@ impl Endpoint {
 
     /// Resolve from flags, env, or the local daemon's files under ~/.kybern.
     pub fn resolve(url: Option<String>, token: Option<String>, data_dir: Option<PathBuf>) -> Result<Self> {
+        let url = url.or_else(|| std::env::var("KYBERN_URL").ok());
+        let token = token.or_else(|| std::env::var("KYBERN_TOKEN").ok());
+        if url.is_some() && token.is_none() {
+            return Err(anyhow!("An explicit environment address requires --token or KYBERN_TOKEN; pair a device on that environment"));
+        }
         let root = Self::data_dir(data_dir);
-        let token = match token.or_else(|| std::env::var("KYBERN_TOKEN").ok()) {
+        let token = match token {
             Some(t) => t,
             None => {
                 let path = root.as_ref().context("no home dir")?.join("daemon.token");
@@ -51,7 +60,7 @@ impl Endpoint {
                     .to_string()
             }
         };
-        let url = match url.or_else(|| std::env::var("KYBERN_URL").ok()) {
+        let url = match url {
             Some(u) => u,
             None => {
                 let port = root
@@ -59,11 +68,24 @@ impl Endpoint {
                     .and_then(|r| std::fs::read_to_string(r.join("daemon.port")).ok())
                     .and_then(|p| p.trim().parse::<u16>().ok())
                     .unwrap_or(DEFAULT_PORT);
-                format!("ws://127.0.0.1:{port}/ws")
+                let bound = root
+                    .as_ref()
+                    .and_then(|root| std::fs::read_to_string(root.join("daemon.listen")).ok())
+                    .and_then(|value| value.trim().parse::<std::net::SocketAddr>().ok())
+                    .filter(|addr| addr.port() == port);
+                local_listener_url(bound, port)
             }
         };
-        Ok(Self { url, token })
+        Ok(Self { url: address::normalize(&url)?, token })
     }
+}
+
+fn local_listener_url(bound: Option<std::net::SocketAddr>, port: u16) -> String {
+    let mut bound = bound.unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], port)));
+    if bound.ip().is_unspecified() {
+        bound.set_ip(if bound.is_ipv4() { std::net::Ipv4Addr::LOCALHOST.into() } else { std::net::Ipv6Addr::LOCALHOST.into() });
+    }
+    format!("ws://{bound}/ws")
 }
 
 impl Client {
@@ -74,7 +96,7 @@ impl Client {
         let (mut sink, mut stream) = ws.split();
 
         let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
-        tokio::spawn(async move {
+        let writer = tokio::spawn(async move {
             while let Some(text) = out_rx.recv().await {
                 if sink.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await.is_err() {
                     break;
@@ -87,7 +109,7 @@ impl Client {
         let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let closed2 = closed.clone();
         let p2 = pending.clone();
-        tokio::spawn(async move {
+        let reader = tokio::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
                 let text = match msg {
                     tokio_tungstenite::tungstenite::Message::Text(t) => t,
@@ -114,7 +136,7 @@ impl Client {
             }
         });
 
-        Ok(Self { next_id: AtomicI64::new(1), pending, out: out_tx, notifications: Mutex::new(note_rx), closed })
+        Ok(Self { tasks: [writer, reader], next_id: AtomicI64::new(1), pending, out: out_tx, notifications: Mutex::new(note_rx), closed })
     }
 
     pub async fn call_raw(&self, method: &str, params: Value) -> Result<Value> {
@@ -136,5 +158,25 @@ impl Client {
     pub async fn call<M: Method>(&self, params: M::Params) -> Result<M::Result> {
         let v = self.call_raw(M::NAME, serde_json::to_value(params)?).await?;
         Ok(serde_json::from_value(v)?)
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod listener_tests {
+    use super::local_listener_url;
+    #[test]
+    fn resolves_specific_private_and_ipv6_listeners_and_legacy_port_files() {
+        assert_eq!(local_listener_url(Some("100.101.102.103:4173".parse().unwrap()), 4173), "ws://100.101.102.103:4173/ws");
+        assert_eq!(local_listener_url(Some("[::]:4173".parse().unwrap()), 4173), "ws://[::1]:4173/ws");
+        assert_eq!(local_listener_url(Some("0.0.0.0:4173".parse().unwrap()), 4173), "ws://127.0.0.1:4173/ws");
+        assert_eq!(local_listener_url(None, 4199), "ws://127.0.0.1:4199/ws");
     }
 }

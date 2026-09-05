@@ -1,7 +1,7 @@
 // App shell, mirroring Synara's `_chat.tsx` route: an offcanvas, resizable,
 // translucent left sidebar; a content card with a seam rail; the right dock.
 
-import { AnimatePresence, motion } from "motion/react"
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import type { ThreadId } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { boot, loadThread } from "@/state/rpc"
+import { useEnvironments, activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 import { Draft } from "@/views/Draft"
 import { HandoffDialog } from "@/views/Handoff"
@@ -45,6 +46,14 @@ function useDockWidth() {
 }
 
 export default function App() {
+  const epoch = useEnvironments((s) => s.epoch)
+  return <Workspace key={epoch} />
+}
+
+function Workspace() {
+  const connectionPending = useStore((s) => s.connection.state === "connecting")
+  const resolutionFailed = useEnvironments((s) => s.error !== null)
+  const connecting = connectionPending || resolutionFailed
   const selected = useStore((s) => s.selected)
   const splitView = useStore((s) => s.splitView)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
@@ -97,7 +106,7 @@ export default function App() {
             <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
               <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <ConnectionBanner />
-                {splitView ? (
+                {connecting ? <Welcome /> : splitView ? (
                   <SplitThreads splitView={splitView} />
                 ) : selected.kind === "thread" ? (
                   <SingleThreadSurface threadId={selected.id} />
@@ -115,7 +124,7 @@ export default function App() {
               </main>
 
               <AnimatePresence initial={false}>
-                {rightOpen && (
+                {rightOpen && !connecting && (
                   <motion.aside
                     key="dock"
                     initial={{ width: 0, opacity: 0 }}
@@ -170,32 +179,35 @@ function SingleThreadSurface({ threadId }: { threadId: ThreadId }) {
 }
 
 function ConnectionBanner() {
+  const reducedMotion = useReducedMotion()
   const connection = useStore((s) => s.connection)
+  const name = activeEnvironment()?.name ?? "environment"
   const show = connection.state === "reconnecting" || connection.state === "failed"
   return (
-    <AnimatePresence>
+    <AnimatePresence initial={false}>
       {show && (
         <motion.div
           key="conn"
-          initial={{ y: -8, opacity: 0 }}
+          role="status"
+          initial={{ y: reducedMotion ? 0 : -4, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          exit={{ y: -8, opacity: 0 }}
-          transition={DOCK_MOTION}
+          exit={{ y: reducedMotion ? 0 : -4, opacity: 0 }}
+          transition={{ duration: reducedMotion ? 0 : 0.15, ease: "easeOut" }}
           className={cn(
-            "absolute top-14 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 px-3 py-1.5 text-[length:var(--app-font-size-ui-sm,11px)]",
+            "absolute top-14 inset-x-3 z-40 mx-auto flex w-fit max-w-[min(36rem,calc(100%-1.5rem))] items-center gap-3 px-3 py-2 text-[length:var(--app-font-size-ui-sm,13px)] leading-relaxed",
             "overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-xl",
           )}
         >
           {connection.state === "reconnecting" ? (
             <>
-              <Spinner size={12} /> Reconnecting to the daemon
+              <Spinner size={12} /><span className="min-w-0 break-words">Reconnecting to <bdi>{name}</bdi>…</span>
             </>
           ) : (
             <>
-              <span className="size-1.5 rounded-full bg-destructive" />
-              <span>Lost the daemon. {connection.detail}</span>
+              <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-destructive" />
+              <span className="min-w-0 break-words"><bdi>{name}</bdi>: {connection.detail}</span>
               <Button size="xs" variant="chrome-outline" onClick={() => void boot()}>
-                Retry
+                Reconnect
               </Button>
             </>
           )}
@@ -214,8 +226,10 @@ function Welcome() {
         <Logo size={40} className="text-foreground/80" />
         {connection.state === "connecting" ? (
           <p className="flex items-center gap-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
-            <Spinner size={13} /> Starting the daemon
+            <Spinner size={13} /> Connecting to {activeEnvironment()?.name ?? "environment"}
           </p>
+        ) : connection.state !== "open" ? (
+          <p className="text-sm text-muted-foreground">This environment is unavailable. Reconnect or choose another machine.</p>
         ) : (
           <>
             <h2 className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">Add a project to begin</h2>

@@ -91,6 +91,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(ProvidersListResult { providers })
         }
         ProjectsList::NAME => ok(ProjectsListResult { projects: state.store.projects_list().map_err(internal)? }),
+        ProjectsBrowse::NAME => {
+            let p: ProjectsBrowseParams = parse_or_default(params)?;
+            ok(crate::files::browse_directories(p.path).await.map_err(bad)?)
+        }
         ProjectsAdd::NAME => {
             let p: ProjectsAddParams = parse(params)?;
             ok(state.orchestrator.add_project(p.path, p.name).map_err(bad)?)
@@ -172,6 +176,19 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             })?;
             ok(ThreadsSendResult { turn_id, message_id })
         }
+        QueueAdd::NAME => {
+            state.orchestrator.enqueue(parse(params)?).map_err(bad)?;
+            ok(Empty {})
+        }
+        QueueList::NAME => {
+            let p: QueueListParams = parse(params)?;
+            ok(QueueListResult { messages: state.store.queue_list(p.thread_id).map_err(internal)? })
+        }
+        QueueRemove::NAME => {
+            let p: QueueRemoveParams = parse(params)?;
+            state.orchestrator.remove_queued(p.thread_id, p.id).map_err(bad)?;
+            ok(Empty {})
+        }
         ThreadsInterrupt::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
             state.orchestrator.interrupt(p.thread_id).await.map_err(bad)?;
@@ -241,7 +258,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 (None, Some(t)) => state.store.thread_get(t).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?.cwd,
                 (None, None) => return Err(RpcError::invalid_params("thread_id or cwd is required")),
             };
-            let t = state.terminals.create(p.thread_id, cwd, p.cols, p.rows, p.command).map_err(internal)?;
+            let t = state.terminals.create(p.terminal_id, p.thread_id, cwd, p.cols, p.rows, p.command).map_err(internal)?;
             ok(t.info())
         }
         TerminalsList::NAME => {
@@ -297,9 +314,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         PairingCreate::NAME => {
             let p: PairingCreateParams = parse_or_default(params)?;
+            let endpoints = crate::access::endpoints(state).await;
             let (code, expires_at) = state.pairing.create(p.label);
-            let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
-            ok(PairingCreateResult { code, expires_at, endpoints: crate::access::advertised_endpoints(port) })
+            ok(PairingCreateResult { code, expires_at, endpoints })
         }
         TokensList::NAME => ok(TokensListResult { tokens: state.store.tokens_list().map_err(internal)? }),
         TokensRevoke::NAME => {
@@ -308,6 +325,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 return Err(RpcError::invalid_params("a token cannot revoke itself"));
             }
             state.store.token_revoke(p.token_id).map_err(internal)?;
+            let _ = state.revoked_tokens.send(p.token_id);
             ok(Empty {})
         }
         FilesSearch::NAME => {
@@ -416,15 +434,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ApprovalsListParams = parse_or_default(params)?;
             ok(ApprovalsListResult { approvals: state.store.approvals_pending(p.thread_id).map_err(internal)? })
         }
-        EventsSubscribe::NAME => {
-            let p: EventsSubscribeParams = parse_or_default(params)?;
-            let head_seq = state.store.events_head_seq().map_err(internal)?;
-            let subscription_id = ctx.subscribe(p.thread_id, head_seq).await;
-            if let Some(after) = p.after_seq {
-                ctx.replay(state, subscription_id, p.thread_id, after, head_seq).await.map_err(internal)?;
-            }
-            ok(EventsSubscribeResult { subscription_id, head_seq })
-        }
+        // events.subscribe is handled by ws.rs, which acknowledges the
+        // subscription before replay and serializes replay with live delivery.
         EventsUnsubscribe::NAME => {
             let p: EventsUnsubscribeParams = parse(params)?;
             ctx.unsubscribe(p.subscription_id).await;

@@ -271,6 +271,7 @@ pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) 
         T::Create { thread, cwd } => {
             let info = client
                 .call::<TerminalsCreate>(TerminalsCreateParams {
+                    terminal_id: None,
                     thread_id: thread.map(|t| t.parse()).transpose()?,
                     cwd,
                     cols: 120,
@@ -295,6 +296,7 @@ pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) 
         T::Run { thread, cwd, seconds, command } => {
             let info = client
                 .call::<TerminalsCreate>(TerminalsCreateParams {
+                    terminal_id: None,
                     thread_id: thread.map(|t| t.parse()).transpose()?,
                     cwd,
                     cols: 120,

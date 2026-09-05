@@ -87,7 +87,7 @@ fn assert_completed_with_text(kind: ProviderKind, events: &[DriverEvent]) {
         .collect();
     assert!(
         text.to_lowercase().contains("pong") || deltas.to_lowercase().contains("pong"),
-        "{kind}: expected pong in output, got text={text:?} deltas={deltas:?}"
+        "{kind}: expected pong in output, got text={text:?} deltas={deltas:?}; events={events:?}"
     );
     assert!(
         events.iter().any(|e| matches!(e, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })),

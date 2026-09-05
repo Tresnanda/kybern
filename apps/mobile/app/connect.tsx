@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useConnection } from "@/connection/ConnectionContext";
-import { endpointFromForm, parsePairingUrl } from "@/connection/pairing";
+import { endpointFromForm, parsePairingUrl, redeemPairing } from "@/connection/pairing";
 import { Button } from "@/ui/Button";
 import { Caption, Screen } from "@/ui/Screen";
 import { radius, space, type as t, useTheme } from "@/ui/theme";
@@ -12,10 +12,12 @@ export default function ConnectScreen() {
   const th = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ url?: string; token?: string }>();
+  const params = useLocalSearchParams<{ url?: string; token?: string; code?: string; environment?: string }>();
   const { connectTo, endpoint } = useConnection();
   const [url, setUrl] = useState(params.url ?? endpoint?.url ?? "");
   const [token, setToken] = useState(params.token ?? endpoint?.token ?? "");
+  const [code, setCode] = useState(params.code ?? "");
+  const [environmentId, setEnvironmentId] = useState(params.environment);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,30 +26,29 @@ export default function ConnectScreen() {
     const pairing = parsePairingUrl(text);
     if (pairing) {
       setUrl(pairing.url);
-      setToken(pairing.token);
+      setToken("");
+      setCode(pairing.code);
+      setEnvironmentId(pairing.environmentId);
     } else {
       setUrl(text);
+      setEnvironmentId(undefined);
     }
   };
 
   const connect = async () => {
     const ep = endpointFromForm(url, token);
-    if (!ep) {
+    if (!ep && !code) {
       setError("Enter the daemon address and its token.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await connectTo(ep);
+      await connectTo(code ? await redeemPairing(url, code, environmentId) : ep!);
       router.replace("/threads");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(
-        /unauthorized|401|invalid token/i.test(msg)
-          ? "The daemon rejected the token. Copy it again from ~/.kybern/daemon.token."
-          : `Could not reach ${ep.url}. Check the address and that kybernd runs with --bind 0.0.0.0.`,
-      );
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -82,14 +83,20 @@ export default function ConnectScreen() {
           </View>
 
           <View style={styles.field}>
-            <Caption>Token</Caption>
+            <Caption>Pairing code</Caption>
+            <TextInput accessibilityLabel="Pairing code" value={code} onChangeText={(value) => { setCode(value); setToken(""); }}
+              keyboardType="number-pad" maxLength={6} placeholder="000000"
+              style={[styles.input, t.mono, { color: th.text, backgroundColor: th.surface }]} />
+          </View>
+          <View style={styles.field}>
+            <Caption>Device token (optional)</Caption>
             <TextInput
               accessibilityLabel="Token"
               style={[styles.input, t.mono, { color: th.text, backgroundColor: th.surface }]}
               placeholder="Paste the bearer token"
               placeholderTextColor={th.textTertiary}
               value={token}
-              onChangeText={setToken}
+              onChangeText={(value) => { setToken(value); setCode(""); }}
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry
@@ -103,8 +110,7 @@ export default function ConnectScreen() {
           <Button title="Connect" variant="primary" onPress={() => void connect()} busy={busy} disabled={busy} />
 
           <Caption color={th.textTertiary}>
-            The token lives in ~/.kybern/daemon.token on the machine running kybernd. Start the daemon with --bind 0.0.0.0 so
-            the phone can reach it over Tailscale or the LAN.
+            On the host, choose Pair a device from the environment menu. Connect this phone to the same private network, then paste the invitation.
           </Caption>
         </ScrollView>
       </KeyboardAvoidingView>

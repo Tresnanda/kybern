@@ -16,6 +16,7 @@ kybern-protocol.workspace = true
 kybern-store.workspace = true
 kybern-drivers.workspace = true
 kybern-git.workspace = true
+kybern-client.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
@@ -36,4 +37,6 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tokio-tungstenite.workspace = true
+reqwest.workspace = true
 async-trait.workspace = true

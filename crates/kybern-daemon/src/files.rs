@@ -216,6 +216,41 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
     current.is_none()
 }
 
+/// Browse on the host that will execute the project, including directories
+/// outside existing projects. No shell expansion or subprocess is involved.
+pub async fn browse_directories(path: Option<String>) -> anyhow::Result<kybern_protocol::methods::ProjectsBrowseResult> {
+    use kybern_protocol::methods::{ProjectDirectory, ProjectsBrowseResult};
+    let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_owned());
+    let root = match path.as_deref().filter(|value| !value.is_empty()) {
+        None | Some("~") => home.clone().ok_or_else(|| anyhow::anyhow!("Enter an absolute directory path"))?,
+        Some(value) if value.starts_with("~/") => home.ok_or_else(|| anyhow::anyhow!("Home directory is unavailable"))?.join(&value[2..]),
+        Some(value) => std::path::PathBuf::from(value),
+    };
+    anyhow::ensure!(root.is_absolute(), "Enter an absolute directory path on this environment");
+    let root = tokio::fs::canonicalize(root).await?;
+    let mut reader = tokio::fs::read_dir(&root).await?;
+    let mut directories = Vec::new();
+    let mut has_more = false;
+    while let Some(entry) = reader.next_entry().await? {
+        let kind = entry.file_type().await?;
+        if kind.is_dir() || (kind.is_symlink() && tokio::fs::metadata(entry.path()).await.is_ok_and(|metadata| metadata.is_dir())) {
+            if directories.len() >= 1000 {
+                has_more = true;
+                break;
+            }
+            directories
+                .push(ProjectDirectory { name: entry.file_name().to_string_lossy().into(), path: entry.path().to_string_lossy().into() });
+        }
+    }
+    directories.sort_by_key(|directory| directory.name.to_lowercase());
+    Ok(ProjectsBrowseResult {
+        path: root.to_string_lossy().into(),
+        parent: root.parent().map(|path| path.to_string_lossy().into()),
+        directories,
+        has_more,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

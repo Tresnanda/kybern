@@ -21,6 +21,7 @@ import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { SurfaceHeader } from "./chrome"
 
 export function Draft({ projectId }: { projectId: ProjectId }) {
+  const environmentId = useStore((s) => s.environmentId)
   const project = useStore((s) => s.projects[projectId])
   const projects = useStore((s) => s.projects)
   const settings = useStore((s) => s.settings)
@@ -30,9 +31,9 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
   const set = useStore((s) => s.set)
   const composer = useRef<ComposerHandle>(null)
 
-  const [modeStored, setMode] = useLocalStorage<PermissionMode | null>("kybern.mode", null)
-  const [providerStored, setProvider] = useLocalStorage<ProviderInstance | null>("kybern.provider", null)
-  const [modelStored, setModelStored] = useLocalStorage<Record<string, { model?: string; effort?: string }>>("kybern.models", {})
+  const [modeStored, setMode] = useLocalStorage<PermissionMode | null>(`kybern.mode:${environmentId}`, null)
+  const [providerStored, setProvider] = useLocalStorage<ProviderInstance | null>(`kybern.provider:${environmentId}`, null)
+  const [modelStored, setModelStored] = useLocalStorage<Record<string, { model?: string; effort?: string }>>(`kybern.models:${environmentId}`, {})
   const [worktree, setWorktree] = useState<boolean | null>(null)
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
   const [branches, setBranches] = useState<GitBranchesResult | null>(null)
@@ -116,6 +117,7 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
 
         <div className="w-full shrink-0 pb-3 sm:pb-4">
           <Composer
+            draftKey={`project:${projectId}`}
             ref={composer}
             autoFocus
             mode={mode}
@@ -155,7 +157,7 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
                 <Menu>
                   <MenuTrigger render={<button type="button" aria-label="Choose where the thread runs" className={cn(TRAY_CHIP_CLASS_NAME, useWorktree && "text-[var(--color-text-foreground)]")} />}>
                     {useWorktree ? <WorktreeIcon className="size-3.5 shrink-0" /> : <DeviceLaptopIcon className="size-3.5 shrink-0" />}
-                    <span className="min-w-0 truncate">{useWorktree ? "New worktree" : "Local"}</span>
+                    <span className="min-w-0 truncate">{useWorktree ? "New worktree" : "Checkout"}</span>
                     <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
                   </MenuTrigger>
                   <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="w-64 min-w-64">
@@ -164,7 +166,7 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
                       <MenuRadioGroup value={useWorktree ? "worktree" : "local"} onValueChange={(v) => setWorktree(v === "worktree")}>
                         <MenuRadioItem value="local">
                           <DeviceLaptopIcon className="size-3.5" />
-                          <span className="min-w-0 flex-1 truncate">Local</span>
+                          <span className="min-w-0 flex-1 truncate">Checkout</span>
                           <span className="shrink-0 text-muted-foreground/70">{parentPath(project.path)}</span>
                         </MenuRadioItem>
                         <MenuRadioItem value="worktree" disabled={!isGit}>

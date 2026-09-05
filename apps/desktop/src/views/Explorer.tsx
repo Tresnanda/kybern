@@ -1,3 +1,4 @@
+import { activeEnvironment } from "@/state/environments"
 // Explorer dock pane, after Synara's DockExplorerPane: a fixed search box
 // over a lazily loaded file tree (BeUI File Tree) in a w-60 column, next to a
 // file viewer with a breadcrumb header, syntax highlighting and a markdown
@@ -342,7 +343,7 @@ const FileViewer = memo(function FileViewer({ projectId, path, projectName, proj
               </MenuGroup>
               <MenuSeparator />
               <MenuGroup>
-                <MenuItem onClick={() => void revealInFinder(`${projectPath}/${path}`)}>
+                <MenuItem disabled={!activeEnvironment()?.local} onClick={() => void revealInFinder(`${projectPath}/${path}`)}>
                   <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" /> Reveal in Finder
                 </MenuItem>
               </MenuGroup>
@@ -369,7 +370,7 @@ const FileViewer = memo(function FileViewer({ projectId, path, projectName, proj
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground/70">
           <FileEntryIcon pathValue={path} kind="file" className="size-5 opacity-70" />
           <p>Binary file, {formatBytes(file.size)}.</p>
-          <Button size="xs" variant="chrome-outline" onClick={() => void revealInFinder(`${projectPath}/${path}`)}>
+          <Button size="xs" variant="chrome-outline" disabled={!activeEnvironment()?.local} onClick={() => void revealInFinder(`${projectPath}/${path}`)}>
             Reveal in Finder
           </Button>
         </div>
