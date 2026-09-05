@@ -41,9 +41,9 @@ install-path = "CARGO_HOME"
 install-updater = false
 # GitHub already offers the source for every tag.
 source-tarball = false
-# Build the desktop bundles after the GitHub Release exists and upload them there
-post-announce-jobs = ["./desktop"]
-github-custom-job-permissions = { "desktop" = { contents = "write" } }
+# Cache cargo builds between releases in dist's build jobs (steps injected
+# into build-local-artifacts).
+github-build-setup = "dist-build-setup.yml"
 
 # Pin the actions dist uses to commits rather than floating tags.
 [dist.github-action-commits]

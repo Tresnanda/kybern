@@ -127,6 +127,11 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Cache cargo builds"
+        uses: "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6"
+        with:
+          "cache-on-failure": true
+          "key": "dist-${{ join(matrix.targets, '-') }}"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
@@ -294,14 +299,3 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-
-  custom-desktop:
-    needs:
-      - plan
-      - announce
-    uses: ./.github/workflows/desktop.yml
-    with:
-      plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
-    permissions:
-      "contents": "write"
