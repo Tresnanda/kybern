@@ -91,6 +91,18 @@ try {
   const assetsCatalog = join(compileOutputDir, "Assets.car")
   const fallbackIcon = join(compileOutputDir, `${iconName}.icns`)
   if (!existsSync(assetsCatalog) || !existsSync(fallbackIcon)) {
+    // actool before Xcode 26 accepts the package but emits nothing. The
+    // committed icons/Assets.car and icons/icon.icns were compiled with a
+    // current Xcode; keep them so CI runners with an older Xcode still bundle.
+    if (
+      existsSync(join(iconsDir, "Assets.car")) &&
+      existsSync(join(iconsDir, "icon.icns"))
+    ) {
+      console.warn(
+        "actool did not produce Assets.car; using the committed icons/Assets.car and icon.icns. Recompile with Xcode 26 or newer after changing the icon."
+      )
+      process.exit(0)
+    }
     throw new Error("actool did not produce Assets.car and the fallback ICNS")
   }
 

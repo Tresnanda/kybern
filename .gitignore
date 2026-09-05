@@ -6,8 +6,9 @@
 /apps/mobile/.expo
 *.snap.new
 
-# Compiled from assets/icon-composer by the macOS Tauri bundle hook.
-/apps/desktop/src-tauri/icons/Assets.car
+# apps/desktop/src-tauri/icons/Assets.car is compiled from assets/icon-composer
+# by the macOS Tauri bundle hook and committed so CI runners without Xcode 26
+# can still bundle; recompile it after changing the icon.
 
 # Target-triple daemon binaries staged for Tauri's externalBin bundler.
 /apps/desktop/src-tauri/binaries/
