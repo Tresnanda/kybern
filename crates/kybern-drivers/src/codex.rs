@@ -1567,44 +1567,6 @@ mod tests {
     async fn questions_round_trip_and_withdraw_on_provider_resolution() {
         use super::*;
 
-    #[test]
-    fn installed_plugins_become_mentionable_catalog_entries() {
-        let result = json!({
-            "marketplaces": [{
-                "name": "openai-bundled",
-                "plugins": [
-                    { "id": "computer-use@openai-bundled", "name": "computer-use", "installed": true, "enabled": true,
-                      "interface": { "displayName": "Computer Use", "shortDescription": "Control Mac apps from ChatGPT" } },
-                    { "id": "unified-computer-use@openai-bundled", "name": "unified-computer-use", "installed": true, "enabled": true,
-                      "interface": { "displayName": null } },
-                    { "id": "sites@openai-bundled", "name": "sites", "installed": false, "enabled": true,
-                      "interface": { "displayName": "Sites" } }
-                ]
-            }]
-        });
-        let plugins = installed_plugins(&result);
-        assert_eq!(plugins.len(), 1);
-        let plugin = &plugins[0];
-        assert_eq!(plugin.name, "computer-use");
-        assert_eq!(plugin.display_name.as_deref(), Some("Computer Use"));
-        assert_eq!(plugin.path, "plugin://computer-use@openai-bundled");
-        assert_eq!(plugin.scope, SkillScope::Plugin);
-        assert!(plugin.enabled);
-    }
-
-    #[test]
-    fn plugin_mentions_send_the_token_and_a_structured_mention_item() {
-        let message = UserMessage {
-            parts: vec![
-                ContentPart::Mention { name: "computer-use".into(), path: "plugin://computer-use@openai-bundled".into(), display_name: Some("Computer Use".into()) },
-                ContentPart::Text { text: " open Finder".into() },
-            ],
-        };
-        let items = input_items(&message);
-        assert_eq!(items[0]["text"], "@computer-use");
-        assert_eq!(items[1], json!({ "type": "mention", "name": "Computer Use", "path": "plugin://computer-use@openai-bundled" }));
-        assert_eq!(items[2]["text"], " open Finder");
-    }
         let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(CodexSession {
@@ -1652,13 +1614,56 @@ mod tests {
         assert!(session.pending_approvals.lock().await.is_empty());
         child.kill().await;
     }
+    #[test]
+    fn installed_plugins_become_mentionable_catalog_entries() {
+        let result = json!({
+            "marketplaces": [{
+                "name": "openai-bundled",
+                "plugins": [
+                    { "id": "computer-use@openai-bundled", "name": "computer-use", "installed": true, "enabled": true,
+                      "interface": { "displayName": "Computer Use", "shortDescription": "Control Mac apps from ChatGPT" } },
+                    { "id": "unified-computer-use@openai-bundled", "name": "unified-computer-use", "installed": true, "enabled": true,
+                      "interface": { "displayName": null } },
+                    { "id": "sites@openai-bundled", "name": "sites", "installed": false, "enabled": true,
+                      "interface": { "displayName": "Sites" } }
+                ]
+            }]
+        });
+        let plugins = installed_plugins(&result);
+        assert_eq!(plugins.len(), 1);
+        let plugin = &plugins[0];
+        assert_eq!(plugin.name, "computer-use");
+        assert_eq!(plugin.display_name.as_deref(), Some("Computer Use"));
+        assert_eq!(plugin.path, "plugin://computer-use@openai-bundled");
+        assert_eq!(plugin.scope, SkillScope::Plugin);
+        assert!(plugin.enabled);
+    }
+
+    #[test]
+    fn plugin_mentions_send_the_token_and_a_structured_mention_item() {
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Mention {
+                    name: "computer-use".into(),
+                    path: "plugin://computer-use@openai-bundled".into(),
+                    display_name: Some("Computer Use".into()),
+                },
+                ContentPart::Text { text: " open Finder".into() },
+            ],
+        };
+        let items = input_items(&message);
+        assert_eq!(items[0]["text"], "@computer-use");
+        assert_eq!(items[1], json!({ "type": "mention", "name": "Computer Use", "path": "plugin://computer-use@openai-bundled" }));
+        assert_eq!(items[2]["text"], " open Finder");
+    }
+
     use std::collections::HashMap;
 
     use super::{
-        ChildNotificationRoute, child_notification_route, codex_agent_status, codex_background_process, input_items, process_stats_changed,
-        should_register_subagent,
+        ChildNotificationRoute, child_notification_route, codex_agent_status, codex_background_process, input_items, installed_plugins,
+        process_stats_changed, should_register_subagent,
     };
-    use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStats, RuntimeTaskStatus, UserMessage};
+    use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStats, RuntimeTaskStatus, SkillScope, UserMessage};
     use serde_json::json;
 
     #[test]

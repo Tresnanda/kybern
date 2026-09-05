@@ -295,11 +295,11 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-  custom-macos-app:
+  custom-desktop:
     needs:
       - plan
       - announce
-    uses: ./.github/workflows/macos-app.yml
+    uses: ./.github/workflows/desktop.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit

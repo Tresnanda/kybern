@@ -1,9 +1,11 @@
 # Config for `dist` (cargo-dist): https://axodotdev.github.io/cargo-dist/
 #
 # Builds and publishes the daemon (`kybernd`) and the CLI (`kybern`).
-# The Tauri desktop app is not distributed through dist; it is bundled by
-# scripts/bundle-macos.sh and uploaded by .github/workflows/macos-app.yml,
-# which dist runs as a post-announce job.
+# The Tauri desktop app is not distributed through dist; it is built by
+# .github/workflows/desktop.yml (macOS via scripts/bundle-macos.sh, Linux and
+# Windows via `pnpm tauri build`), which dist runs as a post-announce job. That
+# workflow also publishes latest.json for the desktop updater and the
+# kybern-remote-install.sh helper for daemon-only machines.
 
 [workspace]
 members = ["cargo:."]
@@ -31,11 +33,12 @@ targets = [
 hosting = ["github"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
-# Whether to install an updater program
-install-updater = false
-# Build the macOS .app + DMG after the GitHub Release exists and upload it there
-post-announce-jobs = ["./macos-app"]
-github-custom-job-permissions = { "macos-app" = { contents = "write" } }
+# Ship `kybernd-update` / `kybern-update` next to each binary so daemon-only
+# machines can upgrade in place from GitHub Releases.
+install-updater = true
+# Build the desktop bundles after the GitHub Release exists and upload them there
+post-announce-jobs = ["./desktop"]
+github-custom-job-permissions = { "desktop" = { contents = "write" } }
 
 # Pin the actions dist uses to commits rather than floating tags.
 [dist.github-action-commits]

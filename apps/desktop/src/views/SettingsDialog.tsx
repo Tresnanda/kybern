@@ -1,3 +1,4 @@
+import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from "@/lib/appUpdate"
 import { notificationPermission, notify, type NotificationPermissionState } from "@/lib/tauri"
 // Settings, in a Synara dialog: a 16rem nav column of sidebar rows and a
 // content column of SettingsSection / SettingsCard / SettingsRow blocks.
@@ -379,10 +380,34 @@ function Usage() {
   )
 }
 
+function AppUpdateRow() {
+  const update = useAppUpdate()
+  const busy = update.phase === "checking" || update.phase === "installing"
+  const label =
+    update.phase === "checking" ? "Checking…"
+    : update.phase === "installing" ? (update.progress === null ? "Installing…" : `Installing… ${Math.round(update.progress * 100)}%`)
+    : update.phase === "available" ? `Update to ${update.version}`
+    : "Check for updates"
+  const status =
+    update.phase === "available" ? `${update.version} is ready. Installing restarts the app and the agents running on this machine.`
+    : update.phase === "error" ? update.error
+    : update.phase === "current" && update.checkedAt ? `Up to date · checked ${new Date(update.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+    : null
+  return (
+    <Row title="Kybern" description={<>
+      <span className="block">{update.appVersion ?? "…"}</span>
+      {status && <span role="status" className={cn("mt-1 block", update.phase === "error" ? "text-destructive" : "text-muted-foreground")}>{status}</span>}
+    </>}>
+      {canSelfUpdate() && <Button size="sm" variant="chrome-outline" disabled={busy} onClick={() => void (update.phase === "available" ? installAppUpdate() : checkForAppUpdate({ manual: true }))}>{label}</Button>}
+    </Row>
+  )
+}
+
 function About() {
   const info = useStore((s) => s.info)
   return (
     <Section title="About">
+      <AppUpdateRow />
       <Row title="Daemon" description={info?.version ?? "…"} />
       <Row title="Protocol" description={info ? String(info.protocol_version) : "…"} />
       <Row title="Host" description={info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"} />

@@ -9,6 +9,7 @@ import { ErrorBoundary } from "@/components/kybern/ErrorBoundary"
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/synara/tooltip"
 import { isTauri, platform } from "@/lib/tauri"
+import { startAppUpdateChecks } from "@/lib/appUpdate"
 import { boot } from "@/state/rpc"
 
 // Dev only: `VITE_KYBERN_THEME=light pnpm tauri dev` boots the window in a fixed
@@ -33,6 +34,7 @@ document.addEventListener("contextmenu", (e) => {
 })
 
 void boot()
+startAppUpdateChecks()
 
 // Uncaught errors outside React land on screen too; a blank webview is otherwise undebuggable.
 function reportFatal(message: string) {

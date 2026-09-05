@@ -57,5 +57,12 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBNjc0NEY5RTE0N0ZEMTkKUldRWi9VZmgrVVJuS2l2ME96TEc2THdBcGNDZkVjUUtVR01VKzdiNmhKY2drYUN4bG1rRlRrc2IK",
+      "endpoints": [
+        "https://github.com/Tresnanda/kybern/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }

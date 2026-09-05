@@ -63,6 +63,14 @@ import { ChatHeaderButton, ChatHeaderIconButton, SurfaceHeader } from "./chrome"
 const EMPTY: never[] = []
 const EMPTY_TASKS: RuntimeTask[] = []
 
+
+/** MCP approvals carry the server name in their input; other tools fall back to the tool name. */
+function approvalServerName(input: unknown): string | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null
+  const name = (input as Record<string, unknown>).serverName
+  return typeof name === "string" ? name : null
+}
+
 export function ThreadView({
   threadId,
   splitPaneId,
@@ -382,7 +390,7 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
           {prompt}
-          <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">{approval.input && typeof approval.input === "object" && !Array.isArray(approval.input) && typeof approval.input.serverName === "string" ? approval.input.serverName : approval.tool_name}</span>
+          <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">{approvalServerName(approval.input) ?? approval.tool_name}</span>
         </p>
         {count > 1 && (
           <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium text-[var(--color-text-foreground-secondary)] tabular-nums">

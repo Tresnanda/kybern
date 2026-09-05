@@ -19,6 +19,8 @@
     "opener:allow-reveal-item-in-dir",
     "window-state:default",
     "os:default",
-    "dialog:default"
+    "dialog:default",
+    "process:allow-restart",
+    "updater:default"
   ]
 }

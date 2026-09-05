@@ -1,0 +1,160 @@
+# Builds the desktop app for every platform and attaches the installers, the
+# signed updater artifacts and latest.json to the GitHub Release.
+#
+# dist (cargo-dist) calls this as a post-announce job from release.yml (see
+# `post-announce-jobs` in dist-workspace.toml), so it runs after the release for
+# the tag exists and the kybernd/kybern archives and installers are on it.
+# `workflow_dispatch` runs the same build as a dry run: nothing is uploaded to a
+# release, the bundles are only kept as workflow artifacts.
+#
+# Secrets: TAURI_SIGNING_PRIVATE_KEY (required, the updater key generated with
+# `pnpm tauri signer generate`) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty
+# when the key has none). macOS bundles are ad-hoc signed; there is no Apple
+# Developer ID or notarization.
+name: Desktop
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  bundle:
+    name: bundle (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    env:
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+        shell: bash
+      - name: Linux desktop and credential-store dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file patchelf libssl-dev libgtk-3-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev
+      - name: Require the updater signing key
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; add the repository secret before releasing" >&2
+            exit 1
+          fi
+      - id: release
+        name: Resolve the release tag
+        shell: bash
+        run: |
+          tag=""
+          if [ -n "${PLAN:-}" ]; then tag="$(printf '%s' "$PLAN" | jq -r '.announcement_tag // empty')"; fi
+          if [ -z "$tag" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release tag: ${tag:-<none, dry run>}"
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        shell: bash
+        run: pnpm install --frozen-lockfile
+      - name: Build (macOS app, DMG and updater tarball)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: scripts/bundle-macos.sh
+      - name: Build (AppImage and deb)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        shell: bash
+        run: pnpm tauri build --config src-tauri/tauri.updater.conf.json --bundles appimage,deb
+      - name: Build (NSIS installer)
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop
+        shell: bash
+        run: pnpm tauri build --config src-tauri/tauri.updater.conf.json --bundles nsis
+      - name: Stage release assets
+        shell: bash
+        run: node scripts/desktop-artifacts.mjs --target "${{ matrix.target }}" --tag "${{ steps.release.outputs.tag }}"
+      - name: Upload to the GitHub Release
+        if: steps.release.outputs.tag != ''
+        shell: bash
+        run: gh release upload "${{ steps.release.outputs.tag }}" dist/kybern-* --clobber
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  manifest:
+    name: updater manifest
+    needs: bundle
+    # A platform that failed to build is simply absent from latest.json; the
+    # other platforms still receive the update. The failed job stays red.
+    if: ${{ always() && needs.bundle.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    env:
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+      - id: release
+        name: Resolve the release tag
+        shell: bash
+        run: |
+          tag=""
+          if [ -n "${PLAN:-}" ]; then tag="$(printf '%s' "$PLAN" | jq -r '.announcement_tag // empty')"; fi
+          if [ -z "$tag" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Write latest.json and the remote installer
+        run: |
+          node scripts/updater-manifest.mjs --tag "${{ steps.release.outputs.tag }}"
+          cp scripts/install-remote.sh dist/kybern-remote-install.sh
+          cat dist/latest.json
+      - name: Upload to the GitHub Release
+        if: steps.release.outputs.tag != ''
+        run: gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh --clobber
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-manifest
+          path: |
+            dist/latest.json
+            dist/kybern-remote-install.sh

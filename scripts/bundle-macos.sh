@@ -3,8 +3,11 @@
 # and write a DMG.
 #
 # Usage: scripts/bundle-macos.sh
-#   SKIP_BUILD=1      reuse the last self-contained `pnpm tauri build`
-#   CARGO_TARGET_DIR  honoured if set
+#   SKIP_BUILD=1                reuse the last self-contained `pnpm tauri build`
+#   CARGO_TARGET_DIR            honoured if set
+#   TAURI_SIGNING_PRIVATE_KEY   when set, also writes the signed updater
+#                               tarball (kybern-<v>-<arch>-apple-darwin.app.tar.gz
+#                               + .sig) that latest.json points at
 #
 # Requires: cargo, node 22, pnpm, codesign, hdiutil (Xcode CLT).
 set -euo pipefail
@@ -54,7 +57,18 @@ cp -R "$SRC_APP" "$APP"
 echo "==> codesign (ad hoc)"
 codesign --force --deep --sign - "$APP"
 
-# 4. DMG -----------------------------------------------------------------------------
+# 4. Updater tarball -------------------------------------------------------------------
+TARBALL="$DIST/kybern-$VERSION-$ARCH-apple-darwin.app.tar.gz"
+if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  echo "==> $TARBALL (+ .sig)"
+  rm -f "$TARBALL" "$TARBALL.sig"
+  (cd "$DIST" && COPYFILE_DISABLE=1 tar -czf "$TARBALL" kybern.app)
+  (cd apps/desktop && node node_modules/@tauri-apps/cli/tauri.js signer sign "$TARBALL")
+else
+  echo "==> TAURI_SIGNING_PRIVATE_KEY is unset; skipping the updater tarball"
+fi
+
+# 5. DMG -----------------------------------------------------------------------------
 echo "==> $DMG"
 rm -f "$DMG"
 STAGE="$(mktemp -d)"

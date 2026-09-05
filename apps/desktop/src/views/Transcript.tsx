@@ -782,7 +782,8 @@ function workLabel(
 
 /** Screen-control rows keep the harness's own step title; without one they name the app. */
 function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean, isError: boolean): string {
-  const title = input && typeof input === "object" && !Array.isArray(input) && typeof input.title === "string" ? input.title.trim() : ""
+  const rawTitle = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>).title : undefined
+  const title = typeof rawTitle === "string" ? rawTitle.trim() : ""
   const target = surface.app ?? (surface.kind === "browser" ? "the browser" : "your computer")
   if (isError) return title ? `Failed to ${title.charAt(0).toLowerCase()}${title.slice(1)}` : `Failed to use ${target}`
   if (title) return title
