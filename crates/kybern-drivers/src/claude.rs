@@ -136,7 +136,7 @@ impl AgentDriver for ClaudeDriver {
         });
 
         // Initialize is optional; we send it to get the catalog and to be a well-behaved client.
-        session.send_control_nowait("initialize", json!({})).await?;
+        session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"] })).await?;
 
         let reader = session.clone();
         tokio::spawn(async move { reader.read_loop().await });
@@ -486,8 +486,38 @@ impl ClaudeSession {
                 self.pending_permissions.lock().await.insert(request_id.clone(), (input.clone(), suggestions.clone()));
                 self.emit(DriverEvent::PermissionRequest { request_id, tool_call_id, tool_name, input, summary, suggestions }).await;
             }
+            "request_user_dialog" => {
+                if req.get("dialog_kind").and_then(Value::as_str) != Some("resume_return") {
+                    // Undeclared dialogs may belong to another attached client. Do not settle them.
+                    self.emit(DriverEvent::Notice {
+                        level: NoticeLevel::Warning,
+                        text: "Claude requested an unsupported dialog. Answer it in the originating client.".into(),
+                        data: None,
+                    })
+                    .await;
+                    return;
+                }
+                self.pending_permissions.lock().await.insert(request_id.clone(), (json!({ "_kybern_dialog": req }), vec![]));
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id,
+                    tool_call_id: req.get("tool_use_id").and_then(Value::as_str).map(str::to_owned),
+                    tool_name: "ui_select".into(),
+                    input: json!({ "title": "Resume session", "options": ["Compact and continue", "Keep full history", "Keep full history and skip future prompts"] }),
+                    summary: "Resume with a summary to use fewer tokens, or keep the full conversation.".into(),
+                    suggestions: vec![],
+                }).await;
+            }
             "elicitation" => {
-                let _ = self.respond_control(&request_id, Ok(json!({ "action": "decline" }))).await;
+                self.pending_permissions.lock().await.insert(request_id.clone(), (json!({ "_kybern_elicitation": req }), vec![]));
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id,
+                    tool_call_id: None,
+                    tool_name: "mcp_elicitation".into(),
+                    input: req.clone(),
+                    summary: req.get("message").and_then(Value::as_str).unwrap_or("Provide the requested information").into(),
+                    suggestions: vec![],
+                })
+                .await;
             }
             "hook_callback" => {
                 let _ = self.respond_control(&request_id, Ok(json!({ "continue": true }))).await;
@@ -978,10 +1008,42 @@ impl AgentSession for SessionHandle {
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
-        let Some((input, suggestions)) = self.0.pending_permissions.lock().await.remove(request_id) else {
+        let Some((mut input, suggestions)) = self.0.pending_permissions.lock().await.get(request_id).cloned() else {
             return Err(DriverError::Protocol(format!("no pending permission request {request_id}")));
         };
+        if input.get("_kybern_dialog").is_some() {
+            let response = match decision {
+                ApprovalDecision::Submit { response } => {
+                    let result = match response.get("value").and_then(Value::as_str) {
+                        Some("Compact and continue") => "compact",
+                        Some("Keep full history") => "continue",
+                        Some("Keep full history and skip future prompts") => "never",
+                        _ => return Err(DriverError::Protocol("choose a resume option".into())),
+                    };
+                    json!({ "behavior": "completed", "result": result })
+                }
+                ApprovalDecision::Deny { .. } => json!({ "behavior": "cancelled" }),
+                _ => return Err(DriverError::Protocol("this dialog needs an answer".into())),
+            };
+            self.0.respond_control(request_id, Ok(response)).await?;
+            self.0.pending_permissions.lock().await.remove(request_id);
+            return Ok(());
+        }
+        if input.get("_kybern_elicitation").is_some() {
+            let response = match decision {
+                ApprovalDecision::Submit { response } => response.clone(),
+                ApprovalDecision::Deny { .. } => json!({ "action": "decline" }),
+                _ => return Err(DriverError::Protocol("this form needs an answer".into())),
+            };
+            self.0.respond_control(request_id, Ok(response)).await?;
+            self.0.pending_permissions.lock().await.remove(request_id);
+            return Ok(());
+        }
         let response = match decision {
+            ApprovalDecision::Submit { response } => {
+                input["answers"] = response.get("answers").cloned().ok_or_else(|| DriverError::Protocol("missing answers".into()))?;
+                json!({ "behavior": "allow", "updatedInput": input })
+            }
             ApprovalDecision::AllowOnce => json!({ "behavior": "allow", "updatedInput": input }),
             ApprovalDecision::AllowAlways => {
                 json!({ "behavior": "allow", "updatedInput": input, "updatedPermissions": suggestions })
@@ -992,7 +1054,9 @@ impl AgentSession for SessionHandle {
                 "interrupt": false,
             }),
         };
-        self.0.respond_control(request_id, Ok(response)).await
+        self.0.respond_control(request_id, Ok(response)).await?;
+        self.0.pending_permissions.lock().await.remove(request_id);
+        Ok(())
     }
 
     async fn stop_runtime_task(&self, task: &RuntimeTask) -> Result<()> {
@@ -1020,6 +1084,62 @@ impl AgentSession for SessionHandle {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn questions_and_elicitation_keep_native_response_shapes() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            session_id: Mutex::new("test".into()),
+        });
+        let handle = SessionHandle(session.clone());
+        let questions = json!([{ "question": "Which sections?", "options": [{"label":"Intro"},{"label":"Summary"}], "multiSelect": true }]);
+        session.handle_control_request(&json!({ "request_id": "question", "request": { "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "input": { "questions": questions } } })).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == "AskUserQuestion"));
+        handle
+            .respond_permission(
+                "question",
+                &ApprovalDecision::Submit { response: json!({ "answers": { "Which sections?": "Intro, Summary" } }) },
+            )
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(
+            response["response"]["response"]["updatedInput"],
+            json!({ "questions": questions, "answers": { "Which sections?": "Intro, Summary" } })
+        );
+        session.handle_control_request(&json!({ "request_id": "form", "request": { "subtype": "elicitation", "message": "Name", "requestedSchema": { "type": "object" } } })).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == "mcp_elicitation"));
+        handle
+            .respond_permission("form", &ApprovalDecision::Submit { response: json!({ "action": "accept", "content": { "name": "Ada" } }) })
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(response["response"]["response"], json!({ "action": "accept", "content": { "name": "Ada" } }));
+        for (choice, expected) in
+            [("Compact and continue", "compact"), ("Keep full history", "continue"), ("Keep full history and skip future prompts", "never")]
+        {
+            session.handle_control_request(&json!({ "request_id": "resume", "request": { "subtype": "request_user_dialog", "dialog_kind": "resume_return", "payload": {} } })).await;
+            assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == "ui_select"));
+            handle.respond_permission("resume", &ApprovalDecision::Submit { response: json!({ "value": choice }) }).await.unwrap();
+            let response =
+                tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
+                    .await
+                    .unwrap();
+            assert_eq!(response["response"]["response"], json!({ "behavior": "completed", "result": expected }));
+        }
+        child.kill().await;
+    }
     use super::{claude_background_task, claude_efforts, claude_model_aliases, claude_task_started, claude_task_update, content_blocks};
     use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStatus, UserMessage};
     use serde_json::json;

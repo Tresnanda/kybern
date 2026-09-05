@@ -185,6 +185,30 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/EventOrigin"
+        },
+        "source": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "image_received"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "origin",
+        "source"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "message_id": {
           "type": "string",
           "format": "uuid"
@@ -355,6 +379,22 @@ expression: schema_for!(ThreadEvent)
       "required": [
         "kind",
         "task"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalRequest"
+        },
+        "kind": {
+          "type": "string",
+          "const": "user_input_requested"
+        }
+      },
+      "required": [
+        "kind",
+        "approval"
       ]
     },
     {
@@ -1195,6 +1235,21 @@ expression: schema_for!(ThreadEvent)
     },
     "ApprovalDecision": {
       "oneOf": [
+        {
+          "description": "Answer a structured question or form using the provider-native payload.",
+          "type": "object",
+          "properties": {
+            "response": true,
+            "decision": {
+              "type": "string",
+              "const": "submit"
+            }
+          },
+          "required": [
+            "decision",
+            "response"
+          ]
+        },
         {
           "type": "object",
           "properties": {

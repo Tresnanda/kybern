@@ -1,3 +1,5 @@
+import { SidebarLeadingControls } from "@/views/chrome"
+import { platform } from "@/lib/tauri"
 // App shell, mirroring Synara's `_chat.tsx` route: an offcanvas, resizable,
 // translucent left sidebar; a content card with a seam rail; the right dock.
 
@@ -85,6 +87,9 @@ function Workspace() {
       data-sidebar-side="left"
       style={{ "--sidebar-width": `${sidebar.width}px` } as React.CSSProperties}
     >
+      <div className="fixed top-0 z-40 flex h-[46px] items-center" style={{ left: platform() === "macos" ? "var(--desktop-top-bar-traffic-light-gutter, 84px)" : "16px" }}>
+        <SidebarLeadingControls className="hidden md:flex" />
+      </div>
       <Sidebar
         side="left"
         collapsible="offcanvas"

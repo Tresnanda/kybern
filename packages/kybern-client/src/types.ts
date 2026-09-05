@@ -284,6 +284,7 @@ export interface ApprovalRequest {
 }
 
 export type ApprovalDecision =
+  | { decision: "submit"; response: unknown }
   | { decision: "allow_once" }
   | { decision: "allow_always" }
   | { decision: "deny"; reason?: string | null };
@@ -298,6 +299,7 @@ export interface ToolCall {
 export type StopReason = "completed" | "interrupted" | "max_turns" | "error";
 
 export type TranscriptEntry =
+  | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }
   | {
       role: "user";
       id: MessageId;
@@ -421,6 +423,7 @@ export type EventPayload =
   | { kind: "message_removed"; message_id: MessageId }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
+  | { kind: "image_received"; id: string; origin: EventOrigin; source: string }
   | {
       kind: "assistant_text_delta";
       message_id: MessageId;
@@ -451,6 +454,7 @@ export type EventPayload =
   | { kind: "runtime_task_started"; task: RuntimeTask }
   | { kind: "runtime_task_updated"; task: RuntimeTask }
   | { kind: "runtime_task_completed"; task: RuntimeTask }
+  | { kind: "user_input_requested"; approval: ApprovalRequest }
   | { kind: "approval_requested"; approval: ApprovalRequest }
   | {
       kind: "approval_resolved";
@@ -758,6 +762,7 @@ export interface Settings {
   title_provider?: ProviderKind | null;
   providers: Partial<Record<ProviderKind, ProviderSettings>>;
   notifications: boolean;
+  auto_update_harnesses: boolean;
 }
 
 export interface SettingsUpdateParams {
@@ -973,6 +978,8 @@ export interface Methods {
   ];
   "daemon.info": [Empty, DaemonInfo];
   "providers.list": [ProvidersListParams, ProvidersListResult];
+  "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
+  "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];
   "files.search": [FilesSearchParams, FilesSearchResult];
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
@@ -1025,3 +1032,11 @@ export interface Methods {
 export type MethodName = keyof Methods;
 export type ParamsOf<M extends MethodName> = Methods[M][0];
 export type ResultOf<M extends MethodName> = Methods[M][1];
+
+export interface HarnessUpdate {
+  kind: ProviderKind;
+  status: "not_checked" | "waiting" | "updating" | "updated" | "current" | "unsupported" | "failed";
+  message: string;
+  version: string | null;
+  checked_at: DateTime | null;
+}

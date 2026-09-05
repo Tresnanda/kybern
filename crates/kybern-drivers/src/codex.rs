@@ -421,6 +421,8 @@ struct CodexSession {
 enum ApprovalKind {
     Command,
     FileChange,
+    UserInput,
+    Elicitation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -664,13 +666,20 @@ impl CodexSession {
                 })
                 .await;
             }
-            "item/tool/requestUserInput" => {
-                // Not mappable to yes/no approvals yet; decline so the turn continues.
-                let _ = self.respond(&id, Err("kybern does not support tool questions yet".into())).await;
-                self.emit(DriverEvent::Notice {
-                    level: NoticeLevel::Warning,
-                    text: "Codex asked a question kybern cannot relay yet".into(),
-                    data: Some(params.clone()),
+            "item/tool/requestUserInput" | "mcpServer/elicitation/request" => {
+                let elicitation = method == "mcpServer/elicitation/request";
+                let request_id = id.to_string();
+                self.pending_approvals.lock().await.insert(
+                    request_id.clone(),
+                    (id.clone(), if elicitation { ApprovalKind::Elicitation } else { ApprovalKind::UserInput }),
+                );
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id,
+                    tool_call_id: params.get("itemId").and_then(Value::as_str).map(str::to_owned),
+                    tool_name: if elicitation { "mcp_elicitation" } else { "request_user_input" }.into(),
+                    input: params.clone(),
+                    summary: params.get("message").and_then(Value::as_str).unwrap_or("Answer the agent's questions").into(),
+                    suggestions: vec![],
                 })
                 .await;
             }
@@ -1426,15 +1435,29 @@ impl AgentSession for Handle {
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
-        let Some((id, _kind)) = self.0.pending_approvals.lock().await.remove(request_id) else {
+        let Some((id, kind)) = self.0.pending_approvals.lock().await.get(request_id).cloned() else {
             return Err(DriverError::Protocol(format!("no pending approval {request_id}")));
         };
+        if matches!(kind, ApprovalKind::UserInput | ApprovalKind::Elicitation) {
+            let response = match decision {
+                ApprovalDecision::Submit { response } => response.clone(),
+                ApprovalDecision::Deny { .. } if matches!(kind, ApprovalKind::Elicitation) => json!({ "action": "decline" }),
+                ApprovalDecision::Deny { .. } => json!({ "answers": {} }),
+                _ => return Err(DriverError::Protocol("this request needs an answer".into())),
+            };
+            self.0.respond(&id, Ok(response)).await?;
+            self.0.pending_approvals.lock().await.remove(request_id);
+            return Ok(());
+        }
         let d = match decision {
+            ApprovalDecision::Submit { .. } => return Err(DriverError::Protocol("expected permission decision".into())),
             ApprovalDecision::AllowOnce => "accept",
             ApprovalDecision::AllowAlways => "acceptForSession",
             ApprovalDecision::Deny { .. } => "decline",
         };
-        self.0.respond(&id, Ok(json!({ "decision": d }))).await
+        self.0.respond(&id, Ok(json!({ "decision": d }))).await?;
+        self.0.pending_approvals.lock().await.remove(request_id);
+        Ok(())
     }
 
     async fn stop_runtime_task(&self, task: &RuntimeTask) -> Result<()> {
@@ -1489,6 +1512,57 @@ impl AgentSession for Handle {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn questions_round_trip_and_withdraw_on_provider_resolution() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            state: Mutex::new(State {
+                thread_id: Some("test".into()),
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+        session
+            .handle_server_request(json!(42), "item/tool/requestUserInput", &json!({"questions":[{"id":"choice", "question":"Which?"}]}))
+            .await;
+        let Some(DriverEvent::PermissionRequest { request_id, tool_name, .. }) = rx.recv().await else {
+            panic!("missing question");
+        };
+        assert_eq!(tool_name, "request_user_input");
+        let handle = Handle(session.clone());
+        let answer = json!({"answers":{"choice":{"answers":["Custom answer"]}}});
+        handle.respond_permission(&request_id, &ApprovalDecision::Submit { response: answer.clone() }).await.unwrap();
+        let wire = tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(wire["id"], 42);
+        assert_eq!(wire["result"], answer);
+        session.handle_server_request(json!(43), "item/tool/requestUserInput", &json!({"questions":[]})).await;
+        let _ = rx.recv().await;
+        session.handle_notification("serverRequest/resolved", &json!({"requestId":43})).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionWithdrawn { .. })));
+        assert!(session.pending_approvals.lock().await.is_empty());
+        child.kill().await;
+    }
     use std::collections::HashMap;
 
     use super::{

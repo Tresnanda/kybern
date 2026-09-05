@@ -4,6 +4,7 @@ mod config;
 mod discovery;
 mod files;
 mod github;
+mod harness_updates;
 mod http;
 mod orchestrator;
 #[cfg(test)]
@@ -113,6 +114,7 @@ async fn main() -> Result<()> {
     // daemon.port to general clients until the state is consistent.
     state.orchestrator.recover_after_restart().await?;
 
+    let update_worker = tokio::spawn(harness_updates::run(state.clone()));
     let queue_state = state.clone();
     let queue_worker = tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
@@ -156,6 +158,7 @@ async fn main() -> Result<()> {
     };
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
+    let _ = update_worker.await;
     state.orchestrator.shutdown().await;
     state.terminals.shutdown().await;
     let _ = std::fs::remove_file(&paths.port_file);

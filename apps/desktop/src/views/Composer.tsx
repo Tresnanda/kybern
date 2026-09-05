@@ -84,12 +84,14 @@ export interface ComposerProps {
   onModelChange?: (model: string | undefined, effort: string | undefined) => void
   /** Enables @ file mentions. */
   projectId?: ProjectId
-  /** Slash commands offered when the text starts with "/". */
+  /** Slash commands offered at a word boundary. */
   commands?: SlashCommand[]
   /** Panels stacked above the input surface (queued, approval, landing tray). */
   above?: React.ReactNode
   /** Hides the footer row (pending approval). */
   hideFooter?: boolean
+  /** A structured question panel temporarily takes the place of the editor. */
+  hideInput?: boolean
   autoFocus?: boolean
   className?: string
   /** Adapts the footer and surface geometry to a constrained split pane. */
@@ -206,6 +208,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     commands = [],
     above,
     hideFooter,
+    hideInput,
     autoFocus,
     className,
     surfaceMode = "single",
@@ -299,11 +302,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const slash = useMemo(() => {
     const before = text.slice(0, caret)
-    if (!before.startsWith("/")) return null
-    const token = before.slice(1)
+    const start = before.lastIndexOf("/")
+    if (start < 0 || (start > 0 && !/\s/.test(before[start - 1]!))) return null
+    const token = before.slice(start + 1)
     if (/\s/.test(token)) return null
     const skillOnly = token.toLowerCase().startsWith("skill:")
-    return { query: skillOnly ? token.slice(6) : token, skillOnly }
+    return { start, query: skillOnly ? token.slice(6) : token, skillOnly }
   }, [text, caret])
 
   const skill = useMemo(() => {
@@ -364,7 +368,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const skillItems = rankSkills(skills, slash.query).map((item) => ({ id: `skill:${item.name}`, type: "skill" as const, skill: item }))
     return [...commandItems, ...skillItems].slice(0, 16)
   }, [commands, files, mention, skill, skills, slash])
-  const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? "/" : null
+  const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? `/${slash.start}` : null
   const menuOpen = !!menuKey && menuDismissed !== menuKey
   const menuSignature = `${menuKey}:${menuItems.map((item) => item.id).join("|")}`
   const menuIndex = menuSel.sig === menuSignature ? menuSel.index : 0
@@ -382,12 +386,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     setTextAndCaret(next, mention.start + path.length + 2)
   }
   const pickCommand = (cmd: SlashCommand) => {
-    setTextAndCaret("")
-    cmd.run()
+    if (!slash) return
+    setTextAndCaret(`${text.slice(0, slash.start)}${text.slice(caret)}`, slash.start)
+    if (cmd.name === "attach") fileInput.current?.click()
+    else cmd.run()
   }
   const pickSkill = (item: SkillInfo) => {
     selectedSkills.current.set(item.name.toLowerCase(), item)
-    const trigger = skill ?? (slash ? { start: 0, query: slash.query } : null)
+    const trigger = skill ?? (slash)
     if (!trigger) return
     const token = `$${item.name} `
     const next = `${text.slice(0, trigger.start)}${token}${text.slice(caret)}`
@@ -559,7 +565,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     <ComposerColumnFrame className={cn(className, surfaceMode === "split" && "split-chat-composer")}>
       <div>{above}</div>
       <div
-        className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, menuOpen && "overflow-visible")}
+        className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, menuOpen && "overflow-visible", hideInput && "hidden")}
         onDragOver={(e) => {
           e.preventDefault()
           setDragOver(true)
@@ -576,7 +582,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             {menuOpen && (
               <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
                 <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME} role="listbox">
-                  <div ref={menuList} className="max-h-72 scroll-py-1 overflow-y-auto overscroll-contain p-1.5">
+                  <div ref={menuList} className="max-h-[min(22rem,45vh)] scroll-py-1 overflow-y-auto overscroll-contain p-1.5">
                     {menuItems.length === 0 ? (
                       <p className="px-2.5 py-2 text-[length:var(--app-font-size-ui-sm,11px)] leading-relaxed text-muted-foreground/60">{menuEmptyText}</p>
                     ) : (
@@ -619,16 +625,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 )}
                               </span>
                               <div className="flex min-w-0 flex-1 items-center gap-3">
-                                <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                                  <span className="max-w-[45%] shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/90">{title}</span>
-                                  {description && <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/60">{description}</span>}
+                                <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5 overflow-hidden">
+                                  <span className="max-w-full truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/90">{title}</span>
+                                  {description && <span className="w-full min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">{description}</span>}
                                 </div>
                                 {item.type === "file" ? (
                                   <span className="max-w-[42%] shrink truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
                                 ) : item.type === "command" ? (
                                   <span className="shrink-0 text-end font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">/{item.command.name}</span>
                                 ) : (
-                                  <span className="shrink-0 rounded-full bg-[var(--color-background-button-secondary)] px-2 py-0.5 text-[length:var(--app-font-size-ui-2xs,10px)] font-medium text-muted-foreground/70">
+                                  <span className="shrink-0 px-1 py-0.5 text-[length:var(--app-font-size-ui-2xs,10px)] font-medium text-muted-foreground/70">
                                     {skillSourceLabel(item.skill.scope)}
                                   </span>
                                 )}

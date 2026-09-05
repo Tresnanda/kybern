@@ -12,6 +12,7 @@ import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/synara/
 import { useLocalStorage } from "@/lib/hooks"
 import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, PaperclipIcon, SettingsIcon, WorktreeIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
+import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
 import { createThread, rpc } from "@/state/rpc"
 import { selectAvailableProviders, useStore } from "@/state/store"
@@ -20,7 +21,7 @@ import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from ".
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { SurfaceHeader } from "./chrome"
 
-export function Draft({ projectId }: { projectId: ProjectId }) {
+export function Draft({ projectId, paneId, onProjectChange }: { projectId: ProjectId; paneId?: PaneId; onProjectChange?: (id: ProjectId) => void }) {
   const environmentId = useStore((s) => s.environmentId)
   const project = useStore((s) => s.projects[projectId])
   const projects = useStore((s) => s.projects)
@@ -79,8 +80,8 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
   const projectList = Object.values(projects).sort((a, b) => a.name.localeCompare(b.name))
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <SurfaceHeader minimal />
+    <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-col">
+      <SurfaceHeader minimal showSidebarControls={!paneId} />
       <div className={cn("chat-pane-enter flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER)}>
         <div className="flex min-h-0 flex-1 items-center justify-center">
           <div className="flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]">
@@ -101,7 +102,7 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
                 <ComposerPickerMenuPopup align="center" side="bottom" className="min-w-56">
                   <MenuGroup>
                     {projectList.map((p) => (
-                      <MenuItem key={p.id} onClick={() => useStore.getState().selectDraft(p.id)}>
+                      <MenuItem key={p.id} onClick={() => onProjectChange ? onProjectChange(p.id) : useStore.getState().selectDraft(p.id)}>
                         <FolderIcon />
                         <span className="min-w-0 flex-1 truncate">{p.name}</span>
                         {p.id === projectId && <CheckIcon className="size-3.5 shrink-0" />}
@@ -117,7 +118,8 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
 
         <div className="w-full shrink-0 pb-3 sm:pb-4">
           <Composer
-            draftKey={`project:${projectId}`}
+            surfaceMode={paneId ? "split" : "single"}
+            draftKey={`project:${projectId}:${paneId ?? "main"}`}
             ref={composer}
             autoFocus
             mode={mode}
@@ -144,7 +146,7 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
                     <MenuGroup>
                       <MenuGroupLabel>Project</MenuGroupLabel>
                       {projectList.map((p) => (
-                        <MenuItem key={p.id} onClick={() => useStore.getState().selectDraft(p.id)}>
+                        <MenuItem key={p.id} onClick={() => onProjectChange ? onProjectChange(p.id) : useStore.getState().selectDraft(p.id)}>
                           <FolderIcon />
                           <span className="min-w-0 flex-1 truncate">{p.name}</span>
                           {p.id === projectId && <CheckIcon className="size-3.5 shrink-0" />}
@@ -223,7 +225,8 @@ export function Draft({ projectId }: { projectId: ProjectId }) {
             }
             onSend={async (message) => {
               if (!provider) return
-              await createThread({ projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
+              if (paneId) useStore.getState().focusSplitPane(paneId)
+              await createThread({ paneId, projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
             }}
           />
         </div>

@@ -34,6 +34,7 @@ struct Inner {
     paths: Paths,
     settings: SettingsStore,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
+    harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
     /// Threads whose next session must fork the provider conversation at this point.
     pending_rewinds: Mutex<HashMap<ThreadId, RewindPoint>>,
 }
@@ -125,9 +126,31 @@ impl Orchestrator {
                 paths,
                 settings,
                 sessions: Mutex::new(HashMap::new()),
+                harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
                 pending_rewinds: Mutex::new(HashMap::new()),
             }),
         }
+    }
+
+    /// The write guard prevents sends and one-shot jobs from racing an update.
+    pub async fn idle_harness_for_update(&self, kind: ProviderKind) -> Result<Option<tokio::sync::OwnedRwLockWriteGuard<()>>> {
+        let Ok(guard) = self.inner.harness_gates[&kind].clone().try_write_owned() else { return Ok(None) };
+        let threads = self.inner.store.threads_list(None, true)?;
+        for thread in threads.iter().filter(|thread| thread.provider.kind == kind) {
+            if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+                || self.inner.store.runtime_tasks_for_thread(thread.id)?.iter().any(|task| task.status.is_active())
+            {
+                return Ok(None);
+            }
+        }
+        // Resume the persisted conversation with the new executable on the next send.
+        for thread in threads.iter().filter(|thread| thread.provider.kind == kind) {
+            let live = self.inner.sessions.lock().await.remove(&thread.id);
+            if let Some(live) = live {
+                live.session.close().await?;
+            }
+        }
+        Ok(Some(guard))
     }
 
     /// Binary override for a provider from settings.
@@ -362,6 +385,11 @@ impl Orchestrator {
         mut message: UserMessage,
         queued: bool,
     ) -> Result<(TurnId, MessageId)> {
+        let kind = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?.provider.kind;
+        let _harness = self.inner.harness_gates[&kind]
+            .clone()
+            .try_read_owned()
+            .map_err(|_| anyhow!("This agent is updating. Try sending again after the update finishes."))?;
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
         if queued && !self.inner.store.queue_list(Some(thread_id))?.iter().any(|item| item.id == message_id) {
             return Err(anyhow!("queued message was removed"));
@@ -620,10 +648,14 @@ impl Orchestrator {
         if resolved {
             return Err(anyhow!("approval already resolved"));
         }
+        approval.validate_decision(&decision).map_err(|message| anyhow!(message))?;
         let live =
             self.inner.sessions.lock().await.get(&approval.thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
-        let request_id = live.pending.lock().await.remove(&approval_id).ok_or_else(|| anyhow!("approval no longer pending"))?;
+        let mut pending = live.pending.lock().await;
+        let request_id = pending.get(&approval_id).cloned().ok_or_else(|| anyhow!("approval no longer pending"))?;
         live.session.respond_permission(&request_id, &decision).await?;
+        pending.remove(&approval_id);
+        drop(pending);
         self.inner.store.approval_resolve(approval_id, &decision)?;
         self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
         if live.pending.lock().await.is_empty()
@@ -632,6 +664,24 @@ impl Orchestrator {
         {
             t.status = ThreadStatus::Running;
             self.update_thread(t)?;
+        }
+        Ok(())
+    }
+
+    async fn resolve_finished_requests(&self, thread_id: ThreadId, turn_id: TurnId, live: &LiveSession) -> Result<()> {
+        let mut pending = live.pending.lock().await;
+        let ids = pending.keys().copied().collect::<Vec<_>>();
+        for id in ids {
+            let Some((request, resolved)) = self.inner.store.approval_get(id)? else { continue };
+            if request.turn_id != turn_id || resolved {
+                continue;
+            }
+            let decision = ApprovalDecision::Deny { reason: Some("turn ended".into()) };
+            if let Some(provider_id) = pending.remove(&id) {
+                let _ = live.session.respond_permission(&provider_id, &decision).await;
+            }
+            self.inner.store.approval_resolve(id, &decision)?;
+            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision })?;
         }
         Ok(())
     }
@@ -725,6 +775,7 @@ impl Orchestrator {
                 continue;
             }
             let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            let _harness = self.inner.harness_gates[&kind].read().await;
             let binary = self.binary_for(kind);
             match driver.one_shot(&cwd, &prompt, binary.as_ref()).await {
                 Ok(text) => {
@@ -748,6 +799,7 @@ impl Orchestrator {
         let mut last: Option<anyhow::Error> = None;
         for kind in kinds {
             let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            let _harness = self.inner.harness_gates[&kind].read().await;
             match driver.one_shot(&cwd, prompt, self.binary_for(kind).as_ref()).await {
                 Ok(t) if !t.trim().is_empty() => return Ok(t),
                 Ok(_) => {}
@@ -1132,11 +1184,17 @@ impl Orchestrator {
                 tracing::error!(%thread_id, error = %e, "failed to persist driver event");
             }
         }
-        // Stream closed: provider is gone.
-        self.inner.sessions.lock().await.remove(&thread_id);
+        // An idle session retired for an update must not remove its replacement.
+        {
+            let mut sessions = self.inner.sessions.lock().await;
+            if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, &live)) {
+                sessions.remove(&thread_id);
+            }
+        }
         self.interrupt_runtime_tasks(thread_id, &live, "Provider exited before this work finished").await;
         let turn = live.turn.lock().await.take();
         if let Some(turn) = turn.filter(|t| !t.completed) {
+            let _ = self.resolve_finished_requests(thread_id, turn.id, &live).await;
             let _ =
                 self.emit(thread_id, Some(turn.id), EventPayload::TurnFailed { error: "provider exited before finishing the turn".into() });
             if let Ok(Some(mut t)) = self.inner.store.thread_get(thread_id) {
@@ -1151,7 +1209,8 @@ impl Orchestrator {
         let turn_id = turn_guard.as_ref().map(|t| t.id);
         let response_event = matches!(
             &ev,
-            DriverEvent::TextDelta { .. }
+            DriverEvent::ImageReceived { .. }
+                | DriverEvent::TextDelta { .. }
                 | DriverEvent::ThinkingDelta { .. }
                 | DriverEvent::MessageCompleted { .. }
                 | DriverEvent::ToolStarted(_)
@@ -1186,6 +1245,11 @@ impl Orchestrator {
                     self.update_thread(t)?;
                 }
                 self.emit(thread_id, turn_id, EventPayload::ProviderSessionBound { session_id, model })?;
+            }
+            DriverEvent::ImageReceived { id, origin, source } => {
+                if source.len() <= 70_000_000 {
+                    self.emit(thread_id, turn_id, EventPayload::ImageReceived { id, origin, source })?;
+                }
             }
             DriverEvent::TextDelta { message_id, origin, delta } => {
                 let id = map_message_delta(&mut turn_guard, &origin, &message_id);
@@ -1325,7 +1389,12 @@ impl Orchestrator {
                 };
                 self.inner.store.approval_insert(&approval)?;
                 live.pending.lock().await.insert(approval.id, request_id);
-                self.emit(thread_id, Some(turn_id), EventPayload::ApprovalRequested { approval })?;
+                let event = if approval.is_user_input() {
+                    EventPayload::UserInputRequested { approval }
+                } else {
+                    EventPayload::ApprovalRequested { approval }
+                };
+                self.emit(thread_id, Some(turn_id), event)?;
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
                 if t.status != ThreadStatus::AwaitingApproval {
                     t.status = ThreadStatus::AwaitingApproval;
@@ -1339,6 +1408,13 @@ impl Orchestrator {
                     let decision = ApprovalDecision::Deny { reason: Some("withdrawn by provider".into()) };
                     self.inner.store.approval_resolve(approval_id, &decision)?;
                     self.emit(thread_id, turn_id, EventPayload::ApprovalResolved { approval_id, decision })?;
+                    if pending.is_empty()
+                        && let Some(mut thread) = self.inner.store.thread_get(thread_id)?
+                        && thread.status == ThreadStatus::AwaitingApproval
+                    {
+                        thread.status = ThreadStatus::Running;
+                        self.update_thread(thread)?;
+                    }
                 }
             }
             DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
@@ -1402,6 +1478,7 @@ impl Orchestrator {
                 let turn_id = turn.id;
                 *turn_guard = None;
                 drop(turn_guard);
+                self.resolve_finished_requests(thread_id, turn_id, live).await?;
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
                 self.inner.store.usage_insert(&TurnUsageRow {
                     turn_id,
@@ -1435,6 +1512,7 @@ impl Orchestrator {
                 let turn_id = turn.id;
                 *turn_guard = None;
                 drop(turn_guard);
+                self.resolve_finished_requests(thread_id, turn_id, live).await?;
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
                 let has_active_tasks =
                     live.tasks.lock().await.values().any(|task| task.origin_turn_id == turn_id && task.status.is_active());

@@ -31,6 +31,7 @@ pub struct Inner {
     pub terminals: TerminalManager,
     pub settings: SettingsStore,
     pub provider_catalogs: ProviderCatalogCache,
+    pub harness_updates: crate::harness_updates::HarnessUpdates,
     pub pairing: Pairing,
     pub tickets: crate::access::Tickets,
     pub revoked_tokens: broadcast::Sender<uuid::Uuid>,
@@ -68,6 +69,7 @@ impl AppState {
         let (events, _) = broadcast::channel(8192);
         let drivers = DriverRegistry::with_defaults();
         let settings = SettingsStore::load(&paths.settings)?;
+        let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone());
         Ok(Self {
             inner: Arc::new(Inner {
@@ -79,6 +81,7 @@ impl AppState {
                 terminals: TerminalManager::default(),
                 settings,
                 provider_catalogs: ProviderCatalogCache::default(),
+                harness_updates,
                 pairing: Pairing::default(),
                 tickets: crate::access::Tickets::default(),
                 revoked_tokens: broadcast::channel(128).0,
@@ -113,6 +116,9 @@ pub struct ProviderCatalogCache {
 }
 
 impl ProviderCatalogCache {
+    pub async fn invalidate(&self) {
+        self.entries.lock().await.clear();
+    }
     pub async fn get_or_refresh<F, Fut>(&self, key: String, force_refresh: bool, refresh: F) -> Vec<ProviderStatus>
     where
         F: FnOnce() -> Fut,

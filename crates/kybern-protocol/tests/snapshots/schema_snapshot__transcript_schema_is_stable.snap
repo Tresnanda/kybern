@@ -11,6 +11,45 @@ expression: schema_for!(TranscriptEntry)
       "type": "object",
       "properties": {
         "id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "origin": {
+          "$ref": "#/$defs/EventOrigin"
+        },
+        "source": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "const": "image"
+        }
+      },
+      "required": [
+        "role",
+        "id",
+        "turn_id",
+        "seq",
+        "at",
+        "origin",
+        "source"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
           "type": "string",
           "format": "uuid"
         },
@@ -345,6 +384,45 @@ expression: schema_for!(TranscriptEntry)
     }
   ],
   "$defs": {
+    "EventOrigin": {
+      "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "root"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "provider_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ]
+        }
+      ]
+    },
     "UserMessage": {
       "type": "object",
       "properties": {
@@ -472,45 +550,6 @@ expression: schema_for!(TranscriptEntry)
         }
       ]
     },
-    "EventOrigin": {
-      "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "root"
-            }
-          },
-          "required": [
-            "kind"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "task_id": {
-              "type": "string"
-            },
-            "provider_thread_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "kind": {
-              "type": "string",
-              "const": "agent"
-            }
-          },
-          "required": [
-            "kind",
-            "task_id"
-          ]
-        }
-      ]
-    },
     "ToolCall": {
       "description": "A tool invocation as shown in the transcript.",
       "type": "object",
@@ -591,6 +630,21 @@ expression: schema_for!(TranscriptEntry)
     },
     "ApprovalDecision": {
       "oneOf": [
+        {
+          "description": "Answer a structured question or form using the provider-native payload.",
+          "type": "object",
+          "properties": {
+            "response": true,
+            "decision": {
+              "type": "string",
+              "const": "submit"
+            }
+          },
+          "required": [
+            "decision",
+            "response"
+          ]
+        },
         {
           "type": "object",
           "properties": {

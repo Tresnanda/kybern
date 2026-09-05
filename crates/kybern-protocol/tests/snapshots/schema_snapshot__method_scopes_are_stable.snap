@@ -8,6 +8,10 @@ expression: scopes
   - "access:write"
 - - providers.list
   - "orchestration:read"
+- - harness_updates.list
+  - "orchestration:read"
+- - harness_updates.run
+  - "orchestration:operate"
 - - projects.list
   - "orchestration:read"
 - - projects.browse

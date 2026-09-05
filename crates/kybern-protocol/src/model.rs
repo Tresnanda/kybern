@@ -503,9 +503,162 @@ pub struct ApprovalRequest {
     pub created_at: DateTime<Utc>,
 }
 
+impl ApprovalRequest {
+    pub fn is_user_input(&self) -> bool {
+        matches!(
+            self.tool_name.as_str(),
+            "AskUserQuestion"
+                | "request_user_input"
+                | "opencode_question"
+                | "mcp_elicitation"
+                | "ui_select"
+                | "ui_confirm"
+                | "ui_input"
+                | "ui_editor"
+        )
+    }
+
+    pub fn validate_decision(&self, decision: &ApprovalDecision) -> Result<(), String> {
+        let ApprovalDecision::Submit { response } = decision else {
+            return if self.is_user_input() && !matches!(decision, ApprovalDecision::Deny { .. }) {
+                Err("This request needs an answer. Submit a response or decline.".into())
+            } else {
+                Ok(())
+            };
+        };
+        let invalid = || "The response does not match this request. Check the answers and try again.".to_string();
+        match self.tool_name.as_str() {
+            "AskUserQuestion" | "request_user_input" | "opencode_question" => {
+                let questions = self.input.get("questions").and_then(Value::as_array).ok_or_else(invalid)?;
+                for (index, question) in questions.iter().enumerate() {
+                    let answer = if self.tool_name == "AskUserQuestion" {
+                        response.get("answers").and_then(|a| a.get(question.get("question").and_then(Value::as_str).unwrap_or("")))
+                    } else if self.tool_name == "request_user_input" {
+                        response
+                            .get("answers")
+                            .and_then(|a| a.get(question.get("id").and_then(Value::as_str).unwrap_or("")))
+                            .and_then(|a| a.get("answers"))
+                    } else {
+                        response.get("answers").and_then(|a| a.get(index))
+                    };
+                    let valid = if self.tool_name == "AskUserQuestion" {
+                        answer.and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
+                    } else {
+                        answer
+                            .and_then(Value::as_array)
+                            .is_some_and(|a| !a.is_empty() && a.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())))
+                    };
+                    if !valid {
+                        return Err(invalid());
+                    }
+                }
+            }
+            "ui_confirm" => {
+                if !response.get("confirmed").is_some_and(Value::is_boolean) {
+                    return Err(invalid());
+                }
+            }
+            "ui_input" | "ui_editor" => {
+                if !response.get("value").is_some_and(Value::is_string) {
+                    return Err(invalid());
+                }
+            }
+            "ui_select" => {
+                if !response
+                    .get("value")
+                    .is_some_and(|value| self.input.get("options").and_then(Value::as_array).is_some_and(|options| options.contains(value)))
+                {
+                    return Err(invalid());
+                }
+            }
+            "mcp_elicitation" => {
+                if response.get("action").and_then(Value::as_str) != Some("accept") {
+                    return Err(invalid());
+                }
+                if self.input.get("mode").and_then(Value::as_str) != Some("url") {
+                    let content = response.get("content").filter(|v| v.is_object()).ok_or_else(invalid)?;
+                    let schema = self.input.get("requestedSchema").or_else(|| self.input.get("requested_schema")).ok_or_else(invalid)?;
+                    validate_form_value(schema, content)?;
+                }
+            }
+            _ => return Err("This request needs a permission decision.".into()),
+        }
+        Ok(())
+    }
+}
+
+// Elicitation schemas are provider-owned. Validate the structural constraints at
+// the daemon boundary as well as the form, so CLI and concurrent clients agree.
+fn validate_form_value(schema: &Value, value: &Value) -> Result<(), String> {
+    let invalid = || "Check the form values and required fields before submitting.".to_string();
+    let valid_type = match schema.get("type").and_then(Value::as_str) {
+        Some("object") => value.is_object(),
+        Some("array") => value.is_array(),
+        Some("string") => value.is_string(),
+        Some("boolean") => value.is_boolean(),
+        Some("number") => value.is_number(),
+        Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
+        _ => true,
+    };
+    if !valid_type {
+        return Err(invalid());
+    }
+    if let Some(options) = schema.get("enum").and_then(Value::as_array)
+        && !options.contains(value)
+    {
+        return Err(invalid());
+    }
+    if let Some(options) = schema.get("oneOf").and_then(Value::as_array)
+        && !options.iter().any(|option| option.get("const") == Some(value))
+    {
+        return Err(invalid());
+    }
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        for key in schema.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+            if value.get(key).is_none() {
+                return Err(format!("Provide a value for {key}."));
+            }
+        }
+        for (key, child) in properties {
+            if let Some(field) = value.get(key) {
+                validate_form_value(child, field)?;
+            }
+        }
+    }
+    if let Some(values) = value.as_array() {
+        if schema.get("minItems").and_then(Value::as_u64).is_some_and(|n| values.len() < n as usize)
+            || schema.get("maxItems").and_then(Value::as_u64).is_some_and(|n| values.len() > n as usize)
+        {
+            return Err(invalid());
+        }
+        if let Some(items) = schema.get("items") {
+            for item in values {
+                validate_form_value(items, item)?;
+            }
+        }
+    }
+    if let Some(number) = value.as_f64()
+        && (schema.get("minimum").and_then(Value::as_f64).is_some_and(|n| number < n)
+            || schema.get("maximum").and_then(Value::as_f64).is_some_and(|n| number > n))
+    {
+        return Err(invalid());
+    }
+    if let Some(text) = value.as_str()
+        && (schema.get("minLength").and_then(Value::as_u64).is_some_and(|n| text.chars().count() < n as usize)
+            || schema.get("maxLength").and_then(Value::as_u64).is_some_and(|n| text.chars().count() > n as usize))
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum ApprovalDecision {
+    /// Answer a structured question or form using the provider-native payload.
+    Submit {
+        response: Value,
+    },
     AllowOnce,
     /// Allow and, where the provider supports it, remember for the session.
     AllowAlways,
@@ -538,6 +691,14 @@ pub enum StopReason {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum TranscriptEntry {
+    Image {
+        id: String,
+        turn_id: TurnId,
+        seq: EventSeq,
+        at: DateTime<Utc>,
+        origin: EventOrigin,
+        source: String,
+    },
     User {
         id: MessageId,
         turn_id: TurnId,
@@ -659,6 +820,8 @@ pub struct Settings {
     pub providers: std::collections::BTreeMap<ProviderKind, ProviderSettings>,
     /// Show OS notifications when a turn ends or needs approval.
     pub notifications: bool,
+    /// Check installed harnesses daily and update them when idle. Opt-in per environment.
+    pub auto_update_harnesses: bool,
 }
 
 impl Default for Settings {
@@ -671,6 +834,7 @@ impl Default for Settings {
             title_provider: None,
             providers: Default::default(),
             notifications: true,
+            auto_update_harnesses: false,
         }
     }
 }
@@ -727,4 +891,26 @@ pub struct Diff {
     /// True when an oversized patch was cut to the daemon's transport limit.
     #[serde(default)]
     pub patch_truncated: bool,
+}
+
+/// Last daemon-owned harness update attempt. Persisted across client reconnects.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdate {
+    pub kind: ProviderKind,
+    pub status: HarnessUpdateStatus,
+    pub message: String,
+    pub version: Option<String>,
+    pub checked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessUpdateStatus {
+    NotChecked,
+    Waiting,
+    Updating,
+    Updated,
+    Current,
+    Unsupported,
+    Failed,
 }

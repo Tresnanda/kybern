@@ -34,6 +34,7 @@ import {
 } from "@/state/splitView"
 import { useStore } from "@/state/store"
 
+import { Draft } from "./Draft"
 import { ThreadView } from "./Thread"
 
 export function SplitThreads({ splitView }: { splitView: SplitView }) {
@@ -344,6 +345,9 @@ function SplitPaneEmptyState({
 }) {
   const focusPane = useStore((state) => state.focusSplitPane)
   const selectThread = useStore((state) => state.selectThread)
+  const projects = useStore((state) => state.projects)
+  const [draftProject, setDraftProject] = useState<string | null>(null)
+  if (draftProject && !projects[draftProject]) setDraftProject(null)
   const candidates = useMemo(
     () =>
       Object.values(threads)
@@ -362,6 +366,9 @@ function SplitPaneEmptyState({
     void loadThread(threadId)
   }
 
+  if (draftProject) return <Draft key={draftProject} projectId={draftProject} paneId={paneId} onProjectChange={setDraftProject} />
+
+  const defaultProject = Object.values(threads).find((thread) => excludedThreadIds.has(thread.id) && projects[thread.project_id])?.project_id ?? candidates[0]?.project_id ?? Object.keys(projects)[0]
   return (
     <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-y-auto px-6 py-10">
       <div className="flex w-full max-w-72 flex-col items-center text-center">
@@ -369,11 +376,12 @@ function SplitPaneEmptyState({
           <Columns2Icon className="size-4" />
         </span>
         <h2 className="text-[length:var(--app-font-size-ui-lg,13px)] leading-tight font-medium text-foreground">
-          Choose a thread
+          Start a conversation
         </h2>
         <p className="mt-1 max-w-60 text-[length:var(--app-font-size-ui-sm,11px)] leading-[1.45] text-pretty text-muted-foreground">
-          Select one from the sidebar or drag it into this pane.
+          Start a new thread, choose a recent one, or drag one here.
         </p>
+        {defaultProject && <Button className="mt-4" size="sm" onClick={() => setDraftProject(defaultProject)}>New thread</Button>}
         {candidates.length > 0 && (
           <div className="mt-4 flex w-full flex-col gap-0.5 text-start">
             {candidates.map((thread) => (

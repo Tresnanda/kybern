@@ -1,16 +1,20 @@
+import { notificationPermission, notify, type NotificationPermissionState } from "@/lib/tauri"
 // Settings, in a Synara dialog: a 16rem nav column of sidebar rows and a
 // content column of SettingsSection / SettingsCard / SettingsRow blocks.
 
-import { useEffect, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
 import { useTheme } from "@/components/theme-context"
 import { Button } from "@/components/synara/button"
 import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "@/components/synara/dialog"
+import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
+import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/synara/menu"
+import { ChevronDownIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/synara/icons"
 import { Switch } from "@/components/synara/switch"
 import { PERMISSION_HINT, PERMISSION_LABEL, tokens, usd } from "@/lib/format"
-import { CheckIcon, DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/synara/icons"
+import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/synara/icons"
 import {
   SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -22,7 +26,7 @@ import {
 } from "@/lib/synara/settingsPanelStyles"
 import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_ACTIVE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/synara/sidebarRowStyles"
 import { cn } from "@/lib/utils"
-import type { PermissionMode, ProviderKind, Settings, UsageSummaryResult } from "@/protocol"
+import type { PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
 
@@ -30,7 +34,7 @@ type Tab = "general" | "agents" | "appearance" | "usage" | "about"
 
 const TABS: [Tab, string, string][] = [
   ["general", "General", "Defaults for new threads and notifications."],
-  ["agents", "Agents", "Coding agents installed on this Mac."],
+  ["agents", "Agents", "Availability on the connected machine."],
   ["appearance", "Appearance", "Theme and window material."],
   ["usage", "Usage", "Tokens and cost by agent, model or day."],
   ["about", "About", "Daemon, protocol and data folder."],
@@ -43,19 +47,21 @@ export function SettingsDialog() {
   const current = TABS.find((t) => t[0] === tab) ?? TABS[0]!
   return (
     <Dialog open={open} onOpenChange={(o) => set({ settingsOpen: o })}>
-      <DialogPopup className="app-settings-surface h-[560px] max-w-[860px] flex-row overflow-hidden p-0" bottomStickOnMobile={false}>
+      <DialogPopup className="app-settings-surface h-[min(680px,90dvh)] max-w-[920px] flex-col sm:flex-row overflow-hidden p-0" bottomStickOnMobile={false}>
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">Configure kybern</DialogDescription>
-        <nav className="flex w-52 shrink-0 flex-col border-r border-[color:var(--color-border-light)] px-1.5 py-1.5 pt-4 font-system-ui">
-          <h2 className="px-2 py-1 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">Settings</h2>
-          <ul className="flex flex-col gap-0.5">
+        <nav className="flex shrink-0 flex-col border-b border-[color:var(--color-border-light)] bg-[var(--color-background-button-secondary)] p-3 sm:w-44 sm:border-r sm:border-b-0 sm:py-5 font-system-ui">
+          <h2 className="px-2 py-1 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground">Settings</h2>
+          <ul className="mt-3 flex gap-1 overflow-x-auto sm:flex-col">
             {TABS.map(([v, label]) => (
               <li key={v}>
                 <button
                   type="button"
+                  aria-current={tab === v ? "page" : undefined}
                   onClick={() => set({ settingsTab: v })}
                   className={cn("w-full", SIDEBAR_HEADER_ROW_CLASS_NAME, tab === v ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}
                 >
+                  {(() => { const Icon = { general: SettingsIcon, agents: TerminalIcon, appearance: AppearanceIcon, usage: ClockIcon, about: InfoIcon }[v]; return <Icon className="size-4 shrink-0" /> })()}
                   <span className="truncate">{label}</span>
                 </button>
               </li>
@@ -63,11 +69,11 @@ export function SettingsDialog() {
           </ul>
         </nav>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-2xl px-6 py-8">
-            <div className="mb-8 flex items-start justify-between gap-4">
+          <div className="mx-auto w-full max-w-2xl px-5 py-6 sm:px-8 sm:py-8">
+            <div className="mb-7 flex items-start justify-between gap-4">
               <div>
-                <h1 className="text-xl font-medium tracking-tight text-foreground">{current[1]}</h1>
-                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{current[2]}</p>
+                <h1 className="text-lg font-semibold tracking-tight text-foreground">{current[1]}</h1>
+                <p className="mt-1 text-[length:var(--app-font-size-ui)] leading-relaxed text-muted-foreground">{current[2]}</p>
               </div>
             </div>
             <div className="space-y-6">
@@ -111,41 +117,39 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function Row({ title, description, status, children }: { title: string; description?: string; status?: string; children?: React.ReactNode }) {
+function Row({ title, description, status, children }: { title: string; description?: React.ReactNode; status?: string; children?: React.ReactNode }) {
+  const labelId = useId()
   return (
-    <div className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "scroll-mt-24")}>
-      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-[14rem] flex-1 space-y-0.5">
-          <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{title}</h3>
-          </div>
-          {description && <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{description}</p>}
+    <div className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "scroll-mt-24 py-4!")}>
+      <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
+        <div className="min-w-0 basis-52 flex-1 space-y-1">
+          {title && <div className="flex min-h-5 items-center gap-1.5">
+            <h3 id={labelId} className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{title}</h3>
+          </div>}
+          {description && <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "leading-relaxed break-words")}>{description}</p>}
           {status && <p className="pt-1 text-[11px] text-muted-foreground">{status}</p>}
         </div>
-        {children && <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">{children}</div>}
+        {children && <div role="group" aria-labelledby={labelId} className="flex max-w-full shrink-0 items-center gap-2">{children}</div>}
       </div>
     </div>
   )
 }
 
-function Segmented<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode; disabled?: boolean }[] }) {
+function SettingsPicker<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode; disabled?: boolean }[] }) {
   return (
-    <div role="radiogroup" className="inline-flex w-full flex-wrap items-center gap-1 sm:w-auto sm:justify-end">
-      {options.map((o) => (
-        <Button
-          key={o.value}
-          size="sm"
-          role="radio"
-          aria-checked={value === o.value}
-          disabled={o.disabled}
-          variant={value === o.value ? "secondary" : "ghost"}
-          className={cn("rounded-lg! flex-1 sm:flex-none", value !== o.value && "text-muted-foreground")}
-          onClick={() => onChange(o.value)}
-        >
-          {o.label}
-        </Button>
-      ))}
-    </div>
+    <Menu>
+      <MenuTrigger render={<Button variant="chrome-outline" size="sm" className="min-w-36 max-w-full justify-between" />}>
+        <span className="flex min-w-0 items-center gap-2 truncate">{options.find((o) => o.value === value)?.label ?? value}</span>
+        <ChevronDownIcon className="size-3.5 shrink-0" />
+      </MenuTrigger>
+      <ComposerPickerMenuPopup align="end" className="min-w-44">
+        <MenuGroup>
+          <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as T)}>
+            {options.map((o) => <MenuRadioItem key={o.value} value={o.value} disabled={o.disabled}>{o.label}</MenuRadioItem>)}
+          </MenuRadioGroup>
+        </MenuGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
   )
 }
 
@@ -157,7 +161,7 @@ function General() {
     <>
       <Section title="New threads">
         <Row title="Default agent" description="Used when you start a thread from a project.">
-          <Segmented
+          <SettingsPicker
             value={settings.default_provider}
             onChange={(v) => update({ default_provider: v as ProviderKind })}
             options={providers.map((p) => ({
@@ -172,46 +176,112 @@ function General() {
           />
         </Row>
         <Row title="Default permissions" description={PERMISSION_HINT[settings.default_permission_mode]}>
-          <Segmented
+          <SettingsPicker
             value={settings.default_permission_mode}
             onChange={(v) => update({ default_permission_mode: v as PermissionMode })}
             options={(Object.keys(PERMISSION_LABEL) as PermissionMode[]).map((m) => ({ value: m, label: PERMISSION_LABEL[m] }))}
           />
         </Row>
         <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this.">
-          <Switch checked={settings.worktrees_default} onCheckedChange={(v) => update({ worktrees_default: v })} />
+          <Switch aria-label="Use a worktree for new threads" checked={settings.worktrees_default} onCheckedChange={(v) => update({ worktrees_default: v })} />
         </Row>
       </Section>
       <Section title="Threads">
         <Row title="Generate thread titles" description="Names the thread from its first message using the agent.">
-          <Switch checked={settings.generate_titles} onCheckedChange={(v) => update({ generate_titles: v })} />
+          <Switch aria-label="Generate thread titles" checked={settings.generate_titles} onCheckedChange={(v) => update({ generate_titles: v })} />
         </Row>
-        <Row title="Show notifications" description="When a turn ends or an agent needs approval while kybern is in the background.">
-          <Switch checked={settings.notifications} onCheckedChange={(v) => update({ notifications: v })} />
+        <Row title="Show agent notifications" description="When work finishes, fails, or needs your input.">
+          <Switch aria-label="Show agent notifications" checked={settings.notifications} onCheckedChange={(v) => update({ notifications: v })} />
         </Row>
       </Section>
+      <NotificationSettings />
     </>
   )
 }
 
+function NotificationSettings() {
+  const [permission, setPermission] = useState<NotificationPermissionState>("default")
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { void notificationPermission().then(setPermission).catch(() => setPermission("unavailable")) }, [])
+  const test = async () => {
+    setBusy(true)
+    try {
+      const state = await notificationPermission(true)
+      setPermission(state)
+      if (state === "granted") {
+        if (!await notify("Kybern", "Notifications are ready. You'll hear when an agent needs you.")) throw new Error("Check notification access in system settings and try again.")
+      }
+    } catch (e) { toast.error("Unable to send notification", { description: errorText(e) }) }
+    finally { setBusy(false) }
+  }
+  return <Section title="System notifications"><Row title="Notification access" description={permission === "granted" ? "System alerts appear when Kybern is in the background." : permission === "denied" ? "Allow Kybern notifications in system settings, then try again." : permission === "unavailable" ? "System notifications aren't available in this environment. In-app alerts still work." : "Enable access to receive alerts outside Kybern."}><Button size="sm" variant="chrome-outline" disabled={busy || permission === "unavailable"} onClick={() => void test()}>{permission === "granted" ? "Send test notification" : "Enable notifications"}</Button></Row></Section>
+}
+
 function Agents() {
+  const environmentId = useStore((s) => s.environmentId)
+  return <AgentSettings key={environmentId} />
+}
+
+function AgentSettings() {
   const providers = useStore((s) => s.providers)
-  return (
-    <Section title="Agents on this Mac">
-      {providers.map((p) => (
-        <Row key={p.kind} title={p.display_name} description={p.available ? (p.binary_path ?? undefined) : (p.unavailable_reason ?? "Not found on PATH")}>
-          {p.available ? (
-            <span className="flex items-center gap-1.5 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">
-              <CheckIcon className="size-3.5 text-success" /> {p.version ?? "Installed"}
-            </span>
-          ) : (
-            <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">Not found</span>
-          )}
-        </Row>
-      ))}
-      <Row title="" description="kybern looks for each agent's CLI on your PATH. Install one and reopen this window to use it." />
+  const set = useStore((s) => s.set)
+  const { settings, update } = useSettings()
+  const [updates, setUpdates] = useState<HarnessUpdate[]>([])
+  const [loadError, setLoadError] = useState("")
+  useEffect(() => {
+    const client = rpc()
+    let canceled = false
+    let timer: ReturnType<typeof setTimeout>
+    let lastResult = ""
+    const poll = async () => {
+      try {
+        const result = await client.call("harness_updates.list", {})
+        if (canceled) return
+        setUpdates(result.updates)
+        setLoadError("")
+        const changed = result.updates.filter((item) => item.status === "updated").map((item) => item.checked_at).join(",")
+        if (changed && changed !== lastResult) {
+          lastResult = changed
+          const catalog = await client.call("providers.list", { force_refresh: true })
+          if (!canceled) set({ providers: catalog.providers })
+        }
+      } catch (error) { if (!canceled) setLoadError(errorText(error)) }
+      finally { if (!canceled) timer = setTimeout(() => void poll(), 3000) }
+    }
+    void poll()
+    return () => { canceled = true; clearTimeout(timer) }
+  }, [set])
+  const run = async (kind: ProviderKind) => {
+    try {
+      const record = await rpc().call("harness_updates.run", { kind })
+      setUpdates((previous) => [...previous.filter((item) => item.kind !== kind), record])
+    } catch (error) { toast.error("Unable to start update", { description: errorText(error) }) }
+  }
+  return <>
+    <Section title="Updates">
+      <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished.">
+        <Switch aria-label="Update harnesses automatically" checked={settings?.auto_update_harnesses ?? false} onCheckedChange={(checked) => void update({ auto_update_harnesses: checked })} />
+      </Row>
+      <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
     </Section>
-  )
+    <Section title="Installed agents">
+      {providers.map((provider) => {
+        const result = updates.find((item) => item.kind === provider.kind)
+        const busy = result?.status === "waiting" || result?.status === "updating"
+        const custom = !!settings?.providers[provider.kind]?.binary
+        return <Row key={provider.kind} title={provider.display_name} description={provider.available ? <span title={provider.binary_path ?? undefined} className="block truncate">{provider.binary_path}</span> : provider.unavailable_reason ?? "Not found on PATH"}>
+          <div className="flex min-w-0 flex-col items-end gap-2">
+            <div className="flex items-center gap-3">
+              <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{provider.version ?? (provider.available ? "Installed" : "Not installed")}</span>
+              {provider.available && !custom && <Button size="sm" variant="chrome-outline" disabled={busy} onClick={() => void run(provider.kind)}>{result?.status === "updating" ? "Updating…" : result?.status === "waiting" ? "Waiting for idle…" : "Update now"}</Button>}
+            </div>
+            {custom ? <p className="max-w-80 text-right text-xs text-muted-foreground">Custom executable · Update manually</p> : result && result.status !== "not_checked" && <p role="status" className={cn("max-w-80 text-right text-xs leading-relaxed break-words", result.status === "failed" ? "text-destructive" : "text-muted-foreground")}>{result.message}{result.checked_at && <span className="mt-1 block">Last checked {new Date(result.checked_at).toLocaleString()}</span>}</p>}
+          </div>
+        </Row>
+      })}
+      {loadError && <Row title="Unable to load update status" description={loadError} />}
+    </Section>
+  </>
 }
 
 function Appearance() {
@@ -219,7 +289,7 @@ function Appearance() {
   return (
     <Section title="Theme">
       <Row title="Appearance" description="Follows the system by default.">
-        <Segmented
+        <SettingsPicker
           value={theme}
           onChange={(v) => setTheme(v)}
           options={[
@@ -268,7 +338,7 @@ function Usage() {
     <>
       <Section title="Usage">
         <Row title="Group by">
-          <Segmented
+          <SettingsPicker
             value={group}
             onChange={setGroup}
             options={[

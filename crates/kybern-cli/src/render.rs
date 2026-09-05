@@ -53,6 +53,7 @@ pub fn transcript(r: &ThreadsGetResult) {
     println!("# {}  [{}]", r.thread.title, r.thread.provider.kind);
     for e in &r.transcript {
         match e {
+            TranscriptEntry::Image { .. } => println!("  [Agent image — open the desktop to preview]"),
             TranscriptEntry::User { message, .. } => println!("\n> {}\n", message.plain_text()),
             TranscriptEntry::Assistant { text, thinking, .. } => {
                 if let Some(th) = thinking {
@@ -68,6 +69,7 @@ pub fn transcript(r: &ThreadsGetResult) {
             }
             TranscriptEntry::Approval { approval, decision, .. } => {
                 let d = match decision {
+                    Some(ApprovalDecision::Submit { .. }) => "answered",
                     Some(ApprovalDecision::AllowOnce) => "allowed",
                     Some(ApprovalDecision::AllowAlways) => "always allowed",
                     Some(ApprovalDecision::Deny { .. }) => "denied",
@@ -138,7 +140,7 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
                 }
                 println!("  ▸ {} {}", call.name, kybern_summary(&call.name, &call.input));
             }
-            EventPayload::ApprovalRequested { approval } => {
+            EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => {
                 if line_open {
                     println!();
                     line_open = false;
@@ -186,6 +188,19 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
 }
 
 fn prompt_approval(a: &ApprovalRequest) -> Result<ApprovalDecision> {
+    if a.is_user_input() {
+        eprintln!("\n  ? {}", a.summary);
+        eprintln!("{}", serde_json::to_string_pretty(&a.input)?);
+        eprint!("    Enter a JSON response, or leave blank to decline: ");
+        std::io::stderr().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        return if line.trim().is_empty() {
+            Ok(ApprovalDecision::Deny { reason: None })
+        } else {
+            Ok(ApprovalDecision::Submit { response: serde_json::from_str(&line)? })
+        };
+    }
     eprintln!("\n  ? {} wants to run: {}", a.tool_name, a.summary);
     if let Ok(pretty) = serde_json::to_string_pretty(&a.input) {
         for l in pretty.lines().take(30) {
@@ -227,7 +242,7 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
             let short = match &en.event.payload {
                 EventPayload::AssistantTextDelta { delta, .. } => delta.replace('\n', "⏎"),
                 EventPayload::ToolCallStarted { call, .. } => call.name.clone(),
-                EventPayload::ApprovalRequested { approval } => approval.summary.clone(),
+                EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => approval.summary.clone(),
                 EventPayload::TurnFailed { error } => error.clone(),
                 EventPayload::ThreadUpdated { thread } => format!("{:?} {}", thread.status, thread.title),
                 _ => String::new(),

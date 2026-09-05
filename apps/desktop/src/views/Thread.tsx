@@ -1,3 +1,6 @@
+import { Markdown } from "@/components/kybern/Markdown"
+import { isUserInput } from "@/lib/userInput"
+import { UserInputPanel } from "./UserInputPanel"
 // Thread route: Synara-style header (provider glyph, title, Hand off,
 // actions, dock toggle), the transcript scrolling under the frosted composer,
 // queued follow-ups stacked above the input and the approval card.
@@ -106,7 +109,7 @@ export function ThreadView({
   const approval = pending[0] ?? null
 
   const answer = (n: number): boolean => {
-    if (!approval) return false
+    if (!approval || isUserInput(approval) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
     const decision = n === 1 ? ({ decision: "allow_once" } as const) : n === 2 ? ({ decision: "allow_always" } as const) : n === 3 ? ({ decision: "deny" } as const) : null
     if (!decision) {
       if (n === 4) void interrupt(threadId)
@@ -166,7 +169,7 @@ export function ThreadView({
     await sendMessage(threadId, message)
   }
 
-  const placeholder = approval ? "Resolve this approval request to continue" : running ? "Ask for follow-up changes" : undefined
+  const placeholder = approval ? (isUserInput(approval) ? "Answer the questions above" : "Resolve this approval request to continue") : running ? "Ask for follow-up changes" : undefined
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
@@ -192,6 +195,7 @@ export function ThreadView({
               placeholder={placeholder}
               running={running}
               hideFooter={!!approval}
+              hideInput={!!approval && isUserInput(approval)}
               onStop={() => void interrupt(threadId)}
               onSend={onSend}
               mode={thread.permission_mode}
@@ -211,7 +215,7 @@ export function ThreadView({
                   {queued.length > 0 && <QueuedPanel threadId={threadId} onEdit={(t) => composer.current?.setText(t)} />}
                   {approval && (
                     <div className="pb-2">
-                      <ApprovalPanel approval={approval} count={pending.length} onChoose={answer} />
+                      {isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel approval={approval} count={pending.length} onChoose={answer} />}
                     </div>
                   )}
                 </>
@@ -291,6 +295,11 @@ function QueuedPanel({ threadId, onEdit }: { threadId: ThreadId; onEdit: (text: 
 }
 
 function approvalPrompt(a: ApprovalRequest): { prompt: string; detail: React.ReactNode } {
+  if (a.tool_name === "ExitPlanMode") {
+    const input = a.input && typeof a.input === "object" ? a.input as Record<string, unknown> : {}
+    const plan = typeof input.plan === "string" ? input.plan : ""
+    return { prompt: "Start implementing this plan?", detail: plan ? <div className="mt-3 max-h-64 overflow-auto"><Markdown text={plan} /></div> : <p className="mt-2 text-xs text-muted-foreground">Review the agent’s plan above before continuing.</p> }
+  }
   const { verb, detail } = toolLine({ id: a.tool_call_id ?? "", name: a.tool_name, input: a.input })
   const mono = (s: string) => (
     <pre className="mt-2 overflow-hidden rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-1.5 font-mono text-[11.5px] leading-snug text-foreground/85">
@@ -346,8 +355,8 @@ export function ApprovalPanel({ approval, count, onChoose }: { approval: Approva
       </div>
       {detail}
       <div className="mt-2.5 space-y-0.5">
-        <ComposerChoiceRow shortcut={1} label="Approve once" description="Allow just this request" tone="primary" onSelect={() => onChoose(1)} />
-        <ComposerChoiceRow shortcut={2} label="Always allow this session" description="Don't ask again this session" onSelect={() => onChoose(2)} />
+        <ComposerChoiceRow shortcut={1} label={approval.tool_name === "ExitPlanMode" ? "Start implementing" : "Approve once"} description={approval.tool_name === "ExitPlanMode" ? "Continue with the proposed plan" : "Allow just this request"} tone="primary" onSelect={() => onChoose(1)} />
+        {approval.tool_name !== "ExitPlanMode" && <ComposerChoiceRow shortcut={2} label="Always allow this session" description="Don't ask again this session" onSelect={() => onChoose(2)} />}
         <ComposerChoiceRow shortcut={3} label="Decline" description="Reject and let the agent continue" tone="destructive" onSelect={() => onChoose(3)} />
         <ComposerChoiceRow shortcut={4} label="Cancel turn" description="Stop the current turn" onSelect={() => onChoose(4)} />
       </div>

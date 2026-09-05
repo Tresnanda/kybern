@@ -1,7 +1,7 @@
 //! Plain HTTP routes beside the WebSocket: health, pairing, and assets.
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{
@@ -10,6 +10,7 @@ use axum::{
 };
 use chrono::Utc;
 use kybern_protocol::methods::{AssetInfo, PairRequest, PairResponse};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::authenticate;
@@ -22,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/session", post(session).options(asset_preflight))
         .route("/assets", post(upload_asset).options(asset_preflight))
         .route("/assets/{id}", get(get_asset).options(asset_preflight))
+        .route("/threads/{id}/image", get(get_thread_image).options(asset_preflight))
 }
 
 async fn pair(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<PairRequest>) -> Response {
@@ -197,5 +199,72 @@ mod tests {
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(), "tauri://localhost");
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_METHODS).unwrap(), "GET, POST, OPTIONS");
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_HEADERS).unwrap(), "authorization, content-type, x-kybern-filename");
+    }
+}
+
+#[derive(Deserialize)]
+struct ImageQuery {
+    path: String,
+}
+
+async fn get_thread_image(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ImageQuery>,
+) -> Response {
+    let origin = allowed_asset_origin(&headers);
+    let response = async {
+        let Some(raw) = bearer(&headers) else { return (StatusCode::UNAUTHORIZED, "missing token").into_response() };
+        if !matches!(authenticate(&state.store, &raw), Ok(Some(p)) if p.has(kybern_protocol::Scope::OrchestrationRead)) {
+            return (StatusCode::FORBIDDEN, "token cannot read images").into_response();
+        }
+        let Ok(Some(thread)) = state.store.thread_get(id) else { return (StatusCode::NOT_FOUND, "thread not found").into_response() };
+        let Ok(root) = tokio::fs::canonicalize(&thread.cwd).await else {
+            return (StatusCode::NOT_FOUND, "thread folder is unavailable").into_response();
+        };
+        let Ok(path) = tokio::fs::canonicalize(root.join(&query.path)).await else {
+            return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
+        };
+        if !path.starts_with(&root) {
+            return (StatusCode::FORBIDDEN, "image must be inside the thread folder").into_response();
+        }
+        if !tokio::fs::metadata(&path).await.is_ok_and(|meta| meta.is_file()) {
+            return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
+        }
+        let Ok(file) = tokio::fs::File::open(&path).await else {
+            return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
+        };
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        if file.take((MAX_ASSET_BYTES + 1) as u64).read_to_end(&mut bytes).await.is_err() {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "unable to read image").into_response();
+        }
+        if bytes.len() > MAX_ASSET_BYTES {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "images are limited to 50 MB").into_response();
+        }
+        let Some(mime) = image_mime(&bytes) else {
+            return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "use a PNG, JPEG, GIF, WebP, or AVIF image").into_response();
+        };
+        ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, no-store"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], bytes)
+            .into_response()
+    }
+    .await;
+    with_asset_cors(response, origin)
+}
+
+fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[255, 216, 255]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else if bytes.get(4..8) == Some(b"ftyp") && matches!(bytes.get(8..12), Some(b"avif" | b"avis")) {
+        Some("image/avif")
+    } else {
+        None
     }
 }

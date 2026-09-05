@@ -66,6 +66,11 @@ expression: schema_for!(Settings)
       "description": "Show OS notifications when a turn ends or needs approval.",
       "type": "boolean",
       "default": true
+    },
+    "auto_update_harnesses": {
+      "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
+      "type": "boolean",
+      "default": false
     }
   },
   "$defs": {

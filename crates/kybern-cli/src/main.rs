@@ -43,6 +43,11 @@ enum Cmd {
         #[arg(long)]
         refresh: bool,
     },
+    /// Show harness update results, or request an update when idle.
+    HarnessUpdates {
+        #[arg(long)]
+        run: Option<ProviderKind>,
+    },
     /// Manage projects.
     Projects {
         #[command(subcommand)]
@@ -294,6 +299,11 @@ enum TerminalCmd {
 
 #[derive(Subcommand)]
 enum ApprovalsCmd {
+    /// Submit a provider-native JSON answer to a question or form.
+    Answer {
+        id: String,
+        response: String,
+    },
     List,
     Allow {
         id: String,
@@ -352,6 +362,15 @@ async fn main() -> Result<()> {
             };
             let r = client.call::<ProvidersList>(ProvidersListParams { project_id, force_refresh: refresh }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::providers(&r.providers) }
+        }
+        Cmd::HarnessUpdates { run } => {
+            if let Some(kind) = run {
+                let result = client.call::<HarnessUpdatesRun>(HarnessUpdateParams { kind }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let result = client.call::<HarnessUpdatesList>(Empty {}).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
         }
         Cmd::Projects { cmd } => match cmd {
             ProjectsCmd::List => {
@@ -493,6 +512,14 @@ async fn main() -> Result<()> {
             ApprovalsCmd::List => {
                 let r = client.call::<ApprovalsList>(ApprovalsListParams { thread_id: None }).await?;
                 if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::approvals(&r.approvals) }
+            }
+            ApprovalsCmd::Answer { id, response } => {
+                client
+                    .call::<ApprovalsRespond>(ApprovalsRespondParams {
+                        approval_id: id.parse()?,
+                        decision: ApprovalDecision::Submit { response: serde_json::from_str(&response)? },
+                    })
+                    .await?;
             }
             ApprovalsCmd::Allow { id, always } => {
                 let decision = if always { ApprovalDecision::AllowAlways } else { ApprovalDecision::AllowOnce };

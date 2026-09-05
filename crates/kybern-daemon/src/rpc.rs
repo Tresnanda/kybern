@@ -90,6 +90,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .await;
             ok(ProvidersListResult { providers })
         }
+        HarnessUpdatesList::NAME => ok(HarnessUpdatesResult { updates: state.harness_updates.list() }),
+        HarnessUpdatesRun::NAME => {
+            let p: HarnessUpdateParams = parse(params)?;
+            let record = state.harness_updates.request(&state.store, p.kind);
+            tokio::spawn(crate::harness_updates::tick(state.clone()));
+            ok(record)
+        }
         ProjectsList::NAME => ok(ProjectsListResult { projects: state.store.projects_list().map_err(internal)? }),
         ProjectsBrowse::NAME => {
             let p: ProjectsBrowseParams = parse_or_default(params)?;

@@ -69,6 +69,18 @@ pub struct ProvidersListResult {
 }
 method!(ProvidersList, "providers.list", Some(Scope::OrchestrationRead), ProvidersListParams, ProvidersListResult);
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdatesResult {
+    pub updates: Vec<HarnessUpdate>,
+}
+method!(HarnessUpdatesList, "harness_updates.list", Some(Scope::OrchestrationRead), Empty, HarnessUpdatesResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdateParams {
+    pub kind: ProviderKind,
+}
+method!(HarnessUpdatesRun, "harness_updates.run", Some(Scope::OrchestrationOperate), HarnessUpdateParams, HarnessUpdate);
+
 // ---- projects ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -821,6 +833,8 @@ registry!(
     DaemonInfoMethod,
     DaemonShutdown,
     ProvidersList,
+    HarnessUpdatesList,
+    HarnessUpdatesRun,
     ProjectsList,
     ProjectsBrowse,
     ProjectsAdd,

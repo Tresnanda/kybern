@@ -51,6 +51,11 @@ pub enum EventPayload {
         origin: EventOrigin,
         delta: String,
     },
+    ImageReceived {
+        id: String,
+        origin: EventOrigin,
+        source: String,
+    },
     AssistantThinkingDelta {
         message_id: MessageId,
         #[serde(default)]
@@ -89,6 +94,9 @@ pub enum EventPayload {
     /// Terminal snapshot retained in the event log for history and recovery.
     RuntimeTaskCompleted {
         task: RuntimeTask,
+    },
+    UserInputRequested {
+        approval: ApprovalRequest,
     },
     ApprovalRequested {
         approval: ApprovalRequest,

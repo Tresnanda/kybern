@@ -64,7 +64,6 @@ import { addProject, archiveThread, errorText, loadThread, removeProject, update
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
 import { selectThreadsForProject, useStore } from "@/state/store"
 
-import { SidebarLeadingControls } from "./chrome"
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { ProjectPicker } from "./ProjectPicker"
 
@@ -110,7 +109,7 @@ export function ThreadSidebar() {
           mac ? "desktop-top-bar-traffic-light-gutter" : "ps-4",
         )}
       >
-        <SidebarLeadingControls className="hidden md:flex" />
+        <div className="hidden h-7 w-[84px] md:block" aria-hidden="true" />
       </SidebarHeader>
 
       <SidebarContent className="gap-0 font-system-ui">
@@ -429,7 +428,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
           aria-current={selected ? "page" : undefined}
           className={cn(
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
-            "flex min-w-0 cursor-grab items-center gap-2 overflow-hidden rounded-md pl-8 text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
+            "flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md pl-8 text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
             "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]",
             hasGlyph || thread.pinned ? "pr-[1.75rem]" : "pr-2",
             selected ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, inSplit && "bg-sidebar-accent/55"),

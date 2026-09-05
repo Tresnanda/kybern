@@ -1,3 +1,7 @@
+import { ImageThreadContext } from "@/lib/imageThread"
+import { ResponseImage } from "@/components/kybern/ResponseImage"
+import { responseImages } from "@/lib/responseImages"
+import { isUserInput } from "@/lib/userInput"
 // Transcript pane, to Synara's ChatTranscriptPane / MessagesTimeline spec:
 // centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
@@ -251,7 +255,7 @@ export function Transcript({
   }
 
   return (
-    <div data-chat-transcript-pane className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <ImageThreadContext value={threadId}><div data-chat-transcript-pane className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div
         aria-hidden={agentActivityDetail ? true : undefined}
         inert={agentActivityDetail ? true : undefined}
@@ -308,7 +312,7 @@ export function Transcript({
       {agentActivityDetail && (
         <AgentActivityDetailView detail={agentActivityDetail} bottomInset={bottomInset} onBack={closeAgentActivity} onOpenAgentActivity={openAgentActivity} />
       )}
-    </div>
+    </div></ImageThreadContext>
   )
 }
 
@@ -428,6 +432,7 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
 }
 
 const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
+  const images = [...group.images.map((image) => ({ source: image.source, label: "Agent image" })), ...group.work.flatMap((block) => block.kind === "tool" && block.origin.kind === "root" ? responseImages(block.output) : [])].filter((image, index, all) => all.findIndex((other) => other.source === image.source) === index)
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
@@ -481,6 +486,8 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           )}
         </div>
       )}
+
+      {images.length > 0 && <div className={ROW}>{images.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
 
       {settled && (
         <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
@@ -935,8 +942,9 @@ function WorkRow({
               {block.decision ? <CheckIcon className="size-4 text-muted-foreground/50" /> : <Spinner size={14} />}
             </span>
             <p className="truncate leading-6 text-muted-foreground" style={CHAT_FONT}>
-              {block.decision ? (block.decision.decision === "deny" ? "Declined " : "Approved ") : "Waiting to approve "}
-              {block.approval.summary || block.approval.tool_name}
+              {isUserInput(block.approval)
+                ? block.decision ? block.decision.decision === "deny" ? "Input request declined" : "Answered the agent’s questions" : "Waiting for your input"
+                : <>{block.decision ? (block.decision.decision === "deny" ? "Declined " : "Approved ") : "Waiting to approve "}{block.approval.summary || block.approval.tool_name}</>}
             </p>
           </div>
         </div>

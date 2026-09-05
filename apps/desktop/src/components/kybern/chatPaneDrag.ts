@@ -78,8 +78,13 @@ export function beginThreadPointerDrag(
   let clientY = startY
   let dragging = false
   let finished = false
+  let preview: HTMLElement | null = null
+  const offsetX = startX - source.getBoundingClientRect().left
+  const offsetY = startY - source.getBoundingClientRect().top
 
   const cleanup = () => {
+    preview?.remove()
+    preview = null
     window.removeEventListener("pointermove", onPointerMove, true)
     window.removeEventListener("pointerup", onPointerUp, true)
     window.removeEventListener("pointercancel", onPointerCancel, true)
@@ -123,6 +128,20 @@ export function beginThreadPointerDrag(
 
     if (!dragging) {
       dragging = true
+      preview = source.cloneNode(true) as HTMLElement
+      preview.removeAttribute("id")
+      preview.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"))
+      preview.setAttribute("aria-hidden", "true")
+      preview.inert = true
+      Object.assign(preview.style, {
+        position: "fixed", left: "0", top: "0", margin: "0", zIndex: "1000",
+        pointerEvents: "none", width: `${source.getBoundingClientRect().width}px`,
+        height: `${source.getBoundingClientRect().height}px`,
+        background: "var(--color-background-surface)",
+        boxShadow: "0 8px 24px #0003, 0 0 0 1px var(--color-border)",
+        opacity: "0.95", transition: "none",
+      })
+      document.body.append(preview)
       source.setAttribute("data-thread-drag-source", "true")
       document.documentElement.setAttribute(
         "data-thread-pointer-dragging",
@@ -135,6 +154,7 @@ export function beginThreadPointerDrag(
       }
     }
     pointerEvent.preventDefault()
+    if (preview) preview.style.transform = `translate3d(${clientX - offsetX}px, ${clientY - offsetY}px, 0)`
     publishDrag({ threadId, clientX, clientY })
   }
 

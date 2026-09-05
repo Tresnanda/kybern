@@ -248,6 +248,8 @@ impl AgentDriver for OpencodeDriver {
                 model: config.model.clone(),
                 mode: config.permission_mode,
                 parts: HashMap::new(),
+                message_roles: HashMap::new(),
+                pending_images: HashMap::new(),
                 turn_usage: Usage::default(),
                 turn_cost: 0.0,
                 turn_started: None,
@@ -462,6 +464,8 @@ struct State {
     model: Option<String>,
     mode: PermissionMode,
     parts: HashMap<String, PartInfo>,
+    message_roles: HashMap<String, String>,
+    pending_images: HashMap<String, Value>,
     turn_usage: Usage,
     turn_cost: f64,
     turn_started: Option<std::time::Instant>,
@@ -624,12 +628,15 @@ impl OpencodeSession {
             Some(session_id) => self.state.lock().await.children.get(session_id).map(|child| child.task_id.clone()),
             None => None,
         };
-        if let (Some(session_id), Some(task_id)) = (sid, child_task_id) {
+        let child_request = child_task_id.is_some()
+            && matches!(ty, "question.asked" | "question.replied" | "question.rejected" | "permission.asked" | "permission.replied");
+        if !child_request && let (Some(session_id), Some(task_id)) = (sid, child_task_id) {
             self.handle_child_event(session_id, &task_id, ty, p).await;
             return;
         }
         if let (Some(mine), Some(theirs)) = (&my_session, sid)
             && mine != theirs
+            && !child_request
         {
             return;
         }
@@ -654,6 +661,22 @@ impl OpencodeSession {
             }
             "message.updated" => {
                 let info = &p["info"];
+                if let (Some(id), Some(role)) = (info.get("id").and_then(Value::as_str), info.get("role").and_then(Value::as_str)) {
+                    let pending = {
+                        let mut st = self.state.lock().await;
+                        st.message_roles.insert(id.to_owned(), role.to_owned());
+                        let ids: Vec<_> = st
+                            .pending_images
+                            .iter()
+                            .filter(|(_, part)| part.get("messageID").and_then(Value::as_str) == Some(id))
+                            .map(|(id, _)| id.clone())
+                            .collect();
+                        ids.into_iter().filter_map(|id| st.pending_images.remove(&id)).collect::<Vec<_>>()
+                    };
+                    for part in pending {
+                        self.handle_part(&part).await;
+                    }
+                }
                 if info.get("role").and_then(|r| r.as_str()) == Some("assistant")
                     && let Some(err) = info.get("error")
                     && !err.is_null()
@@ -677,8 +700,8 @@ impl OpencodeSession {
                 };
                 let suggestions = p.get("always").and_then(|a| a.as_array()).cloned().unwrap_or_default();
                 let tool_call_id = p.pointer("/tool/callID").and_then(|c| c.as_str()).map(str::to_string);
-                if let Some(s) = &my_session {
-                    self.state.lock().await.pending.insert(id.clone(), s.clone());
+                if let Some(s) = sid.or(my_session.as_deref()) {
+                    self.state.lock().await.pending.insert(id.clone(), s.to_owned());
                 }
                 self.emit(DriverEvent::PermissionRequest {
                     request_id: id,
@@ -697,15 +720,23 @@ impl OpencodeSession {
                 }
             }
             "question.asked" => {
-                // Decline questions for now; approvals are yes/no only.
-                let id = p.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                let _ = self.http.post(format!("{}/question/{id}/reject", self.base)).query(&[("directory", &self.dir)]).send().await;
-                self.emit(DriverEvent::Notice {
-                    level: NoticeLevel::Warning,
-                    text: "OpenCode asked a question kybern cannot relay yet".into(),
-                    data: Some(p.clone()),
+                let id = p.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                self.state.lock().await.pending.insert(id.clone(), "__question".into());
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id: id,
+                    tool_call_id: p.pointer("/tool/callID").and_then(Value::as_str).map(str::to_owned),
+                    tool_name: "opencode_question".into(),
+                    input: p.clone(),
+                    summary: "Answer the agent's questions".into(),
+                    suggestions: vec![],
                 })
                 .await;
+            }
+            "question.replied" | "question.rejected" => {
+                let id = p.get("requestID").and_then(Value::as_str).unwrap_or("").to_owned();
+                if self.state.lock().await.pending.remove(&id).is_some() {
+                    self.emit(DriverEvent::PermissionWithdrawn { request_id: id }).await;
+                }
             }
             "session.status" => {
                 let status = p.pointer("/status/type").and_then(|s| s.as_str()).unwrap_or("");
@@ -869,9 +900,26 @@ impl OpencodeSession {
         let kind = part.get("type").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let message_id = part.get("messageID").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let mut st = self.state.lock().await;
+        if kind == "file" {
+            match st.message_roles.get(&message_id).map(String::as_str) {
+                Some("assistant") => {}
+                Some(_) => return,
+                None => {
+                    st.pending_images.insert(id, part.clone());
+                    return;
+                }
+            }
+        }
         let info =
             st.parts.entry(id.clone()).or_insert_with(|| PartInfo { kind: kind.clone(), message_id: message_id.clone(), started: false });
         match kind.as_str() {
+            "file" if !info.started && part.get("mime").and_then(Value::as_str).is_some_and(|mime| mime.starts_with("image/")) => {
+                info.started = true;
+                drop(st);
+                if let Some(source) = part.get("url").and_then(Value::as_str) {
+                    self.emit(DriverEvent::ImageReceived { id, origin: EventOrigin::Root, source: source.to_owned() }).await;
+                }
+            }
             "text" => {
                 let text = part.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
                 let finished = part.pointer("/time/end").is_some_and(|e| !e.is_null());
@@ -904,6 +952,7 @@ impl OpencodeSession {
                             "content": part.pointer("/state/output").or_else(|| part.pointer("/state/error")),
                             "title": part.pointer("/state/title"),
                             "metadata": part.pointer("/state/metadata"),
+                            "attachments": part.pointer("/state/attachments"),
                         });
                         self.emit(DriverEvent::ToolCompleted { tool_call_id: call_id, output, is_error: status == "error" }).await;
                     }
@@ -1065,15 +1114,28 @@ impl AgentSession for Handle {
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
         let s = &self.0;
-        let Some(session_id) = s.state.lock().await.pending.remove(request_id) else {
+        let Some(session_id) = s.state.lock().await.pending.get(request_id).cloned() else {
             return Err(DriverError::Protocol(format!("no pending permission {request_id}")));
         };
+        if session_id == "__question" {
+            let (action, body) = match decision {
+                ApprovalDecision::Submit { response } => ("reply", response.clone()),
+                ApprovalDecision::Deny { .. } => ("reject", json!({})),
+                _ => return Err(DriverError::Protocol("this question needs an answer".into())),
+            };
+            s.post(&format!("/question/{request_id}/{action}"), body).await?;
+            s.state.lock().await.pending.remove(request_id);
+            return Ok(());
+        }
         let response = match decision {
+            ApprovalDecision::Submit { .. } => return Err(DriverError::Protocol("expected permission decision".into())),
             ApprovalDecision::AllowOnce => "once",
             ApprovalDecision::AllowAlways => "always",
             ApprovalDecision::Deny { .. } => "reject",
         };
-        s.post(&format!("/session/{session_id}/permissions/{request_id}"), json!({ "response": response })).await.map(|_| ())
+        s.post(&format!("/session/{session_id}/permissions/{request_id}"), json!({ "response": response })).await?;
+        s.state.lock().await.pending.remove(request_id);
+        Ok(())
     }
 
     async fn stop_runtime_task(&self, task: &RuntimeTask) -> Result<()> {
@@ -1093,6 +1155,102 @@ impl AgentSession for Handle {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn questions_reply_to_native_endpoint_and_can_be_declined() {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut requests = vec![];
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![];
+                loop {
+                    let mut chunk = [0; 4096];
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    let text = String::from_utf8_lossy(&bytes);
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let length: usize = text[..end]
+                            .lines()
+                            .find_map(|line| line.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap()))
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                requests.push(String::from_utf8(bytes).unwrap());
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        let (events, mut rx) = mpsc::channel(8);
+        let mut command = Command::new("sleep");
+        command.arg("30").kill_on_drop(true);
+        let session = Arc::new(OpencodeSession {
+            http: reqwest::Client::new(),
+            base,
+            dir: "/tmp".into(),
+            child: Mutex::new(command.spawn().unwrap()),
+            events,
+            state: Mutex::new(State {
+                session_id: Some("root".into()),
+                model: None,
+                mode: PermissionMode::Supervised,
+                parts: HashMap::new(),
+                message_roles: HashMap::new(),
+                pending_images: HashMap::new(),
+                turn_usage: Usage::default(),
+                turn_cost: 0.0,
+                turn_started: None,
+                active: true,
+                pending: HashMap::new(),
+                current_message_id: None,
+                children: HashMap::new(),
+            }),
+        });
+        // Parts can arrive before message metadata. Only assistant-authored images are emitted.
+        for role in ["user", "assistant"] {
+            let part = json!({"id":role,"messageID":role,"type":"file","mime":"image/png","url":"data:image/png;base64,aW1hZ2U="});
+            session.handle_part(&part).await;
+            assert!(rx.try_recv().is_err());
+            session.handle_event(&json!({"type":"message.updated","properties":{"info":{"id":role,"role":role,"sessionID":"root"}}})).await;
+            if role == "assistant" {
+                assert!(matches!(rx.recv().await, Some(DriverEvent::ImageReceived { .. })));
+            } else {
+                assert!(rx.try_recv().is_err());
+            }
+            session.handle_part(&part).await;
+            assert!(rx.try_recv().is_err());
+        }
+        let handle = Handle(session.clone());
+        for id in ["question-1", "question-2"] {
+            session.handle_event(&json!({"type":"question.asked","properties":{"id":id,"sessionID":"root","questions":[{"question":"Which?","multiple":true}]}})).await;
+            assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == "opencode_question"));
+            let decision = if id == "question-1" {
+                ApprovalDecision::Submit { response: json!({"answers":[["A","Custom"]]}) }
+            } else {
+                ApprovalDecision::Deny { reason: None }
+            };
+            handle.respond_permission(id, &decision).await.unwrap();
+        }
+        let requests = tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap();
+        assert!(requests[0].starts_with("POST /question/question-1/reply?"));
+        assert_eq!(
+            serde_json::from_str::<Value>(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap(),
+            json!({"answers":[["A","Custom"]]})
+        );
+        assert!(requests[1].starts_with("POST /question/question-2/reject?"));
+        assert!(session.state.lock().await.pending.is_empty());
+        handle.close().await.unwrap();
+    }
     use super::{MODEL_DISCOVERY_TIMEOUT, opencode_child_session, opencode_child_task, parse_skills, skill_command};
     use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStatus, SkillScope, UserMessage};
     use serde_json::json;

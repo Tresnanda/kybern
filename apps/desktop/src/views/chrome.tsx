@@ -193,7 +193,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
 export function SidebarHeaderNavigationControls() {
   const { open } = useSidebar()
   if (open) return null
-  return <SidebarLeadingControls className="hidden md:flex" />
+  return <div className="hidden h-7 w-[84px] shrink-0 md:block" aria-hidden="true" />
 }
 
 const PANEL_TOGGLE_CLASS_NAME = cn(

@@ -14,6 +14,7 @@ pub mod ndjson;
 pub mod opencode;
 pub mod pi;
 pub mod registry;
+pub mod update;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -153,6 +154,11 @@ pub enum DriverEvent {
         message_id: String,
         origin: EventOrigin,
         delta: String,
+    },
+    ImageReceived {
+        id: String,
+        origin: EventOrigin,
+        source: String,
     },
     ThinkingDelta {
         message_id: String,

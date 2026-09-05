@@ -343,3 +343,11 @@ test("subagent tools stay beneath the delegated task that ran them", () => {
     ["grandchild-search"],
   )
 })
+
+test("native response images remain in the settled turn without duplicate or child output", () => {
+  const image = { kind: "image_received", id: "image-1", origin: ROOT, source: "data:image/png;base64,YQ==" }
+  const state = fold([start, image, image, { ...image, id: "child-image", origin: agentOrigin("child") }, done])
+  assert.equal(groupTurns(state.blocks)[0].images.length, 1)
+  assert.equal(groupTurns(state.blocks)[0].images[0].source, image.source)
+  assert.equal(groupTurns(state.blocks)[0].work.length, 0)
+})

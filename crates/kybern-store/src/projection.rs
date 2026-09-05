@@ -132,6 +132,12 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 turn_started_at.insert(turn_id, ev.at);
                 out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
             }
+            EventPayload::ImageReceived { id, origin, source } => {
+                if let Some(turn_id) = turn_id.filter(|_| origin.is_root())
+                    && !out.iter().any(|entry| matches!(entry, TranscriptEntry::Image { id: previous, turn_id: previous_turn, .. } if previous == id && *previous_turn == turn_id)) {
+                        out.push(TranscriptEntry::Image { id: id.clone(), turn_id, seq: ev.seq, at: ev.at, origin: origin.clone(), source: source.clone() });
+                }
+            }
             EventPayload::AssistantTextDelta { message_id, origin, delta } => {
                 if !origin.is_root() {
                     continue;
@@ -303,7 +309,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                     error: Some(error.clone()),
                 });
             }
-            EventPayload::ApprovalRequested { approval } => {
+            EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => {
                 let Some(turn_id) = turn_id else { continue };
                 out.push(TranscriptEntry::Approval { turn_id, seq: ev.seq, approval: approval.clone(), decision: None });
             }
@@ -543,6 +549,22 @@ mod tests {
 
     fn event(seq: EventSeq, task: RuntimeTask, payload: fn(RuntimeTask) -> EventPayload) -> ThreadEvent {
         ThreadEvent { seq, thread_id: task.thread_id, turn_id: Some(task.origin_turn_id), at: task.updated_at, payload: payload(task) }
+    }
+
+    #[test]
+    fn native_images_reload_once_per_turn_and_keep_the_original_source() {
+        let thread_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let image =
+            EventPayload::ImageReceived { id: "image".into(), origin: EventOrigin::Root, source: "data:image/png;base64,YQ==".into() };
+        let events = [1, 2].map(|seq| ThreadEvent { seq, thread_id, turn_id: Some(turn_id), at: Utc::now(), payload: image.clone() });
+        let serialized = serde_json::to_string(&events).unwrap();
+        let reloaded: Vec<ThreadEvent> = serde_json::from_str(&serialized).unwrap();
+        let rows = project_transcript(&reloaded);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(&rows[0], TranscriptEntry::Image { source, turn_id: row_turn, .. } if source == "data:image/png;base64,YQ==" && *row_turn == turn_id)
+        );
     }
 
     #[test]

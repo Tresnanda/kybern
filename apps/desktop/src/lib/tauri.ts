@@ -22,16 +22,37 @@ export async function resolveEndpoint(): Promise<EndpointInfo> {
   return { url, token, http_base: url.replace(/^ws/, "http").replace(/\/ws$/, ""), spawned: false }
 }
 
-export async function notify(title: string, body: string): Promise<void> {
-  if (!isTauri()) return
-  try {
+export type NotificationPermissionState = "granted" | "denied" | "default" | "unavailable"
+
+export async function notificationPermission(request = false): Promise<NotificationPermissionState> {
+  if (isTauri()) {
+    if (platform() === "macos") {
+      const { invoke } = await import("@tauri-apps/api/core")
+      return invoke<NotificationPermissionState>("notification_permission", { request })
+    }
     const n = await import("@tauri-apps/plugin-notification")
-    let ok = await n.isPermissionGranted()
-    if (!ok) ok = (await n.requestPermission()) === "granted"
-    if (ok) n.sendNotification({ title, body })
-  } catch {
-    // notifications are best effort
+    if (await n.isPermissionGranted()) return "granted"
+    if (!request) return "default"
+    return (await n.requestPermission()) === "granted" ? "granted" : "denied"
   }
+  if (!("Notification" in window)) return "unavailable"
+  return request ? Notification.requestPermission() : Notification.permission
+}
+
+export async function notify(title: string, body: string): Promise<boolean> {
+  try {
+    if (await notificationPermission() !== "granted") return false
+    if (isTauri()) {
+      if (platform() === "macos") {
+        const { invoke } = await import("@tauri-apps/api/core")
+        await invoke("send_notification", { title, body })
+      } else {
+        const n = await import("@tauri-apps/plugin-notification")
+        n.sendNotification({ title, body })
+      }
+    } else new Notification(title, { body })
+    return true
+  } catch { return false }
 }
 
 export async function openExternal(url: string): Promise<void> {

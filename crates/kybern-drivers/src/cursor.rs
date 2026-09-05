@@ -284,6 +284,9 @@ async fn run_connection(
                 let ev = &events;
                 match n.update {
                     SessionUpdate::AgentMessageChunk(c) => {
+                        if let ContentBlock::Image(image) = &c.content {
+                            let _ = ev.send(DriverEvent::ImageReceived { id: uuid::Uuid::new_v4().to_string(), origin: EventOrigin::Root, source: format!("data:{};base64,{}", image.mime_type, image.data) }).await;
+                        }
                         if let ContentBlock::Text(t) = c.content {
                             let id = {
                                 let mut s = msg_state_notif.lock().await;
@@ -333,7 +336,7 @@ async fn run_connection(
                             let _ = ev
                                 .send(DriverEvent::ToolCompleted {
                                     tool_call_id: u.tool_call_id.to_string(),
-                                    output: json!({ "raw": u.fields.raw_output, "diffs": diffs, "title": u.fields.title }),
+                                    output: json!({ "raw": u.fields.raw_output, "diffs": diffs, "content": u.fields.content, "title": u.fields.title }),
                                     is_error: status.as_deref() == Some("failed"),
                                 })
                                 .await;
@@ -549,13 +552,16 @@ impl AgentSession for Handle {
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
+        if matches!(decision, ApprovalDecision::Submit { .. }) {
+            return Err(DriverError::Unsupported("Cursor ACP does not expose structured questions".into()));
+        }
         let Some(tx) = self.shared.pending.lock().await.remove(request_id) else {
             return Err(DriverError::Protocol(format!("no pending approval {request_id}")));
         };
         let choice = match decision {
             ApprovalDecision::AllowOnce => "allow_once",
             ApprovalDecision::AllowAlways => "allow_always",
-            ApprovalDecision::Deny { .. } => "reject",
+            ApprovalDecision::Deny { .. } | ApprovalDecision::Submit { .. } => "reject",
         };
         let _ = tx.send(Some(choice.to_string()));
         Ok(())

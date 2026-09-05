@@ -1,9 +1,11 @@
+import { ResponseImage } from "./ResponseImage"
+import { imageSource } from "@/lib/responseImages"
 // Chat markdown, styled by Synara's `.chat-markdown` rules (styles/synara.css).
 // Code blocks get the `.chat-markdown-codeblock` chrome: language label,
 // wrap toggle and copy action in the header, shiki-highlighted body.
 
 import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "react"
-import ReactMarkdown from "react-markdown"
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { useTheme } from "@/components/theme-context"
@@ -186,7 +188,9 @@ export const Markdown = memo(function Markdown({
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={(url, key) => key === "src" ? (imageSource(url) ? url : "") : defaultUrlTransform(url)}
         components={{
+          img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
           a: ({ href, children }) => (
             <a
               href={href}

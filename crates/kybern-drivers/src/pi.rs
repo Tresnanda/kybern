@@ -629,7 +629,7 @@ impl PiSession {
         self.emit(ev).await;
     }
 
-    async fn handle_ui_request(&self, v: &Value) {
+    async fn handle_ui_request(self: &Arc<Self>, v: &Value) {
         let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
         let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
@@ -659,8 +659,27 @@ impl PiSession {
                 .await;
             }
             "select" | "confirm" | "input" | "editor" => {
-                // Not an approval; cancel so the agent continues without blocking.
-                let _ = self.child.write(&json!({ "type": "extension_ui_response", "id": id, "cancelled": true })).await;
+                self.pending_approvals.lock().await.insert(id.clone(), format!("ui_{method}"));
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id: id.clone(),
+                    tool_call_id: None,
+                    tool_name: format!("ui_{method}"),
+                    input: v.clone(),
+                    summary: title,
+                    suggestions: vec![],
+                })
+                .await;
+                if let Some(timeout) = v.get("timeout").and_then(Value::as_u64) {
+                    let weak = Arc::downgrade(self);
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(timeout)).await;
+                        if let Some(session) = weak.upgrade()
+                            && session.pending_approvals.lock().await.remove(&id).is_some()
+                        {
+                            session.emit(DriverEvent::PermissionWithdrawn { request_id: id }).await;
+                        }
+                    });
+                }
             }
             "notify" => {
                 let level = match v.get("notifyType").and_then(|t| t.as_str()) {
@@ -883,14 +902,29 @@ impl AgentSession for Handle {
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
-        if self.0.pending_approvals.lock().await.remove(request_id).is_none() {
+        let Some(kind) = self.0.pending_approvals.lock().await.get(request_id).cloned() else {
             return Err(DriverError::Protocol(format!("no pending approval {request_id}")));
+        };
+        if kind.starts_with("ui_") {
+            let mut response = match decision {
+                ApprovalDecision::Submit { response } if response.is_object() => response.clone(),
+                ApprovalDecision::Deny { .. } => json!({ "cancelled": true }),
+                _ => return Err(DriverError::Protocol("this dialog needs an answer".into())),
+            };
+            response["type"] = json!("extension_ui_response");
+            response["id"] = json!(request_id);
+            self.0.child.write(&response).await?;
+            self.0.pending_approvals.lock().await.remove(request_id);
+            return Ok(());
         }
         let value = match decision {
+            ApprovalDecision::Submit { .. } => return Err(DriverError::Protocol("expected permission decision".into())),
             ApprovalDecision::AllowOnce | ApprovalDecision::AllowAlways => "Approve",
             ApprovalDecision::Deny { .. } => "Deny",
         };
-        self.0.child.write(&json!({ "type": "extension_ui_response", "id": request_id, "value": value })).await
+        self.0.child.write(&json!({ "type": "extension_ui_response", "id": request_id, "value": value })).await?;
+        self.0.pending_approvals.lock().await.remove(request_id);
+        Ok(())
     }
 
     async fn close(&self) -> Result<()> {
@@ -906,6 +940,53 @@ impl AgentSession for Handle {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn extension_dialogs_round_trip_for_pi_and_omp() {
+        use super::*;
+        for flavor in [Flavor::Pi, Flavor::Omp] {
+            let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+            let (events, mut rx) = mpsc::channel(8);
+            let session = Arc::new(PiSession {
+                flavor,
+                child: child.clone(),
+                events,
+                pending: Mutex::new(HashMap::new()),
+                pending_approvals: Mutex::new(HashMap::new()),
+                state: Mutex::new(State::default()),
+                ready: Mutex::new(None),
+            });
+            let handle = Handle(session.clone());
+            for (method, response) in [
+                ("select", json!({"value":"Option B"})),
+                ("confirm", json!({"confirmed":false})),
+                ("input", json!({"value":"typed answer"})),
+                ("editor", json!({"value":"line one\nline two"})),
+            ] {
+                session
+                    .handle_ui_request(&json!({ "id": method, "method": method, "title": "Choose", "options": ["Option A", "Option B"] }))
+                    .await;
+                assert!(
+                    matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == format!("ui_{method}"))
+                );
+                handle.respond_permission(method, &ApprovalDecision::Submit { response: response.clone() }).await.unwrap();
+                let wire =
+                    tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+                assert_eq!(wire["id"], method);
+                assert_eq!(wire["type"], "extension_ui_response");
+                for (key, value) in response.as_object().unwrap() {
+                    assert_eq!(&wire[key], value);
+                }
+            }
+            session.handle_ui_request(&json!({ "id":"timeout", "method":"input", "title":"Expires", "timeout": 1 })).await;
+            let _ = rx.recv().await;
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.unwrap(),
+                Some(DriverEvent::PermissionWithdrawn { .. })
+            ));
+            child.kill().await;
+        }
+    }
     use super::*;
     use std::time::Duration;
 

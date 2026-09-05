@@ -22,6 +22,7 @@ import type {
 } from "@/protocol"
 
 export type Block =
+  | { kind: "image"; id: string; turnId: TurnId; at: string; seq: number; source: string }
   | { kind: "user"; id: string; turnId: TurnId; at: string; seq: number; message: UserMessage }
   | {
       kind: "assistant"
@@ -100,6 +101,7 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
 
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
+    case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null
     case "approval":
       return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null }
     case "user":
@@ -176,6 +178,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       break
     case "turn_started":
       blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
+      break
+    case "image_received":
+      if (ev.turn_id && ev.origin.kind === "root" && !blocks.some((block) => block.kind === "image" && block.id === ev.id && block.turnId === ev.turn_id)) blocks = [...blocks, { kind: "image", id: ev.id, turnId: ev.turn_id, at, seq: ev.seq, source: ev.source }]
       break
     case "assistant_text_delta": {
       const origin = ev.origin ?? ROOT_ORIGIN
@@ -274,6 +279,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       }
       break
     }
+    case "user_input_requested":
     case "approval_requested":
       if (!pending.some((a) => a.id === ev.approval.id)) pending = [...pending, ev.approval]
       blocks = [...blocks, { kind: "approval", id: `approval:${ev.approval.id}`, turnId, at, seq: ev.seq, approval: ev.approval, decision: null }]
@@ -469,6 +475,7 @@ export interface TurnGroup {
   turnId: TurnId
   user: Extract<Block, { kind: "user" }> | null
   /** Tool calls, thinking, notices and intermediate assistant text, in order. */
+  images: Extract<Block, { kind: "image" }>[]
   work: Block[]
   /** Whole terminal root message. It is deliberately absent until settlement. */
   answer: Extract<Block, { kind: "assistant" }> | null
@@ -606,7 +613,7 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
   const get = (turnId: TurnId) => {
     let g = byId.get(turnId)
     if (!g) {
-      g = { turnId, user: null, work: [], answer: null, liveTextId: null, approvals: [], end: null, reverted: null, running: false }
+      g = { turnId, user: null, images: [], work: [], answer: null, liveTextId: null, approvals: [], end: null, reverted: null, running: false }
       byId.set(turnId, g)
       groups.push(g)
     }
@@ -615,6 +622,7 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
   for (const b of blocks) {
     const g = get(b.turnId)
     switch (b.kind) {
+      case "image": g.images.push(b); break
       case "user":
         g.user = b
         break

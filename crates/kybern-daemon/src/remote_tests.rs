@@ -225,3 +225,128 @@ async fn interrupted_host_recovery_pauses_remaining_follow_ups() {
     assert_eq!(host.state.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Failed);
     assert_eq!(host.state.store.queue_list(Some(thread.id)).unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn response_images_require_auth_and_stay_on_the_owning_host() {
+    let host = Host::start().await;
+    let other = Host::start().await;
+    let thread = host.thread();
+    let http = reqwest::Client::new();
+    let url = format!("{}/threads/{}/image", host.url, thread.id);
+    let png = b"\x89PNG\r\n\x1a\nfixture";
+    std::fs::write(host.root.join("image with spaces.png"), png).unwrap();
+    std::fs::write(host.root.join("not-an-image.png"), b"<html>no</html>").unwrap();
+    assert_eq!(
+        http.get(&url).query(&[("path", "image with spaces.png")]).send().await.unwrap().status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        http.get(&url).bearer_auth(&other.state.bootstrap_token).query(&[("path", "image with spaces.png")]).send().await.unwrap().status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    let response =
+        http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", "image with spaces.png")]).send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(response.bytes().await.unwrap().as_ref(), png);
+    let response = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", "not-an-image.png")]).send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    std::fs::write(other.root.join("outside.png"), png).unwrap();
+    let outside = other.root.join("outside.png");
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("path", outside.to_string_lossy().as_ref())])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside, host.root.join("linked.png")).unwrap();
+        assert_eq!(
+            http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", "linked.png")]).send().await.unwrap().status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
+    }
+}
+
+#[tokio::test]
+async fn harness_updates_wait_for_turns_and_block_new_sends_during_installation() {
+    let host = Host::start().await;
+    let mut thread = host.thread();
+    for status in [ThreadStatus::Running, ThreadStatus::AwaitingApproval] {
+        thread.status = status;
+        host.state.store.thread_upsert(&thread).unwrap();
+        assert!(host.state.orchestrator.idle_harness_for_update(thread.provider.kind).await.unwrap().is_none());
+    }
+    thread.status = ThreadStatus::Idle;
+    host.state.store.thread_upsert(&thread).unwrap();
+    let guard = host.state.orchestrator.idle_harness_for_update(thread.provider.kind).await.unwrap().unwrap();
+    let error = host.state.orchestrator.send(thread.id, UserMessage::text("do not launch a real CLI")).await.unwrap_err();
+    assert!(error.to_string().contains("updating"));
+    assert!(host.state.store.events_for_thread(thread.id).unwrap().is_empty());
+    assert!(host.state.orchestrator.idle_harness_for_update(thread.provider.kind).await.unwrap().is_none());
+    drop(guard);
+    let now = chrono::Utc::now();
+    let turn_id = Uuid::now_v7();
+    let mut task = RuntimeTask {
+        id: "background".into(),
+        thread_id: thread.id,
+        origin_turn_id: turn_id,
+        started_seq: 1,
+        updated_seq: 1,
+        kind: RuntimeTaskKind::Agent,
+        status: RuntimeTaskStatus::Running,
+        title: "Background agent".into(),
+        detail: None,
+        provider_type: None,
+        parent_id: None,
+        tool_call_id: None,
+        provider_thread_id: None,
+        model: None,
+        effort: None,
+        backgrounded: true,
+        last_tool_name: None,
+        usage: None,
+        stats: RuntimeTaskStats::default(),
+        capabilities: RuntimeTaskCapabilities::default(),
+        started_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
+    host.state.store.event_append(thread.id, Some(turn_id), EventPayload::RuntimeTaskStarted { task: task.clone() }).unwrap();
+    assert!(host.state.orchestrator.idle_harness_for_update(thread.provider.kind).await.unwrap().is_none());
+    task.status = RuntimeTaskStatus::Completed;
+    host.state.store.event_append(thread.id, Some(turn_id), EventPayload::RuntimeTaskCompleted { task }).unwrap();
+    assert!(host.state.orchestrator.idle_harness_for_update(thread.provider.kind).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn custom_harnesses_are_not_mutated_and_update_results_survive_reconnect() {
+    let host = Host::start().await;
+    let mut settings = host.state.settings.get();
+    settings
+        .providers
+        .insert(ProviderKind::ClaudeCode, ProviderSettings { binary: Some("/custom/pinned-claude".into()), ..Default::default() });
+    host.state.settings.set(settings).unwrap();
+    let client = host.client().await;
+    client.call::<HarnessUpdatesRun>(HarnessUpdateParams { kind: ProviderKind::ClaudeCode }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let records = client.call::<HarnessUpdatesList>(Empty {}).await.unwrap().updates;
+            if records.iter().any(|record| record.kind == ProviderKind::ClaudeCode && record.status == HarnessUpdateStatus::Unsupported) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let reloaded = crate::harness_updates::HarnessUpdates::new(&host.state.store).unwrap().list();
+    let record = reloaded.iter().find(|record| record.kind == ProviderKind::ClaudeCode).unwrap();
+    assert_eq!(record.status, HarnessUpdateStatus::Unsupported);
+    assert!(record.message.contains("Custom executable"));
+}

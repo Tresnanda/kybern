@@ -1,3 +1,4 @@
+import { imageSafeOutput } from "./responseImages"
 import type { JsonValue, PermissionMode, ProviderKind, ThreadStatus } from "@/protocol"
 
 export { toolLine } from "@/lib/toolActivity"
@@ -101,12 +102,13 @@ export const PROVIDER_LABEL: Record<ProviderKind, string> = {
 export function outputText(output: JsonValue | null, stream: string): string {
   if (typeof output === "string") return output
   if (output && typeof output === "object") {
-    const o = output as Record<string, unknown>
+    const safe = imageSafeOutput(output)
+    const o = safe as Record<string, unknown>
     for (const k of ["output", "stdout", "content", "text", "result"]) {
       const v = o[k]
       if (typeof v === "string") return v
     }
-    return JSON.stringify(output, null, 2)
+    return JSON.stringify(safe, null, 2)
   }
   return stream
 }

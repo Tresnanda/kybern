@@ -286,6 +286,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
   function onEvent(ev: ThreadEvent) {
     const s = useStore.getState()
+    if (ev.kind === "approval_resolved") toast.dismiss(`agent-input:${ev.approval_id}`)
     if (
       ev.kind === "message_queued" ||
       ev.kind === "message_removed" ||
@@ -318,27 +319,36 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         void loadGitStatus(ev.thread_id)
       void announce(ev)
     }
-    if (ev.kind === "approval_requested") void announce(ev)
+    if (ev.kind === "approval_requested" || ev.kind === "user_input_requested") void announce(ev)
   }
 
+  const announced = new Map<string, number>()
+  const notificationsStartedAt = Date.now()
+
   async function announce(ev: ThreadEvent) {
+    // Historical replay updates the transcript without replaying old alerts.
+    if (Date.parse(ev.at) < notificationsStartedAt || ev.seq <= (announced.get(ev.thread_id) ?? 0)) return
+    announced.set(ev.thread_id, ev.seq)
     const st = useStore.getState()
-    if (st.settings && !st.settings.notifications) return
-    const focused = await isWindowFocused()
+    if (!st.settings?.notifications) return
+    let focused = document.hasFocus()
+    try { focused = await isWindowFocused() } catch { /* Browser focus is the fallback. */ }
     const viewing = isThreadVisible(st, ev.thread_id)
     if (focused && viewing) return
-    const title = st.threads[ev.thread_id]?.title ?? "Thread"
-    if (ev.kind === "approval_requested")
-      await notify(title, `Needs approval: ${ev.approval.summary}`)
-    else if (ev.kind === "turn_completed")
-      await notify(
-        title,
-        ev.stop_reason === "completed"
-          ? "Finished working"
-          : `Stopped: ${ev.stop_reason}`
-      )
-    else if (ev.kind === "turn_failed")
-      await notify(title, `Failed: ${ev.error}`)
+    const title = st.threads[ev.thread_id]?.title || "Thread"
+    const body = ev.kind === "user_input_requested" ? "Needs your input"
+      : ev.kind === "approval_requested" ? `Needs approval: ${ev.approval.summary}`
+      : ev.kind === "turn_failed" ? `Failed: ${ev.error}`
+      : ev.kind === "turn_completed" && ev.stop_reason === "completed" ? "Finished working"
+      : null
+    if (!body) return
+    toast(title, {
+      id: ev.kind === "user_input_requested" || ev.kind === "approval_requested" ? `agent-input:${ev.approval.id}` : `agent:${ev.thread_id}:${ev.seq}`,
+      description: body,
+      duration: ev.kind === "user_input_requested" || ev.kind === "approval_requested" ? Infinity : 6000,
+      action: { label: "Open thread", onClick: () => { useStore.getState().selectThread(ev.thread_id); void loadThread(ev.thread_id) } },
+    })
+    if (!focused) await notify(title, body)
   }
 
   function loadDiff(threadId: ThreadId, turnId?: TurnId): Promise<void> {
@@ -417,6 +427,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   // ---- actions ----
 
   async function createThread(opts: {
+    paneId?: import("@/state/splitView").PaneId
     projectId: ProjectId
     provider: ProviderInstance
     permissionMode: PermissionMode
@@ -438,6 +449,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     })
     const s = useStore.getState()
     s.set((st) => ({ threads: { ...st.threads, [t.id]: t } }))
+    if (opts.paneId) s.focusSplitPane(opts.paneId)
     s.selectThread(t.id)
     void loadThread(t.id)
     return t.id
@@ -695,6 +707,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     }
   }
 
+  async function fetchThreadImage(threadId: string, path: string, signal: AbortSignal): Promise<Blob> {
+    const response = await fetch(`${httpBase}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` }, signal })
+    if (!response.ok) throw new Error((await response.text()).trim() || "Unable to load image. Try again.")
+    return response.blob()
+  }
+
   function disconnect() {
     hydrationGeneration++
     uploads.abort()
@@ -726,6 +744,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     addProject,
     removeProject,
     uploadFile,
+    fetchThreadImage,
   }
 }
 
@@ -800,3 +819,5 @@ export function errorText(e: unknown): string {
 
 // Stateful module: a hot update would drop the live connection, so reload instead.
 reloadOnHotUpdate(import.meta.hot)
+
+export const fetchThreadImage: EnvironmentRuntime["fetchThreadImage"] = (...args) => activeRuntime().fetchThreadImage(...args)

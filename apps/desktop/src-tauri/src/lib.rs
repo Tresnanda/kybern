@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 mod environments;
+mod notifications;
 
 static ENDPOINT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static STARTING_ENDPOINT: tokio::sync::Mutex<Option<StartingEndpoint>> = tokio::sync::Mutex::const_new(None);
@@ -301,6 +302,7 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            notifications::setup();
             if cfg!(debug_assertions) {
                 app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
             }
@@ -314,6 +316,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             endpoint,
             data_dir_path,
+            notifications::notification_permission,
+            notifications::send_notification,
             environments::environments_list,
             environments::environment_open,
             environments::environment_select,
