@@ -146,28 +146,49 @@ html[data-thread-pointer-dragging="true"] * {
   -webkit-backdrop-filter: blur(18px) saturate(140%);
 }
 
-/* Shimmer for in-progress labels. */
-.t-shimmer {
-  color: transparent;
-  background-image: linear-gradient(
-    100deg,
-    var(--muted-foreground) 0%,
-    var(--muted-foreground) 35%,
-    var(--foreground) 50%,
-    var(--muted-foreground) 65%,
-    var(--muted-foreground) 100%
-  );
-  background-size: 250% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: kybern-shimmer 2.2s linear infinite;
+/* Shimmer text (transitions.dev): the visible string renders in the base
+   colour; ::before duplicates it from data-text, paints a moving highlight band
+   onto the glyphs with background-clip: text, and sweeps it across. Pure CSS.
+   Keep data-text in sync with the visible text. */
+:root {
+  --shimmer-dur: 2000ms;
+  --shimmer-base: var(--muted-foreground);
+  --shimmer-highlight: var(--foreground);
+  --shimmer-band: 400%;
+  --shimmer-ease: linear;
 }
-@keyframes kybern-shimmer {
-  from {
-    background-position: 200% 50%;
+.t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+.t-shimmer::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--shimmer-highlight) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+}
+@keyframes t-shimmer {
+  0% {
+    background-position: 100% 0;
   }
-  to {
-    background-position: -200% 50%;
+  100% {
+    background-position: 0% 0;
   }
 }
 
@@ -195,10 +216,8 @@ html[data-thread-pointer-dragging="true"] * {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .t-shimmer {
-    animation: none;
-    color: var(--muted-foreground);
-    background: none;
+  .t-shimmer::before {
+    animation: none !important;
   }
   .runtime-activity-detail-enter {
     animation: none;

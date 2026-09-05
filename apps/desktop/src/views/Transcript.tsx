@@ -484,8 +484,8 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             </div>
           )}
           {!hasLiveWork && (
-            <div className="t-row-enter shimmer mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
-              Thinking
+            <div className="t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
+              <span className="t-shimmer" data-text="Thinking">Thinking</span>
             </div>
           )}
         </div>
@@ -1122,8 +1122,8 @@ function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extr
               <IconSwap active={block.complete ? "b" : "a"} a={<Spinner size={14} className="text-muted-foreground" />} b={<BrainIcon className="size-4" />} />
             </span>
             <div className="min-w-0 overflow-hidden">
-              <p className={cn("truncate leading-6", TONE, !block.complete && "shimmer")} style={CHAT_FONT}>
-                <TextSwap text={block.complete ? "Thought" : "Thinking"} />
+              <p className={cn("truncate leading-6", TONE)} style={CHAT_FONT}>
+                <TextSwap text={block.complete ? "Thought" : "Thinking"} shimmer={!block.complete} />
               </p>
             </div>
             <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />

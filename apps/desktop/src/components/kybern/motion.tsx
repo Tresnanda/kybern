@@ -106,7 +106,7 @@ export function StreamWords({ text, live = true }: { text: string; live?: boolea
  * new one rises in from below. Keyed on the text itself; identical text never
  * re-animates. The first paint renders without motion.
  */
-export function TextSwap({ text, className, as: Tag = "span" }: { text: string; className?: string; as?: "span" | "div" }) {
+export function TextSwap({ text, className, as: Tag = "span", shimmer = false }: { text: string; className?: string; as?: "span" | "div"; shimmer?: boolean }) {
   const [state, setState] = useState<{ shown: string; leaving: string | null }>({ shown: text, leaving: null })
   // Adjust state during render (not in an effect) so the swap starts on the
   // same frame the text changes.
@@ -123,7 +123,7 @@ export function TextSwap({ text, className, as: Tag = "span" }: { text: string; 
           {state.leaving}
         </span>
       )}
-      <span key={`in:${state.shown}`} data-swap={state.leaving !== null ? "in" : undefined} className="truncate">
+      <span key={`in:${state.shown}`} data-swap={state.leaving !== null ? "in" : undefined} className={cn("truncate", shimmer && "t-shimmer")} data-text={shimmer ? state.shown : undefined}>
         {state.shown}
       </span>
     </Tag>
