@@ -101,7 +101,7 @@ function MenuPopupBase({
       >
         <MenuPrimitive.Popup
           className={cn(
-            "relative flex origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
+            "relative flex origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none transition-[opacity,scale,filter] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] will-change-transform data-ending-style:duration-[var(--duration-quick)] data-starting-style:scale-[var(--scale-medium)] data-starting-style:opacity-0 data-starting-style:blur-[var(--blur-small)] data-ending-style:scale-[var(--scale-tiny)] data-ending-style:opacity-0 motion-reduce:transition-none",
             isComposerSurface ? "min-w-0 max-w-[92vw]" : "w-full min-w-full",
             isComposerSurface ? className : null,
             popupSurfaceClassName,
@@ -147,6 +147,7 @@ function MenuItem({
     <MenuPrimitive.Item
       className={cn(
         COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
+        "press-row",
         // text-destructive (not -foreground): these items sit on the popup surface, so they
         // need the red accent itself — the foreground token is for text on a destructive fill.
         "data-inset:ps-8 data-[variant=destructive]:text-destructive",

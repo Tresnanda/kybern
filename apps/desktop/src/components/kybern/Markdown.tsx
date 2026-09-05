@@ -13,6 +13,7 @@ import { copyText } from "@/lib/hooks"
 import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { IconSwap, StreamWords } from "@/components/kybern/motion"
 
 type Highlighter = {
   codeToHtml: (code: string, opts: { lang: string; theme: string }) => string
@@ -146,7 +147,7 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
             }}
             className="chat-markdown-codeblock__action inline-flex size-6 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
           >
-            {copied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
+            <IconSwap active={copied ? "b" : "a"} a={<CopyIcon className="size-3" />} b={<CheckIcon className="size-3 text-success" />} />
           </button>
         </span>
       </div>
@@ -170,16 +171,36 @@ function extractText(node: ReactNode): string {
   return ""
 }
 
+/** Wraps string children in streaming word spans; element children pass through untouched. */
+function streamChildren(children: ReactNode): ReactNode {
+  if (typeof children === "string") return <StreamWords text={children} />
+  if (Array.isArray(children)) return children.map((child, i) => (typeof child === "string" ? <StreamWords key={i} text={child} /> : child))
+  return children
+}
+
+const LIVE_TEXT_COMPONENTS = {
+  p: ({ children }: { children?: ReactNode }) => <p>{streamChildren(children)}</p>,
+  li: ({ children }: { children?: ReactNode }) => <li>{streamChildren(children)}</li>,
+  strong: ({ children }: { children?: ReactNode }) => <strong>{streamChildren(children)}</strong>,
+  em: ({ children }: { children?: ReactNode }) => <em>{streamChildren(children)}</em>,
+  h1: ({ children }: { children?: ReactNode }) => <h1>{streamChildren(children)}</h1>,
+  h2: ({ children }: { children?: ReactNode }) => <h2>{streamChildren(children)}</h2>,
+  h3: ({ children }: { children?: ReactNode }) => <h3>{streamChildren(children)}</h3>,
+}
+
 export const Markdown = memo(function Markdown({
   text,
   className,
   variant = "assistant",
   style,
+  live = false,
 }: {
   text: string
   className?: string
   variant?: "assistant" | "user"
   style?: CSSProperties
+  /** While streaming, each newly arrived word resolves through a short blur. */
+  live?: boolean
 }) {
   return (
     <div
@@ -190,6 +211,7 @@ export const Markdown = memo(function Markdown({
         remarkPlugins={[remarkGfm]}
         urlTransform={(url, key) => key === "src" ? (imageSource(url) ? url : "") : defaultUrlTransform(url)}
         components={{
+          ...(live ? LIVE_TEXT_COMPONENTS : null),
           img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
           a: ({ href, children }) => (
             <a

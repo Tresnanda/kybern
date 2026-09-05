@@ -2,3 +2,4 @@
    adds only what the Tauri shell needs on top. */
 @import "./styles/kit.css";
 @import "./styles/kybern.css";
+@import "./styles/motion.css";

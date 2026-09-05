@@ -2,7 +2,7 @@
 // "What should we do in {project}?" heading with a dotted project picker, and
 // the composer anchored at the bottom with its controls tray.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { useShallow } from "zustand/react/shallow"
 
 import { Logo } from "@/components/kybern/bits"
@@ -84,9 +84,9 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
       <SurfaceHeader minimal showSidebarControls={!paneId} />
       <div className={cn("chat-pane-enter flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER)}>
         <div className="flex min-h-0 flex-1 items-center justify-center">
-          <div className="flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]">
+          <div className="t-stagger flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]">
             <Logo size={40} className="text-foreground" />
-            <h2 className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
+            <h2 style={{ "--i": 1 } as CSSProperties} className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
               What should we do in{" "}
               <Menu>
                 <MenuTrigger
@@ -116,7 +116,8 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
           </div>
         </div>
 
-        <div className="w-full shrink-0 pb-3 sm:pb-4">
+        <div className="t-stagger w-full shrink-0 pb-3 sm:pb-4">
+          <div style={{ "--i": 2 } as CSSProperties}>
           <Composer
             surfaceMode={paneId ? "split" : "single"}
             draftKey={`project:${projectId}:${paneId ?? "main"}`}
@@ -229,6 +230,7 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
               await createThread({ paneId, projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
             }}
           />
+          </div>
         </div>
       </div>
     </div>

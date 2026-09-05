@@ -16,6 +16,7 @@ import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { Markdown } from "@/components/kybern/Markdown"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { Spinner } from "@/components/kybern/bits"
+import { IconSwap, MatrixLoader, StreamWords, TextSwap } from "@/components/kybern/motion"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { DiffStatLabel } from "@/components/kit/chat/DiffStatLabel"
@@ -251,7 +252,7 @@ export function Transcript({
     return (
       <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-foreground [contain:layout_style_paint]">
         <div className="opacity-0 [animation:chat-mount-loader-in_200ms_ease-out_150ms_forwards] motion-reduce:animate-none motion-reduce:opacity-100">
-          <Spinner size={20} className="text-muted-foreground" />
+          <MatrixLoader variant="twinkle" dot={3} gap={3} className="text-muted-foreground" label="Loading thread" />
         </div>
       </div>
     )
@@ -483,8 +484,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             </div>
           )}
           {!hasLiveWork && (
-            <div className="shimmer mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
-              Thinking
+            <div className="t-row-enter mt-1.5 flex items-center gap-2 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
+              <MatrixLoader variant="twinkle" className="text-foreground/70" />
+              <span className="shimmer">Thinking</span>
             </div>
           )}
         </div>
@@ -625,8 +627,11 @@ function RuntimeTaskTranscriptRow({ task, onOpenAgentActivity }: { task: Runtime
 function WorkingHeader({ since }: { since: string }) {
   const now = useTicker(true)
   return (
-    <div className="-ml-0.5 text-muted-foreground" style={CHAT_FONT}>
-      Working for {clockDuration(elapsedSince(since, now))}
+    <div className="-ml-0.5 flex items-center gap-2 text-muted-foreground" style={CHAT_FONT}>
+      <MatrixLoader variant="orbit" className="text-foreground/70" />
+      <span>
+        Working for <span className="tabular-nums">{clockDuration(elapsedSince(since, now))}</span>
+      </span>
     </div>
   )
 }
@@ -644,7 +649,7 @@ function CopyAction({ text }: { text: string }) {
         setTimeout(() => setCopied(false), 1400)
       }}
     >
-      {copied ? <CheckIcon className="size-[1.125em] text-success" /> : <CopyIcon className="size-[1.125em]" />}
+      <IconSwap active={copied ? "b" : "a"} a={<CopyIcon className="size-[1.125em]" />} b={<CheckIcon className="size-[1.125em] text-success" />} />
     </MessageActionButton>
   )
 }
@@ -968,7 +973,7 @@ function WorkRow({
         <div className="rounded-lg py-1">
           <div className="flex w-full items-center gap-2">
             <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-              {block.decision ? <CheckIcon className="size-4 text-muted-foreground/50" /> : <Spinner size={14} />}
+              <IconSwap active={block.decision ? "b" : "a"} a={<MatrixLoader variant="pulse" />} b={<CheckIcon className="size-4 text-muted-foreground/50" />} />
             </span>
             <p className="truncate leading-6 text-muted-foreground" style={CHAT_FONT}>
               {approvalRowText(block.approval, block.decision)}
@@ -1026,8 +1031,10 @@ function ToolRow({
   const tone = block.isError
     ? "text-destructive/80 transition-colors group-hover/tool-row:text-destructive group-focus-visible/tool-row:text-destructive"
     : TONE
+  // Decided once on mount: only a row that just arrived plays the entrance.
+  const [fresh] = useState(() => Date.now() - new Date(block.at).getTime() < 3000)
   return (
-    <div className="rounded-lg py-1">
+    <div className={cn("rounded-lg py-1", fresh && "t-row-enter")}>
       <button
         type="button"
         data-agent-launch-row={opensFocusedActivity ? "true" : undefined}
@@ -1113,18 +1120,18 @@ function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extr
         <div className="rounded-lg py-1">
           <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="group/tool-row flex w-full cursor-pointer items-center gap-2 text-left focus-visible:outline-none">
             <span className={cn("flex size-5 shrink-0 items-center justify-center", TONE)}>
-              {block.complete ? <BrainIcon className="size-4" /> : <Spinner size={14} className="text-muted-foreground" />}
+              <IconSwap active={block.complete ? "b" : "a"} a={<MatrixLoader variant="scan" className="text-muted-foreground" />} b={<BrainIcon className="size-4" />} />
             </span>
             <div className="min-w-0 overflow-hidden">
               <p className={cn("truncate leading-6", TONE, !block.complete && "shimmer")} style={CHAT_FONT}>
-                {block.complete ? "Thought" : "Thinking"}
+                <TextSwap text={block.complete ? "Thought" : "Thinking"} />
               </p>
             </div>
             <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />
           </button>
           <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ms-7">
             <p className="selectable whitespace-pre-wrap text-muted-foreground" style={TEXT}>
-              {thinking}
+              <StreamWords text={thinking} live={!block.complete} />
             </p>
           </DisclosureRegion>
         </div>
@@ -1132,10 +1139,10 @@ function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extr
       {showText && (
         <div className="chat-message-segment flex flex-col gap-1.5 pr-[2px] pl-[2px]">
           {tone === "bright" ? (
-            <Markdown text={bodyText} style={TEXT} />
+            <Markdown text={bodyText} style={TEXT} live={live && !block.complete} />
           ) : (
             <div className="text-muted-foreground">
-              <Markdown text={bodyText} className="[&_*]:text-muted-foreground" style={TEXT} />
+              <Markdown text={bodyText} className="[&_*]:text-muted-foreground" style={TEXT} live={live && !block.complete} />
             </div>
           )}
         </div>

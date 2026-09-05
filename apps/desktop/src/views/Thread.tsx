@@ -231,7 +231,7 @@ export function ThreadView({
                   {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
                   {queued.length > 0 && <QueuedPanel threadId={threadId} onEdit={(t) => composer.current?.setText(t)} />}
                   {approval && (
-                    <div className="pb-2">
+                    <div key={approval.id} className="t-panel-enter pb-2">
                       {connector ? <ConnectorApprovalPanel approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel approval={approval} count={pending.length} onChoose={answer} />}
                     </div>
                   )}
@@ -358,7 +358,7 @@ function permissionBody(input: JsonValue): string {
 export function ApprovalPanel({ approval, count, onChoose }: { approval: ApprovalRequest; count: number; onChoose: (n: number) => void }) {
   const { prompt, detail } = approvalPrompt(approval)
   return (
-    <div className="chat-composer-surface overflow-hidden border border-[color:var(--surface-border)] px-3.5 py-3 shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] transition-colors duration-200 dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]">
+    <div className="chat-composer-surface t-border-beam overflow-hidden border border-[color:var(--surface-border)] px-3.5 py-3 shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] transition-colors duration-200 dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
           {prompt}
@@ -386,7 +386,7 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
   const canPersist = connector.persist.includes("session")
   const prompt = connector.app ? `Allow ${connector.connector} to use ${connector.app}?` : connector.message || `Allow ${connector.connector}?`
   return (
-    <div className="chat-composer-surface overflow-hidden border border-[color:var(--surface-border)] px-3.5 py-3 shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] transition-colors duration-200 dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]">
+    <div className="chat-composer-surface t-border-beam overflow-hidden border border-[color:var(--surface-border)] px-3.5 py-3 shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] transition-colors duration-200 dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
           {prompt}

@@ -15,7 +15,7 @@ function Checkbox({ className, ...props }: CheckboxPrimitive.Root.Props) {
       {...props}
     >
       <CheckboxPrimitive.Indicator
-        className="-inset-px absolute flex items-center justify-center rounded-[.25rem] text-primary-foreground data-unchecked:hidden data-checked:bg-primary data-indeterminate:text-foreground"
+        className="-inset-px absolute flex items-center justify-center rounded-[.25rem] text-primary-foreground transition-[opacity,scale] duration-[var(--duration-quick)] ease-[var(--ease-smooth-out)] data-unchecked:hidden data-checked:bg-primary data-indeterminate:text-foreground data-starting-style:scale-[0.8] data-starting-style:opacity-0 motion-reduce:transition-none"
         data-slot="checkbox-indicator"
         render={(props, state) => (
           <span {...props}>
@@ -47,7 +47,7 @@ function Checkbox({ className, ...props }: CheckboxPrimitive.Root.Props) {
                 width="24"
                 xmlns="http://www.w3.org/2000/svg"
               >
-                <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+                <path className="t-check-path" d="M5.252 12.7 10.2 18.63 18.748 5.37" />
               </svg>
             )}
           </span>

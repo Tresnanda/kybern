@@ -1,0 +1,495 @@
+/* Motion layer for the desktop shell.
+
+   One token scale (the transitions.dev motion tokens) and the handful of
+   portable transitions the app leans on: matrix dot loader, streaming words,
+   text/icon swaps, border beam, row entrances and staggered reveals. Every
+   rule that moves anything is guarded by prefers-reduced-motion at the end.
+
+   Rules of thumb baked in here:
+   - transform / opacity / filter only; never layout properties.
+   - enters use --ease-smooth-out, exits are ~30% faster than enters.
+   - no bare cross-fades: a fade always carries a small blur or a nudge. */
+
+:root {
+  --duration-stagger: 40ms;
+  --duration-micro: 80ms;
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --duration-slow: 400ms;
+  --duration-very-slow: 500ms;
+
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-linear: linear;
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --ease-bounce-strong: cubic-bezier(0.34, 3.85, 0.64, 1);
+
+  --distance-micro: 4px;
+  --distance-small: 6px;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+
+  --scale-large: 0.96;
+  --scale-medium: 0.97;
+  --scale-small: 0.98;
+  --scale-tiny: 0.99;
+  --scale-press: 0.97;
+
+  --blur-small: 2px;
+  --blur-medium: 3px;
+  --blur-large: 8px;
+
+  /* Matrix dot loader */
+  --matrix-cycle: 1200ms;
+  --matrix-dot: 2px;
+  --matrix-gap: 2px;
+  --matrix-base: color-mix(in srgb, currentColor 22%, transparent);
+  --matrix-active: currentColor;
+  --matrix-ease: ease-in-out;
+
+  /* Streaming text */
+  --stream-fade: 350ms;
+  --stream-blur: 1px;
+  --stream-ease: var(--ease-smooth-out);
+
+  /* Border beam */
+  --beam-duration: 4s;
+  --beam-size: 120px;
+  --beam-width: 1px;
+  --beam-color: var(--color-accent-blue, var(--foreground));
+}
+
+/* ─── Press feedback ────────────────────────────────────────────────────────
+   Every pressable control squashes a hair on :active so the UI is visibly
+   listening. Transition lives on `scale` alone so it never fights the
+   color/opacity transitions each component already owns. */
+.press,
+[data-slot="button"],
+[data-slot="icon-button"],
+[data-slot="toggle"],
+[data-slot="menu-trigger"],
+[data-slot="popover-trigger"],
+[data-slot="select-trigger"] {
+  transition-property: scale, background-color, border-color, color, box-shadow, opacity;
+  transition-duration: var(--duration-quick);
+  transition-timing-function: var(--ease-out);
+}
+.press:active:not(:disabled),
+[data-slot="button"]:active:not(:disabled):not([aria-disabled="true"]),
+[data-slot="icon-button"]:active:not(:disabled),
+[data-slot="toggle"]:active:not(:disabled),
+[data-slot="menu-trigger"]:active:not(:disabled),
+[data-slot="popover-trigger"]:active:not(:disabled),
+[data-slot="select-trigger"]:active:not(:disabled) {
+  scale: var(--scale-press);
+  transition-duration: var(--duration-micro);
+}
+/* Rows (menu items, list rows, choice rows) get a gentler press: no scale, they
+   just darken instantly. Scale on a full-width row reads as a wobble. */
+.press-row:active:not(:disabled) {
+  filter: brightness(0.96);
+}
+.dark .press-row:active:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* ─── Matrix dot loader ─────────────────────────────────────────────────────
+   Sixteen dots in a 4×4 grid, each pulsing on a shared colour cycle. The
+   variant only changes the delay table (set in JS as --d per dot). */
+.t-matrix {
+  display: grid;
+  grid-template-columns: repeat(4, var(--matrix-dot));
+  grid-auto-rows: var(--matrix-dot);
+  gap: var(--matrix-gap);
+  flex-shrink: 0;
+}
+.t-matrix i {
+  display: block;
+  border-radius: 0.5px;
+  background: var(--matrix-base);
+  animation: t-matrix-pulse var(--matrix-cycle) var(--matrix-ease) infinite;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+.t-matrix i.is-gap {
+  visibility: hidden;
+  animation: none;
+}
+@keyframes t-matrix-pulse {
+  0%,
+  45%,
+  100% {
+    background-color: var(--matrix-base);
+  }
+  15% {
+    background-color: var(--matrix-active);
+  }
+}
+
+/* ─── Streaming text ────────────────────────────────────────────────────────
+   Each word mounts blurred and transparent, then resolves. Words that are
+   already on screen are never touched again (keys are stable per index), so a
+   steady stream only ever animates the tail. */
+.t-stream-w {
+  display: inline;
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    opacity var(--stream-fade) var(--stream-ease),
+    filter var(--stream-fade) var(--stream-ease);
+  will-change: opacity, filter;
+}
+@starting-style {
+  .t-stream-w {
+    opacity: 0;
+    filter: blur(var(--stream-blur));
+  }
+}
+
+/* ─── Text states swap ──────────────────────────────────────────────────────
+   Two labels share one grid cell. The outgoing one rises and blurs out, the
+   incoming one rises in from below. Exit is quicker than enter. */
+.t-text-swap {
+  display: inline-grid;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.t-text-swap > * {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+.t-text-swap > [data-swap="in"] {
+  animation: t-text-swap-in var(--duration-fast) var(--ease-smooth-out) both;
+}
+.t-text-swap > [data-swap="out"] {
+  animation: t-text-swap-out var(--duration-quick) var(--ease-in-out) both;
+  pointer-events: none;
+}
+@keyframes t-text-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-micro));
+    filter: blur(var(--blur-small));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0.01px);
+  }
+}
+@keyframes t-text-swap-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0.01px);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(calc(var(--distance-micro) * -1));
+    filter: blur(var(--blur-small));
+  }
+}
+
+/* ─── Icon swap ─────────────────────────────────────────────────────────────
+   Two icons stacked in one slot; the resting one is scaled down and blurred
+   so the swap reads as one glyph morphing rather than two overlapping. */
+.t-icon-swap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+.t-icon-swap > * {
+  grid-area: 1 / 1;
+  transition:
+    opacity var(--duration-fast) var(--ease-in-out),
+    transform var(--duration-fast) var(--ease-in-out),
+    filter var(--duration-fast) var(--ease-in-out);
+  will-change: transform, filter;
+}
+.t-icon-swap > [data-active="false"] {
+  opacity: 0;
+  transform: scale(0.6);
+  filter: blur(var(--blur-small));
+  pointer-events: none;
+}
+.t-icon-swap > [data-active="true"] {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0.01px);
+}
+
+/* ─── Border beam ───────────────────────────────────────────────────────────
+   A short streak of light orbiting the element's border. The element supplies
+   its own border radius; the beam is masked to a 1px ring so it never paints
+   inside the surface. Ambient: used only while something needs the user. */
+.t-border-beam {
+  position: relative;
+  isolation: isolate;
+}
+.t-border-beam::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: var(--beam-width);
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--beam-angle, 0deg),
+    transparent 0deg,
+    transparent calc(360deg - var(--beam-arc, 70deg)),
+    var(--beam-color) 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  animation: t-border-beam var(--beam-duration) linear infinite;
+  opacity: 0.9;
+}
+@property --beam-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes t-border-beam {
+  to {
+    --beam-angle: 360deg;
+  }
+}
+
+/* ─── Row entrance ──────────────────────────────────────────────────────────
+   For work rows that appear while a turn is live: a short rise with a blur
+   resolve. Enter-only; rows never animate out. */
+.t-row-enter {
+  animation: t-row-enter var(--duration-fast) var(--ease-smooth-out) both;
+  will-change: opacity, transform, filter;
+}
+@keyframes t-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-micro));
+    filter: blur(var(--blur-small));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0.01px);
+  }
+}
+
+/* ─── Panel entrance ────────────────────────────────────────────────────────
+   Cards stacked above the composer (approvals, questions): rise from below the
+   composer edge with a soft blur. Heavier than a row, lighter than a dialog. */
+.t-panel-enter {
+  animation: t-panel-enter var(--duration-medium) var(--ease-smooth-out) both;
+  will-change: opacity, transform, filter;
+}
+@keyframes t-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-base)) scale(0.985);
+    filter: blur(var(--blur-small));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0.01px);
+  }
+}
+
+/* ─── Staggered text reveal ─────────────────────────────────────────────────
+   Stacked lines enter one after another with a blurred rise. `--i` is the
+   item index; total budget stays under 400ms for the usual 3-4 items. */
+.t-stagger > * {
+  animation: t-stagger-in var(--duration-very-slow) var(--ease-smooth-out) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+  will-change: opacity, transform, filter;
+}
+@keyframes t-stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-medium));
+    filter: blur(var(--blur-medium));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0.01px);
+  }
+}
+
+/* ─── Sliding tabs ──────────────────────────────────────────────────────────
+   The active pill is one element that travels between tabs. Position and
+   width come from JS (--x / --w); the first paint sets them without motion. */
+.t-tabs {
+  position: relative;
+}
+.t-tabs-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: calc(var(--w, 0) * 1px);
+  transform: translateX(calc(var(--x, 0) * 1px));
+  border-radius: inherit;
+  pointer-events: none;
+  transition:
+    transform var(--duration-fast) var(--ease-smooth-out),
+    width var(--duration-fast) var(--ease-smooth-out),
+    opacity var(--duration-quick) var(--ease-out);
+  will-change: transform, width;
+}
+.t-tabs-pill[data-ready="false"] {
+  transition: none;
+  opacity: 0;
+}
+
+/* ─── Pane switch ───────────────────────────────────────────────────────────
+   Panes that stay mounted while hidden (dock tabs). Hidden panes sit slightly
+   scaled and lifted so the cross-fade has direction; no blur here because
+   the terminal pane owns a WebGL canvas. */
+.t-pane {
+  transition:
+    opacity var(--duration-fast) var(--ease-smooth-out),
+    transform var(--duration-fast) var(--ease-smooth-out);
+  will-change: opacity, transform;
+}
+.t-pane[data-active="false"] {
+  opacity: 0;
+  transform: translateY(var(--distance-micro)) scale(0.995);
+  pointer-events: none;
+}
+.t-pane[data-active="true"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* ─── Section swap ──────────────────────────────────────────────────────────
+   Keyed remount for settings sections and similar: rise with a blur resolve. */
+.t-section-enter {
+  animation: t-section-enter var(--duration-fast) var(--ease-smooth-out) both;
+  will-change: opacity, transform, filter;
+}
+@keyframes t-section-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-small));
+    filter: blur(var(--blur-small));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0.01px);
+  }
+}
+
+/* ─── Checkbox check draw ───────────────────────────────────────────────────
+   The box fills, then the checkmark strokes itself in. */
+.t-check-path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: t-check-draw var(--duration-fast) var(--ease-smooth-out) var(--duration-micro) forwards;
+}
+@keyframes t-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* ─── Attention pop ─────────────────────────────────────────────────────────
+   One small scale bump for a badge/count that just changed. */
+.t-pop {
+  animation: t-pop var(--duration-fast) var(--ease-bounce) both;
+}
+@keyframes t-pop {
+  from {
+    transform: scale(0.85);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ─── Success check ─────────────────────────────────────────────────────────
+   Icon fades in, rotates from -20deg and bobs up; the stroke draws itself. */
+.t-success {
+  animation: t-success-in var(--duration-very-slow) var(--ease-smooth-out) both;
+}
+.t-success path {
+  stroke-dasharray: 32;
+  stroke-dashoffset: 32;
+  animation: t-check-draw var(--duration-fast) var(--ease-smooth-out) var(--duration-quick) forwards;
+}
+@keyframes t-success-in {
+  from {
+    opacity: 0;
+    transform: rotate(-20deg) scale(0.8) translateY(2px);
+    filter: blur(var(--blur-small));
+  }
+  60% {
+    transform: rotate(4deg) scale(1.06) translateY(-1px);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(0) scale(1) translateY(0);
+    filter: blur(0.01px);
+  }
+}
+
+/* ─── Reduced motion ────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .t-matrix i,
+  .t-border-beam::after,
+  .t-row-enter,
+  .t-panel-enter,
+  .t-stagger > *,
+  .t-section-enter,
+  .t-check-path,
+  .t-success,
+  .t-success path,
+  .t-pop,
+  .t-text-swap > * {
+    animation: none !important;
+  }
+  .t-check-path,
+  .t-success path {
+    stroke-dashoffset: 0;
+  }
+  .t-stream-w,
+  .t-icon-swap > *,
+  .t-tabs-pill,
+  .t-pane {
+    transition: none !important;
+  }
+  .t-stream-w {
+    filter: none !important;
+    opacity: 1 !important;
+  }
+  .press,
+  [data-slot="button"],
+  [data-slot="icon-button"],
+  [data-slot="toggle"],
+  [data-slot="menu-trigger"],
+  [data-slot="popover-trigger"],
+  [data-slot="select-trigger"] {
+    transition-property: background-color, border-color, color, box-shadow, opacity;
+  }
+  .press:active,
+  [data-slot="button"]:active,
+  [data-slot="icon-button"]:active,
+  [data-slot="toggle"]:active,
+  [data-slot="menu-trigger"]:active,
+  [data-slot="popover-trigger"]:active,
+  [data-slot="select-trigger"]:active {
+    scale: 1;
+  }
+}

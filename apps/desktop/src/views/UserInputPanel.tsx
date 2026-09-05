@@ -1,5 +1,6 @@
 import { useId, useState } from "react"
 import { Button } from "@/components/kit/button"
+import { TextSwap } from "@/components/kybern/motion"
 import { ComposerStackedPanel } from "@/components/kit/chat/ComposerStackedPanel"
 import { array, questionResponse, questionsFor, record, string } from "@/lib/userInput"
 import { openExternal } from "@/lib/tauri"
@@ -62,7 +63,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
     } catch (error) { setError(errorText(error)) }
   }
 
-  return <ComposerStackedPanel className="overflow-hidden !rounded-b-xl">
+  return <ComposerStackedPanel className="t-border-beam overflow-hidden !rounded-b-xl">
     <form onSubmit={onSubmit} className="flex max-h-[min(32rem,65dvh)] flex-col text-[length:var(--app-font-size-ui)]">
       <div className="px-4 pt-4 pb-3">
         <h2 className="font-semibold text-foreground">{count > 1 ? `Your input is needed · ${count} requests` : "Your input is needed"}</h2>
@@ -93,7 +94,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
       {error && <p role="alert" className="px-4 py-2 text-xs text-destructive">{error}</p>}
       <div className="flex shrink-0 justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void submit()}>Decline</Button>
-        {approval.tool_name === "ui_confirm" ? <><Button type="button" variant="chrome-outline" size="sm" disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button><Button type="button" size="sm" disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button></> : <Button type="submit" size="sm" disabled={busy || (isUrl && !urlOpened)}>{busy ? "Sending…" : "Submit answer"}</Button>}
+        {approval.tool_name === "ui_confirm" ? <><Button type="button" variant="chrome-outline" size="sm" disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button><Button type="button" size="sm" disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button></> : <Button type="submit" size="sm" disabled={busy || (isUrl && !urlOpened)}><TextSwap text={busy ? "Sending…" : "Submit answer"} /></Button>}
       </div>
     </form>
   </ComposerStackedPanel>

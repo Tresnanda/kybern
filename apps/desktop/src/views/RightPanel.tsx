@@ -18,6 +18,7 @@ import { plural } from "@/lib/format"
 import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { useSlidingPill } from "@/lib/kit/slidingPill"
 import type { Diff, ThreadId } from "@/protocol"
 import { errorText, loadDiff, loadFileDiff, loadGitStatus, rpc } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore, type RightTab } from "@/state/store"
@@ -28,7 +29,7 @@ import { TerminalWorkspace } from "./Terminal"
 import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME, DOCK_HEADER_ICON_BUTTON_CLASS } from "./chrome"
 
 const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} inline-flex min-w-0 items-center pr-2.5`
-const DOCK_TAB_ACTIVE = "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+const DOCK_TAB_ACTIVE = "text-[var(--color-text-foreground)]"
 
 const ENV_ROW =
   "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground)] outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
@@ -44,6 +45,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const projectId = useStore((s) => (threadId ? s.threads[threadId]?.project_id : undefined) ?? (s.selected.kind === "draft" ? s.selected.draft.projectId : undefined))
   const [adds, dels] = useMemo(() => [diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0, diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0], [diff])
   const activeTasks = useStore((s) => (threadId ? (s.runtimeTasks[threadId] ?? []).filter(isRuntimeTaskActive).length : 0))
+  const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(tab)
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
@@ -51,7 +53,8 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         data-tauri-drag-region="deep"
         className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "drag-region gap-1 px-1.5")}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div ref={tabsRef} className="t-tabs flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <span aria-hidden className="t-tabs-pill z-0 rounded-lg bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />
           <DockTab active={tab === "activity"} onClick={() => set({ rightTab: "activity" })} icon={<WorkflowIcon className="size-3.5 shrink-0 opacity-70" />} label="Activity">
             {activeTasks > 0 && <span className="ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
           </DockTab>
@@ -101,16 +104,16 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
           <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its activity, changes, and terminal.</div>
         ) : (
           <>
-            <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "activity" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "activity"}>
+            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={tab === "activity"} aria-hidden={tab !== "activity"}>
               <ActivityPane threadId={threadId} />
             </div>
-            <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "changes" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "changes"}>
+            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "changes" ? "z-[1]" : "z-0")} data-active={tab === "changes"} aria-hidden={tab !== "changes"}>
               <Changes key={threadId} threadId={threadId} active={tab === "changes"} />
             </div>
-            <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "explorer" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "explorer"}>
+            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "explorer" ? "z-[1]" : "z-0")} data-active={tab === "explorer"} aria-hidden={tab !== "explorer"}>
               {projectId && <ExplorerPane projectId={projectId} active={tab === "explorer"} />}
             </div>
-            <div className={cn("absolute inset-0 flex min-h-0 w-full transition-opacity", tab === "terminal" ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")} aria-hidden={tab !== "terminal"}>
+            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={tab === "terminal"} aria-hidden={tab !== "terminal"}>
               <TerminalWorkspace threadId={threadId} active={tab === "terminal"} />
             </div>
           </>
@@ -122,7 +125,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
 
 function DockTab({ active, onClick, icon, label, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; children?: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} data-pressed={active || undefined} className={cn("group/dock-tab [-webkit-app-region:no-drag]", DOCK_TAB_CHIP, active && DOCK_TAB_ACTIVE)}>
+    <button type="button" onClick={onClick} data-pressed={active || undefined} data-tab-active={active} className={cn("group/dock-tab press relative z-[1] [-webkit-app-region:no-drag]", DOCK_TAB_CHIP, active && DOCK_TAB_ACTIVE)}>
       <span className="relative flex size-4 shrink-0 items-center justify-center">{icon}</span>
       <span className="max-w-[10rem] truncate">{label}</span>
       {children}

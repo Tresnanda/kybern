@@ -41,6 +41,7 @@ import { CentralIcon } from "@/lib/kit/central-icons"
 import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
   SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
+import { IconSwap } from "@/components/kybern/motion"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
@@ -972,13 +973,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         />
                       }
                     >
-                      {sending ? (
-                        <svg width={12} height={12} viewBox="0 0 14 14" className="animate-spin" aria-hidden>
-                          <circle cx={7} cy={7} r={5.5} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="20 12" fill="none" />
-                        </svg>
-                      ) : (
-                        <ComposerSendArrowIcon className="size-5 shrink-0 translate-y-px" />
-                      )}
+                      <IconSwap
+                        active={sending ? "b" : "a"}
+                        a={<ComposerSendArrowIcon className="size-5 shrink-0 translate-y-px" />}
+                        b={
+                          <svg width={12} height={12} viewBox="0 0 14 14" className="animate-spin" aria-hidden>
+                            <circle cx={7} cy={7} r={5.5} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="20 12" fill="none" />
+                          </svg>
+                        }
+                      />
                     </TooltipTrigger>
                     <TooltipPopup side="top">
                       {disabled && disabledReason ? (

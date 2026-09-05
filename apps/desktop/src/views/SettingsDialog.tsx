@@ -70,7 +70,7 @@ export function SettingsDialog() {
           </ul>
         </nav>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-2xl px-5 py-6 sm:px-8 sm:py-8">
+          <div key={tab} className="t-section-enter mx-auto w-full max-w-2xl px-5 py-6 sm:px-8 sm:py-8">
             <div className="mb-7 flex items-start justify-between gap-4">
               <div>
                 <h1 className="text-lg font-semibold tracking-tight text-foreground">{current[1]}</h1>

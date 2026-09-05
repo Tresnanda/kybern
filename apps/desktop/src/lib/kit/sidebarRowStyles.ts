@@ -16,7 +16,7 @@ export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-[var(--app-density-row-gap,0.5rem
 export const SIDEBAR_ROW_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui,12px)] font-normal";
 
 export const SIDEBAR_ROW_FOCUS_CLASS_NAME =
-  "outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  "press-row outline-hidden transition-colors duration-[var(--duration-quick)] ease-[var(--ease-out)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
 export const SIDEBAR_ROW_HOVER_CLASS_NAME =
   "hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)]";

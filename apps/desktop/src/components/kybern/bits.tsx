@@ -3,6 +3,7 @@
 import { useState } from "react"
 
 import { ProviderIcon } from "@/components/kit/ProviderIcon"
+import { IconSwap } from "@/components/kybern/motion"
 import { copyText } from "@/lib/hooks"
 import { CheckIcon, CopyIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
@@ -51,7 +52,7 @@ export function CopyButton({ text, className, label = "Copy" }: { text: string; 
         setTimeout(() => setDone(false), 1400)
       }}
     >
-      {done ? <CheckIcon className="size-3.5 text-success" /> : <CopyIcon className="size-3.5" />}
+      <IconSwap active={done ? "b" : "a"} a={<CopyIcon className="size-3.5" />} b={<CheckIcon className="size-3.5 text-success" />} />
     </button>
   )
 }
