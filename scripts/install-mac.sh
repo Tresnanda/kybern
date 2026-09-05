@@ -39,7 +39,7 @@ esac
 
 if [ "$VERSION" = "latest" ]; then
   MANIFEST="https://github.com/$REPO/releases/latest/download/latest.json"
-  URL="$(curl -fsSL "$MANIFEST" | sed -n 's/.*"url": *"\([^"]*darwin-'"$ARCH"'[^"]*\.app\.tar\.gz\)".*/\1/p' | head -n 1)"
+  URL="$(curl -fsSL "$MANIFEST" | sed -n 's/.*"url": *"\([^"]*-'"$ARCH"'-apple-darwin\.app\.tar\.gz\)".*/\1/p' | head -n 1)"
   [ -n "$URL" ] || { echo "no macOS $ARCH build in the latest release" >&2; exit 1; }
 else
   VERSION="${VERSION#v}"
