@@ -180,7 +180,8 @@ fn explain_ssh_failure(target: &str, code: Option<i32>, stderr: &str) -> String 
     match code {
         Some(255) if detail.is_empty() => format!("SSH to {target} failed"),
         Some(255) => format!("SSH to {target} failed: {detail}"),
-        _ if detail.is_empty() => format!("The command on {target} failed"),
+        Some(code) if detail.is_empty() => format!("The command on {target} exited with status {code} and no output"),
+        None if detail.is_empty() => format!("The command on {target} was killed by a signal"),
         _ => format!("{target}: {detail}"),
     }
 }
@@ -325,9 +326,14 @@ async fn port_accepts(port: u16) -> bool {
 
 /// `ssh -N -L` for one tunnel. Resolves once the local port accepts
 /// connections (ssh only listens after it has authenticated).
+///
+/// Multiplexing is off for this process on purpose: through a `ControlMaster`
+/// socket from the user's ssh config, `ssh -N -L` hands the forward to the
+/// master and exits 0 within a second, so the child's lifetime would no longer
+/// track the forward and the keeper would report the tunnel as failed.
 async fn spawn_tunnel(config: &SshConfig, local_port: u16) -> Result<Child> {
     let mut child = ssh(config)
-        .args(["-N", "-o", "ExitOnForwardFailure=yes", "-L"])
+        .args(["-o", "ControlMaster=no", "-o", "ControlPath=none", "-N", "-o", "ExitOnForwardFailure=yes", "-L"])
         .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{}", config.remote_port))
         .arg(&config.target)
         .stdin(Stdio::null())
@@ -676,5 +682,7 @@ mod tests {
         assert!(denied.contains("ssh-copy-id u@h"));
         assert!(explain_ssh_failure("u@h", Some(255), "ssh: Could not resolve hostname h").contains("resolve h"));
         assert_eq!(explain_ssh_failure("u@h", Some(1), "sh: line 3: boom"), "u@h: sh: line 3: boom");
+        assert_eq!(explain_ssh_failure("u@h", Some(0), ""), "The command on u@h exited with status 0 and no output");
+        assert_eq!(explain_ssh_failure("u@h", None, ""), "The command on u@h was killed by a signal");
     }
 }

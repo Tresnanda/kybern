@@ -545,10 +545,13 @@ function AddressEnvironmentForm({
       onDone()
     } catch (e) {
       const detail = errorText(e)
+      const unreachable = /error sending request|connection refused|timed out/i.test(detail)
       setError(
-        /error sending request|connection refused|timed out/i.test(detail)
-          ? "Unable to reach this machine. Check its address and network connection, then try again."
-          : detail
+        unreachable && isLoopbackAddress(address)
+          ? "This invitation points at the other machine's own loopback address, which only works on that machine. For a daemon that listens on 127.0.0.1, add it over SSH instead, or bind it to an address this device can reach."
+          : unreachable
+            ? "Unable to reach this machine. Check its address and network connection, then try again."
+            : detail
       )
     } finally {
       setBusy(false)
@@ -952,4 +955,14 @@ function DeviceAccess() {
       </DialogPanel>
     </>
   )
+}
+
+/** True when the address names this device's own loopback interface. */
+function isLoopbackAddress(address: string) {
+  try {
+    const host = new URL(address.trim()).hostname.replace(/^\[|\]$/g, "")
+    return host === "localhost" || host === "::1" || /^127\./.test(host)
+  } catch {
+    return false
+  }
 }
