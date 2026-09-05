@@ -339,6 +339,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       blocks = [...blocks, { kind: "reverted", id: `revert:${ev.seq}`, turnId, at, seq: ev.seq, commit: ev.commit }]
       break
     case "provider_session_bound":
+    case "provider_session_released":
       break
     default:
       break

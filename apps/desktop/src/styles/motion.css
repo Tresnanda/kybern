@@ -545,18 +545,18 @@
 
 /* ─── Hover marquee ─────────────────────────────────────────────────────────
    A truncated label pans to reveal its tail while its row is hovered, then
-   pans back. The container is an inline-size query container so the child
-   can compute its own overflow in CSS: translateX(100cqw - 100%) is negative
-   only when the text is wider than the slot, and min() clamps it to zero
-   otherwise. A short delay keeps quick hover passes from starting a pan. */
-.t-marquee {
-  container-type: inline-size;
-}
+   pans back. The host measures the overflow on pointer enter and writes
+   --marquee-shift (px) and --marquee-dur (ms) onto the label, so the pan speed
+   is constant regardless of how much text is hidden. A short delay keeps
+   quick hover passes from starting a pan. Labels that fit get shift 0 and
+   never move. */
 .t-marquee > span {
   max-width: 100%;
+  transform: translateX(0);
   transition:
     transform var(--duration-slow) var(--ease-out),
     max-width 0s var(--duration-slow);
+  will-change: transform;
 }
 [data-marquee-host]:hover .t-marquee > span,
 [data-marquee-host]:focus-within .t-marquee > span {
@@ -564,9 +564,9 @@
   width: max-content;
   overflow: visible;
   text-overflow: clip;
-  transform: translateX(min(0px, calc(100cqw - 100%)));
+  transform: translateX(var(--marquee-shift, 0px));
   transition:
-    transform 2400ms linear 350ms,
+    transform var(--marquee-dur, 2000ms) linear 350ms,
     max-width 0s 0s;
 }
 

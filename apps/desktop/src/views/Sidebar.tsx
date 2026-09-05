@@ -59,6 +59,7 @@ import { pickFolder, platform } from "@/lib/tauri"
 import { activeEnvironment } from "@/state/environments"
 import { cn } from "@/lib/utils"
 import { TextSwap } from "@/components/kybern/motion"
+import { primeMarquee } from "@/lib/kit/marquee"
 import type { Project, Thread, ThreadActivityState } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
@@ -429,6 +430,8 @@ function ThreadRow({ thread }: { thread: Thread }) {
           }}
           data-active={selected || undefined}
           data-marquee-host
+          onPointerEnter={(event) => primeMarquee(event.currentTarget)}
+          onFocus={(event) => primeMarquee(event.currentTarget)}
           aria-current={selected ? "page" : undefined}
           className={cn(
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
