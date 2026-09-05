@@ -1,6 +1,6 @@
 import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from "@/lib/appUpdate"
 import { notificationPermission, notify, type NotificationPermissionState } from "@/lib/tauri"
-// Settings, in a Synara dialog: a 16rem nav column of sidebar rows and a
+// Settings, in a dialog: a 16rem nav column of sidebar rows and a
 // content column of SettingsSection / SettingsCard / SettingsRow blocks.
 
 import { useEffect, useId, useState } from "react"
@@ -8,14 +8,14 @@ import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
 import { useTheme } from "@/components/theme-context"
-import { Button } from "@/components/synara/button"
-import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "@/components/synara/dialog"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/synara/menu"
-import { ChevronDownIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/synara/icons"
-import { Switch } from "@/components/synara/switch"
+import { Button } from "@/components/kit/button"
+import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "@/components/kit/dialog"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
+import { ChevronDownIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
+import { Switch } from "@/components/kit/switch"
 import { PERMISSION_HINT, PERMISSION_LABEL, tokens, usd } from "@/lib/format"
-import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/synara/icons"
+import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/kit/icons"
 import {
   SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -24,8 +24,8 @@ import {
   SETTINGS_PANEL_SECTION_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
   SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
-} from "@/lib/synara/settingsPanelStyles"
-import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_ACTIVE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/synara/sidebarRowStyles"
+} from "@/lib/kit/settingsPanelStyles"
+import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_ACTIVE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import type { PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"

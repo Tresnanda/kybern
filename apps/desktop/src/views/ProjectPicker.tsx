@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
-import { Button } from "@/components/synara/button"
-import { Input } from "@/components/synara/input"
+import { Button } from "@/components/kit/button"
+import { Input } from "@/components/kit/input"
 import {
   Dialog,
   DialogDescription,
@@ -10,8 +10,8 @@ import {
   DialogPopup,
   DialogTitle,
   dialogFieldLabelClassName,
-} from "@/components/synara/dialog"
-import { FolderIcon } from "@/lib/synara/icons"
+} from "@/components/kit/dialog"
+import { FolderIcon } from "@/lib/kit/icons"
 import { Spinner } from "@/components/kybern/bits"
 import { activeEnvironment } from "@/state/environments"
 import { addProject, errorText, rpc } from "@/state/rpc"

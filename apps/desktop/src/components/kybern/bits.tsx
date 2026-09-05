@@ -2,14 +2,14 @@
 
 import { useState } from "react"
 
-import { ProviderIcon } from "@/components/synara/ProviderIcon"
+import { ProviderIcon } from "@/components/kit/ProviderIcon"
 import { copyText } from "@/lib/hooks"
-import { CheckIcon, CopyIcon } from "@/lib/synara/icons"
+import { CheckIcon, CopyIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ProviderKind } from "@/protocol"
 
-/** Provider glyph, using Synara's icon set. */
-const SYNARA_PROVIDER: Record<ProviderKind, string> = {
+/** Provider glyph, using the kit icon set. */
+const PROVIDER_ICON: Record<ProviderKind, string> = {
   "claude-code": "claudeAgent",
   codex: "codex",
   cursor: "cursor",
@@ -19,7 +19,7 @@ const SYNARA_PROVIDER: Record<ProviderKind, string> = {
 }
 
 export function ProviderMark({ kind, className, size = 14, tone }: { kind: ProviderKind; className?: string; size?: number; tone?: "default" | "header" }) {
-  return <ProviderIcon provider={SYNARA_PROVIDER[kind]} tone={tone} className={cn("shrink-0", className)} style={{ width: size, height: size }} />
+  return <ProviderIcon provider={PROVIDER_ICON[kind]} tone={tone} className={cn("shrink-0", className)} style={{ width: size, height: size }} />
 }
 
 /** The Kybern mark. Monochrome and theme-aware through currentColor. */
@@ -56,7 +56,7 @@ export function CopyButton({ text, className, label = "Copy" }: { text: string; 
   )
 }
 
-/** Synara's stepped spinner: 24 steps over 1.3s, drawn with currentColor. */
+/** Stepped spinner: 24 steps over 1.3s, drawn with currentColor. */
 export function Spinner({ className, size = 14 }: { className?: string; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={cn("animate-spin-stepped shrink-0", className)} aria-hidden>

@@ -1,4 +1,4 @@
-// Right dock, to Synara's RightDock: a 46px tab strip of surface chips, a
+// Right dock: a 46px tab strip of surface chips, a
 // collapse control, and panes kept mounted underneath. The Changes pane
 // combines the Environment card rows with the diff file list.
 
@@ -6,16 +6,16 @@ import { memo, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { Spinner } from "@/components/kybern/bits"
-import { Button } from "@/components/synara/button"
-import { IconButton } from "@/components/synara/icon-button"
-import { DiffStat } from "@/components/synara/chat/DiffStatLabel"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/synara/menu"
-import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/tooltip"
+import { Button } from "@/components/kit/button"
+import { IconButton } from "@/components/kit/icon-button"
+import { DiffStat } from "@/components/kit/chat/DiffStatLabel"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/kit/menu"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { FileDiffCard } from "@/components/kybern/DiffView"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { plural } from "@/lib/format"
-import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, WorkflowIcon, XIcon } from "@/lib/synara/icons"
+import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { Diff, ThreadId } from "@/protocol"

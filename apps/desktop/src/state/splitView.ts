@@ -1,5 +1,5 @@
 // Persisted client-side layout for split chat threads. The recursive binary tree
-// follows Synara's split-view model: depth is capped at two, yielding a calm 2x2
+// uses a bounded split-view model: depth is capped at two, yielding a calm 2x2
 // maximum instead of letting panes become unusably small.
 
 import type { ThreadId } from "../protocol"

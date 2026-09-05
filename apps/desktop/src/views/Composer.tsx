@@ -1,4 +1,4 @@
-// Composer, to Synara's ChatView composer spec: frosted 1.2rem squircle
+// Composer: frosted 1.2rem squircle
 // surface, 12px system-ui editor, footer with the + menu, permission-mode
 // picker (Full access in orange), model/effort picker and the ink send circle.
 // Stacked panels (queued follow-ups, approval card, empty-landing tray) render
@@ -9,10 +9,10 @@ import { HiOutlineHandRaised } from "react-icons/hi2"
 import { toast } from "sonner"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
-import { Button } from "@/components/synara/button"
-import { ComposerColumnFrame } from "@/components/synara/chat/ComposerColumnFrame"
-import { FileEntryIcon } from "@/components/synara/chat/FileEntryIcon"
-import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
+import { Button } from "@/components/kit/button"
+import { ComposerColumnFrame } from "@/components/kit/chat/ComposerColumnFrame"
+import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
@@ -31,15 +31,15 @@ import {
   COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
-} from "@/components/synara/chat/composerPickerStyles"
-import { Kbd } from "@/components/synara/kbd"
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/synara/menu"
-import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/tooltip"
+} from "@/components/kit/chat/composerPickerStyles"
+import { Kbd } from "@/components/kit/kbd"
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/kit/menu"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { buildStructuredTextParts } from "@/lib/composerTokens"
 import { PROVIDER_LABEL, basename } from "@/lib/format"
-import { CentralIcon } from "@/lib/synara/central-icons"
+import { CentralIcon } from "@/lib/kit/central-icons"
 import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
-  SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
+  SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
@@ -1022,7 +1022,7 @@ function parentPath(p: string): string {
   return i === -1 ? "" : p.slice(0, i)
 }
 
-/** Empty-landing controls tray: stacked flush above the input, as Synara's `data-empty-landing-controls`. */
+/** Empty-landing controls tray: stacked flush above the input. */
 export function LandingTray({ children }: { children: React.ReactNode }) {
   return (
     <div

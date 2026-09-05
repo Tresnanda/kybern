@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 import {
   SquareSplitHorizontal,
   SquareSplitVertical,
-} from "@/lib/synara/icons"
+} from "@/lib/kit/icons"
 import type { ThreadId } from "@/protocol"
 import type { SplitDirection, SplitSide } from "@/state/splitView"
 

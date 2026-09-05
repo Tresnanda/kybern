@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { Spinner } from "@/components/kybern/bits"
-import { ThreadRunningSpinner } from "@/components/synara/ThreadRunningSpinner"
-import { Button } from "@/components/synara/button"
+import { ThreadRunningSpinner } from "@/components/kit/ThreadRunningSpinner"
+import { Button } from "@/components/kit/button"
 import { plural } from "@/lib/format"
 import {
   BackgroundTrayIcon,
@@ -13,7 +13,7 @@ import {
   StopIcon,
   TerminalIcon,
   WorkflowIcon,
-} from "@/lib/synara/icons"
+} from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { RuntimeTask, RuntimeTaskStatus, ThreadId } from "@/protocol"
 import { backgroundRuntimeTask, errorText, stopRuntimeTask } from "@/state/rpc"

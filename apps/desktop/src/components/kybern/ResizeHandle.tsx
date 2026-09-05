@@ -1,4 +1,4 @@
-// Drag handle between two panes, styled after Synara's SidebarRail: a 16px
+// Drag handle between two panes: a 16px
 // invisible hit area straddling the seam and a 2px line that appears on hover,
 // keyboard focus, or while dragging.
 

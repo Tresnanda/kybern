@@ -1,6 +1,6 @@
 //! Capability scopes carried by a session token.
 //!
-//! Mirrors the OAuth-style model T3 Code uses: every RPC method declares the
+//! OAuth-style scopes: every RPC method declares the
 //! scope it needs, and the daemon rejects calls whose token lacks it. The
 //! desktop bootstrap token carries every scope; a pairing code for a phone
 //! grants the four client-operation scopes.

@@ -1,7 +1,7 @@
 import { Markdown } from "@/components/kybern/Markdown"
 import { connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
 import { UserInputPanel } from "./UserInputPanel"
-// Thread route: Synara-style header (provider glyph, title, Hand off,
+// Thread route: Header (provider glyph, title, Hand off,
 // actions, dock toggle), the transcript scrolling under the frosted composer,
 // queued follow-ups stacked above the input and the approval card.
 
@@ -9,13 +9,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
-import { Button } from "@/components/synara/button"
-import { IconButton } from "@/components/synara/icon-button"
-import { ComposerChoiceRow } from "@/components/synara/chat/ComposerChoiceRow"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/synara/chat/ComposerStackedPanel"
-import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/synara/chat/ComposerStackedPanelContent"
-import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/synara/menu"
+import { Button } from "@/components/kit/button"
+import { IconButton } from "@/components/kit/icon-button"
+import { ComposerChoiceRow } from "@/components/kit/chat/ComposerChoiceRow"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat/ComposerStackedPanel"
+import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/kit/chat/ComposerStackedPanelContent"
+import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/kit/menu"
 import { PROVIDER_LABEL, basename, mod, toolLine } from "@/lib/format"
 import { activeTaskSummary } from "@/lib/runtimeActivity"
 import {
@@ -42,8 +42,8 @@ import {
   Trash2,
   WorkflowIcon,
   XIcon,
-} from "@/lib/synara/icons"
-import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/synara/chat/composerStackedPanelStyles"
+} from "@/lib/kit/icons"
+import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, JsonValue, RuntimeTask, ThreadId, UserMessage } from "@/protocol"
@@ -52,7 +52,7 @@ import { archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, 
 import { canSplitPane, type PaneId } from "@/state/splitView"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
 
-import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/synara/chat/composerPickerStyles"
+import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/kit/chat/composerPickerStyles"
 
 import { Composer, type ComposerHandle, type SlashCommand } from "./Composer"
 import { ENVIRONMENT_DOCKED_CONTENT_INSET_PX, EnvironmentPanel } from "./Environment"

@@ -146,7 +146,7 @@ pub struct ProviderStatus {
     pub instances: Vec<String>,
 }
 
-/// The four permission modes, mirroring T3 Code.
+/// The four permission modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum PermissionMode {

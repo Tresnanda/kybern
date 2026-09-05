@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from "react"
 
-import { Button } from "@/components/synara/button"
+import { Button } from "@/components/kit/button"
 
 interface State {
   error: Error | null

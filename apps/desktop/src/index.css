@@ -1,4 +1,4 @@
-/* Synara's stylesheet is the base (tokens, primitives, chat surfaces). Kybern
+/* The kit stylesheet is the base (tokens, primitives, chat surfaces). Kybern
    adds only what the Tauri shell needs on top. */
-@import "./styles/synara.css";
+@import "./styles/kit.css";
 @import "./styles/kybern.css";

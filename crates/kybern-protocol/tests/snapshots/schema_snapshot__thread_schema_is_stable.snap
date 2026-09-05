@@ -120,7 +120,7 @@ expression: schema_for!(Thread)
       ]
     },
     "PermissionMode": {
-      "description": "The four permission modes, mirroring T3 Code.",
+      "description": "The four permission modes.",
       "oneOf": [
         {
           "description": "Every tool call that mutates or executes asks for approval.",

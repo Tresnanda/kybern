@@ -1,4 +1,4 @@
-// Left sidebar, built to Synara's ThreadSidebar: 46px drag-region title bar,
+// Left sidebar: 46px drag-region title bar,
 // brand row, primary nav, "Projects" list with nested thread rows, footer
 // with Settings and Help.
 
@@ -13,16 +13,16 @@ import {
   beginThreadPointerDrag,
   consumeThreadPointerDragClick,
 } from "@/components/kybern/chatPaneDrag"
-import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
-import { SidebarIconButton } from "@/components/synara/SidebarIconButton"
-import { ThreadRunningSpinner } from "@/components/synara/ThreadRunningSpinner"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { Kbd, KbdGroup } from "@/components/synara/kbd"
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
-import { SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/synara/sidebar"
+import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
+import { SidebarIconButton } from "@/components/kit/SidebarIconButton"
+import { ThreadRunningSpinner } from "@/components/kit/ThreadRunningSpinner"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Kbd, KbdGroup } from "@/components/kit/kbd"
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
+import { SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/kit/sidebar"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { mod } from "@/lib/format"
-import { CentralIcon } from "@/lib/synara/central-icons"
+import { CentralIcon } from "@/lib/kit/central-icons"
 import {
   AddPlusIcon,
   ArchiveIcon,
@@ -44,8 +44,8 @@ import {
   SquareSplitHorizontal,
   SquareSplitVertical,
   WorktreeIcon,
-} from "@/lib/synara/icons"
-import { disclosureContentClassName, disclosureShellClassName } from "@/lib/synara/disclosureMotion"
+} from "@/lib/kit/icons"
+import { disclosureContentClassName, disclosureShellClassName } from "@/lib/kit/disclosureMotion"
 import {
   SIDEBAR_HEADER_ROW_CLASS_NAME,
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
@@ -54,7 +54,7 @@ import {
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
-} from "@/lib/synara/sidebarRowStyles"
+} from "@/lib/kit/sidebarRowStyles"
 import { pickFolder, platform } from "@/lib/tauri"
 import { activeEnvironment } from "@/state/environments"
 import { cn } from "@/lib/utils"

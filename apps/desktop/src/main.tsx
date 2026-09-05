@@ -7,7 +7,7 @@ import "./index.css"
 import App from "./App"
 import { ErrorBoundary } from "@/components/kybern/ErrorBoundary"
 import { ThemeProvider } from "@/components/theme-provider"
-import { TooltipProvider } from "@/components/synara/tooltip"
+import { TooltipProvider } from "@/components/kit/tooltip"
 import { isTauri, platform } from "@/lib/tauri"
 import { startAppUpdateChecks } from "@/lib/appUpdate"
 import { boot } from "@/state/rpc"
@@ -20,7 +20,7 @@ if (import.meta.env.DEV && (forcedTheme === "light" || forcedTheme === "dark" ||
   localStorage.setItem("kybern.theme", forcedTheme)
 }
 
-// Synara's stylesheet keys desktop-only rules (traffic-light gutter, corner
+// The kit stylesheet keys desktop-only rules (traffic-light gutter, corner
 // smoothing) off this attribute; the Tauri shell wants the same treatment.
 if (isTauri()) {
   document.documentElement.dataset.runtime = "electron"

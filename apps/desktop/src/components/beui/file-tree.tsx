@@ -1,7 +1,7 @@
 // beui.dev/components/motion/file-tree
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronRightIcon as ChevronRight, FileIcon as File, FolderIcon as Folder, FolderOpenIcon as FolderOpen } from "@/lib/synara/icons";
+import { ChevronRightIcon as ChevronRight, FileIcon as File, FolderIcon as Folder, FolderOpenIcon as FolderOpen } from "@/lib/kit/icons";
 import {
   Children,
   Fragment,

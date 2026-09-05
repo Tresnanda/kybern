@@ -28,11 +28,11 @@ The old GPUI client is on the `gpui` branch. Do not port its views back.
 | `protocol/` | TypeScript wire types + the WebSocket JSON-RPC client. Keep `types.ts` in step with `kybern-protocol`. |
 | `state/` | `store.ts` (zustand), `rpc.ts` (boot, subscriptions, actions), `transcript.ts` (folds events into blocks and turn groups), `nav.ts`. Stateful modules reload the page on HMR through `lib/hot.ts`. |
 | `views/` | One file per surface: `Sidebar`, `Draft` (home), `Thread`, `Transcript`, `Composer`, `RightPanel` (dock), `Terminal`, `Explorer`, `Environment`, `PullRequests`, `Palette`, `SettingsDialog`, `Handoff`, `chrome` (headers, toggles), `chatLayout` (shared column gutter). |
-| `components/synara/` | Synara's UI primitives, vendored (MIT). `components/synara/chat/` holds the composer/transcript helpers and the `composerPickerStyles` class constants. |
+| `components/kit/` | UI primitives. `components/kit/chat/` holds the composer/transcript helpers and the `composerPickerStyles` class constants. |
 | `components/beui/` | BeUI components, vendored (MIT): message scroller with rail, file tree. |
 | `components/kybern/` | Our own pieces: `DiffView`, `Markdown` (shiki), `ResizeHandle`, `bits`. |
-| `lib/synara/` | Synara's icon system (`icons.tsx`, Central SVGs under `public/central-icons-*`), theme math (`applyTheme.ts`), density/typography/width variables, sidebar row styles. |
-| `styles/synara.css` | Synara's stylesheet, unmodified. `styles/kybern.css` adds only what the Tauri shell needs. |
+| `lib/kit/` | Icon system (`icons.tsx`, Central SVGs under `public/central-icons-*`), theme math (`applyTheme.ts`), density/typography/width variables, sidebar row styles. |
+| `styles/kit.css` | Base stylesheet (tokens, primitives, chat surfaces). `styles/kybern.css` adds only what the Tauri shell needs. |
 
 ## Build and run
 
@@ -97,13 +97,12 @@ ubuntu and macos.
 
 ## Desktop UI rules
 
-- The look is Synara's. Before styling anything new, find the matching Synara
-  component or class constant and reuse it; class strings in `views/` are
-  copied from Synara on purpose. Do not reintroduce generic shadcn styling.
-- Icons come from `lib/synara/icons.tsx` (Central, Tabler, react-icons).
+- Before styling anything new, find the matching kit component or class
+  constant and reuse it; class strings in `views/` are shared on purpose. Do not reintroduce generic shadcn styling.
+- Icons come from `lib/kit/icons.tsx` (Central, Tabler, react-icons).
   Phosphor and lucide are not used.
 - Base UI menus: `MenuGroupLabel` must sit inside a `MenuGroup`; picker popups
-  are `ComposerPickerMenuPopup`; dialogs use `components/synara/dialog`.
+  are `ComposerPickerMenuPopup`; dialogs use `components/kit/dialog`.
 - Transcript, composer and the home screen share `CHAT_COLUMN_GUTTER` from
   `views/chatLayout.ts` so their columns line up edge to edge.
 - Panes that stay mounted while hidden switch with `opacity-0` +

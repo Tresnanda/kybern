@@ -1,6 +1,6 @@
 import { useId, useState } from "react"
-import { Button } from "@/components/synara/button"
-import { ComposerStackedPanel } from "@/components/synara/chat/ComposerStackedPanel"
+import { Button } from "@/components/kit/button"
+import { ComposerStackedPanel } from "@/components/kit/chat/ComposerStackedPanel"
 import { array, questionResponse, questionsFor, record, string } from "@/lib/userInput"
 import { openExternal } from "@/lib/tauri"
 import type { ApprovalRequest } from "@/protocol"

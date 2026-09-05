@@ -26,8 +26,8 @@ export default defineConfig([
       'src/components/motion/**',
       'src/components/agents/**',
       'src/components/beui/**',
-      'src/components/synara/**',
-      'src/lib/synara/**',
+      'src/components/kit/**',
+      'src/lib/kit/**',
     ],
     rules: {
       'react-refresh/only-export-components': 'off',

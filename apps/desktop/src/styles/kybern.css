@@ -1,4 +1,4 @@
-/* Tauri shell additions on top of synara.css. */
+/* Tauri shell additions on top of kit.css. */
 
 :root {
   --composer-glass-surface: var(--composer-surface);
@@ -34,7 +34,7 @@ body {
   -webkit-user-select: text;
 }
 
-/* Split chat uses Synara's compact surface gutter. The transcript, composer,
+/* Split chat uses the kit's compact surface gutter. The transcript, composer,
    and header now share the same 12/20px edge instead of retaining the roomy
    single-thread reading inset. */
 .split-thread-pane {

@@ -305,7 +305,7 @@ fn contextual_command(binary: &std::path::Path, context: &ProbeContext) -> Comma
     command
 }
 
-/// Friendly names mirror T3Code's CLI-version-gated Claude manifest while the
+/// Friendly names follow a CLI-version-gated manifest while the
 /// selector itself remains exactly what Claude Code accepts.
 fn claude_model_name(selector: &str, cli_version: Option<&str>, alias_target: Option<&str>) -> String {
     let (base, context_suffix) =

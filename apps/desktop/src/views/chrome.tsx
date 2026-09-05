@@ -1,16 +1,16 @@
-// Shared header chrome, mirroring Synara's ChatHeader / chatHeaderControls:
+// Shared header chrome:
 // a 46px bar, 28px controls on one baseline, and the sidebar-toggle +
 // back/forward cluster that moves into the route header when the sidebar collapses.
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react"
 import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io"
 
-import { Button } from "@/components/synara/button"
-import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/synara/sidebar"
-import { Toggle } from "@/components/synara/toggle"
-import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/tooltip"
-import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/synara/desktopChrome"
-import { LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/synara/icons"
+import { Button } from "@/components/kit/button"
+import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/kit/sidebar"
+import { Toggle } from "@/components/kit/toggle"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
+import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
+import { LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
 import { mod } from "@/lib/format"
 import { isTauri, platform } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -125,7 +125,7 @@ const SIDEBAR_TRIGGER_CLASS_NAME = cn(
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 )
 
-/** Sidebar toggle + back/forward, as Synara's SidebarLeadingControls. */
+/** Sidebar toggle + back/forward. */
 export function SidebarLeadingControls({ className }: { className?: string }) {
   const { toggleSidebar } = useSidebar()
   return (
@@ -231,7 +231,7 @@ export function DockToggle() {
   )
 }
 
-/** Toggles the floating Environment card, as Synara's EnvironmentToggle. */
+/** Toggles the floating Environment card. */
 export function EnvironmentToggle() {
   const envOpen = useStore((s) => s.envOpen)
   const set = useStore((s) => s.set)

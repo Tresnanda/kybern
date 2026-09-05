@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { applyAppearance } from "@/lib/synara/applyTheme"
+import { applyAppearance } from "@/lib/kit/applyTheme"
 import { isTauri } from "@/lib/tauri"
 import { isTheme, ThemeProviderContext, type Theme } from "@/components/theme-context"
 
@@ -104,7 +104,7 @@ export function ThemeProvider({
         ? disableTransitionsTemporarily()
         : null
 
-      // Synara's runtime tokens (color math, density, typography) live on <html>.
+      // The kit's runtime tokens (color math, density, typography) live on <html>.
       applyAppearance(nextTheme)
       // The macOS window material (sidebar vibrancy) follows the NSWindow appearance,
       // not our CSS, so a light theme on a dark desktop kept a dark sidebar.

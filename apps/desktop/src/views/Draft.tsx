@@ -1,4 +1,4 @@
-// Home / new-thread landing, as Synara's centered empty landing: logo, the
+// Home / new-thread landing: logo, the
 // "What should we do in {project}?" heading with a dotted project picker, and
 // the composer anchored at the bottom with its controls tray.
 
@@ -6,11 +6,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 
 import { Logo } from "@/components/kybern/bits"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
-import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/synara/chat/composerPickerStyles"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
+import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
-import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, PaperclipIcon, SettingsIcon, WorktreeIcon } from "@/lib/synara/icons"
+import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, PaperclipIcon, SettingsIcon, WorktreeIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"

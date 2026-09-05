@@ -1,6 +1,6 @@
 import { useContext, useEffect, useState } from "react"
-import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "@/components/synara/dialog"
-import { Button } from "@/components/synara/button"
+import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
+import { Button } from "@/components/kit/button"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource } from "@/lib/responseImages"
 import { fetchThreadImage } from "@/state/rpc"

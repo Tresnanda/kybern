@@ -1,6 +1,6 @@
 import { ResponseImage } from "./ResponseImage"
 import { imageSource } from "@/lib/responseImages"
-// Chat markdown, styled by Synara's `.chat-markdown` rules (styles/synara.css).
+// Chat markdown, styled by the `.chat-markdown` rules (styles/kit.css).
 // Code blocks get the `.chat-markdown-codeblock` chrome: language label,
 // wrap toggle and copy action in the header, shiki-highlighted body.
 
@@ -10,7 +10,7 @@ import remarkGfm from "remark-gfm"
 
 import { useTheme } from "@/components/theme-context"
 import { copyText } from "@/lib/hooks"
-import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/synara/icons"
+import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 

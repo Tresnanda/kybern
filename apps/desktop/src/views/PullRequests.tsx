@@ -1,19 +1,19 @@
-// Pull requests list, to Synara's `_chat.pull-requests.index.tsx`: header
+// Pull requests list: header
 // with refresh, state filter pills and a project filter, rows grouped by
 // project with a state glyph, title, meta line and a relative timestamp.
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 
 import { Spinner } from "@/components/kybern/bits"
-import { Button } from "@/components/synara/button"
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/synara/empty"
-import { IconButton } from "@/components/synara/icon-button"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuTrigger } from "@/components/synara/menu"
+import { Button } from "@/components/kit/button"
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/kit/empty"
+import { IconButton } from "@/components/kit/icon-button"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuTrigger } from "@/components/kit/menu"
 import { relativeTime } from "@/lib/format"
 import { mapWithConcurrency } from "@/lib/workload"
-import { CentralIcon } from "@/lib/synara/central-icons"
-import { CheckIcon, FilterIcon, GitPullRequestIcon, RefreshCwIcon } from "@/lib/synara/icons"
+import { CentralIcon } from "@/lib/kit/central-icons"
+import { CheckIcon, FilterIcon, GitPullRequestIcon, RefreshCwIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { Project, ProjectId, PullRequest } from "@/protocol"

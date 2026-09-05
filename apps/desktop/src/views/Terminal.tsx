@@ -1,4 +1,4 @@
-// Terminal workspace for a thread, after Synara's TerminalViewportPane: a tab
+// Terminal workspace for a thread: a tab
 // strip of terminals (shells and agent CLIs) with identity icons, new-tab and
 // close actions, and one xterm + pty per tab that stays alive across tab
 // switches. Terminals render edge to edge on the surface colour.
@@ -11,13 +11,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
 import { useTheme } from "@/components/theme-context"
-import { IconButton } from "@/components/synara/icon-button"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
-import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/tooltip"
+import { IconButton } from "@/components/kit/icon-button"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { PROVIDER_LABEL } from "@/lib/format"
-import { CentralIcon } from "@/lib/synara/central-icons"
-import { Plus, TerminalSquareIcon, Trash2 } from "@/lib/synara/icons"
+import { CentralIcon } from "@/lib/kit/central-icons"
+import { Plus, TerminalSquareIcon, Trash2 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ProviderKind, TerminalExitedNotification, TerminalId, TerminalOutputNotification, ThreadId } from "@/protocol"
 import { TERMINAL_EXITED_NOTIFICATION, TERMINAL_OUTPUT_NOTIFICATION } from "@/protocol"
@@ -33,7 +33,7 @@ const EMPTY: never[] = []
 const TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} group/dock-tab inline-flex min-w-0 items-center pr-2.5`
 const TAB_ACTIVE = "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
 
-// Synara's terminal palette (terminalRuntimeAppearance.ts fallbacks); the background follows the app surface.
+// Terminal palette; the background follows the app surface.
 const DARK = {
   foreground: "rgb(237,241,247)",
   cursor: "rgb(180,203,255)",
@@ -310,7 +310,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       if (n.terminal_id !== idRef.current) return
       term.write(`\r\n\x1b[2m[process exited${n.exit_code != null ? ` with ${n.exit_code}` : ""}]\x1b[0m\r\n`)
       idRef.current = null
-      // A tab whose program ended closes itself, as in Synara's dock.
+      // A tab whose program ended closes itself.
       exitTimer = setTimeout(() => { if (!disposed) onExitRef.current() }, 600)
     })
     const titleSub = term.onTitleChange((raw) => {

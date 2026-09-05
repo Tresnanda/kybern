@@ -1,13 +1,13 @@
-// Unified diff renderer, styled after Synara's FileDiffCard: a sticky file
+// Unified diff renderer: a sticky file
 // header (icon, name, directory, +/- stats), then numbered rows with the
 // diff background tokens. Shared by the dock and the inline "Edited N files"
 // card in the transcript.
 
 import { useMemo, useState } from "react"
 
-import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
-import { DiffStatLabel } from "@/components/synara/chat/DiffStatLabel"
-import { FileEntryIcon } from "@/components/synara/chat/FileEntryIcon"
+import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
+import { DiffStatLabel } from "@/components/kit/chat/DiffStatLabel"
+import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
 import type { DiffHunk, FileDiff } from "@/lib/diff"
 import { basename } from "@/lib/format"
 import { cn } from "@/lib/utils"

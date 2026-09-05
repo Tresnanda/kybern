@@ -1,12 +1,12 @@
 // "Hand off to another agent": pick a provider, start a new thread seeded with
-// the conversation so far. Synara Dialog surface with picker-style rows.
+// the conversation so far. Dialog surface with picker-style rows.
 
 import { useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
-import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "@/components/synara/dialog"
-import { ArrowRightIcon } from "@/lib/synara/icons"
+import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "@/components/kit/dialog"
+import { ArrowRightIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { errorText, handOff } from "@/state/rpc"
 import { useStore } from "@/state/store"

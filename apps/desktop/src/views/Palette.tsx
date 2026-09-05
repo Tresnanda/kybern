@@ -1,4 +1,4 @@
-// Search palette (⌘K), built on Synara's Command primitives (Base UI
+// Search palette (⌘K), built on the Command primitives (Base UI
 // Autocomplete) and the SidebarSearchPalette row anatomy.
 
 import { useMemo } from "react"
@@ -6,12 +6,12 @@ import { useShallow } from "zustand/react/shallow"
 
 import { ProviderMark } from "@/components/kybern/bits"
 import { useTheme } from "@/components/theme-context"
-import { ThreadRunningSpinner } from "@/components/synara/ThreadRunningSpinner"
-import { Command, CommandCollection, CommandDialog, CommandDialogPopup, CommandEmpty, CommandGroup, CommandGroupLabel, CommandInput, CommandList, CommandPanel, CommandSeparator } from "@/components/synara/command"
-import { Kbd, KbdGroup } from "@/components/synara/kbd"
-import { AutocompleteItem } from "@/components/synara/autocomplete"
+import { ThreadRunningSpinner } from "@/components/kit/ThreadRunningSpinner"
+import { Command, CommandCollection, CommandDialog, CommandDialogPopup, CommandEmpty, CommandGroup, CommandGroupLabel, CommandInput, CommandList, CommandPanel, CommandSeparator } from "@/components/kit/command"
+import { Kbd, KbdGroup } from "@/components/kit/kbd"
+import { AutocompleteItem } from "@/components/kit/autocomplete"
 import { mod, relativeTime } from "@/lib/format"
-import { FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/synara/icons"
+import { FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { newThread } from "@/state/nav"
 import { loadThread } from "@/state/rpc"

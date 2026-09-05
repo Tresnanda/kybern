@@ -1,6 +1,6 @@
 import { activeRuntime } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
-// Environment panel, to Synara's EnvironmentPanel: a floating w-72 card
+// Environment panel: a floating w-72 card
 // docked at the right edge of the thread, toggled from the header. Rows use
 // the EnvironmentRow skin; sections can be hidden from the gear menu.
 
@@ -9,13 +9,13 @@ import { toast } from "sonner"
 
 import { Markdown } from "@/components/kybern/Markdown"
 import { Spinner } from "@/components/kybern/bits"
-import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
-import { DisclosureRegion } from "@/components/synara/DisclosureRegion"
-import { IconButton } from "@/components/synara/icon-button"
-import { ComposerPickerMenuPopup } from "@/components/synara/chat/ComposerPickerMenuPopup"
-import { DiffStat } from "@/components/synara/chat/DiffStatLabel"
-import { ENVIRONMENT_PANEL_MOTION_CLASS, ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "@/components/synara/chat/composerPickerStyles"
-import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/synara/menu"
+import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
+import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
+import { IconButton } from "@/components/kit/icon-button"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { DiffStat } from "@/components/kit/chat/DiffStatLabel"
+import { ENVIRONMENT_PANEL_MOTION_CLASS, ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
+import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { copyText, useLocalStorage } from "@/lib/hooks"
 import {
   ArrowUpRightIcon,
@@ -32,7 +32,7 @@ import {
   LayoutSidebarIcon,
   SettingsIcon,
   WorktreeIcon,
-} from "@/lib/synara/icons"
+} from "@/lib/kit/icons"
 import { openExternal, openPath, revealInFinder } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { ThreadId } from "@/protocol"

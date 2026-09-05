@@ -5,13 +5,10 @@ terminals and a file explorer for Claude Code, Codex, OpenCode, pi, Oh My Pi
 and Cursor, driven through their own protocols, from one Rust daemon and a
 Tauri + React desktop client.
 
-kybern is a reimplementation of the ideas in [T3 Code](https://github.com/pingdotgg/t3code)
-with a Rust daemon on each host. Desktop and mobile clients connect to a
-selected machine, which keeps its own projects, threads, and running agents.
-The desktop client's look follows
-[Synara](https://github.com/Emanuele-web04/synara) (MIT): its stylesheet,
-primitives and icon system are vendored under `apps/desktop/src/components/synara`
-and `apps/desktop/src/lib/synara`.
+kybern is inspired by [T3 Code](https://github.com/pingdotgg/t3code) and
+[Synara](https://github.com/Emanuele-web04/synara), with a Rust daemon on
+each host. Desktop and mobile clients connect to a selected machine, which
+keeps its own projects, threads, and running agents.
 
 ## Layout
 
@@ -89,7 +86,7 @@ builds do not self-update.
 The easiest path needs nothing on the machine but SSH access: in the desktop
 app choose **Switch environment → Add environment → Over SSH**, enter
 `user@host`, and Kybern installs the daemon, starts it, and pairs through a
-tunnel it manages. See [docs/remote-environments.md](docs/remote-environments.md).
+tunnel it manages.
 
 To set the machine up yourself instead, one command installs the daemon and the `kybern` CLI into `~/.cargo/bin`
 without Rust, Node or a desktop. Add `--service` on a Linux machine with systemd
@@ -175,10 +172,7 @@ For an existing HTTPS reverse proxy, supply its public address explicitly:
 kybernd --port 4173 --advertise-url https://kybern.example.com --pair
 ```
 
-This advertises the URL; it does not configure the proxy or TLS. See the
-[remote environments guide](docs/remote-environments.md) for proxy routes,
-direct interface binding, running the daemon after logout/reboot, device
-revocation, and custom data directories.
+This advertises the URL; it does not configure the proxy or TLS.
 
 ## Build from source
 
@@ -199,8 +193,7 @@ CLI. The standalone daemon and CLI builds remain available for headless and
 remote use.
 
 To connect to another machine, use the desktop environment menu. Each machine
-keeps its own projects and running work. The [remote environments guide](docs/remote-environments.md)
-covers pairing, Tailscale/HTTPS, SSH tunnels, credentials and reconnect behavior.
+keeps its own projects and running work.
 
 For development, run the web app with hot reload inside the Tauri window:
 
@@ -280,10 +273,6 @@ What works today, all verified end to end on macOS:
 - **CLI**: everything the daemon does, usable from scripts.
 - **Mobile**: Expo client scaffold in `apps/mobile`. Not yet run on a device.
 
-See `docs/architecture.md` for how the pieces fit and `docs/design.md` for
-the desktop design rules.
-
 ## License
 
-MIT. Synara's vendored UI code is MIT as well; see its license header notes
-in `apps/desktop/src/components/synara`.
+MIT.

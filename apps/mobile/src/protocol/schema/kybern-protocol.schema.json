@@ -331,6 +331,30 @@
         {
           "type": "object",
           "properties": {
+            "id": {
+              "type": "string"
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin"
+            },
+            "source": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "image_received"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "origin",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "message_id": {
               "type": "string",
               "format": "uuid"
@@ -501,6 +525,22 @@
           "required": [
             "kind",
             "task"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "approval": {
+              "$ref": "#/$defs/ApprovalRequest"
+            },
+            "kind": {
+              "type": "string",
+              "const": "user_input_requested"
+            }
+          },
+          "required": [
+            "kind",
+            "approval"
           ]
         },
         {
@@ -776,7 +816,7 @@
           ]
         },
         "PermissionMode": {
-          "description": "The four permission modes, mirroring T3 Code.",
+          "description": "The four permission modes.",
           "oneOf": [
             {
               "description": "Every tool call that mutates or executes asks for approval.",
@@ -963,6 +1003,33 @@
                 "type": {
                   "type": "string",
                   "const": "skill"
+                }
+              },
+              "required": [
+                "type",
+                "name",
+                "path"
+              ]
+            },
+            {
+              "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "const": "mention"
                 }
               },
               "required": [
@@ -1341,6 +1408,21 @@
         },
         "ApprovalDecision": {
           "oneOf": [
+            {
+              "description": "Answer a structured question or form using the provider-native payload.",
+              "type": "object",
+              "properties": {
+                "response": true,
+                "decision": {
+                  "type": "string",
+                  "const": "submit"
+                }
+              },
+              "required": [
+                "decision",
+                "response"
+              ]
+            },
             {
               "type": "object",
               "properties": {
@@ -1654,6 +1736,30 @@
             {
               "type": "object",
               "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "origin": {
+                  "$ref": "#/$defs/EventOrigin"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "image_received"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "origin",
+                "source"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
                 "message_id": {
                   "type": "string",
                   "format": "uuid"
@@ -1824,6 +1930,22 @@
               "required": [
                 "kind",
                 "task"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "approval": {
+                  "$ref": "#/$defs/ApprovalRequest"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "user_input_requested"
+                }
+              },
+              "required": [
+                "kind",
+                "approval"
               ]
             },
             {
@@ -2099,7 +2221,7 @@
           ]
         },
         "PermissionMode": {
-          "description": "The four permission modes, mirroring T3 Code.",
+          "description": "The four permission modes.",
           "oneOf": [
             {
               "description": "Every tool call that mutates or executes asks for approval.",
@@ -2286,6 +2408,33 @@
                 "type": {
                   "type": "string",
                   "const": "skill"
+                }
+              },
+              "required": [
+                "type",
+                "name",
+                "path"
+              ]
+            },
+            {
+              "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "const": "mention"
                 }
               },
               "required": [
@@ -2665,6 +2814,21 @@
         "ApprovalDecision": {
           "oneOf": [
             {
+              "description": "Answer a structured question or form using the provider-native payload.",
+              "type": "object",
+              "properties": {
+                "response": true,
+                "decision": {
+                  "type": "string",
+                  "const": "submit"
+                }
+              },
+              "required": [
+                "decision",
+                "response"
+              ]
+            },
+            {
               "type": "object",
               "properties": {
                 "decision": {
@@ -2895,7 +3059,7 @@
           ]
         },
         "PermissionMode": {
-          "description": "The four permission modes, mirroring T3 Code.",
+          "description": "The four permission modes.",
           "oneOf": [
             {
               "description": "Every tool call that mutates or executes asks for approval.",
@@ -2995,6 +3159,45 @@
       "title": "TranscriptEntry",
       "description": "Rendered transcript entries, projected from events by the daemon.",
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin"
+            },
+            "source": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "role",
+            "id",
+            "turn_id",
+            "seq",
+            "at",
+            "origin",
+            "source"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -3333,6 +3536,45 @@
         }
       ],
       "$defs": {
+        "EventOrigin": {
+          "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "root"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string"
+                },
+                "provider_thread_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "agent"
+                }
+              },
+              "required": [
+                "kind",
+                "task_id"
+              ]
+            }
+          ]
+        },
         "UserMessage": {
           "type": "object",
           "properties": {
@@ -3457,44 +3699,32 @@
                 "name",
                 "path"
               ]
-            }
-          ]
-        },
-        "EventOrigin": {
-          "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "root"
-                }
-              },
-              "required": [
-                "kind"
-              ]
             },
             {
+              "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
               "type": "object",
               "properties": {
-                "task_id": {
+                "name": {
                   "type": "string"
                 },
-                "provider_thread_id": {
+                "path": {
+                  "type": "string"
+                },
+                "display_name": {
                   "type": [
                     "string",
                     "null"
                   ]
                 },
-                "kind": {
+                "type": {
                   "type": "string",
-                  "const": "agent"
+                  "const": "mention"
                 }
               },
               "required": [
-                "kind",
-                "task_id"
+                "type",
+                "name",
+                "path"
               ]
             }
           ]
@@ -3579,6 +3809,21 @@
         },
         "ApprovalDecision": {
           "oneOf": [
+            {
+              "description": "Answer a structured question or form using the provider-native payload.",
+              "type": "object",
+              "properties": {
+                "response": true,
+                "decision": {
+                  "type": "string",
+                  "const": "submit"
+                }
+              },
+              "required": [
+                "decision",
+                "response"
+              ]
+            },
             {
               "type": "object",
               "properties": {
@@ -4046,7 +4291,7 @@
           ]
         },
         "PermissionMode": {
-          "description": "The four permission modes, mirroring T3 Code.",
+          "description": "The four permission modes.",
           "oneOf": [
             {
               "description": "Every tool call that mutates or executes asks for approval.",
@@ -4349,6 +4594,11 @@
           "description": "Show OS notifications when a turn ends or needs approval.",
           "type": "boolean",
           "default": true
+        },
+        "auto_update_harnesses": {
+          "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
+          "type": "boolean",
+          "default": false
         }
       },
       "$defs": {
@@ -4365,7 +4615,7 @@
           ]
         },
         "PermissionMode": {
-          "description": "The four permission modes, mirroring T3 Code.",
+          "description": "The four permission modes.",
           "oneOf": [
             {
               "description": "Every tool call that mutates or executes asks for approval.",
@@ -4571,15 +4821,24 @@
       ],
       "$defs": {
         "SkillScope": {
-          "type": "string",
-          "enum": [
-            "project",
-            "repo",
-            "user",
-            "system",
-            "admin",
-            "app",
-            "other"
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "project",
+                "repo",
+                "user",
+                "system",
+                "admin",
+                "app",
+                "other"
+              ]
+            },
+            {
+              "description": "A provider plugin or connector mentioned with `@name` rather than\ninvoked as a `$skill`.",
+              "type": "string",
+              "const": "plugin"
+            }
           ]
         }
       }
@@ -5226,7 +5485,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -5289,6 +5548,182 @@
             "required": [
               "id",
               "display_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "harness_updates.list",
+      "scope": "orchestration_read",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessUpdatesResult",
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/HarnessUpdate"
+            }
+          }
+        },
+        "required": [
+          "updates"
+        ],
+        "$defs": {
+          "HarnessUpdate": {
+            "description": "Last daemon-owned harness update attempt. Persisted across client reconnects.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/ProviderKind"
+              },
+              "status": {
+                "$ref": "#/$defs/HarnessUpdateStatus"
+              },
+              "message": {
+                "type": "string"
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "checked_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "kind",
+              "status",
+              "message"
+            ]
+          },
+          "ProviderKind": {
+            "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "opencode",
+              "pi",
+              "omp",
+              "cursor"
+            ]
+          },
+          "HarnessUpdateStatus": {
+            "type": "string",
+            "enum": [
+              "not_checked",
+              "waiting",
+              "updating",
+              "updated",
+              "current",
+              "unsupported",
+              "failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "harness_updates.run",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessUpdateParams",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ProviderKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "$defs": {
+          "ProviderKind": {
+            "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "opencode",
+              "pi",
+              "omp",
+              "cursor"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessUpdate",
+        "description": "Last daemon-owned harness update attempt. Persisted across client reconnects.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ProviderKind"
+          },
+          "status": {
+            "$ref": "#/$defs/HarnessUpdateStatus"
+          },
+          "message": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "kind",
+          "status",
+          "message"
+        ],
+        "$defs": {
+          "ProviderKind": {
+            "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "opencode",
+              "pi",
+              "omp",
+              "cursor"
+            ]
+          },
+          "HarnessUpdateStatus": {
+            "type": "string",
+            "enum": [
+              "not_checked",
+              "waiting",
+              "updating",
+              "updated",
+              "current",
+              "unsupported",
+              "failed"
             ]
           }
         }
@@ -5753,7 +6188,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -5955,7 +6390,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -6103,6 +6538,33 @@
                   "name",
                   "path"
                 ]
+              },
+              {
+                "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "mention"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "path"
+                ]
               }
             ]
           }
@@ -6226,7 +6688,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -6445,7 +6907,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -6497,6 +6959,45 @@
           "TranscriptEntry": {
             "description": "Rendered transcript entries, projected from events by the daemon.",
             "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "turn_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string",
+                    "const": "image"
+                  }
+                },
+                "required": [
+                  "role",
+                  "id",
+                  "turn_id",
+                  "seq",
+                  "at",
+                  "origin",
+                  "source"
+                ]
+              },
               {
                 "type": "object",
                 "properties": {
@@ -6835,6 +7336,45 @@
               }
             ]
           },
+          "EventOrigin": {
+            "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "root"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "provider_thread_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "agent"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "task_id"
+                ]
+              }
+            ]
+          },
           "UserMessage": {
             "type": "object",
             "properties": {
@@ -6959,44 +7499,32 @@
                   "name",
                   "path"
                 ]
-              }
-            ]
-          },
-          "EventOrigin": {
-            "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
-            "oneOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "root"
-                  }
-                },
-                "required": [
-                  "kind"
-                ]
               },
               {
+                "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
                 "type": "object",
                 "properties": {
-                  "task_id": {
+                  "name": {
                     "type": "string"
                   },
-                  "provider_thread_id": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "display_name": {
                     "type": [
                       "string",
                       "null"
                     ]
                   },
-                  "kind": {
+                  "type": {
                     "type": "string",
-                    "const": "agent"
+                    "const": "mention"
                   }
                 },
                 "required": [
-                  "kind",
-                  "task_id"
+                  "type",
+                  "name",
+                  "path"
                 ]
               }
             ]
@@ -7081,6 +7609,21 @@
           },
           "ApprovalDecision": {
             "oneOf": [
+              {
+                "description": "Answer a structured question or form using the provider-native payload.",
+                "type": "object",
+                "properties": {
+                  "response": true,
+                  "decision": {
+                    "type": "string",
+                    "const": "submit"
+                  }
+                },
+                "required": [
+                  "decision",
+                  "response"
+                ]
+              },
               {
                 "type": "object",
                 "properties": {
@@ -7447,7 +7990,7 @@
         ],
         "$defs": {
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -7591,7 +8134,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -7811,6 +8354,33 @@
                   "name",
                   "path"
                 ]
+              },
+              {
+                "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "mention"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "path"
+                ]
               }
             ]
           }
@@ -7979,6 +8549,33 @@
                   "type": {
                     "type": "string",
                     "const": "skill"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "path"
+                ]
+              },
+              {
+                "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "mention"
                   }
                 },
                 "required": [
@@ -8168,6 +8765,33 @@
                   "type": {
                     "type": "string",
                     "const": "skill"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "path"
+                ]
+              },
+              {
+                "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "mention"
                   }
                 },
                 "required": [
@@ -9207,7 +9831,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -9930,6 +10554,11 @@
             "description": "Show OS notifications when a turn ends or needs approval.",
             "type": "boolean",
             "default": true
+          },
+          "auto_update_harnesses": {
+            "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
+            "type": "boolean",
+            "default": false
           }
         },
         "$defs": {
@@ -9946,7 +10575,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -10078,6 +10707,11 @@
                 "description": "Show OS notifications when a turn ends or needs approval.",
                 "type": "boolean",
                 "default": true
+              },
+              "auto_update_harnesses": {
+                "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
+                "type": "boolean",
+                "default": false
               }
             }
           },
@@ -10094,7 +10728,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -10211,6 +10845,11 @@
             "description": "Show OS notifications when a turn ends or needs approval.",
             "type": "boolean",
             "default": true
+          },
+          "auto_update_harnesses": {
+            "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
+            "type": "boolean",
+            "default": false
           }
         },
         "$defs": {
@@ -10227,7 +10866,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -11267,15 +11906,24 @@
             ]
           },
           "SkillScope": {
-            "type": "string",
-            "enum": [
-              "project",
-              "repo",
-              "user",
-              "system",
-              "admin",
-              "app",
-              "other"
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "repo",
+                  "user",
+                  "system",
+                  "admin",
+                  "app",
+                  "other"
+                ]
+              },
+              {
+                "description": "A provider plugin or connector mentioned with `@name` rather than\ninvoked as a `$skill`.",
+                "type": "string",
+                "const": "plugin"
+              }
             ]
           }
         }
@@ -11298,6 +11946,21 @@
           "approval_id"
         ],
         "oneOf": [
+          {
+            "description": "Answer a structured question or form using the provider-native payload.",
+            "type": "object",
+            "properties": {
+              "response": true,
+              "decision": {
+                "type": "string",
+                "const": "submit"
+              }
+            },
+            "required": [
+              "decision",
+              "response"
+            ]
+          },
           {
             "type": "object",
             "properties": {
@@ -11738,6 +12401,30 @@
               {
                 "type": "object",
                 "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "origin": {
+                    "$ref": "#/$defs/EventOrigin"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "image_received"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id",
+                  "origin",
+                  "source"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
                   "message_id": {
                     "type": "string",
                     "format": "uuid"
@@ -11908,6 +12595,22 @@
                 "required": [
                   "kind",
                   "task"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "approval": {
+                    "$ref": "#/$defs/ApprovalRequest"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "user_input_requested"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "approval"
                 ]
               },
               {
@@ -12183,7 +12886,7 @@
             ]
           },
           "PermissionMode": {
-            "description": "The four permission modes, mirroring T3 Code.",
+            "description": "The four permission modes.",
             "oneOf": [
               {
                 "description": "Every tool call that mutates or executes asks for approval.",
@@ -12370,6 +13073,33 @@
                   "type": {
                     "type": "string",
                     "const": "skill"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "path"
+                ]
+              },
+              {
+                "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "mention"
                   }
                 },
                 "required": [
@@ -12748,6 +13478,21 @@
           },
           "ApprovalDecision": {
             "oneOf": [
+              {
+                "description": "Answer a structured question or form using the provider-native payload.",
+                "type": "object",
+                "properties": {
+                  "response": true,
+                  "decision": {
+                    "type": "string",
+                    "const": "submit"
+                  }
+                },
+                "required": [
+                  "decision",
+                  "response"
+                ]
+              },
               {
                 "type": "object",
                 "properties": {

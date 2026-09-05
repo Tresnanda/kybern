@@ -13,12 +13,12 @@ registerHooks({
 
 // Static imports would hoist above the hook, so these load after it.
 const { buildStructuredTextParts } = await import("./src/lib/composerTokens.ts")
-const { getAttachmentIconName, getFileIconName } = await import("./src/lib/synara/fileIcons.ts")
+const { getAttachmentIconName, getFileIconName } = await import("./src/lib/kit/fileIcons.ts")
 const { humanizeToolName, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolLine, toolVisualKind } = await import("./src/lib/toolActivity.ts")
 
 const call = (name, input) => ({ id: "tool-1", name, input })
 
-test("Synara file icons distinguish common project and attachment types", () => {
+test("File icons distinguish common project and attachment types", () => {
   assert.equal(getFileIconName("Cargo.toml"), "rust")
   assert.equal(getFileIconName("src/App.tsx"), "react")
   assert.equal(getFileIconName("docs/RTK.md"), "markdown")

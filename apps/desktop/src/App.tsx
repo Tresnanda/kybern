@@ -1,6 +1,6 @@
 import { SidebarLeadingControls } from "@/views/chrome"
 import { platform } from "@/lib/tauri"
-// App shell, mirroring Synara's `_chat.tsx` route: an offcanvas, resizable,
+// App shell: an offcanvas, resizable,
 // translucent left sidebar; a content card with a seam rail; the right dock.
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
@@ -10,8 +10,8 @@ import { toast } from "sonner"
 import { ChatPaneDropOverlay } from "@/components/kybern/ChatPaneDropOverlay"
 import { ErrorBoundary } from "@/components/kybern/ErrorBoundary"
 import { Logo, Spinner } from "@/components/kybern/bits"
-import { Button } from "@/components/synara/button"
-import { Sidebar, SidebarInset, SidebarProvider } from "@/components/synara/sidebar"
+import { Button } from "@/components/kit/button"
+import { Sidebar, SidebarInset, SidebarProvider } from "@/components/kit/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import { useHotkey, useResize } from "@/lib/hooks"
@@ -34,7 +34,7 @@ import { SurfaceHeader } from "@/views/chrome"
 
 const DOCK_MOTION = { type: "spring", stiffness: 420, damping: 42, mass: 0.7 } as const
 
-/** Synara opens the dock at half the shell, never narrower than 26rem; the seam is draggable. */
+/** The dock opens at half the shell, never narrower than 26rem; the seam is draggable. */
 const RIGHT_DOCK_MIN_WIDTH = 26 * 16
 function useDockWidth() {
   const [max, setMax] = useState(() => Math.max(RIGHT_DOCK_MIN_WIDTH, Math.round(window.innerWidth * 0.7)))

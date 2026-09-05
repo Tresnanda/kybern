@@ -14,3 +14,6 @@
 
 # Claude Code agent worktrees
 /.claude/worktrees/
+
+# Internal design notes and research.
+/docs/

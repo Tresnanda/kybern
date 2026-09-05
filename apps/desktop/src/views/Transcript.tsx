@@ -3,7 +3,7 @@ import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
 import { surfaceOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
 import { connectorApproval, isUserInput } from "@/lib/userInput"
-// Transcript pane, to Synara's ChatTranscriptPane / MessagesTimeline spec:
+// Transcript pane:
 // centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
@@ -16,16 +16,16 @@ import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { Markdown } from "@/components/kybern/Markdown"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { Spinner } from "@/components/kybern/bits"
-import { DisclosureChevron } from "@/components/synara/DisclosureChevron"
-import { DisclosureRegion } from "@/components/synara/DisclosureRegion"
-import { DiffStatLabel } from "@/components/synara/chat/DiffStatLabel"
-import { FileEntryIcon } from "@/components/synara/chat/FileEntryIcon"
-import { MessageActionButton } from "@/components/synara/chat/MessageActionButton"
-import { ReviewChangesButton } from "@/components/synara/chat/ReviewChangesButton"
+import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
+import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
+import { DiffStatLabel } from "@/components/kit/chat/DiffStatLabel"
+import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
+import { MessageActionButton } from "@/components/kit/chat/MessageActionButton"
+import { ReviewChangesButton } from "@/components/kit/chat/ReviewChangesButton"
 import {
   getChatMessageFooterTextStyle,
   getChatTranscriptTextStyle,
-} from "@/components/synara/chat/chatTypography"
+} from "@/components/kit/chat/chatTypography"
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
 import { isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
@@ -54,7 +54,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   WebSearchIcon,
-} from "@/lib/synara/icons"
+} from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { errorText, loadFileDiff, revertTo } from "@/state/rpc"
@@ -101,7 +101,7 @@ interface SettledWorkPresentation {
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
 }
 
-/** Formats a duration the way Synara's formatClockDuration does. */
+/** Formats a duration as a clock-style duration. */
 function clockDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
   if (s < 60) return `${s}s`
