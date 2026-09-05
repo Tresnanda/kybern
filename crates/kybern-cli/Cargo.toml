@@ -7,10 +7,6 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[[bin]]
-name = "kybern"
-path = "src/main.rs"
-
 [dependencies]
 kybern-protocol.workspace = true
 kybern-client.workspace = true

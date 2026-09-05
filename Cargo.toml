@@ -8,6 +8,7 @@ members = [
   "crates/kybern-daemon",
   "crates/kybern-client",
   "crates/kybern-cli",
+  "crates/kybern",
   "apps/desktop/src-tauri",
 ]
 
@@ -24,6 +25,8 @@ kybern-store = { path = "crates/kybern-store" }
 kybern-drivers = { path = "crates/kybern-drivers" }
 kybern-git = { path = "crates/kybern-git" }
 kybern-client = { path = "crates/kybern-client" }
+kybern-daemon = { path = "crates/kybern-daemon" }
+kybern-cli = { path = "crates/kybern-cli" }
 
 agent-client-protocol = "=2.0.0"
 anyhow = "1.0.104"

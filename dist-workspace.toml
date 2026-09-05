@@ -1,6 +1,7 @@
 # Config for `dist` (cargo-dist): https://axodotdev.github.io/cargo-dist/
 #
-# Builds and publishes the daemon (`kybernd`) and the CLI (`kybern`).
+# Builds and publishes the `kybern` package: one archive per target that holds
+# both the daemon (`kybernd`) and the CLI (`kybern`), plus one installer.
 # The Tauri desktop app is not distributed through dist; it is built by
 # .github/workflows/desktop.yml (macOS via scripts/bundle-macos.sh, Linux and
 # Windows via `pnpm tauri build`), which dist runs as a post-announce job. That
@@ -15,8 +16,8 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
-# Default every package to "do not distribute"; the crates that ship (kybern-daemon,
-# kybern-cli) opt back in with `dist = true` in their own crates/<name>/dist.toml.
+# Default every package to "do not distribute"; crates/kybern opts back in with
+# `dist = true` in its own dist.toml.
 # (The `packages = [...]` allow-list is not honoured by dist 0.32 for Cargo workspaces.)
 dist = false
 # The installers to generate for each app
@@ -36,9 +37,10 @@ hosting = ["github"]
 precise-builds = true
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
-# Ship `kybernd-update` / `kybern-update` next to each binary so daemon-only
-# machines can upgrade in place from GitHub Releases.
-install-updater = true
+# No separate self-update binaries: rerunning the installer upgrades in place.
+install-updater = false
+# GitHub already offers the source for every tag.
+source-tarball = false
 # Build the desktop bundles after the GitHub Release exists and upload them there
 post-announce-jobs = ["./desktop"]
 github-custom-job-permissions = { "desktop" = { contents = "write" } }

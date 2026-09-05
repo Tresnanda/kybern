@@ -82,8 +82,9 @@ fn write_startup_announcement(paths: &config::Paths, id: &str, port: u16) -> Res
     Ok(())
 }
 
+/// Run the daemon with the process arguments. `kybernd` is a thin wrapper around this.
 #[tokio::main]
-async fn main() -> Result<()> {
+pub async fn run() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,kybern=debug")))
         .with_target(true)

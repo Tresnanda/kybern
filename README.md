@@ -17,6 +17,7 @@ keeps its own projects, threads, and running agents.
 | `crates/kybern-protocol` | Wire types. JSON-RPC 2.0 over WebSocket, scoped tokens, the event-sourced thread model. `kybern-schema` dumps JSON Schema for non-Rust clients. |
 | `crates/kybern-store` | SQLite persistence (WAL, event log, projections). |
 | `crates/kybern-drivers` | One native driver per agent: Claude Code, Codex, OpenCode, pi, Oh My Pi, Cursor. |
+| `crates/kybern` | The shipped package: builds the `kybernd` and `kybern` binaries from the two crates below. |
 | `crates/kybern-daemon` | `kybernd`. Owns provider processes, threads, approvals, terminals and project files; serves clients on a loopback port with bearer tokens. |
 | `crates/kybern-cli` | `kybern`. Command-line client and the integration harness for every driver. |
 | `crates/kybern-client` | Shared WebSocket client used by the CLI and the desktop shell. |
@@ -97,16 +98,14 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/Tresnanda/kybern/releases/latest/download/kybern-remote-install.sh | sh -s -- --service
 ```
 
-Other options: `--daemon-only` skips the CLI, `--version 0.2.0` pins a release,
-`--port` and `--bind` set the service's listener (default `127.0.0.1:4173`).
-The release page also has the individual `kybern-daemon-installer.sh`,
-`kybern-cli-installer.sh` and PowerShell installers, plus archives for macOS
-(Apple silicon/Intel), Linux (x86_64/arm64 musl) and Windows (x86_64). Upgrade
-in place later with `kybern-daemon-update` and `kybern-cli-update`.
+Other options: `--version 0.2.0` pins a release, `--port` and `--bind` set the
+service's listener (default `127.0.0.1:4173`). The release page also has
+`kybern-installer.sh`, its PowerShell twin, and one `kybern-<target>` archive
+per platform holding both binaries: macOS (Apple silicon/Intel), Linux
+(x86_64/arm64 musl) and Windows (x86_64). Run the installer again to upgrade.
 
-From a checkout, `cargo install --locked --path crates/kybern-daemon` (and
-`crates/kybern-cli`) builds the same binaries with stable Rust and your
-platform's native build tools.
+From a checkout, `cargo install --locked --path crates/kybern` builds the same
+binaries with stable Rust and your platform's native build tools.
 
 #### Connect over Tailscale
 
@@ -180,7 +179,7 @@ Needs stable Rust 1.88 or newer (`rust-toolchain.toml` picks it up), Node 22
 and pnpm 11 (`corepack enable`).
 
 ```sh
-cargo build --release -p kybern-daemon -p kybern-cli   # target/release/{kybernd,kybern}
+cargo build --release -p kybern   # target/release/{kybernd,kybern}
 
 cd apps/desktop
 pnpm install --frozen-lockfile

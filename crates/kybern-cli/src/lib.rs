@@ -337,8 +337,9 @@ fn parse_mode(s: &str) -> Result<PermissionMode, String> {
         .map_err(|_| format!("unknown mode {s}; use supervised|accept-edits|auto|full-access"))
 }
 
+/// Run the CLI with the process arguments. `kybern` is a thin wrapper around this.
 #[tokio::main]
-async fn main() -> Result<()> {
+pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let client = Client::connect(&ep).await?;

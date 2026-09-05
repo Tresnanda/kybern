@@ -11,7 +11,7 @@ Requirements: Node 20+, pnpm 11 (`corepack enable`), Expo Go on the phone.
 ```sh
 # 1. On the machine with your projects, start the daemon reachable from the LAN
 #    or Tailscale (it binds to loopback by default).
-cargo run -p kybern-daemon -- --bind <private-interface-ip> --port 4173
+cargo run -p kybern --bin kybernd -- --bind <private-interface-ip> --port 4173
 kybern pair                       # one-use code, expires in ten minutes
 
 # 2. Start the app

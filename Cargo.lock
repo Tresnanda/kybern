@@ -2666,6 +2666,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kybern"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "kybern-cli",
+ "kybern-daemon",
+]
+
+[[package]]
 name = "kybern-cli"
 version = "0.1.1"
 dependencies = [

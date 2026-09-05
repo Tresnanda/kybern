@@ -1,3 +1,0 @@
-# dist (cargo-dist) package config: opt this crate into distribution.
-[dist]
-dist = true
