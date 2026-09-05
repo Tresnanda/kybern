@@ -54,6 +54,9 @@ fn main() {
     method::<ProvidersList>(&mut methods);
     method::<HarnessUpdatesList>(&mut methods);
     method::<HarnessUpdatesRun>(&mut methods);
+    method::<DaemonUpdateStatusMethod>(&mut methods);
+    method::<DaemonUpdateCheck>(&mut methods);
+    method::<DaemonUpdateRun>(&mut methods);
     method::<ProjectsList>(&mut methods);
     method::<ProjectsBrowse>(&mut methods);
     method::<ProjectsAdd>(&mut methods);

@@ -210,6 +210,71 @@ fn daemon_binary() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("kybernd not found next to the app or on PATH"))
 }
 
+/// PATH for the daemon and every agent CLI it starts. An app launched from
+/// Finder or the Dock inherits only the system directories, so `claude`,
+/// `codex` and friends under ~/.local/bin, Homebrew or a Node version manager
+/// would be invisible. Ask the user's login shell once, then fall back to the
+/// usual locations, keeping whatever PATH we already have.
+fn daemon_path() -> std::ffi::OsString {
+    static RESOLVED: std::sync::OnceLock<std::ffi::OsString> = std::sync::OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            let current = std::env::var("PATH").unwrap_or_default();
+            let home = std::env::var("HOME").ok().map(PathBuf::from);
+            let mut entries: Vec<PathBuf> = Vec::new();
+            let mut push = |entry: PathBuf| {
+                if !entry.as_os_str().is_empty() && !entries.contains(&entry) {
+                    entries.push(entry);
+                }
+            };
+            for entry in login_shell_path().unwrap_or_default().split(':') {
+                push(PathBuf::from(entry));
+            }
+            if let Some(home) = &home {
+                for relative in [".local/bin", ".cargo/bin", ".bun/bin"] {
+                    push(home.join(relative));
+                }
+                // The Node version manager's active toolchain, when it has one.
+                if let Ok(node) = std::fs::read_link(home.join(".nvm/current")) {
+                    push(node.join("bin"));
+                }
+            }
+            for system in ["/opt/homebrew/bin", "/usr/local/bin"] {
+                push(PathBuf::from(system));
+            }
+            for entry in current.split(':') {
+                push(PathBuf::from(entry));
+            }
+            std::env::join_paths(entries).unwrap_or_else(|_| current.into())
+        })
+        .clone()
+}
+
+/// The PATH the user's interactive login shell exports, or None when the
+/// shell is missing, misbehaves, or takes more than a few seconds.
+fn login_shell_path() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let shell = std::env::var("SHELL").ok().filter(|shell| Path::new(shell).is_file())?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output =
+                std::process::Command::new(shell).args(["-ilc", "printf '%s' \"$PATH\""]).stdin(std::process::Stdio::null()).output();
+            let _ = tx.send(
+                output
+                    .ok()
+                    .filter(|output| output.status.success())
+                    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string()),
+            );
+        });
+        rx.recv_timeout(Duration::from_secs(5)).ok().flatten().filter(|path| !path.is_empty())
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 fn spawn_daemon(startup_id: &str) -> Result<std::process::Child> {
     let bin = daemon_binary()?;
     let root = data_dir();
@@ -217,6 +282,7 @@ fn spawn_daemon(startup_id: &str) -> Result<std::process::Child> {
     // plugin: shell-plugin children are killed with the app, while kybernd is
     // shared by the CLI and mobile clients and intentionally outlives it.
     let mut cmd = std::process::Command::new(&bin);
+    cmd.env("PATH", daemon_path());
     if let Some(r) = &root {
         std::fs::create_dir_all(r)?;
         cmd.arg("--data-dir").arg(r);

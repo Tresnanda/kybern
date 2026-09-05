@@ -119,7 +119,13 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 ```
 
 Other options: `--version 0.2.0` pins a release, `--port` and `--bind` set the
-service's listener (default `127.0.0.1:4173`). The release page also has
+service's listener (default `127.0.0.1:4173`).
+
+A remote daemon updates itself: **Settings → Agents → Updates** on the desktop
+shows its version, checks the release feed, and installs the newest version
+once nothing is running, restarting it under its service manager. Turn on
+**Update the daemon automatically** there for a daily check. The same is
+available headless as `kybern daemon-update --check` and `--run`. The release page also has
 `kybern-installer.sh`, its PowerShell twin, and one `kybern-<target>` archive
 per platform holding both binaries: macOS (Apple silicon/Intel), Linux
 (x86_64/arm64 musl) and Windows (x86_64). Run the installer again to upgrade.

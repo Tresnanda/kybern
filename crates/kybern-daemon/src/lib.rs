@@ -13,6 +13,7 @@ mod power;
 #[cfg(test)]
 mod remote_tests;
 mod rpc;
+mod self_update;
 mod settings;
 mod skills;
 mod state;
@@ -92,6 +93,7 @@ pub async fn run() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    widen_path();
     let paths = config::Paths::resolve(args.data_dir)?;
     let state = state::AppState::initialize(&paths)?;
 
@@ -112,6 +114,7 @@ pub async fn run() -> Result<()> {
     if let Some(startup_id) = &args.desktop_startup_id {
         write_startup_announcement(&paths, startup_id, addr.port())?;
     }
+    state.desktop_managed.store(args.desktop_startup_id.is_some(), std::sync::atomic::Ordering::SeqCst);
 
     // Recovery may need to close interrupted turns and capture final snapshots.
     // Keep the port reserved while it runs, but do not serve requests or publish
@@ -119,6 +122,7 @@ pub async fn run() -> Result<()> {
     state.orchestrator.recover_after_restart().await?;
 
     let update_worker = tokio::spawn(harness_updates::run(state.clone()));
+    let self_update_worker = tokio::spawn(self_update::run(state.clone()));
     let maintenance_worker = tokio::spawn(maintenance::run(state.clone(), !args.pair));
     let queue_state = state.clone();
     let queue_worker = tokio::spawn(async move {
@@ -180,10 +184,40 @@ pub async fn run() -> Result<()> {
     queue_worker.abort();
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
+    let _ = self_update_worker.await;
     state.orchestrator.shutdown().await;
     state.terminals.shutdown().await;
     release_endpoint_files(&paths, addr);
+    if state.restart_pending.load(std::sync::atomic::Ordering::SeqCst) {
+        self_update::restart(&paths.root.join("daemon.log"));
+    }
     Ok(())
+}
+
+/// Agent CLIs usually live in per-user directories that a service manager or a
+/// GUI launcher leaves off PATH. Append the usual ones so `claude`, `codex` and
+/// friends resolve without a binary override, keeping the inherited order first.
+fn widen_path() {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries: Vec<std::path::PathBuf> = std::env::split_paths(&current).collect();
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from);
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(home) = &home {
+        candidates.extend([".local/bin", ".cargo/bin", ".bun/bin"].map(|relative| home.join(relative)));
+        if let Ok(node) = std::fs::read_link(home.join(".nvm/current")) {
+            candidates.push(node.join("bin"));
+        }
+    }
+    candidates.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(std::path::PathBuf::from));
+    for candidate in candidates {
+        if candidate.is_dir() && !entries.contains(&candidate) {
+            entries.push(candidate);
+        }
+    }
+    if let Ok(joined) = std::env::join_paths(entries) {
+        // SAFETY: called once at startup before any thread is spawned.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
 }
 
 /// Remove the port and listen files on exit, but only while they still name

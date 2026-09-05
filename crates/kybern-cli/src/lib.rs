@@ -50,6 +50,15 @@ enum Cmd {
         #[arg(long)]
         run: Option<ProviderKind>,
     },
+    /// Show the daemon's own update state, check the release feed, or install the newest version when idle.
+    DaemonUpdate {
+        /// Ask the release feed for the newest version.
+        #[arg(long)]
+        check: bool,
+        /// Install the newest version once nothing is running, then restart the daemon.
+        #[arg(long)]
+        run: bool,
+    },
     /// Manage projects.
     Projects {
         #[command(subcommand)]
@@ -382,6 +391,16 @@ pub async fn run() -> Result<()> {
                 let result = client.call::<HarnessUpdatesList>(Empty {}).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
+        }
+        Cmd::DaemonUpdate { check, run } => {
+            let result = if run {
+                client.call::<DaemonUpdateRun>(Empty {}).await?
+            } else if check {
+                client.call::<DaemonUpdateCheck>(Empty {}).await?
+            } else {
+                client.call::<DaemonUpdateStatusMethod>(Empty {}).await?
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Projects { cmd } => match cmd {
             ProjectsCmd::List => {

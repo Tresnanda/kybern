@@ -32,6 +32,11 @@ pub struct Inner {
     pub settings: SettingsStore,
     pub provider_catalogs: ProviderCatalogCache,
     pub harness_updates: crate::harness_updates::HarnessUpdates,
+    pub daemon_updates: crate::self_update::DaemonUpdates,
+    /// Started by the desktop app, whose bundle owns this binary.
+    pub desktop_managed: std::sync::atomic::AtomicBool,
+    /// A newer binary is in place; hand over to it after the graceful shutdown.
+    pub restart_pending: std::sync::atomic::AtomicBool,
     pub pairing: Pairing,
     pub tickets: crate::access::Tickets,
     pub revoked_tokens: broadcast::Sender<uuid::Uuid>,
@@ -85,6 +90,7 @@ impl AppState {
         let drivers = DriverRegistry::with_defaults();
         let settings = SettingsStore::load(&paths.settings)?;
         let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;
+        let daemon_updates = crate::self_update::DaemonUpdates::new(&store)?;
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone());
         Ok(Self {
             inner: Arc::new(Inner {
@@ -97,6 +103,9 @@ impl AppState {
                 settings,
                 provider_catalogs: ProviderCatalogCache::default(),
                 harness_updates,
+                daemon_updates,
+                desktop_managed: std::sync::atomic::AtomicBool::new(false),
+                restart_pending: std::sync::atomic::AtomicBool::new(false),
                 pairing: Pairing::default(),
                 tickets: crate::access::Tickets::default(),
                 revoked_tokens: broadcast::channel(128).0,

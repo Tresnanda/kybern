@@ -109,6 +109,12 @@ pub struct HarnessUpdateParams {
 }
 method!(HarnessUpdatesRun, "harness_updates.run", Some(Scope::OrchestrationOperate), HarnessUpdateParams, HarnessUpdate);
 
+// `check` asks the release feed without installing; `run` installs the newest
+// version once nothing is running, then restarts the daemon.
+method!(DaemonUpdateStatusMethod, "daemon_update.status", Some(Scope::OrchestrationRead), Empty, DaemonUpdate);
+method!(DaemonUpdateCheck, "daemon_update.check", Some(Scope::OrchestrationOperate), Empty, DaemonUpdate);
+method!(DaemonUpdateRun, "daemon_update.run", Some(Scope::OrchestrationOperate), Empty, DaemonUpdate);
+
 // ---- projects ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -885,6 +891,9 @@ registry!(
     ProvidersList,
     HarnessUpdatesList,
     HarnessUpdatesRun,
+    DaemonUpdateStatusMethod,
+    DaemonUpdateCheck,
+    DaemonUpdateRun,
     ProjectsList,
     ProjectsBrowse,
     ProjectsAdd,

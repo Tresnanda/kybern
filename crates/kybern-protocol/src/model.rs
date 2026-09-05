@@ -839,6 +839,9 @@ pub struct Settings {
     pub notifications: bool,
     /// Check installed harnesses daily and update them when idle. Opt-in per environment.
     pub auto_update_harnesses: bool,
+    /// Check the release feed daily and replace this daemon when idle. Opt-in
+    /// per environment; ignored for a daemon the desktop app manages.
+    pub auto_update_daemon: bool,
     /// How the daemon trims CPU and memory while nothing needs it.
     pub background: BackgroundSettings,
     /// Which networks other devices can reach this daemon on.
@@ -866,6 +869,7 @@ impl Default for Settings {
             providers: Default::default(),
             notifications: true,
             auto_update_harnesses: false,
+            auto_update_daemon: false,
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
         }
@@ -1037,6 +1041,34 @@ pub enum HarnessUpdateStatus {
     Updating,
     Updated,
     Current,
+    Unsupported,
+    Failed,
+}
+
+/// The daemon's own update state. The daemon replaces its binary from the
+/// GitHub release feed and restarts under its service manager; persisted so
+/// clients see the same record after a reconnect or the restart itself.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DaemonUpdate {
+    pub status: DaemonUpdateStatus,
+    pub message: String,
+    /// Version of the running daemon.
+    pub current_version: String,
+    /// Newest published version, once a check has succeeded.
+    pub latest_version: Option<String>,
+    pub checked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonUpdateStatus {
+    NotChecked,
+    Checking,
+    Current,
+    Available,
+    Waiting,
+    Updating,
+    Restarting,
     Unsupported,
     Failed,
 }

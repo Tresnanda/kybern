@@ -8,6 +8,9 @@ expression: names
 - providers.list
 - harness_updates.list
 - harness_updates.run
+- daemon_update.status
+- daemon_update.check
+- daemon_update.run
 - projects.list
 - projects.browse
 - projects.add

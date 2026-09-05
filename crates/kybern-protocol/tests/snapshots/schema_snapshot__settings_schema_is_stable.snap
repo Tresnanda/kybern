@@ -72,6 +72,11 @@ expression: schema_for!(Settings)
       "type": "boolean",
       "default": false
     },
+    "auto_update_daemon": {
+      "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
+      "type": "boolean",
+      "default": false
+    },
     "background": {
       "description": "How the daemon trims CPU and memory while nothing needs it.",
       "$ref": "#/$defs/BackgroundSettings",

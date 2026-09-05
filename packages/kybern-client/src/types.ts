@@ -797,6 +797,7 @@ export interface Settings {
   providers: Partial<Record<ProviderKind, ProviderSettings>>;
   notifications: boolean;
   auto_update_harnesses: boolean;
+  auto_update_daemon: boolean;
   background: BackgroundSettings;
   access: AccessSettings;
 }
@@ -1027,6 +1028,9 @@ export interface Methods {
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];
+  "daemon_update.status": [Empty, DaemonUpdate];
+  "daemon_update.check": [Empty, DaemonUpdate];
+  "daemon_update.run": [Empty, DaemonUpdate];
   "files.search": [FilesSearchParams, FilesSearchResult];
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
@@ -1082,6 +1086,13 @@ export type MethodName = keyof Methods;
 export type ParamsOf<M extends MethodName> = Methods[M][0];
 export type ResultOf<M extends MethodName> = Methods[M][1];
 
+export interface DaemonUpdate {
+  status: "not_checked" | "checking" | "current" | "available" | "waiting" | "updating" | "restarting" | "unsupported" | "failed";
+  message: string;
+  current_version: string;
+  latest_version: string | null;
+  checked_at: DateTime | null;
+}
 export interface HarnessUpdate {
   kind: ProviderKind;
   status: "not_checked" | "waiting" | "updating" | "updated" | "current" | "unsupported" | "failed";

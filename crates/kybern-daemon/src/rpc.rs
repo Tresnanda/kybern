@@ -98,6 +98,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             tokio::spawn(crate::harness_updates::tick(state.clone()));
             ok(record)
         }
+        DaemonUpdateStatusMethod::NAME => ok(state.daemon_updates.get()),
+        DaemonUpdateCheck::NAME => ok(crate::self_update::check(state).await),
+        DaemonUpdateRun::NAME => {
+            let record = state.daemon_updates.request(&state.store);
+            tokio::spawn(crate::self_update::tick(state.clone()));
+            ok(record)
+        }
         ProjectsList::NAME => ok(ProjectsListResult { projects: state.store.projects_list().map_err(internal)? }),
         ProjectsBrowse::NAME => {
             let p: ProjectsBrowseParams = parse_or_default(params)?;
