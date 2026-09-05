@@ -199,12 +199,40 @@ fn collect(bound: SocketAddr, mut interfaces: Vec<IpAddr>, status: &Value, serve
 
 /// Run on explicit pairing requests so network changes are picked up without
 /// restarting the daemon, and ordinary desktop boot never waits on discovery.
-pub async fn endpoints(bound: SocketAddr) -> Vec<String> {
+/// Listeners on a real network come before loopback so an invitation leads
+/// with an address another device can use.
+pub async fn endpoints(bounds: &[SocketAddr]) -> Vec<String> {
     let (interfaces, status, serve) =
         tokio::join!(interfaces(), tailscale(&["status", "--json", "--peers=false"]), tailscale(&["serve", "status", "--json"]));
     let status = status.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or(Value::Null);
     let serve = serve.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or(Value::Null);
-    collect(bound, interfaces, &status, &serve)
+    let mut ordered: Vec<SocketAddr> = bounds.to_vec();
+    ordered.sort_by_key(|bound| bound.ip().is_loopback());
+    let mut out: Vec<String> = vec![];
+    for bound in ordered {
+        for endpoint in collect(bound, interfaces.clone(), &status, &serve) {
+            if !out.contains(&endpoint) {
+                out.push(endpoint);
+            }
+        }
+    }
+    out
+}
+
+/// The Tailscale IPv4 address this host can bind: Tailscale must be running
+/// and the address must belong to a real interface (userspace networking
+/// mode has none).
+pub async fn tailscale_ip() -> Option<IpAddr> {
+    let (interfaces, status) = tokio::join!(interfaces(), tailscale(&["status", "--json", "--peers=false"]));
+    let status: Value = status.and_then(|text| serde_json::from_str(&text).ok())?;
+    if status["BackendState"] != "Running" {
+        return None;
+    }
+    status["TailscaleIPs"]
+        .as_array()?
+        .iter()
+        .filter_map(|value| value.as_str()?.parse::<IpAddr>().ok())
+        .find(|ip| ip.is_ipv4() && interfaces.contains(ip))
 }
 
 #[cfg(test)]

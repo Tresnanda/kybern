@@ -522,6 +522,27 @@ pub struct PairingCreateResult {
 }
 method!(PairingCreate, "access.pairing.create", Some(Scope::AccessWrite), PairingCreateParams, PairingCreateResult);
 
+/// Which networks the daemon listens on besides loopback.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Exposure {
+    /// This machine's Tailscale IPv4 address when Tailscale is running and
+    /// the daemon could bind it; `None` when Tailscale is absent or userspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale_ip: Option<String>,
+    /// Whether the daemon currently listens on the Tailscale address.
+    pub tailscale: bool,
+    /// Every address the daemon listens on, loopback included.
+    pub listeners: Vec<String>,
+}
+method!(ExposureGet, "access.exposure.get", Some(Scope::AccessRead), Empty, Exposure);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ExposureSetParams {
+    /// Listen on the Tailscale address as well. Persisted in settings.
+    pub tailscale: bool,
+}
+method!(ExposureSet, "access.exposure.set", Some(Scope::AccessWrite), ExposureSetParams, Exposure);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TokenInfo {
     pub id: uuid::Uuid,
@@ -897,6 +918,8 @@ registry!(
     SettingsUpdate,
     UsageSummary,
     PairingCreate,
+    ExposureGet,
+    ExposureSet,
     TokensList,
     TokensRevoke,
     GitStatusMethod,

@@ -55,6 +55,13 @@ export async function notify(title: string, body: string): Promise<boolean> {
   } catch { return false }
 }
 
+/** SVG QR code for a `kybern://pair` invitation, or null outside the shell. */
+export async function pairingQr(invitation: string): Promise<string | null> {
+  if (!isTauri()) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string>("pairing_qr", { invitation })
+}
+
 export async function openExternal(url: string): Promise<void> {
   if (isTauri()) {
     const { openUrl } = await import("@tauri-apps/plugin-opener")

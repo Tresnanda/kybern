@@ -154,6 +154,10 @@ enum Cmd {
         /// Address reachable from the receiving device (e.g. an HTTPS proxy or SSH tunnel).
         #[arg(long)]
         address: Option<String>,
+        /// Also listen on this machine's Tailscale address (remembered across restarts),
+        /// so devices on the tailnet can scan the invitation and connect directly.
+        #[arg(long)]
+        tailscale: bool,
     },
     /// List or revoke access tokens.
     Tokens {
@@ -605,10 +609,16 @@ pub async fn run() -> Result<()> {
             let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
         }
-        Cmd::Pair { label, address } => {
+        Cmd::Pair { label, address, tailscale } => {
             // Validate before minting a code, so a typo doesn't waste an invitation.
             let address = address.map(|value| kybern_client::address::normalize(&value)).transpose()?;
             let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
+            if tailscale {
+                let exposure = client.call::<ExposureSet>(ExposureSetParams { tailscale: true }).await?;
+                if !json {
+                    eprintln!("Listening on {}", exposure.listeners.join(", "));
+                }
+            }
             let mut pairing = client.call::<PairingCreate>(PairingCreateParams { label }).await?;
             if let Some(address) = address {
                 pairing.endpoints = vec![address];

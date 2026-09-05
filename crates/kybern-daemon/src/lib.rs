@@ -2,6 +2,7 @@ mod access;
 mod auth;
 mod config;
 mod discovery;
+mod exposure;
 mod files;
 mod github;
 mod harness_updates;
@@ -151,6 +152,13 @@ pub async fn run() -> Result<()> {
     tracing::info!(%addr, data_dir = %paths.root.display(), "kybernd listening");
     std::fs::write(paths.root.join("daemon.listen"), addr.to_string())?;
     std::fs::write(&paths.port_file, addr.port().to_string())?;
+
+    state.exposure.attach(app.clone()).await;
+    if state.settings.get().access.tailscale
+        && let Err(error) = state.exposure.set_tailscale(addr, true).await
+    {
+        tracing::warn!(%error, "could not listen on Tailscale; pairing stays loopback-only until it is enabled again");
+    }
 
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;

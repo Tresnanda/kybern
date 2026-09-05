@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/kit/button"
 import { Input } from "@/components/kit/input"
+import { Switch } from "@/components/kit/switch"
 import {
   Dialog,
   DialogDescription,
@@ -38,7 +39,7 @@ import {
   type BootstrapStep,
   type EnvironmentProfile,
 } from "@/lib/environments"
-import { isTauri } from "@/lib/tauri"
+import { isTauri, pairingQr } from "@/lib/tauri"
 import {
   parsePairingInvitation,
   pairingInvitation,
@@ -54,7 +55,7 @@ import {
 } from "@/state/environments"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import type { PairingCreateResult, TokenInfo } from "@/protocol"
+import type { Exposure, PairingCreateResult, TokenInfo } from "@/protocol"
 import {
   ENVIRONMENT_DIALOG,
   ENVIRONMENT_HINT,
@@ -768,15 +769,54 @@ function ManageEnvironments({
   )
 }
 
+/**
+ * The address another device should use: the daemon's Tailscale listener
+ * first, then any other network address it reports, then the address this
+ * desktop itself connected with when that is not a loopback tunnel.
+ */
+function suggestedAddress(
+  endpoints: string[],
+  exposure: Exposure | null,
+  profileUrl: string | null | undefined
+) {
+  const remote = endpoints.filter((url) => !isLoopbackAddress(url))
+  const tailscale = exposure?.tailscale_ip
+    ? remote.find((url) => url.includes(exposure.tailscale_ip!))
+    : undefined
+  if (tailscale) return tailscale
+  if (remote[0]) return remote[0]
+  if (profileUrl && !isLoopbackAddress(profileUrl)) return profileUrl
+  return ""
+}
+
 function DeviceAccess() {
   const [invitation, setInvitation] = useState<PairingCreateResult | null>(null)
   const [address, setAddress] = useState("")
   const [devices, setDevices] = useState<TokenInfo[]>([])
+  const [exposure, setExposure] = useState<Exposure | null>(null)
+  const [exposureBusy, setExposureBusy] = useState(false)
+  const [qr, setQr] = useState<{ link: string; svg: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const info = useStore((s) => s.info)
   const profile = activeEnvironment()
+  useEffect(() => {
+    let active = true
+    const client = rpc()
+    if (client.status === "open")
+      void client
+        .call("access.exposure.get", {})
+        .then((next) => {
+          if (active) setExposure(next)
+        })
+        .catch(() => {
+          // Older daemons have no exposure control; the row stays hidden.
+        })
+    return () => {
+      active = false
+    }
+  }, [])
   useEffect(() => {
     let active = true
     let loading = false
@@ -811,20 +851,52 @@ function DeviceAccess() {
     try {
       const next = await rpc().call("access.pairing.create", {})
       setInvitation(next)
-      setAddress(
-        profile?.url ??
-          next.endpoints.find(
-            (url) => !url.includes("127.0.0.1") && !url.includes("[::1]")
-          ) ??
-          ""
-      )
+      setAddress(suggestedAddress(next.endpoints, exposure, profile?.url))
     } catch (e) {
       setError(errorText(e))
     } finally {
       setBusy(false)
     }
   }
+  const setTailscale = async (enabled: boolean) => {
+    setExposureBusy(true)
+    setError(null)
+    try {
+      const next = await rpc().call("access.exposure.set", { tailscale: enabled })
+      setExposure(next)
+      if (invitation) {
+        // The listener set changed, so the reachable endpoints did too.
+        const fresh = await rpc().call("access.pairing.create", {})
+        setInvitation(fresh)
+        setAddress(suggestedAddress(fresh.endpoints, next, profile?.url))
+      }
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setExposureBusy(false)
+    }
+  }
   const expired = !!invitation && Date.parse(invitation.expires_at) <= now
+  const link =
+    invitation && address && info
+      ? pairingInvitation(address, invitation.code, info.environment_id)
+      : null
+  const scannable = !!link && !expired && !isLoopbackAddress(address)
+  useEffect(() => {
+    if (!scannable || !link) return
+    let active = true
+    pairingQr(link)
+      .then((svg) => {
+        if (active && svg) setQr({ link, svg })
+      })
+      .catch(() => {
+        // No QR outside the shell; the copyable invitation still works.
+      })
+    return () => {
+      active = false
+    }
+  }, [link, scannable])
+  const qrSvg = qr && scannable && qr.link === link ? qr.svg : null
   return (
     <>
       <DialogHeader>
@@ -834,8 +906,43 @@ function DeviceAccess() {
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="flex flex-col gap-4 pt-3">
+        {exposure && (
+          <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/40 px-4 py-3">
+            <div className="min-w-0 space-y-0.5">
+              <div className="text-[length:var(--app-font-size-ui,14px)] font-medium">
+                Reachable over Tailscale
+              </div>
+              <p className={ENVIRONMENT_HINT}>
+                {exposure.tailscale_ip
+                  ? exposure.tailscale
+                    ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.`
+                    : "Lets phones and other devices on your tailnet pair without a tunnel."
+                  : "Tailscale is not running on this machine."}
+              </p>
+            </div>
+            <Switch
+              aria-label="Reachable over Tailscale"
+              checked={exposure.tailscale}
+              disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)}
+              onCheckedChange={(checked) => void setTailscale(checked)}
+            />
+          </div>
+        )}
         {invitation && (
           <>
+            {qrSvg && (
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  aria-label="Pairing QR code"
+                  role="img"
+                  className="w-44 rounded-xl bg-white p-3 text-black shadow-sm [&>svg]:block [&>svg]:size-full"
+                  dangerouslySetInnerHTML={{ __html: qrSvg }}
+                />
+                <p className={`text-center ${ENVIRONMENT_HINT}`}>
+                  Scan with the Kybern mobile app, or copy the invitation below.
+                </p>
+              </div>
+            )}
             <div className="rounded-xl bg-muted/40 px-4 py-4 text-center">
               <div
                 dir="ltr"
@@ -870,6 +977,14 @@ function DeviceAccess() {
               <p className={ENVIRONMENT_HINT}>
                 Enter an address the other device can reach, such as your
                 Tailscale HTTPS address or SSH tunnel address.
+              </p>
+            )}
+            {address && isLoopbackAddress(address) && (
+              <p className={ENVIRONMENT_HINT}>
+                This address only works on the machine itself.
+                {exposure?.tailscale_ip && !exposure.tailscale
+                  ? " Turn on Reachable over Tailscale to get one other devices can use."
+                  : " Enter an address the other device can reach."}
               </p>
             )}
             <Button

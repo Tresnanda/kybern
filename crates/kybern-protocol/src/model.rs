@@ -841,6 +841,18 @@ pub struct Settings {
     pub auto_update_harnesses: bool,
     /// How the daemon trims CPU and memory while nothing needs it.
     pub background: BackgroundSettings,
+    /// Which networks other devices can reach this daemon on.
+    pub access: AccessSettings,
+}
+
+/// Extra listeners the daemon opens besides its loopback port. Persisted so
+/// a restart keeps the daemon reachable for paired phones.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AccessSettings {
+    /// Also listen on this machine's Tailscale address, so devices on the
+    /// same tailnet can pair and connect directly.
+    pub tailscale: bool,
 }
 
 impl Default for Settings {
@@ -855,6 +867,7 @@ impl Default for Settings {
             notifications: true,
             auto_update_harnesses: false,
             background: BackgroundSettings::default(),
+            access: AccessSettings::default(),
         }
     }
 }

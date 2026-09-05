@@ -783,6 +783,11 @@ export interface BackgroundSettings {
   save_power_on_battery: boolean;
 }
 
+/** Extra listeners besides loopback, so paired phones can reach the daemon after a restart. */
+export interface AccessSettings {
+  tailscale: boolean;
+}
+
 export interface Settings {
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
@@ -793,6 +798,7 @@ export interface Settings {
   notifications: boolean;
   auto_update_harnesses: boolean;
   background: BackgroundSettings;
+  access: AccessSettings;
 }
 
 export interface SettingsUpdateParams {
@@ -977,6 +983,16 @@ export interface PairingCreateResult {
   expires_at: DateTime;
   endpoints: string[];
 }
+/** Which networks the daemon listens on besides loopback. */
+export interface Exposure {
+  /** This machine's Tailscale IPv4 address when Tailscale runs and the daemon could bind it. */
+  tailscale_ip?: string | null;
+  tailscale: boolean;
+  listeners: string[];
+}
+export interface ExposureSetParams {
+  tailscale: boolean;
+}
 export interface TokenInfo {
   id: string;
   label: string;
@@ -1019,6 +1035,8 @@ export interface Methods {
   "projects.list": [Empty, ProjectsListResult];
   "projects.browse": [{ path?: string }, ProjectsBrowseResult];
   "access.pairing.create": [{ label?: string }, PairingCreateResult];
+  "access.exposure.get": [Empty, Exposure];
+  "access.exposure.set": [ExposureSetParams, Exposure];
   "access.tokens.list": [Empty, { tokens: TokenInfo[] }];
   "access.tokens.revoke": [{ token_id: string }, Empty];
   "projects.add": [ProjectsAddParams, Project];

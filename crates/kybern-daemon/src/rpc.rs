@@ -327,6 +327,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let (code, expires_at) = state.pairing.create(p.label);
             ok(PairingCreateResult { code, expires_at, endpoints })
         }
+        ExposureGet::NAME => ok(crate::access::exposure(state).await),
+        ExposureSet::NAME => {
+            let p: ExposureSetParams = parse(params)?;
+            ok(crate::access::set_exposure(state, p.tailscale).await.map_err(|e| internal(format!("{e:#}")))?)
+        }
         TokensList::NAME => ok(TokensListResult { tokens: state.store.tokens_list().map_err(internal)? }),
         TokensRevoke::NAME => {
             let p: TokensRevokeParams = parse(params)?;

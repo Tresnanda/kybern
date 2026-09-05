@@ -80,6 +80,10 @@ expression: scopes
   - "orchestration:read"
 - - access.pairing.create
   - "access:write"
+- - access.exposure.get
+  - "access:read"
+- - access.exposure.set
+  - "access:write"
 - - access.tokens.list
   - "access:read"
 - - access.tokens.revoke

@@ -41,6 +41,8 @@ expression: names
 - settings.update
 - usage.summary
 - access.pairing.create
+- access.exposure.get
+- access.exposure.set
 - access.tokens.list
 - access.tokens.revoke
 - git.status

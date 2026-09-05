@@ -130,8 +130,21 @@ binaries with stable Rust and your platform's native build tools.
 #### Connect over Tailscale
 
 With Tailscale installed and connected on the VPS and your desktop or phone,
-configure [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
-on the VPS to forward HTTPS to Kybern:
+the quickest route is to let the daemon listen on its Tailscale address:
+
+```sh
+kybern pair --tailscale
+```
+
+This opens a listener on the VPS's Tailscale IP next to the loopback one,
+remembers the choice in `settings.json` (`access.tailscale`), and prints a QR
+code the Kybern mobile app can scan. The desktop app offers the same switch,
+**Reachable over Tailscale**, in **Pair a device**. Traffic stays inside the
+tailnet's WireGuard tunnel; nothing is exposed on the public interface.
+
+For a browser-friendly HTTPS address instead, configure
+[Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
+on the VPS to forward to Kybern:
 
 ```sh
 tailscale serve --bg http://127.0.0.1:4173
@@ -141,6 +154,7 @@ kybernd --port 4173 --pair
 `kybernd --pair` starts the daemon and prints:
 
 - A six-digit pairing code, valid once for ten minutes.
+- A QR code of the invitation when a reachable address was detected.
 - Detected addresses, including a matching Tailscale HTTPS proxy when configured.
 - A complete invitation for each address, containing the code and environment identity.
 
@@ -164,7 +178,8 @@ It prefers a matching HTTPS Serve proxy, and lists direct Tailscale, private,
 and public interface addresses only when the daemon listens on them. It never
 opens a firewall, enables Serve, or guesses that a public NAT address accepts
 inbound connections. With the default loopback listener and no proxy, it prints
-local-only addresses and tells you to configure a proxy or SSH tunnel.
+local-only addresses and tells you to run `kybern pair --tailscale` or
+configure a proxy or SSH tunnel.
 
 #### Connect through an SSH tunnel or another HTTPS proxy
 

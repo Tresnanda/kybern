@@ -328,9 +328,20 @@ pub fn run() {
             environments::environment_remove,
             remote::remote_bootstrap,
             remote::remote_ssh_hosts,
+            pairing_qr,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// SVG QR code for a pairing invitation, drawn in `currentColor` so the
+/// dialog's stylesheet picks its contrast.
+#[tauri::command]
+fn pairing_qr(invitation: String) -> Result<String, String> {
+    if !invitation.starts_with("kybern://pair?") || invitation.len() > 2048 {
+        return Err("Not a pairing invitation".into());
+    }
+    kybern_client::pairing::qr_svg(&invitation).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
