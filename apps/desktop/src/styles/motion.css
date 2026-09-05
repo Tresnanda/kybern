@@ -63,9 +63,12 @@
 }
 
 /* ─── Press feedback ────────────────────────────────────────────────────────
-   Every pressable control squashes a hair on :active so the UI is visibly
-   listening. Transition lives on `scale` alone so it never fights the
-   color/opacity transitions each component already owns. */
+   Compact controls (buttons, icon buttons, toggles, chips) squash a hair on
+   :active so the UI is visibly listening. Wide row-like controls never scale:
+   a full-width strip shrinking reads as a wobble, so rows, menu/popover/select
+   triggers, and anything marked w-full or data-press="row" fall through to
+   the darken-only treatment below. Transition lives on `scale` alone so it
+   never fights the color/opacity transitions each component already owns. */
 .press,
 [data-slot="button"],
 [data-slot="icon-button"],
@@ -77,22 +80,29 @@
   transition-duration: var(--duration-quick);
   transition-timing-function: var(--ease-out);
 }
-.press:active:not(:disabled),
-[data-slot="button"]:active:not(:disabled):not([aria-disabled="true"]),
+.press:active:not(:disabled):not([class~="w-full"]):not([data-press="row"]),
+[data-slot="button"]:active:not(:disabled):not([aria-disabled="true"]):not([class~="w-full"]):not([data-press="row"]),
 [data-slot="icon-button"]:active:not(:disabled),
-[data-slot="toggle"]:active:not(:disabled),
-[data-slot="menu-trigger"]:active:not(:disabled),
-[data-slot="popover-trigger"]:active:not(:disabled),
-[data-slot="select-trigger"]:active:not(:disabled) {
+[data-slot="toggle"]:active:not(:disabled):not([class~="w-full"]) {
   scale: var(--scale-press);
   transition-duration: var(--duration-micro);
 }
 /* Rows (menu items, list rows, choice rows) get a gentler press: no scale, they
    just darken instantly. Scale on a full-width row reads as a wobble. */
-.press-row:active:not(:disabled) {
+.press-row:active:not(:disabled),
+[data-press="row"]:active:not(:disabled),
+[data-slot="menu-trigger"]:active:not(:disabled),
+[data-slot="popover-trigger"]:active:not(:disabled),
+[data-slot="select-trigger"]:active:not(:disabled),
+[data-slot="button"][class~="w-full"]:active:not(:disabled) {
   filter: brightness(0.96);
 }
-.dark .press-row:active:not(:disabled) {
+.dark .press-row:active:not(:disabled),
+.dark [data-press="row"]:active:not(:disabled),
+.dark [data-slot="menu-trigger"]:active:not(:disabled),
+.dark [data-slot="popover-trigger"]:active:not(:disabled),
+.dark [data-slot="select-trigger"]:active:not(:disabled),
+.dark [data-slot="button"][class~="w-full"]:active:not(:disabled) {
   filter: brightness(1.08);
 }
 
