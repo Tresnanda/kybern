@@ -1,37 +1,50 @@
+// A thread: the transcript scrolling under a transparent header, the glass
+// composer riding the keyboard, and any approval fused above it.
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Platform, StyleSheet, View } from "react-native";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { FlashList, type FlashListRef } from "@shopify/flash-list";
+import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated, { FadeIn, LinearTransition } from "react-native-reanimated";
 import { useConnection } from "@/connection/ConnectionContext";
-import type { ApprovalDecision, ApprovalRequest, TranscriptEntry } from "@/protocol";
+import { formatDuration, formatTokens } from "@/lib/time";
+import type { ApprovalDecision, ApprovalRequest, PermissionMode, TranscriptEntry } from "@/protocol";
+import { forgetApproval, patchThread } from "@/state/daemon";
 import { applyEvent, emptyThreadState, removeApproval, seedFromGet, type ThreadState } from "@/state/transcript";
 import { ApprovalCard } from "@/ui/ApprovalCard";
+import { ConnectionBanner } from "@/ui/Banner";
 import { Composer } from "@/ui/Composer";
 import { Markdown } from "@/ui/Markdown";
-import { Caption, EmptyState, Screen } from "@/ui/Screen";
-import { statusColor, statusLabel } from "@/ui/StatusDot";
+import { EmptyState, Screen, Txt } from "@/ui/Screen";
+import { Thinking } from "@/ui/Thinking";
 import { ToolRow } from "@/ui/ToolRow";
-import { radius, space, type as t, useTheme } from "@/ui/theme";
+import { GUTTER, radius, space, useTheme } from "@/ui/theme";
 
-type Row =
-  | { key: string; kind: "entry"; entry: TranscriptEntry }
-  | { key: string; kind: "approval"; approval: ApprovalRequest };
+type Row = { key: string; entry: TranscriptEntry };
+
+const MODE_LABEL: Record<PermissionMode, string> = {
+  supervised: "Supervised",
+  "accept-edits": "Accept edits",
+  auto: "Auto",
+  "full-access": "Full access",
+};
 
 export default function ThreadScreen() {
   const th = useTheme();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { client, status } = useConnection();
+  const { client, status, statusDetail } = useConnection();
   const [state, setState] = useState<ThreadState>(emptyThreadState);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const listRef = useRef<FlatList<Row>>(null);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const [dockHeight, setDockHeight] = useState(96);
+  const listRef = useRef<FlashListRef<Row>>(null);
 
   // Seed from threads.get, then subscribe from the seed's last_seq so nothing
-  // between the two calls is lost. Reconnects replay from the last delivered
-  // seq inside the client; a lag notice does the same.
+  // between the two calls is lost. Reconnects replay inside the client.
   useEffect(() => {
     if (!client || !id) return;
     let cancelled = false;
@@ -49,8 +62,6 @@ export default function ThreadScreen() {
           { thread_id: id, after_seq: res.thread.last_seq },
           (ev) => setState((s) => applyEvent(s, ev)),
           () => {
-            // After a resubscribe the replay covers the gap. Refresh pending
-            // approvals too, in case one was resolved elsewhere while offline.
             client
               .call("threads.get", { thread_id: id })
               .then((r) => {
@@ -76,17 +87,18 @@ export default function ThreadScreen() {
     };
   }, [client, id]);
 
-  const rows = useMemo<Row[]>(() => {
-    const out: Row[] = state.entries.map((entry, i) => ({ key: entryKey(entry, i), kind: "entry", entry }));
-    for (const a of state.pendingApprovals) out.push({ key: `approval:${a.id}`, kind: "approval", approval: a });
-    return out;
-  }, [state.entries, state.pendingApprovals]);
+  useEffect(() => {
+    if (state.thread) patchThread(state.thread);
+  }, [state.thread]);
+
+  const rows = useMemo<Row[]>(() => state.entries.map((entry, i) => ({ key: entryKey(entry, i), entry })), [state.entries]);
 
   const respond = useCallback(
     async (approval: ApprovalRequest, decision: ApprovalDecision) => {
       if (!client) throw new Error("Not connected");
       await client.call("approvals.respond", { approval_id: approval.id, ...decision });
       setState((s) => removeApproval(s, approval.id));
+      forgetApproval(approval.id);
     },
     [client],
   );
@@ -95,6 +107,7 @@ export default function ThreadScreen() {
     async (text: string) => {
       if (!client || !id) throw new Error("Not connected");
       await client.call("threads.send", { thread_id: id, message: { parts: [{ type: "text", text }] } });
+      listRef.current?.scrollToEnd({ animated: true });
     },
     [client, id],
   );
@@ -104,56 +117,79 @@ export default function ThreadScreen() {
     await client.call("threads.interrupt", { thread_id: id }).catch(() => {});
   }, [client, id]);
 
+  const setMode = async (mode: PermissionMode) => {
+    if (!client || !id) return;
+    const next = await client.call("threads.update", { thread_id: id, permission_mode: mode });
+    setState((s) => ({ ...s, thread: next }));
+  };
+  const togglePin = async () => {
+    if (!client || !id || !state.thread) return;
+    const next = await client.call("threads.update", { thread_id: id, pinned: !state.thread.pinned });
+    setState((s) => ({ ...s, thread: next }));
+  };
+  const archive = async () => {
+    if (!client || !id) return;
+    await client.call("threads.archive", { thread_id: id });
+    if (state.thread) patchThread({ ...state.thread, status: "archived" });
+    router.back();
+  };
+
   const thread = state.thread;
-  const label = thread ? statusLabel(thread.status) : null;
   const working = thread?.status === "running";
+  const streaming = working && !state.entries.some((e) => e.role === "assistant" && !e.complete && e.text.length > 0);
 
   return (
     <Screen>
-      <Stack.Screen
-        options={{
-          title: thread?.title || "Thread",
-          headerRight: label
-            ? () => (
-                <Text style={[t.caption, { color: thread ? (statusColor(thread.status, th) ?? th.textSecondary) : th.textSecondary }]}>{label}</Text>
-              )
-            : undefined,
-        }}
+      <Stack.Screen options={{ title: thread?.title || "Thread", headerLargeTitleEnabled: false }} />
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel="Thread options">
+          <Stack.Toolbar.MenuAction icon={thread?.pinned ? "pin.slash" : "pin"} onPress={() => void togglePin()}>
+            {thread?.pinned ? "Unpin" : "Pin"}
+          </Stack.Toolbar.MenuAction>
+          <Stack.Toolbar.Menu title="Permissions" icon="shield" inline>
+            {(Object.keys(MODE_LABEL) as PermissionMode[]).map((m) => (
+              <Stack.Toolbar.MenuAction key={m} isOn={thread?.permission_mode === m} onPress={() => void setMode(m)}>
+                {MODE_LABEL[m]}
+              </Stack.Toolbar.MenuAction>
+            ))}
+          </Stack.Toolbar.Menu>
+          <Stack.Toolbar.MenuAction icon="archivebox" destructive onPress={() => void archive()}>
+            Archive
+          </Stack.Toolbar.MenuAction>
+        </Stack.Toolbar.Menu>
+      </Stack.Toolbar>
+
+      <ConnectionBanner status={status} detail={statusDetail} error={loadError} />
+
+      <FlashList
+        ref={listRef}
+        data={rows}
+        keyExtractor={(r) => r.key}
+        renderItem={({ item }) => <EntryView entry={item.entry} />}
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{ paddingHorizontal: GUTTER, paddingTop: Platform.OS === "android" ? space.md : space.sm, paddingBottom: dockHeight + space.lg }}
+        keyboardDismissMode="interactive"
+        maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 0.2, startRenderingFromBottom: true, animateAutoScrollToBottom: false }}
+        ListFooterComponent={streaming ? <View style={styles.block}><Thinking /></View> : null}
+        ListEmptyComponent={loaded ? <EmptyState title="Nothing here yet" hint="Send a message to start the conversation." /> : null}
       />
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={insets.top + 44}>
-        {status !== "open" ? (
-          <View style={[styles.banner, { backgroundColor: th.surface }]}>
-            <Caption>{status === "reconnecting" ? "Reconnecting… you can keep reading" : status === "connecting" ? "Connecting…" : "Disconnected"}</Caption>
-          </View>
-        ) : null}
-        {loadError ? (
-          <View style={[styles.banner, { backgroundColor: th.surface }]}>
-            <Caption color={th.failed}>{loadError}</Caption>
-          </View>
-        ) : null}
-        <FlatList
-          ref={listRef}
-          data={rows}
-          keyExtractor={(r) => r.key}
-          renderItem={({ item }) => <RowView row={item} onRespond={respond} />}
-          contentContainerStyle={styles.list}
-          keyboardDismissMode="interactive"
-          onContentSizeChange={() => {
-            if (rows.length) listRef.current?.scrollToEnd({ animated: false });
-          }}
-          ListEmptyComponent={loaded ? <EmptyState title="Empty thread" hint="Send a message to start." /> : null}
-          ListFooterComponent={<View style={{ height: space.lg }} />}
-        />
-        <View style={{ paddingBottom: insets.bottom }}>
+
+      <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }} style={styles.dock}>
+        <Animated.View layout={LinearTransition.springify().damping(20).stiffness(220)} onLayout={(e) => setDockHeight(e.nativeEvent.layout.height)} style={[styles.dockInner, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
+          {state.pendingApprovals.map((a) => (
+            <View key={a.id} style={styles.approval}>
+              <ApprovalCard approval={a} onRespond={(d) => respond(a, d)} />
+            </View>
+          ))}
           <Composer
             disabled={!loaded || status !== "open" || thread?.status === "archived"}
             working={working}
             onSend={send}
             onInterrupt={interrupt}
-            placeholder={working ? "Queue a message" : "Message"}
+            placeholder={working ? "Queue a message" : thread?.permission_mode === "full-access" ? "Message · Full access" : "Message"}
           />
-        </View>
-      </KeyboardAvoidingView>
+        </Animated.View>
+      </KeyboardStickyView>
     </Screen>
   );
 }
@@ -161,7 +197,7 @@ export default function ThreadScreen() {
 function entryKey(e: TranscriptEntry, i: number): string {
   switch (e.role) {
     case "user":
-      return `${e.role}:${e.id}`;
+      return `user:${e.id}`;
     case "assistant":
       return `assistant:${e.id}#${e.segment ?? 0}`;
     case "tool_call":
@@ -169,7 +205,7 @@ function entryKey(e: TranscriptEntry, i: number): string {
     case "runtime_task":
       return `task:${e.task.id}`;
     case "approval":
-      return `approval-history:${e.approval.id}`;
+      return `approval:${e.approval.id}`;
     case "notice":
       return `notice:${e.seq}`;
     case "reverted":
@@ -181,29 +217,7 @@ function entryKey(e: TranscriptEntry, i: number): string {
   }
 }
 
-const RowView = React.memo(function RowView({
-  row,
-  onRespond,
-}: {
-  row: Row;
-  onRespond: (a: ApprovalRequest, d: ApprovalDecision) => Promise<void>;
-}) {
-  const th = useTheme();
-  switch (row.kind) {
-    case "approval":
-      return (
-        <View style={styles.block}>
-          <ApprovalCard approval={row.approval} onRespond={(d) => onRespond(row.approval, d)} />
-        </View>
-      );
-    case "entry":
-      return <EntryView entry={row.entry} />;
-    default:
-      return null;
-  }
-});
-
-function EntryView({ entry }: { entry: TranscriptEntry }) {
+const EntryView = React.memo(function EntryView({ entry }: { entry: TranscriptEntry }) {
   const th = useTheme();
   switch (entry.role) {
     case "user": {
@@ -211,23 +225,17 @@ function EntryView({ entry }: { entry: TranscriptEntry }) {
         .map((p) => (p.type === "text" ? p.text : p.type === "file_mention" ? `@${p.path}` : p.type === "image" ? "[image]" : `[${p.name}]`))
         .join("");
       return (
-        <View style={[styles.block, styles.userWrap]}>
-          <View style={[styles.userCard, { backgroundColor: th.surface }]}>
-            <Text style={[t.transcript, { color: th.text }]} selectable>
+        <Animated.View entering={FadeIn.duration(180)} style={[styles.block, styles.userWrap]}>
+          <View style={[styles.userCard, { backgroundColor: th.bubble }]}>
+            <Txt variant="transcript" selectable>
               {text}
-            </Text>
+            </Txt>
           </View>
-        </View>
+        </Animated.View>
       );
     }
     case "assistant":
-      if (!entry.text && !entry.complete) {
-        return (
-          <View style={styles.block}>
-            <Caption color={th.textTertiary}>Thinking…</Caption>
-          </View>
-        );
-      }
+      if (!entry.text) return null;
       return (
         <View style={styles.block}>
           <Markdown text={entry.text} />
@@ -242,12 +250,12 @@ function EntryView({ entry }: { entry: TranscriptEntry }) {
     case "runtime_task": {
       const active = ["pending", "running", "waiting", "stopping"].includes(entry.task.status);
       const noun = entry.task.kind === "agent" ? "Agent" : entry.task.kind === "process" ? "Process" : "Monitor";
-      const status = entry.task.status === "pending" ? "starting" : entry.task.status === "running" ? "running" : entry.task.status;
+      const st = entry.task.status === "pending" ? "starting" : entry.task.status;
       return (
         <View style={styles.blockTight}>
-          <Caption color={entry.task.status === "failed" ? th.failed : active ? th.waiting : th.textTertiary}>
-            {noun} {status} · {entry.task.title}
-          </Caption>
+          <Txt variant="footnote" tone="tertiary" color={entry.task.status === "failed" ? th.failed : active ? th.running : undefined} numberOfLines={1}>
+            {noun} {st} · {entry.task.title}
+          </Txt>
         </View>
       );
     }
@@ -255,36 +263,44 @@ function EntryView({ entry }: { entry: TranscriptEntry }) {
       if (!entry.decision) return null;
       return (
         <View style={styles.blockTight}>
-          <Caption color={th.textTertiary}>
+          <Txt variant="footnote" tone="tertiary" numberOfLines={1}>
             {entry.decision.decision === "deny" ? "Declined" : "Approved"} · {entry.approval.summary || entry.approval.tool_name}
-          </Caption>
+          </Txt>
         </View>
       );
     case "notice":
       return (
         <View style={styles.blockTight}>
-          <Caption color={entry.level === "error" ? th.failed : entry.level === "warning" ? th.waiting : th.textTertiary}>{entry.text}</Caption>
+          <Txt variant="footnote" tone="tertiary" color={entry.level === "error" ? th.failed : entry.level === "warning" ? th.waiting : undefined}>
+            {entry.text}
+          </Txt>
         </View>
       );
     case "reverted":
       return (
         <View style={styles.blockTight}>
-          <Caption color={th.textTertiary}>Reverted to before this turn</Caption>
+          <Txt variant="footnote" tone="tertiary">
+            Reverted to before this turn
+          </Txt>
         </View>
       );
     case "turn_summary":
       return (
-        <View style={styles.block}>
-          <Caption color={entry.error ? th.failed : th.textTertiary}>{summaryText(entry)}</Caption>
+        <View style={[styles.block, styles.summary]}>
+          <View style={[styles.summaryRule, { backgroundColor: th.hairline }]} />
+          <Txt variant="caption" tone="tertiary" color={entry.error ? th.failed : undefined} numberOfLines={2} style={{ fontVariant: ["tabular-nums"] }}>
+            {summaryText(entry)}
+          </Txt>
+          <View style={[styles.summaryRule, { backgroundColor: th.hairline }]} />
         </View>
       );
     default:
       return null;
   }
-}
+});
 
 function summaryText(e: Extract<TranscriptEntry, { role: "turn_summary" }>): string {
-  if (e.error) return `Failed: ${e.error}`;
+  if (e.error) return `Failed · ${e.error}`;
   const parts: string[] = [];
   switch (e.stop_reason) {
     case "completed":
@@ -302,25 +318,19 @@ function summaryText(e: Extract<TranscriptEntry, { role: "turn_summary" }>): str
   }
   if (e.duration_ms > 0) parts.push(formatDuration(e.duration_ms));
   const tokens = e.usage.input_tokens + e.usage.output_tokens;
-  if (tokens > 0) parts.push(`${tokens.toLocaleString()} tokens`);
+  if (tokens > 0) parts.push(`${formatTokens(tokens)} tokens`);
   if (e.cost_usd != null) parts.push(`$${e.cost_usd.toFixed(2)}`);
   return parts.join(" · ");
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms} ms`;
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s} s`;
-  const m = Math.floor(s / 60);
-  return `${m} min ${s % 60} s`;
-}
-
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  banner: { paddingHorizontal: space.lg, paddingVertical: space.sm },
-  list: { paddingVertical: space.md },
-  block: { paddingHorizontal: space.lg, paddingVertical: space.sm },
-  blockTight: { paddingHorizontal: space.lg, paddingVertical: 2 },
+  block: { paddingVertical: space.sm },
+  blockTight: { paddingVertical: 2 },
   userWrap: { alignItems: "flex-end" },
-  userCard: { maxWidth: "88%", borderRadius: radius.lg, paddingHorizontal: space.md, paddingVertical: space.sm },
+  userCard: { maxWidth: "84%", borderRadius: radius.xl, borderBottomRightRadius: radius.sm, paddingHorizontal: space.lg, paddingVertical: space.sm + 2 },
+  summary: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.md },
+  summaryRule: { flex: 1, height: StyleSheet.hairlineWidth },
+  dock: { position: "absolute", left: 0, right: 0, bottom: 0 },
+  dockInner: { gap: space.sm, paddingTop: space.sm },
+  approval: { marginHorizontal: space.md },
 });

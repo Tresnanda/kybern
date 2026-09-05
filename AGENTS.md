@@ -17,7 +17,7 @@ before touching UI.
 | `crates/kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell. |
 | `crates/kybern-cli` | `kybern` binary. Also the integration harness. |
 | `apps/desktop` | Desktop app. `src-tauri` is the Tauri 2 shell (crate `kybern-desktop`: resolves or spawns `kybernd`, exposes `endpoint`/`data_dir_path`). `src/` is the React app (see below). |
-| `apps/mobile` | Expo client (pnpm 11, exact pins). |
+| `apps/mobile` | Expo SDK 57 client (pnpm 11, exact pins). Native tabs, Liquid Glass surfaces, a dev client (not Expo Go). `plugins/withSceneLifecycle.js` adopts the UIScene life cycle the iOS 27 SDK requires; drop it once Expo ships `ExpoAppSceneDelegate`. See `apps/mobile/README.md`. |
 
 The old GPUI client is on the `gpui` branch. Do not port its views back.
 

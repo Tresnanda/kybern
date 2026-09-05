@@ -12,7 +12,12 @@ type Block =
   | { kind: "code"; lang: string; text: string }
   | { kind: "list"; ordered: boolean; items: string[] }
   | { kind: "quote"; text: string }
+  | { kind: "table"; header: string[]; rows: string[][] }
   | { kind: "rule" };
+
+function splitRow(line: string): string[] {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+}
 
 function parseBlocks(src: string): Block[] {
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
@@ -46,6 +51,18 @@ function parseBlocks(src: string): Block[] {
       flush();
       blocks.push({ kind: "h", level: h[1]?.length ?? 1, text: h[2] ?? "" });
       i += 1;
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] ?? "")) {
+      flush();
+      const header = splitRow(line);
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i] ?? "")) {
+        rows.push(splitRow(lines[i] ?? ""));
+        i += 1;
+      }
+      blocks.push({ kind: "table", header, rows });
       continue;
     }
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
@@ -122,11 +139,11 @@ function Inline({ text, th, base }: { text: string; th: Theme; base: object }) {
     <Text style={[base, { color: th.text }]} selectable>
       {spans.map((s, i) =>
         s.code ? (
-          <Text key={i} style={[t.mono, { backgroundColor: th.surfaceRaised, color: th.text }]}>
+          <Text key={i} style={[t.mono, { fontSize: 14.5, backgroundColor: th.codeFill, color: th.text }]}>
             {s.text}
           </Text>
         ) : s.href ? (
-          <Text key={i} style={{ textDecorationLine: "underline" }} onPress={() => void Linking.openURL(s.href ?? "")}>
+          <Text key={i} style={{ textDecorationLine: "underline", textDecorationColor: th.textTertiary }} onPress={() => void Linking.openURL(s.href ?? "")}>
             {s.text}
           </Text>
         ) : (
@@ -149,10 +166,10 @@ export function Markdown({ text }: { text: string }) {
           case "p":
             return <Inline key={i} text={b.text} th={th} base={t.transcript} />;
           case "h":
-            return <Inline key={i} text={b.text} th={th} base={b.level <= 2 ? t.title : t.heading} />;
+            return <Inline key={i} text={b.text} th={th} base={b.level <= 2 ? t.title3 : t.headline} />;
           case "code":
             return (
-              <ScrollView key={i} horizontal bounces={false} style={[styles.code, { backgroundColor: th.surface }]}>
+              <ScrollView key={i} horizontal bounces={false} style={[styles.code, { backgroundColor: th.codeFill }]} contentContainerStyle={styles.codeInner}>
                 <Text style={[t.mono, { color: th.text }]} selectable>
                   {b.text}
                 </Text>
@@ -163,7 +180,7 @@ export function Markdown({ text }: { text: string }) {
               <View key={i} style={styles.list}>
                 {b.items.map((item, j) => (
                   <View key={j} style={styles.li}>
-                    <Text style={[t.transcript, styles.bullet, { color: th.textSecondary }]}>{b.ordered ? `${j + 1}.` : "•"}</Text>
+                    <Text style={[t.transcript, styles.bullet, { color: th.textTertiary }]}>{b.ordered ? `${j + 1}.` : "•"}</Text>
                     <View style={styles.liBody}>
                       <Inline text={item} th={th} base={t.transcript} />
                     </View>
@@ -173,12 +190,40 @@ export function Markdown({ text }: { text: string }) {
             );
           case "quote":
             return (
-              <View key={i} style={[styles.quote, { borderLeftColor: th.border }]}>
+              <View key={i} style={[styles.quote, { borderLeftColor: th.hairline }]}>
                 <Inline text={b.text} th={th} base={t.transcript} />
               </View>
             );
+          case "table": {
+            const widths = b.header.map((_, j) => {
+              const longest = Math.max(b.header[j]?.length ?? 0, ...b.rows.map((r) => r[j]?.length ?? 0));
+              return Math.min(240, Math.max(88, longest * 7.2 + 24));
+            });
+            return (
+              <ScrollView key={i} horizontal bounces={false} style={[styles.table, { borderColor: th.hairline }]}>
+                <View>
+                  <View style={[styles.tr, { borderBottomColor: th.hairline, backgroundColor: th.codeFill }]}>
+                    {b.header.map((c, j) => (
+                      <View key={j} style={[styles.td, { width: widths[j] }]}>
+                        <Inline text={c} th={th} base={{ ...t.footnote, fontWeight: "600" }} />
+                      </View>
+                    ))}
+                  </View>
+                  {b.rows.map((r, k) => (
+                    <View key={k} style={[styles.tr, k < b.rows.length - 1 ? { borderBottomColor: th.hairline } : { borderBottomWidth: 0 }]}>
+                      {r.map((c, j) => (
+                        <View key={j} style={[styles.td, { width: widths[j] }]}>
+                          <Inline text={c} th={th} base={t.footnote} />
+                        </View>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            );
+          }
           case "rule":
-            return <View key={i} style={[styles.rule, { backgroundColor: th.border }]} />;
+            return <View key={i} style={[styles.rule, { backgroundColor: th.hairline }]} />;
           default:
             return null;
         }
@@ -189,11 +234,15 @@ export function Markdown({ text }: { text: string }) {
 
 const styles = StyleSheet.create({
   root: { gap: space.md },
-  code: { borderRadius: radius.md, paddingHorizontal: space.md, paddingVertical: space.sm },
+  code: { borderRadius: radius.md },
+  codeInner: { paddingHorizontal: space.md, paddingVertical: space.sm + 2 },
   list: { gap: space.xs },
   li: { flexDirection: "row", gap: space.sm },
-  bullet: { minWidth: 18, textAlign: "right" },
+  bullet: { minWidth: 20, textAlign: "right" },
   liBody: { flex: 1 },
   quote: { borderLeftWidth: 2, paddingLeft: space.md },
   rule: { height: StyleSheet.hairlineWidth, marginVertical: space.sm },
+  table: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, overflow: "hidden" },
+  tr: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
+  td: { paddingHorizontal: space.md, paddingVertical: 6, justifyContent: "center" },
 });

@@ -1,37 +1,63 @@
-// Shared page primitives: a canvas-colored container and text helpers.
+// Page scaffolding: an ambient canvas the glass can refract, plus text helpers
+// that carry the type scale so screens never set raw font sizes.
 
-import React from "react";
-import { StyleSheet, Text, View, type TextStyle, type ViewStyle } from "react-native";
+import React, { useRef } from "react";
+import { StyleSheet, Text, View, type StyleProp, type TextProps, type TextStyle, type ViewStyle } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { BlurTargetContext } from "./Glass";
 import { space, type as t, useTheme } from "./theme";
 
-export function Screen({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
+export function Screen({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
   const th = useTheme();
-  return <View style={[styles.screen, { backgroundColor: th.canvas }, style]}>{children}</View>;
+  const target = useRef<View>(null);
+  return (
+    <View ref={target} collapsable={false} style={[styles.screen, { backgroundColor: th.canvas }, style]}>
+      <LinearGradient
+        pointerEvents="none"
+        colors={[th.canvas, th.canvasDeep]}
+        start={{ x: 0.2, y: 0 }}
+        end={{ x: 0.8, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <BlurTargetContext.Provider value={target}>{children}</BlurTargetContext.Provider>
+    </View>
+  );
 }
 
-export function Caption({ children, style, color }: { children: React.ReactNode; style?: TextStyle; color?: string }) {
-  const th = useTheme();
-  return <Text style={[t.caption, { color: color ?? th.textSecondary }, style]}>{children}</Text>;
+type Tone = "primary" | "secondary" | "tertiary";
+type Variant = keyof typeof t;
+
+interface TypoProps extends TextProps {
+  variant?: Variant;
+  tone?: Tone;
+  color?: string;
+  style?: StyleProp<TextStyle>;
 }
 
-export function Body({ children, style, color }: { children: React.ReactNode; style?: TextStyle; color?: string }) {
+export function Txt({ variant = "body", tone = "primary", color, style, ...rest }: TypoProps) {
   const th = useTheme();
-  return <Text style={[t.body, { color: color ?? th.text }, style]}>{children}</Text>;
+  const fallback = tone === "primary" ? th.text : tone === "secondary" ? th.textSecondary : th.textTertiary;
+  return <Text {...rest} style={[t[variant], { color: color ?? fallback }, style]} />;
 }
 
 /** Orients and offers one action. */
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: React.ReactNode }) {
-  const th = useTheme();
   return (
     <View style={styles.empty}>
-      <Text style={[t.heading, { color: th.text, textAlign: "center" }]}>{title}</Text>
-      {hint ? <Text style={[t.body, { color: th.textSecondary, textAlign: "center" }]}>{hint}</Text> : null}
-      {action}
+      <Txt variant="title3" style={{ textAlign: "center" }}>
+        {title}
+      </Txt>
+      {hint ? (
+        <Txt variant="subhead" tone="secondary" style={{ textAlign: "center", maxWidth: 300 }}>
+          {hint}
+        </Txt>
+      ) : null}
+      {action ? <View style={{ marginTop: space.sm }}>{action}</View> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl, gap: space.md },
+  empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xxl, gap: space.sm },
 });
