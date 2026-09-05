@@ -34,8 +34,30 @@ const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
  * (Sidebar `className`) and the layout `gapClassName` so they animate in lockstep.
  * Shared by the thread sidebar (left) and the right dock so the two slides match.
  */
-const SIDEBAR_OFFCANVAS_MOTION_CLASS =
-  "will-change-[translate] duration-[260ms] ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[state=collapsed]:duration-[200ms]";
+// Every class below is spelled out in full so Tailwind's scanner emits it; composing
+// the variant form from the base constant would silently drop the close duration.
+const SIDEBAR_OFFCANVAS_EASE_CLASS = "ease-[cubic-bezier(0.32,0.72,0,1)]";
+const SIDEBAR_OFFCANVAS_OPEN_DURATION_CLASS = "duration-[260ms]";
+const SIDEBAR_OFFCANVAS_CLOSE_DURATION_CLASS = "duration-[200ms]";
+
+const SIDEBAR_OFFCANVAS_MOTION_CLASS = cn(
+  "will-change-[translate]",
+  SIDEBAR_OFFCANVAS_EASE_CLASS,
+  SIDEBAR_OFFCANVAS_OPEN_DURATION_CLASS,
+  "group-data-[state=collapsed]:duration-[200ms]",
+);
+
+/**
+ * The same curve for anything outside the sidebar `group` that has to move in
+ * lockstep with the slide (route-header leading inset, seam dividers). Pass the
+ * state the sidebar is moving *to* so the duration matches its open/close asymmetry.
+ */
+function sidebarOffcanvasMotionClass(open: boolean): string {
+  return cn(
+    SIDEBAR_OFFCANVAS_EASE_CLASS,
+    open ? SIDEBAR_OFFCANVAS_OPEN_DURATION_CLASS : SIDEBAR_OFFCANVAS_CLOSE_DURATION_CLASS,
+  );
+}
 
 /**
  * Suppresses the slide entirely — for first mount or a reposition/remount where
@@ -1131,6 +1153,7 @@ function SidebarMenuSubButton({
 }
 
 export {
+  sidebarOffcanvasMotionClass,
   Sidebar,
   SidebarContent,
   SidebarFooter,

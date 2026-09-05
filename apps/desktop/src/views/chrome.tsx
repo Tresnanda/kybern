@@ -6,7 +6,7 @@ import { forwardRef, type ComponentProps, type ReactNode } from "react"
 import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io"
 
 import { Button } from "@/components/synara/button"
-import { useSidebar } from "@/components/synara/sidebar"
+import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/synara/sidebar"
 import { Toggle } from "@/components/synara/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/tooltip"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/synara/desktopChrome"
@@ -189,12 +189,18 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
   )
 }
 
-/** The leading cluster shows in the route header only while the sidebar is collapsed. */
-export function SidebarHeaderNavigationControls() {
-  const { open } = useSidebar()
-  if (open) return null
-  return <div className="hidden h-7 w-[84px] shrink-0 md:block" aria-hidden="true" />
-}
+/**
+ * Leading inset that keeps the route header's title clear of the fixed sidebar
+ * toggle + nav arrows (`SidebarLeadingControls`) once the sidebar is collapsed.
+ * Measured from the header's own padding edge: on macOS the controls start at the
+ * traffic-light gutter, elsewhere at 16px; both are 84px wide and want 16px of air.
+ * The header itself pads 20px. This is padding, not a spacer, so the title's
+ * position is one tweened value that follows the slide instead of popping at frame 0.
+ */
+const SIDEBAR_HEADER_LEADING_INSET_CLASS =
+  platform() === "macos"
+    ? "md:ps-[calc(var(--desktop-top-bar-traffic-light-gutter,82px)+80px)]"
+    : "md:ps-[80px]"
 
 const PANEL_TOGGLE_CLASS_NAME = cn(
   CHAT_HEADER_TOGGLE_CLASS_NAME,
@@ -269,7 +275,7 @@ export function SurfaceHeader({
   trailing?: ReactNode
 }) {
   const { open } = useSidebar()
-  const gutter = showSidebarControls && !open && platform() === "macos"
+  const inset = showSidebarControls && !open
   return (
     <div
       data-tauri-drag-region="deep"
@@ -277,18 +283,20 @@ export function SurfaceHeader({
         CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
         CHAT_SURFACE_HEADER_PADDING_X_CLASS,
         "@container drag-region font-system-ui",
-        gutter && "desktop-top-bar-traffic-light-gutter",
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <div
           className={cn(
-            "flex min-w-0 flex-1 items-center overflow-hidden",
-            !open ? "gap-4" : "gap-2 sm:gap-3",
+            "flex min-w-0 flex-1 items-center gap-2 overflow-hidden",
+            // Tween the inset with the sidebar slide so the title travels as one
+            // continuous motion; `minimal` headers have no title to keep clear.
+            "transition-[padding-inline-start] motion-reduce:transition-none",
+            sidebarOffcanvasMotionClass(open),
+            inset && SIDEBAR_HEADER_LEADING_INSET_CLASS,
           )}
         >
-          {showSidebarControls && <SidebarHeaderNavigationControls />}
-          {!minimal && <div className="flex min-w-0 flex-1 items-center gap-2">{children}</div>}
+          {!minimal && children}
         </div>
         <div
           data-tauri-drag-region="false"
