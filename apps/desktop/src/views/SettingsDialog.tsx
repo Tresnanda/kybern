@@ -14,6 +14,8 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { ChevronDownIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
 import { Switch } from "@/components/kit/switch"
+import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/kit/input-group"
+import { MatrixLoader, TextSwap } from "@/components/kybern/motion"
 import { PERMISSION_HINT, PERMISSION_LABEL, tokens, usd } from "@/lib/format"
 import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/kit/icons"
 import {
@@ -21,6 +23,7 @@ import {
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
+  SETTINGS_CONTROL_RADIUS_CLASS_NAME,
   SETTINGS_PANEL_SECTION_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
   SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
@@ -28,7 +31,7 @@ import {
 import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
-import type { PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
+import type { BackgroundSettings, DaemonActivity, PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
 
@@ -199,8 +202,132 @@ function General() {
           <Switch aria-label="Show agent notifications" checked={settings.notifications} onCheckedChange={(v) => update({ notifications: v })} />
         </Row>
       </Section>
+      <BackgroundSettingsSection background={settings.background} onChange={(background) => update({ background })} />
       <NotificationSettings />
     </>
+  )
+}
+
+const BACKGROUND_FIELDS: { key: keyof BackgroundSettings; title: string; description: string; unit: string }[] = [
+  {
+    key: "session_idle_minutes",
+    title: "Release idle agents after",
+    description: "A quiet thread's process is closed. The next message resumes it.",
+    unit: "min",
+  },
+  {
+    key: "max_idle_sessions",
+    title: "Idle agents kept warm",
+    description: "Above this, the least recently used process goes first.",
+    unit: "agents",
+  },
+  {
+    key: "terminal_idle_minutes",
+    title: "Close unattended shells after",
+    description: "Only shells with no tab open and nothing running.",
+    unit: "min",
+  },
+  {
+    key: "daemon_idle_exit_minutes",
+    title: "Exit the daemon after",
+    description: "Once nothing needs it. The app relaunches it on demand, so keep this off for CLI or remote use.",
+    unit: "min",
+  },
+]
+
+function BackgroundSettingsSection({ background, onChange }: { background: BackgroundSettings; onChange: (next: BackgroundSettings) => void }) {
+  return (
+    <Section title="Background">
+      <Row title="Activity" description="What the daemon is keeping alive. Running and approval-bound threads are never released.">
+        <ActivityReadout />
+      </Row>
+      {BACKGROUND_FIELDS.map((field) => (
+        <Row key={field.key} title={field.title} description={field.description}>
+          <LimitField label={field.title} unit={field.unit} value={background[field.key]} onCommit={(value) => onChange({ ...background, [field.key]: value })} />
+        </Row>
+      ))}
+    </Section>
+  )
+}
+
+/** Live counts, refreshed every 5s. Numbers swap in place so a change is visible without a flash. */
+function ActivityReadout() {
+  const { activity, failed } = useDaemonActivity()
+  if (failed) return <span className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "text-right")}>Restart the daemon to see activity</span>
+  if (!activity) return <MatrixLoader variant="pulse" className="text-muted-foreground" label="Reading daemon activity" />
+  const stats: [number, string, string][] = [
+    [activity.live_sessions, "agent", "agents"],
+    [activity.idle_sessions, "idle", "idle"],
+    [activity.terminals, "shell", "shells"],
+    [activity.connections, "client", "clients"],
+  ]
+  if (activity.queued_messages > 0) stats.push([activity.queued_messages, "queued", "queued"])
+  return (
+    <dl className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "flex items-baseline gap-x-3 tabular-nums")}>
+      {stats.map(([count, one, many]) => (
+        <div key={many} className="flex items-baseline gap-1">
+          <TextSwap as="span" text={String(count)} className="font-medium text-foreground" />
+          <dt className="sr-only">{many}</dt>
+          <dd>{count === 1 ? one : many}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function useDaemonActivity(): { activity: DaemonActivity | null; failed: boolean } {
+  const [state, setState] = useState<{ activity: DaemonActivity | null; failed: boolean }>({ activity: null, failed: false })
+  useEffect(() => {
+    let canceled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const activity = await rpc().call("daemon.activity", {})
+        if (!canceled) setState({ activity, failed: false })
+      } catch {
+        // An older daemon has no daemon.activity; keep the last reading if there is one.
+        if (!canceled) setState((previous) => (previous.activity ? previous : { activity: null, failed: true }))
+      } finally { if (!canceled) timer = setTimeout(() => void poll(), 5000) }
+    }
+    void poll()
+    return () => { canceled = true; clearTimeout(timer) }
+  }, [])
+  return state
+}
+
+/** Whole-number limit with its unit inside the field. Saves on blur or Enter; an empty field means off. */
+function LimitField({ label, unit, value, onCommit }: { label: string; unit: string; value: number; onCommit: (value: number) => void }) {
+  const show = (v: number) => (v === 0 ? "" : String(v))
+  const [draft, setDraft] = useState(show(value))
+  // Adopt a value saved elsewhere (another client, a reverted save) without an effect.
+  const [adopted, setAdopted] = useState(value)
+  if (adopted !== value) {
+    setAdopted(value)
+    setDraft(show(value))
+  }
+  const commit = () => {
+    const parsed = draft === "" ? 0 : Number.parseInt(draft, 10)
+    const next = Number.isFinite(parsed) && parsed >= 0 ? Math.min(parsed, 100_000) : value
+    setDraft(show(next))
+    if (next !== value) onCommit(next)
+  }
+  return (
+    <InputGroup className={cn("w-28", SETTINGS_CONTROL_RADIUS_CLASS_NAME)}>
+      <InputGroupInput
+        aria-label={label}
+        className="text-right tabular-nums"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        placeholder="Off"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur() } }}
+      />
+      <InputGroupAddon align="inline-end">
+        <InputGroupText className="w-9 text-[length:var(--app-font-size-ui-sm,11px)]">{unit}</InputGroupText>
+      </InputGroupAddon>
+    </InputGroup>
   )
 }
 

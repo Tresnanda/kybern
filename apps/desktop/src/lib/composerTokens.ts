@@ -1,10 +1,13 @@
 import type { ContentPart, SkillInfo } from "@/protocol"
 
-interface StructuredToken {
+export interface StructuredToken {
   start: number
   end: number
   part: ContentPart
 }
+
+/** A run of the composer text: plain characters, or a recognised token with its wire part. */
+export type StructuredSegment = { kind: "text"; text: string } | { kind: "token"; text: string; part: ContentPart }
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
@@ -22,7 +25,36 @@ export function pluginMentionNames(item: SkillInfo): string[] {
 export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[]): ContentPart[] {
   const value = text.trim()
   if (!value) return []
+  const parts: ContentPart[] = []
+  for (const segment of structuredSegments(value, mentionedPaths, skillItems)) {
+    if (segment.kind === "token") parts.push(segment.part)
+    else if (segment.text) parts.push({ type: "text", text: segment.text })
+  }
+  if (parts.length === 0) parts.push({ type: "text", text: value })
+  return parts
+}
 
+/**
+ * Split text into plain runs and recognised tokens, in order, without trimming,
+ * so the composer can paint the same tokens it will send exactly where they sit.
+ */
+export function structuredSegments(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[]): StructuredSegment[] {
+  const segments: StructuredSegment[] = []
+  let last = 0
+  for (const token of structuredTokens(value, mentionedPaths, skillItems)) {
+    if (token.start < last) continue
+    const before = value.slice(last, token.start)
+    if (before) segments.push({ kind: "text", text: before })
+    segments.push({ kind: "token", text: value.slice(token.start, token.end), part: token.part })
+    last = token.end
+  }
+  const rest = value.slice(last)
+  if (rest || segments.length === 0) segments.push({ kind: "text", text: rest })
+  return segments
+}
+
+/** Every recognised `@file`, `@plugin` and `$skill` token in `value`, sorted by position. */
+export function structuredTokens(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[]): StructuredToken[] {
   const tokens: StructuredToken[] = []
   const mentionPattern = /(^|\s)@([^\s]+)(?=\s|$)/g
   let mentionMatch: RegExpExecArray | null
@@ -66,16 +98,19 @@ export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlyS
   }
 
   tokens.sort((left, right) => left.start - right.start || right.end - left.end)
-  const parts: ContentPart[] = []
-  let last = 0
-  for (const token of tokens) {
-    if (token.start < last) continue
-    const before = value.slice(last, token.start)
-    if (before) parts.push({ type: "text", text: before })
-    parts.push(token.part)
-    last = token.end
+  return tokens
+}
+
+/** The literal text a structured part occupies in the message ("$skill", "@path"). */
+export function partToken(part: ContentPart): string | null {
+  switch (part.type) {
+    case "skill":
+      return `$${part.name}`
+    case "mention":
+      return `@${part.display_name ?? part.name}`
+    case "file_mention":
+      return `@${part.path}`
+    default:
+      return null
   }
-  const rest = value.slice(last)
-  if (rest || parts.length === 0) parts.push({ type: "text", text: rest })
-  return parts
 }

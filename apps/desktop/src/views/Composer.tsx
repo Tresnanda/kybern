@@ -35,13 +35,14 @@ import {
 import { Kbd } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
-import { buildStructuredTextParts } from "@/lib/composerTokens"
+import { buildStructuredTextParts, structuredSegments } from "@/lib/composerTokens"
 import { PROVIDER_LABEL, basename } from "@/lib/format"
 import { CentralIcon } from "@/lib/kit/central-icons"
 import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
   SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
+import { InlineToken } from "@/components/kybern/InlineToken"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
@@ -119,8 +120,22 @@ function prettyModel(id: string): string {
     .replace(/(\d) (\d)/g, "$1.$2")
 }
 
-const EDITOR_CLASS =
-  "block max-h-[200px] w-full resize-none overflow-y-auto bg-transparent font-system-ui text-[length:var(--app-font-size-chat,12px)] leading-relaxed break-words whitespace-pre-wrap text-foreground min-h-[var(--app-density-composer-editor-min-height,2lh)] placeholder:text-muted-foreground/40 focus:outline-none disabled:opacity-60 selectable"
+// The textarea and its highlight layer share these metrics exactly so the
+// painted tokens sit under the same glyphs the user is editing.
+const EDITOR_METRICS_CLASS =
+  "block max-h-[200px] w-full font-system-ui text-[length:var(--app-font-size-chat,12px)] leading-relaxed break-words whitespace-pre-wrap min-h-[var(--app-density-composer-editor-min-height,2lh)]"
+
+const EDITOR_CLASS = cn(
+  EDITOR_METRICS_CLASS,
+  // Text is painted by the highlight layer underneath; the textarea keeps the
+  // caret, selection, placeholder and all input behaviour.
+  "relative z-[1] resize-none overflow-y-auto bg-transparent text-transparent caret-[var(--foreground)] placeholder:text-muted-foreground/40 focus:outline-none disabled:opacity-60 selectable",
+)
+
+const EDITOR_BACKDROP_CLASS = cn(
+  EDITOR_METRICS_CLASS,
+  "chat-composer-backdrop pointer-events-none absolute inset-0 z-0 overflow-hidden text-foreground select-none",
+)
 
 const DEFAULT_PLACEHOLDER = "Ask anything, @ files, $ skills, or / commands"
 
@@ -236,6 +251,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
   const mentioned = useRef(new Set<string>(savedDraft?.mentions ?? []))
   const selectedSkills = useRef(new Map<string, SkillInfo>((savedDraft?.skills ?? []).map((skill) => [skill.name.toLowerCase(), skill])))
+  // Render-safe snapshot of the two refs above for the highlight layer; refreshed
+  // after every pick and send so painted tokens match what buildParts will send.
+  const [tokenSources, setTokenSources] = useState(() => ({ mentions: new Set<string>(savedDraft?.mentions ?? []), skills: [...(savedDraft?.skills ?? [])] }))
+  const syncTokenSources = () => setTokenSources({ mentions: new Set(mentioned.current), skills: [...selectedSkills.current.values()] })
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const menuList = useRef<HTMLDivElement>(null)
@@ -391,6 +410,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const pickMention = (path: string) => {
     if (!mention) return
     mentioned.current.add(path)
+    syncTokenSources()
     const next = `${text.slice(0, mention.start)}@${path} ${text.slice(caret)}`
     setTextAndCaret(next, mention.start + path.length + 2)
   }
@@ -403,12 +423,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const pickPlugin = (item: SkillInfo) => {
     if (!mention) return
     selectedSkills.current.set(item.path, item)
+    syncTokenSources()
     const token = `@${item.display_name ?? item.name} `
     const next = `${text.slice(0, mention.start)}${token}${text.slice(caret)}`
     setTextAndCaret(next, mention.start + token.length)
   }
   const pickSkill = (item: SkillInfo) => {
     selectedSkills.current.set(item.name.toLowerCase(), item)
+    syncTokenSources()
     const trigger = skill ?? (slash)
     if (!trigger) return
     const token = `$${item.name} `
@@ -427,6 +449,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // ---- sending ----
 
   const canSend = !disabled && !sending && uploading === 0 && (text.trim().length > 0 || attachments.length > 0)
+
+  // Tokens the highlight layer paints: the same ones buildParts will send.
+  const backdrop = useRef<HTMLDivElement>(null)
+  const segments = useMemo(
+    () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills]),
+    [text, skills, tokenSources],
+  )
 
   const buildParts = (): ContentPart[] => {
     const skillItems = [...skills, ...selectedSkills.current.values()]
@@ -455,6 +484,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       setAttachments([])
       mentioned.current.clear()
       selectedSkills.current.clear()
+      syncTokenSources()
       if (ta.current) {
         ta.current.style.height = "auto"
         ta.current.focus()
@@ -701,6 +731,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               </div>
             )}
 
+            <div className="relative">
+            <div ref={backdrop} aria-hidden className={cn(EDITOR_BACKDROP_CLASS, disabled && "opacity-60")}>
+              {segments.map((segment, i) =>
+                segment.kind === "token" ? (
+                  <InlineToken key={i} plain kind={segment.part.type === "skill" ? "skill" : segment.part.type === "mention" ? "plugin" : "file"} text={segment.text} />
+                ) : (
+                  <Fragment key={i}>{segment.text}</Fragment>
+                ),
+              )}
+              {"\u200b"}
+            </div>
             <textarea
               ref={ta}
               data-testid="composer-editor"
@@ -719,6 +760,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               }}
               onKeyUp={(e) => syncCaret(e.currentTarget)}
               onClick={(e) => syncCaret(e.currentTarget)}
+              onScroll={(e) => {
+                if (backdrop.current) backdrop.current.scrollTop = e.currentTarget.scrollTop
+              }}
               onKeyDown={onKeyDown}
               onPaste={(e) => {
                 const pasted = clipboardFiles(e.clipboardData)
@@ -729,6 +773,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               }}
               className={EDITOR_CLASS}
             />
+            </div>
           </div>
 
           {!hideFooter && (

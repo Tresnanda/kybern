@@ -4,7 +4,7 @@ import { imageSource } from "@/lib/responseImages"
 // Code blocks get the `.chat-markdown-codeblock` chrome: language label,
 // wrap toggle and copy action in the header, shiki-highlighted body.
 
-import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "react"
+import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -14,6 +14,8 @@ import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { IconSwap, StreamWords } from "@/components/kybern/motion"
+import type { InlineTokenKind } from "@/components/kybern/InlineToken"
+import { renderWithTokens } from "@/lib/inlineTokens"
 
 type Highlighter = {
   codeToHtml: (code: string, opts: { lang: string; theme: string }) => string
@@ -171,22 +173,26 @@ function extractText(node: ReactNode): string {
   return ""
 }
 
-/** Wraps string children in streaming word spans; element children pass through untouched. */
-function streamChildren(children: ReactNode): ReactNode {
-  if (typeof children === "string") return <StreamWords text={children} />
-  if (Array.isArray(children)) return children.map((child, i) => (typeof child === "string" ? <StreamWords key={i} text={child} /> : child))
+/** Maps string children through `transform`; element children pass through untouched. */
+function mapText(children: ReactNode, transform: (text: string, key: number) => ReactNode): ReactNode {
+  if (typeof children === "string") return transform(children, 0)
+  if (Array.isArray(children)) return children.map((child, i) => (typeof child === "string" ? transform(child, i) : child))
   return children
 }
 
-const LIVE_TEXT_COMPONENTS = {
-  p: ({ children }: { children?: ReactNode }) => <p>{streamChildren(children)}</p>,
-  li: ({ children }: { children?: ReactNode }) => <li>{streamChildren(children)}</li>,
-  strong: ({ children }: { children?: ReactNode }) => <strong>{streamChildren(children)}</strong>,
-  em: ({ children }: { children?: ReactNode }) => <em>{streamChildren(children)}</em>,
-  h1: ({ children }: { children?: ReactNode }) => <h1>{streamChildren(children)}</h1>,
-  h2: ({ children }: { children?: ReactNode }) => <h2>{streamChildren(children)}</h2>,
-  h3: ({ children }: { children?: ReactNode }) => <h3>{streamChildren(children)}</h3>,
+type TextTransform = (text: string, key: number) => ReactNode
+
+/** Element overrides that run every text run through `transform` (streaming words, inline tokens). */
+function textComponents(transform: TextTransform) {
+  const wrap = (Tag: "p" | "li" | "strong" | "em" | "h1" | "h2" | "h3") =>
+    function Text({ children }: { children?: ReactNode }) {
+      return <Tag>{mapText(children, transform)}</Tag>
+    }
+  return { p: wrap("p"), li: wrap("li"), strong: wrap("strong"), em: wrap("em"), h1: wrap("h1"), h2: wrap("h2"), h3: wrap("h3") }
 }
+
+const streamTransform: TextTransform = (text, key) => <StreamWords key={key} text={text} />
+const LIVE_TEXT_COMPONENTS = textComponents(streamTransform)
 
 export const Markdown = memo(function Markdown({
   text,
@@ -194,6 +200,7 @@ export const Markdown = memo(function Markdown({
   variant = "assistant",
   style,
   live = false,
+  tokens,
 }: {
   text: string
   className?: string
@@ -201,7 +208,13 @@ export const Markdown = memo(function Markdown({
   style?: CSSProperties
   /** While streaming, each newly arrived word resolves through a short blur. */
   live?: boolean
+  /** Literal tokens ("$skill", "@path") to render as inline chips wherever they appear in text. */
+  tokens?: ReadonlyMap<string, InlineTokenKind>
 }) {
+  const tokenComponents = useMemo(
+    () => (tokens && tokens.size > 0 ? textComponents((text, key) => <Fragment key={key}>{renderWithTokens(text, tokens)}</Fragment>) : null),
+    [tokens],
+  )
   return (
     <div
       className={cn("chat-markdown selectable w-full min-w-0 text-sm leading-relaxed text-foreground", variant === "user" && "chat-markdown--user", className)}
@@ -211,7 +224,7 @@ export const Markdown = memo(function Markdown({
         remarkPlugins={[remarkGfm]}
         urlTransform={(url, key) => key === "src" ? (imageSource(url) ? url : "") : defaultUrlTransform(url)}
         components={{
-          ...(live ? LIVE_TEXT_COMPONENTS : null),
+          ...(live ? LIVE_TEXT_COMPONENTS : tokenComponents),
           img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
           a: ({ href, children }) => (
             <a

@@ -17,6 +17,8 @@ import { Markdown } from "@/components/kybern/Markdown"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { Spinner } from "@/components/kybern/bits"
 import { IconSwap, MatrixLoader, StreamWords, TextSwap } from "@/components/kybern/motion"
+import type { InlineTokenKind } from "@/components/kybern/InlineToken"
+import { partToken } from "@/lib/composerTokens"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { DiffStatLabel } from "@/components/kit/chat/DiffStatLabel"
@@ -49,7 +51,6 @@ import {
   McpIcon,
   PanelRightCloseIcon,
   PencilIcon,
-  PluginIcon,
   SearchIcon,
   SkillCubeIcon,
   TerminalIcon,
@@ -654,11 +655,25 @@ function CopyAction({ text }: { text: string }) {
 }
 
 function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: string }) {
-  const text = message.parts
-    .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
-    .map((p) => p.text)
-    .join("\n")
-  const files = message.parts.filter((p) => p.type !== "text")
+  // Structured parts (skills, plugin and file mentions) sit inline in the
+  // message at the position they were typed, so the bubble is rebuilt as one
+  // string with those tokens rendered as chips. Only attachments and images
+  // float above the bubble.
+  const { text, tokens } = useMemo(() => {
+    const tokens = new Map<string, InlineTokenKind>()
+    let text = ""
+    for (const p of message.parts) {
+      if (p.type === "text") text += p.text
+      else {
+        const token = partToken(p)
+        if (!token) continue
+        tokens.set(token, p.type === "skill" ? "skill" : p.type === "mention" ? "plugin" : "file")
+        text += token
+      }
+    }
+    return { text, tokens }
+  }, [message.parts])
+  const files = message.parts.filter((p) => p.type === "image" || p.type === "attachment")
   // Decided once on mount: only a bubble that was sent just now plays the send animation.
   const [fresh] = useState(() => Date.now() - new Date(at).getTime() < 3000)
   return (
@@ -679,19 +694,8 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
                     key={i}
                     className="inline-flex h-7 max-w-[16rem] min-w-0 items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] px-2 text-[length:var(--app-font-size-ui-sm,13px)] font-medium text-[var(--color-text-foreground)]"
                   >
-                    {p.type === "skill" ? (
-                      <SkillCubeIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
-                    ) : p.type === "mention" ? (
-                      <PluginIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
-                    ) : (
-                      <FileEntryIcon
-                        pathValue={p.type === "attachment" ? p.name : p.path}
-                        kind="file"
-                        mimeType={p.type === "attachment" ? p.media_type : undefined}
-                        className="size-3.5"
-                      />
-                    )}
-                    <span className="min-w-0 truncate">{p.type === "attachment" ? p.name : p.type === "skill" ? `$${p.name}` : p.type === "mention" ? `@${p.display_name ?? p.name}` : p.path}</span>
+                    <FileEntryIcon pathValue={p.name} kind="file" mimeType={p.media_type} className="size-3.5" />
+                    <span className="min-w-0 truncate">{p.name}</span>
                   </span>
                 ),
               )}
@@ -699,7 +703,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
           )}
           {text && (
             <div data-slot="message-content" className="w-max max-w-full min-w-0 self-end rounded-[var(--radius-user-message)] border border-transparent bg-[var(--app-user-message-background)] px-3 py-1.5">
-              <Markdown text={text} variant="user" style={TEXT} />
+              <Markdown text={text} variant="user" style={TEXT} tokens={tokens} />
             </div>
           )}
           <div className="absolute top-full right-0 flex items-center justify-end gap-2 pt-1 pr-0.5 font-system-ui font-normal whitespace-nowrap text-muted-foreground/45" style={META}>
