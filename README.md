@@ -46,19 +46,34 @@ to it does not copy your laptop's projects or credentials.
 Every desktop package bundles `kybernd`; you do not need to install the daemon
 or CLI separately on a desktop.
 
-**macOS**: one command installs the app into Applications and opens it, with
-no Gatekeeper prompt:
+**macOS**, two ways. The quickest is one command, which installs the app into
+Applications and opens it with no prompt:
 
 ```sh
 curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-mac-install.sh | sh
 ```
 
-The DMGs on the [release page](https://github.com/Tresnanda/kybern/releases/latest)
-work too, but the app is signed ad hoc and not notarized, so a browser download
-is blocked with "Apple could not verify" until you allow it under **System
-Settings → Privacy & Security → Open Anyway**. The installer above avoids that
-because files fetched with `curl` are never quarantined. Updates delivered by
-the app itself are not quarantined either.
+Or download the DMG from the
+[release page](https://github.com/Tresnanda/kybern/releases/latest) and drag
+kybern into Applications. Kybern is not notarized by Apple, so the first launch
+of a browser download is blocked with "Apple could not verify kybern is free of
+malware". Allow it once:
+
+1. Click **Done** on that dialog (not Move to Trash).
+2. Open **System Settings → Privacy & Security** and scroll to the **Security**
+   section. Click **Open Anyway** next to "kybern was blocked to protect your
+   Mac".
+
+   ![Open Anyway in Privacy & Security](assets/readme/gatekeeper-open-anyway.png)
+
+3. Confirm with **Open Anyway** on the next dialog and enter your password or
+   Touch ID.
+
+   ![Confirm opening kybern](assets/readme/gatekeeper-confirm.png)
+
+That is a one-time step. Updates installed by the app itself are never blocked,
+and neither is the command above, because only browser downloads are marked for
+this check.
 
 **Linux and Windows**: download from the release page.
 
