@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use kybern_client::{Client, Endpoint};
-use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, Empty, PairingCreate, PairingCreateParams};
+use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, DaemonShutdown, Empty, PairingCreate, PairingCreateParams};
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
@@ -183,6 +183,21 @@ fn explain_ssh_failure(target: &str, code: Option<i32>, stderr: &str) -> String 
         Some(code) if detail.is_empty() => format!("The command on {target} exited with status {code} and no output"),
         None if detail.is_empty() => format!("The command on {target} was killed by a signal"),
         _ => format!("{target}: {detail}"),
+    }
+}
+
+/// `(major, minor, patch)` of a release version, ignoring any suffix.
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.trim().trim_start_matches('v').split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
+/// Whether the daemon on the machine is older than this app.
+fn outdated(remote: Option<&str>) -> bool {
+    match (remote.and_then(parse_version), parse_version(env!("CARGO_PKG_VERSION"))) {
+        (Some(remote), Some(app)) => remote < app,
+        _ => false,
     }
 }
 
@@ -465,7 +480,9 @@ async fn bootstrap<R: tauri::Runtime>(
     report(app, "connect", "done", Some(format!("{} {}", machine.os, machine.arch)));
 
     report(app, "install", "running", None);
-    if machine.kybernd.is_none() {
+    let previous = machine.version.clone();
+    let upgrade = machine.kybernd.is_some() && outdated(previous.as_deref());
+    if machine.kybernd.is_none() || upgrade {
         if !machine.curl {
             bail!("curl is not installed on {}; install it and try again", config.target);
         }
@@ -474,7 +491,35 @@ async fn bootstrap<R: tauri::Runtime>(
         if machine.kybernd.is_none() {
             bail!("The installer finished but kybernd is not on PATH for non-interactive shells on {}", config.target);
         }
-        report(app, "install", "done", Some(format!("Installed kybernd {}", machine.version.as_deref().unwrap_or("")).trim().to_string()));
+        if upgrade {
+            // The old binary is still the one running; stop it so the start
+            // step below brings up the one just installed.
+            config.remote_port = machine.port.unwrap_or(DEFAULT_REMOTE_PORT);
+            if let (Some(token), Some(_)) = (&machine.token, machine.port)
+                && let Ok(port) = ensure_tunnel(id, config).await
+                && let Ok(client) = Client::connect(&endpoint(port, token)).await
+            {
+                let _ = client.call::<DaemonShutdown>(Empty {}).await;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+                while daemon_info(port, token).await.is_ok() && tokio::time::Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+            stop_tunnel(id).await;
+            report(
+                app,
+                "install",
+                "done",
+                Some(format!("Updated kybernd {} to {}", previous.as_deref().unwrap_or("?"), machine.version.as_deref().unwrap_or(""))),
+            );
+        } else {
+            report(
+                app,
+                "install",
+                "done",
+                Some(format!("Installed kybernd {}", machine.version.as_deref().unwrap_or("")).trim().to_string()),
+            );
+        }
     } else {
         report(
             app,
@@ -674,6 +719,15 @@ mod tests {
             stop_tunnel("cleanup").await;
         });
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn detects_an_older_daemon() {
+        assert!(outdated(Some("0.1.1")));
+        assert!(!outdated(Some(env!("CARGO_PKG_VERSION"))));
+        assert!(!outdated(Some("99.0.0")));
+        assert!(!outdated(None));
+        assert!(!outdated(Some("unknown")));
     }
 
     #[test]

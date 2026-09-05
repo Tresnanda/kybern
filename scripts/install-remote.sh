@@ -80,7 +80,10 @@ TimeoutStopSec=30
 WantedBy=default.target
 UNIT
   systemctl --user daemon-reload
-  systemctl --user enable --now kybernd
+  systemctl --user enable kybernd >/dev/null 2>&1
+  # Restart rather than start, so a service already running an older binary
+  # picks up the one just installed.
+  systemctl --user restart kybernd
   echo "==> kybernd is running as a user service on $BIND:$PORT"
   if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
     echo "==> keep it running after logout and reboot:  sudo loginctl enable-linger $USER"
