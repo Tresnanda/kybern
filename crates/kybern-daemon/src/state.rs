@@ -42,6 +42,14 @@ pub struct Inner {
     pub environment_id: String,
     pub started_at: DateTime<Utc>,
     pub shutdown: CancellationToken,
+    /// Open WebSocket connections. Maintained by `ws::run`.
+    pub connections: std::sync::atomic::AtomicUsize,
+    /// When the daemon last had no clients, sessions, terminals, or queued
+    /// work; `None` while anything is active. Maintained by the maintenance sweep.
+    pub idle_since: std::sync::RwLock<Option<DateTime<Utc>>>,
+    /// Latest host power probe; `None` until the first sweep or on hosts
+    /// that cannot report it. Maintained by the maintenance sweep.
+    pub on_battery: std::sync::RwLock<Option<bool>>,
 }
 
 impl std::ops::Deref for AppState {
@@ -52,6 +60,12 @@ impl std::ops::Deref for AppState {
 }
 
 impl AppState {
+    /// Whether `background.save_power_on_battery` applies right now.
+    pub fn saving_power(&self) -> bool {
+        self.settings.get().background.save_power_on_battery
+            && *self.on_battery.read().unwrap_or_else(|poisoned| poisoned.into_inner()) == Some(true)
+    }
+
     /// Construct daemon state before restart recovery. The desktop cold-start
     /// handshake binds its socket after this step, then recovery completes
     /// before axum begins accepting requests.
@@ -92,6 +106,9 @@ impl AppState {
                 environment_id,
                 started_at: Utc::now(),
                 shutdown: CancellationToken::new(),
+                connections: std::sync::atomic::AtomicUsize::new(0),
+                idle_since: std::sync::RwLock::new(None),
+                on_battery: std::sync::RwLock::new(None),
             }),
         })
     }

@@ -250,6 +250,25 @@ cargo build
 
 Approvals show up inline in `new` and `send`; answer with `y`, `a` (always) or `n`.
 
+### Background behaviour
+
+The daemon outlives the app, so it trims what it keeps alive once work
+finishes. Agent processes are resumed from the provider's own session on the
+next message, so releasing one loses no conversation. Limits live under
+`background` in `settings.json` (also in Settings > General > Background);
+every value is in minutes and `0` turns that limit off.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `session_idle_minutes` | 10 | Close an idle thread's agent process after this long. Running, awaiting-approval, and background-task threads are never touched. |
+| `max_idle_sessions` | 4 | Most idle agent processes kept warm; the least recently used go first. |
+| `terminal_idle_minutes` | 60 | Close shells with no window attached and nothing in the foreground. |
+| `daemon_idle_exit_minutes` | 0 (off) | Exit the daemon after nothing has needed it. Only for daemons the desktop app starts on demand; the CLI and remote clients do not restart an exited daemon. |
+
+`kybern activity` shows what the daemon is holding open right now: clients,
+agent processes (live and idle), terminals, queued follow-ups, and when it
+would exit if idle exit is on.
+
 ## Status
 
 What works today, all verified end to end on macOS:

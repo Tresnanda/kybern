@@ -71,6 +71,17 @@ expression: schema_for!(Settings)
       "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
       "type": "boolean",
       "default": false
+    },
+    "background": {
+      "description": "How the daemon trims CPU and memory while nothing needs it.",
+      "$ref": "#/$defs/BackgroundSettings",
+      "default": {
+        "session_idle_minutes": 10,
+        "max_idle_sessions": 4,
+        "terminal_idle_minutes": 60,
+        "daemon_idle_exit_minutes": 0,
+        "save_power_on_battery": false
+      }
     }
   },
   "$defs": {
@@ -135,6 +146,45 @@ expression: schema_for!(Settings)
           "additionalProperties": {
             "type": "string"
           }
+        }
+      }
+    },
+    "BackgroundSettings": {
+      "description": "Limits on what the daemon keeps alive after work finishes. Agent processes\nare resumed from the provider's own session on the next message, so\nreleasing one loses no conversation. Every value is in minutes; `0` turns\nthat limit off.",
+      "type": "object",
+      "properties": {
+        "session_idle_minutes": {
+          "description": "Minutes an idle thread keeps its agent process before the daemon\nreleases it. Threads that are running, awaiting approval, or have\nbackground work are never released.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 10
+        },
+        "max_idle_sessions": {
+          "description": "Most idle agent processes kept warm at once. The least recently used\nare released first, even before their idle time is up.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 4
+        },
+        "terminal_idle_minutes": {
+          "description": "Minutes a shell with no attached client and no foreground job stays\nopen before the daemon closes it.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 60
+        },
+        "daemon_idle_exit_minutes": {
+          "description": "Minutes with no clients, agents, terminals, or queued work before the\ndaemon exits. Only for daemons the desktop app starts on demand: the\nCLI and remote clients do not restart a daemon that has exited.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "save_power_on_battery": {
+          "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes` and hold\nautomatic harness updates until power returns.",
+          "type": "boolean",
+          "default": false
         }
       }
     }

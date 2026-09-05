@@ -19,6 +19,24 @@ pub fn info(i: &DaemonInfo) {
     println!("scopes       {}", i.scopes.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(" "));
 }
 
+pub fn activity(a: &DaemonActivity) {
+    println!("connections      {}", a.connections);
+    println!("agent processes  {} live, {} idle", a.live_sessions, a.idle_sessions);
+    println!("running threads  {}", a.running_threads);
+    println!("terminals        {}", a.terminals);
+    println!("queued messages  {}", a.queued_messages);
+    match (a.idle_since, a.idle_exit_at) {
+        (Some(since), Some(exit)) => println!("idle since       {} (exits at {})", since.to_rfc3339(), exit.to_rfc3339()),
+        (Some(since), None) => println!("idle since       {}", since.to_rfc3339()),
+        _ => println!("idle since       busy"),
+    }
+    match a.on_battery {
+        Some(true) => println!("power            battery"),
+        Some(false) => println!("power            plugged in"),
+        None => {}
+    }
+}
+
 pub fn providers(list: &[ProviderStatus]) {
     for p in list {
         let state = if p.available { "available" } else { "unavailable" };

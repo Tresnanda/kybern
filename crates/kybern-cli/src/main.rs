@@ -32,6 +32,8 @@ struct Cli {
 enum Cmd {
     /// Show daemon info.
     Info,
+    /// Show what the daemon is holding open: clients, agent processes, terminals, queued work.
+    Activity,
     /// Stop the local daemon gracefully.
     StopDaemon,
     /// List providers and their availability.
@@ -346,6 +348,10 @@ async fn main() -> Result<()> {
         Cmd::Info => {
             let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
             if json { println!("{}", serde_json::to_string_pretty(&info)?) } else { render::info(&info) }
+        }
+        Cmd::Activity => {
+            let activity = client.call::<DaemonActivityMethod>(Empty {}).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&activity)?) } else { render::activity(&activity) }
         }
         Cmd::StopDaemon => {
             client.call::<DaemonShutdown>(Empty {}).await?;

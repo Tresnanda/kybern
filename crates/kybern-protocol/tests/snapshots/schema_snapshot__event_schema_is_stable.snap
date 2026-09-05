@@ -156,6 +156,23 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "The daemon closed the agent process while the thread was idle. The\nnext message resumes the provider session; nothing is lost.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/SessionReleaseReason"
+        },
+        "kind": {
+          "type": "string",
+          "const": "provider_session_released"
+        }
+      },
+      "required": [
+        "kind",
+        "reason"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "message_id": {
@@ -891,6 +908,31 @@ expression: schema_for!(ThreadEvent)
             "name",
             "path"
           ]
+        }
+      ]
+    },
+    "SessionReleaseReason": {
+      "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
+      "oneOf": [
+        {
+          "description": "The thread was idle for longer than `background.session_idle_minutes`.",
+          "type": "string",
+          "const": "idle"
+        },
+        {
+          "description": "More idle processes were alive than `background.max_idle_sessions`.",
+          "type": "string",
+          "const": "capacity"
+        },
+        {
+          "description": "The harness was closed so it could be updated.",
+          "type": "string",
+          "const": "update"
+        },
+        {
+          "description": "The host is on battery and `background.save_power_on_battery` is on.",
+          "type": "string",
+          "const": "power"
         }
       ]
     },

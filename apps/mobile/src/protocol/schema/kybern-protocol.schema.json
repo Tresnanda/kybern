@@ -302,6 +302,23 @@
           ]
         },
         {
+          "description": "The daemon closed the agent process while the thread was idle. The\nnext message resumes the provider session; nothing is lost.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/SessionReleaseReason"
+            },
+            "kind": {
+              "type": "string",
+              "const": "provider_session_released"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "message_id": {
@@ -1040,6 +1057,31 @@
             }
           ]
         },
+        "SessionReleaseReason": {
+          "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
+          "oneOf": [
+            {
+              "description": "The thread was idle for longer than `background.session_idle_minutes`.",
+              "type": "string",
+              "const": "idle"
+            },
+            {
+              "description": "More idle processes were alive than `background.max_idle_sessions`.",
+              "type": "string",
+              "const": "capacity"
+            },
+            {
+              "description": "The harness was closed so it could be updated.",
+              "type": "string",
+              "const": "update"
+            },
+            {
+              "description": "The host is on battery and `background.save_power_on_battery` is on.",
+              "type": "string",
+              "const": "power"
+            }
+          ]
+        },
         "EventOrigin": {
           "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
           "oneOf": [
@@ -1704,6 +1746,23 @@
               "required": [
                 "kind",
                 "session_id"
+              ]
+            },
+            {
+              "description": "The daemon closed the agent process while the thread was idle. The\nnext message resumes the provider session; nothing is lost.",
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "$ref": "#/$defs/SessionReleaseReason"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "provider_session_released"
+                }
+              },
+              "required": [
+                "kind",
+                "reason"
               ]
             },
             {
@@ -2442,6 +2501,31 @@
                 "name",
                 "path"
               ]
+            }
+          ]
+        },
+        "SessionReleaseReason": {
+          "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
+          "oneOf": [
+            {
+              "description": "The thread was idle for longer than `background.session_idle_minutes`.",
+              "type": "string",
+              "const": "idle"
+            },
+            {
+              "description": "More idle processes were alive than `background.max_idle_sessions`.",
+              "type": "string",
+              "const": "capacity"
+            },
+            {
+              "description": "The harness was closed so it could be updated.",
+              "type": "string",
+              "const": "update"
+            },
+            {
+              "description": "The host is on battery and `background.save_power_on_battery` is on.",
+              "type": "string",
+              "const": "power"
             }
           ]
         },
@@ -4599,6 +4683,17 @@
           "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
           "type": "boolean",
           "default": false
+        },
+        "background": {
+          "description": "How the daemon trims CPU and memory while nothing needs it.",
+          "$ref": "#/$defs/BackgroundSettings",
+          "default": {
+            "session_idle_minutes": 10,
+            "max_idle_sessions": 4,
+            "terminal_idle_minutes": 60,
+            "daemon_idle_exit_minutes": 0,
+            "save_power_on_battery": false
+          }
         }
       },
       "$defs": {
@@ -4663,6 +4758,45 @@
               "additionalProperties": {
                 "type": "string"
               }
+            }
+          }
+        },
+        "BackgroundSettings": {
+          "description": "Limits on what the daemon keeps alive after work finishes. Agent processes\nare resumed from the provider's own session on the next message, so\nreleasing one loses no conversation. Every value is in minutes; `0` turns\nthat limit off.",
+          "type": "object",
+          "properties": {
+            "session_idle_minutes": {
+              "description": "Minutes an idle thread keeps its agent process before the daemon\nreleases it. Threads that are running, awaiting approval, or have\nbackground work are never released.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "default": 10
+            },
+            "max_idle_sessions": {
+              "description": "Most idle agent processes kept warm at once. The least recently used\nare released first, even before their idle time is up.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "default": 4
+            },
+            "terminal_idle_minutes": {
+              "description": "Minutes a shell with no attached client and no foreground job stays\nopen before the daemon closes it.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "default": 60
+            },
+            "daemon_idle_exit_minutes": {
+              "description": "Minutes with no clients, agents, terminals, or queued work before the\ndaemon exits. Only for daemons the desktop app starts on demand: the\nCLI and remote clients do not restart a daemon that has exited.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "default": 0
+            },
+            "save_power_on_battery": {
+              "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+              "type": "boolean",
+              "default": false
             }
           }
         }
@@ -5348,6 +5482,90 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Empty",
         "type": "object"
+      }
+    },
+    {
+      "name": "daemon.activity",
+      "scope": "orchestration_read",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DaemonActivity",
+        "description": "What the daemon is holding open right now. Lets clients and the CLI verify\nthat finished work does not linger.",
+        "type": "object",
+        "properties": {
+          "connections": {
+            "description": "Connected WebSocket clients.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "live_sessions": {
+            "description": "Threads with an agent process alive.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "idle_sessions": {
+            "description": "Live sessions with no turn, approval, or background work in progress.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "running_threads": {
+            "description": "Threads running a turn or waiting for an approval.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "terminals": {
+            "description": "Shells and agent CLIs with a live pseudo-terminal.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "queued_messages": {
+            "description": "Follow-ups waiting for their thread to become idle.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "idle_since": {
+            "description": "When the daemon last became fully idle, if it is idle now.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "idle_exit_at": {
+            "description": "When the daemon will exit if it stays idle, per `background.daemon_idle_exit_minutes`.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "on_battery": {
+            "description": "Whether the host is running on battery. Absent when the daemon cannot tell.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connections",
+          "live_sessions",
+          "idle_sessions",
+          "running_threads",
+          "terminals",
+          "queued_messages"
+        ]
       }
     },
     {
@@ -10559,6 +10777,17 @@
             "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
             "type": "boolean",
             "default": false
+          },
+          "background": {
+            "description": "How the daemon trims CPU and memory while nothing needs it.",
+            "$ref": "#/$defs/BackgroundSettings",
+            "default": {
+              "session_idle_minutes": 10,
+              "max_idle_sessions": 4,
+              "terminal_idle_minutes": 60,
+              "daemon_idle_exit_minutes": 0,
+              "save_power_on_battery": false
+            }
           }
         },
         "$defs": {
@@ -10623,6 +10852,45 @@
                 "additionalProperties": {
                   "type": "string"
                 }
+              }
+            }
+          },
+          "BackgroundSettings": {
+            "description": "Limits on what the daemon keeps alive after work finishes. Agent processes\nare resumed from the provider's own session on the next message, so\nreleasing one loses no conversation. Every value is in minutes; `0` turns\nthat limit off.",
+            "type": "object",
+            "properties": {
+              "session_idle_minutes": {
+                "description": "Minutes an idle thread keeps its agent process before the daemon\nreleases it. Threads that are running, awaiting approval, or have\nbackground work are never released.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 10
+              },
+              "max_idle_sessions": {
+                "description": "Most idle agent processes kept warm at once. The least recently used\nare released first, even before their idle time is up.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 4
+              },
+              "terminal_idle_minutes": {
+                "description": "Minutes a shell with no attached client and no foreground job stays\nopen before the daemon closes it.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 60
+              },
+              "daemon_idle_exit_minutes": {
+                "description": "Minutes with no clients, agents, terminals, or queued work before the\ndaemon exits. Only for daemons the desktop app starts on demand: the\nCLI and remote clients do not restart a daemon that has exited.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 0
+              },
+              "save_power_on_battery": {
+                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+                "type": "boolean",
+                "default": false
               }
             }
           }
@@ -10712,6 +10980,17 @@
                 "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
                 "type": "boolean",
                 "default": false
+              },
+              "background": {
+                "description": "How the daemon trims CPU and memory while nothing needs it.",
+                "$ref": "#/$defs/BackgroundSettings",
+                "default": {
+                  "session_idle_minutes": 10,
+                  "max_idle_sessions": 4,
+                  "terminal_idle_minutes": 60,
+                  "daemon_idle_exit_minutes": 0,
+                  "save_power_on_battery": false
+                }
               }
             }
           },
@@ -10776,6 +11055,45 @@
                 "additionalProperties": {
                   "type": "string"
                 }
+              }
+            }
+          },
+          "BackgroundSettings": {
+            "description": "Limits on what the daemon keeps alive after work finishes. Agent processes\nare resumed from the provider's own session on the next message, so\nreleasing one loses no conversation. Every value is in minutes; `0` turns\nthat limit off.",
+            "type": "object",
+            "properties": {
+              "session_idle_minutes": {
+                "description": "Minutes an idle thread keeps its agent process before the daemon\nreleases it. Threads that are running, awaiting approval, or have\nbackground work are never released.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 10
+              },
+              "max_idle_sessions": {
+                "description": "Most idle agent processes kept warm at once. The least recently used\nare released first, even before their idle time is up.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 4
+              },
+              "terminal_idle_minutes": {
+                "description": "Minutes a shell with no attached client and no foreground job stays\nopen before the daemon closes it.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 60
+              },
+              "daemon_idle_exit_minutes": {
+                "description": "Minutes with no clients, agents, terminals, or queued work before the\ndaemon exits. Only for daemons the desktop app starts on demand: the\nCLI and remote clients do not restart a daemon that has exited.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 0
+              },
+              "save_power_on_battery": {
+                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+                "type": "boolean",
+                "default": false
               }
             }
           }
@@ -10850,6 +11168,17 @@
             "description": "Check installed harnesses daily and update them when idle. Opt-in per environment.",
             "type": "boolean",
             "default": false
+          },
+          "background": {
+            "description": "How the daemon trims CPU and memory while nothing needs it.",
+            "$ref": "#/$defs/BackgroundSettings",
+            "default": {
+              "session_idle_minutes": 10,
+              "max_idle_sessions": 4,
+              "terminal_idle_minutes": 60,
+              "daemon_idle_exit_minutes": 0,
+              "save_power_on_battery": false
+            }
           }
         },
         "$defs": {
@@ -10914,6 +11243,45 @@
                 "additionalProperties": {
                   "type": "string"
                 }
+              }
+            }
+          },
+          "BackgroundSettings": {
+            "description": "Limits on what the daemon keeps alive after work finishes. Agent processes\nare resumed from the provider's own session on the next message, so\nreleasing one loses no conversation. Every value is in minutes; `0` turns\nthat limit off.",
+            "type": "object",
+            "properties": {
+              "session_idle_minutes": {
+                "description": "Minutes an idle thread keeps its agent process before the daemon\nreleases it. Threads that are running, awaiting approval, or have\nbackground work are never released.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 10
+              },
+              "max_idle_sessions": {
+                "description": "Most idle agent processes kept warm at once. The least recently used\nare released first, even before their idle time is up.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 4
+              },
+              "terminal_idle_minutes": {
+                "description": "Minutes a shell with no attached client and no foreground job stays\nopen before the daemon closes it.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 60
+              },
+              "daemon_idle_exit_minutes": {
+                "description": "Minutes with no clients, agents, terminals, or queued work before the\ndaemon exits. Only for daemons the desktop app starts on demand: the\nCLI and remote clients do not restart a daemon that has exited.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "default": 0
+              },
+              "save_power_on_battery": {
+                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+                "type": "boolean",
+                "default": false
               }
             }
           }
@@ -12372,6 +12740,23 @@
                 ]
               },
               {
+                "description": "The daemon closed the agent process while the thread was idle. The\nnext message resumes the provider session; nothing is lost.",
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "$ref": "#/$defs/SessionReleaseReason"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "provider_session_released"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ]
+              },
+              {
                 "type": "object",
                 "properties": {
                   "message_id": {
@@ -13107,6 +13492,31 @@
                   "name",
                   "path"
                 ]
+              }
+            ]
+          },
+          "SessionReleaseReason": {
+            "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
+            "oneOf": [
+              {
+                "description": "The thread was idle for longer than `background.session_idle_minutes`.",
+                "type": "string",
+                "const": "idle"
+              },
+              {
+                "description": "More idle processes were alive than `background.max_idle_sessions`.",
+                "type": "string",
+                "const": "capacity"
+              },
+              {
+                "description": "The harness was closed so it could be updated.",
+                "type": "string",
+                "const": "update"
+              },
+              {
+                "description": "The host is on battery and `background.save_power_on_battery` is on.",
+                "type": "string",
+                "const": "power"
               }
             ]
           },

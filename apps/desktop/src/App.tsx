@@ -23,6 +23,7 @@ import { useEnvironments, activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 import { Draft } from "@/views/Draft"
 import { HandoffDialog } from "@/views/Handoff"
+import { CloseGuard } from "@/views/CloseGuard"
 import { Palette } from "@/views/Palette"
 import { PullRequests } from "@/views/PullRequests"
 import { RightPanel } from "@/views/RightPanel"
@@ -160,6 +161,9 @@ function Workspace() {
       </ErrorBoundary>
       <ErrorBoundary label="hand off">
         <HandoffDialog />
+      </ErrorBoundary>
+      <ErrorBoundary label="closing">
+        <CloseGuard />
       </ErrorBoundary>
       <Toaster position="bottom-right" />
     </SidebarProvider>

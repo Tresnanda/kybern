@@ -26,6 +26,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             };
             ok(info)
         }
+        DaemonActivityMethod::NAME => ok(crate::maintenance::activity(state).await.map_err(internal)?),
         DaemonShutdown::NAME => {
             if ctx.principal.label != "bootstrap" {
                 return Err(RpcError::new(codes::FORBIDDEN, "daemon shutdown requires the local bootstrap client"));
@@ -146,6 +147,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsGet::NAME => {
             let p: ThreadsGetParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            state.orchestrator.touch_session(p.thread_id).await;
             let store = state.store.clone();
             let id = p.thread_id;
             let (transcript, pending_approvals, runtime_tasks) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {

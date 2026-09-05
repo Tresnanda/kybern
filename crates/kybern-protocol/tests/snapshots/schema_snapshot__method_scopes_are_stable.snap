@@ -6,6 +6,8 @@ expression: scopes
   - ~
 - - daemon.shutdown
   - "access:write"
+- - daemon.activity
+  - "orchestration:read"
 - - providers.list
   - "orchestration:read"
 - - harness_updates.list

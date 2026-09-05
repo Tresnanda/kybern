@@ -6,7 +6,9 @@ mod files;
 mod github;
 mod harness_updates;
 mod http;
+mod maintenance;
 mod orchestrator;
+mod power;
 #[cfg(test)]
 mod remote_tests;
 mod rpc;
@@ -115,17 +117,26 @@ async fn main() -> Result<()> {
     state.orchestrator.recover_after_restart().await?;
 
     let update_worker = tokio::spawn(harness_updates::run(state.clone()));
+    let maintenance_worker = tokio::spawn(maintenance::run(state.clone(), !args.pair));
     let queue_state = state.clone();
     let queue_worker = tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+        // Follow-ups dispatch when their thread goes idle. The orchestrator
+        // wakes this worker on every event that can make that happen; the
+        // timer is only a safety net, short while work is pending and long
+        // otherwise so an idle daemon does not poll the store.
         loop {
+            let waiting = match queue_state.orchestrator.drain_queues().await {
+                Ok(waiting) => waiting,
+                Err(error) => {
+                    tracing::error!(%error, "could not dispatch queued follow-up");
+                    true
+                }
+            };
+            let fallback = if waiting { std::time::Duration::from_secs(2) } else { std::time::Duration::from_secs(60) };
             tokio::select! {
                 _ = queue_state.shutdown.cancelled() => break,
-                _ = tick.tick() => {
-                    if let Err(error) = queue_state.orchestrator.drain_queues().await {
-                        tracing::error!(%error, "could not dispatch queued follow-up");
-                    }
-                }
+                _ = queue_state.orchestrator.queue_changed() => {}
+                _ = tokio::time::sleep(fallback) => {}
             }
         }
     });
@@ -158,17 +169,40 @@ async fn main() -> Result<()> {
     };
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
+    let _ = maintenance_worker.await;
     let _ = update_worker.await;
     state.orchestrator.shutdown().await;
     state.terminals.shutdown().await;
-    let _ = std::fs::remove_file(&paths.port_file);
-    let _ = std::fs::remove_file(paths.root.join("daemon.listen"));
+    release_endpoint_files(&paths, addr);
     Ok(())
+}
+
+/// Remove the port and listen files on exit, but only while they still name
+/// this daemon. A newer daemon may have taken over the data directory; deleting
+/// its files would strand every client and make the desktop spawn yet another.
+fn release_endpoint_files(paths: &config::Paths, addr: SocketAddr) {
+    let listen = paths.root.join("daemon.listen");
+    for (path, expected) in [(&paths.port_file, addr.port().to_string()), (&listen, addr.to_string())] {
+        if std::fs::read_to_string(path).is_ok_and(|contents| owns_endpoint_file(&contents, &expected)) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn owns_endpoint_file(contents: &str, expected: &str) -> bool {
+    contents.trim() == expected
 }
 
 #[cfg(test)]
 mod tests {
-    use super::startup_announcement_filename;
+    use super::{owns_endpoint_file, startup_announcement_filename};
+
+    #[test]
+    fn endpoint_files_are_only_released_by_the_daemon_they_name() {
+        assert!(owns_endpoint_file("4199\n", "4199"));
+        assert!(!owns_endpoint_file("4200", "4199"));
+        assert!(!owns_endpoint_file("", "4199"));
+    }
 
     #[test]
     fn startup_announcement_filename_is_scoped_to_the_data_directory() {

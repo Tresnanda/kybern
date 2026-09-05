@@ -74,7 +74,7 @@ pub async fn tick(state: AppState) {
         let manual = state.harness_updates.requested.lock().unwrap().contains(&kind);
         let settings = state.settings.get();
         let mut record = state.harness_updates.record(kind);
-        if !manual && (!settings.auto_update_harnesses || !due(&record)) {
+        if !manual && (!settings.auto_update_harnesses || !due(&record) || state.saving_power()) {
             if record.status == Status::Waiting && !settings.auto_update_harnesses {
                 record.status = Status::NotChecked;
                 record.message = "Automatic updates are off".into();

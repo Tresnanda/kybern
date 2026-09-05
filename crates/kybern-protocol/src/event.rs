@@ -45,6 +45,11 @@ pub enum EventPayload {
         session_id: String,
         model: Option<String>,
     },
+    /// The daemon closed the agent process while the thread was idle. The
+    /// next message resumes the provider session; nothing is lost.
+    ProviderSessionReleased {
+        reason: SessionReleaseReason,
+    },
     AssistantTextDelta {
         message_id: MessageId,
         #[serde(default)]

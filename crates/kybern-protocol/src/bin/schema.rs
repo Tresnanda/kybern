@@ -50,6 +50,7 @@ fn main() {
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
     method::<DaemonShutdown>(&mut methods);
+    method::<DaemonActivityMethod>(&mut methods);
     method::<ProvidersList>(&mut methods);
     method::<HarnessUpdatesList>(&mut methods);
     method::<HarnessUpdatesRun>(&mut methods);

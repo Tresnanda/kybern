@@ -839,6 +839,8 @@ pub struct Settings {
     pub notifications: bool,
     /// Check installed harnesses daily and update them when idle. Opt-in per environment.
     pub auto_update_harnesses: bool,
+    /// How the daemon trims CPU and memory while nothing needs it.
+    pub background: BackgroundSettings,
 }
 
 impl Default for Settings {
@@ -852,6 +854,100 @@ impl Default for Settings {
             providers: Default::default(),
             notifications: true,
             auto_update_harnesses: false,
+            background: BackgroundSettings::default(),
+        }
+    }
+}
+
+/// Limits on what the daemon keeps alive after work finishes. Agent processes
+/// are resumed from the provider's own session on the next message, so
+/// releasing one loses no conversation. Every value is in minutes; `0` turns
+/// that limit off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct BackgroundSettings {
+    /// Minutes an idle thread keeps its agent process before the daemon
+    /// releases it. Threads that are running, awaiting approval, or have
+    /// background work are never released.
+    pub session_idle_minutes: u32,
+    /// Most idle agent processes kept warm at once. The least recently used
+    /// are released first, even before their idle time is up.
+    pub max_idle_sessions: u32,
+    /// Minutes a shell with no attached client and no foreground job stays
+    /// open before the daemon closes it.
+    pub terminal_idle_minutes: u32,
+    /// Minutes with no clients, agents, terminals, or queued work before the
+    /// daemon exits. Only for daemons the desktop app starts on demand: the
+    /// CLI and remote clients do not restart a daemon that has exited.
+    pub daemon_idle_exit_minutes: u32,
+    /// While the host runs on battery, release idle agent processes after
+    /// `BATTERY_SESSION_IDLE` instead of `session_idle_minutes` and hold
+    /// automatic harness updates until power returns.
+    pub save_power_on_battery: bool,
+}
+
+impl Default for BackgroundSettings {
+    fn default() -> Self {
+        Self {
+            session_idle_minutes: 10,
+            max_idle_sessions: 4,
+            terminal_idle_minutes: 60,
+            daemon_idle_exit_minutes: 0,
+            save_power_on_battery: false,
+        }
+    }
+}
+
+impl BackgroundSettings {
+    fn minutes(value: u32) -> Option<std::time::Duration> {
+        (value > 0).then(|| std::time::Duration::from_secs(u64::from(value) * 60))
+    }
+    /// `None` keeps idle agent processes indefinitely.
+    pub fn session_idle(&self) -> Option<std::time::Duration> {
+        Self::minutes(self.session_idle_minutes)
+    }
+    /// `None` keeps every idle agent process.
+    pub fn idle_session_cap(&self) -> Option<usize> {
+        (self.max_idle_sessions > 0).then_some(self.max_idle_sessions as usize)
+    }
+    /// `None` keeps detached shells open until they exit or are closed.
+    pub fn terminal_idle(&self) -> Option<std::time::Duration> {
+        Self::minutes(self.terminal_idle_minutes)
+    }
+    /// `None` keeps the daemon running until it is stopped.
+    pub fn daemon_idle_exit(&self) -> Option<std::time::Duration> {
+        Self::minutes(self.daemon_idle_exit_minutes)
+    }
+    /// Grace an idle agent process gets on battery before it is released:
+    /// long enough to answer a follow-up without a resume, short enough to
+    /// matter for the battery.
+    pub const BATTERY_SESSION_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+}
+
+/// Why the daemon closed an agent process. The thread's conversation is kept
+/// by the provider and resumes with the next message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionReleaseReason {
+    /// The thread was idle for longer than `background.session_idle_minutes`.
+    Idle,
+    /// More idle processes were alive than `background.max_idle_sessions`.
+    Capacity,
+    /// The harness was closed so it could be updated.
+    Update,
+    /// The host is on battery and `background.save_power_on_battery` is on.
+    Power,
+}
+
+impl SessionReleaseReason {
+    /// Transcript copy for the releases that can surprise. Idle and update
+    /// releases are the expected end of a quiet thread and get no row.
+    /// Mirrored in `apps/desktop/src/state/transcript.ts` for live events.
+    pub fn notice_text(self) -> Option<&'static str> {
+        match self {
+            Self::Capacity => Some("Agent process closed to stay under the warm limit. Your next message resumes it."),
+            Self::Power => Some("Agent process closed to save battery. Your next message resumes it."),
+            Self::Idle | Self::Update => None,
         }
     }
 }

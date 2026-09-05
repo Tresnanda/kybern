@@ -416,6 +416,9 @@ export interface Diff {
 
 export type NoticeLevel = "info" | "warning" | "error";
 
+/** Why the daemon closed an agent process; the next message resumes the conversation. */
+export type SessionReleaseReason = "idle" | "capacity" | "update" | "power";
+
 export type EventPayload =
   | { kind: "thread_created"; thread: Thread }
   | { kind: "thread_updated"; thread: Thread }
@@ -424,6 +427,7 @@ export type EventPayload =
   | { kind: "message_removed"; message_id: MessageId }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
+  | { kind: "provider_session_released"; reason: SessionReleaseReason }
   | { kind: "image_received"; id: string; origin: EventOrigin; source: string }
   | {
       kind: "assistant_text_delta";
@@ -515,6 +519,20 @@ export interface DaemonInfo {
   data_dir: string;
   scopes: Scope[];
   started_at: DateTime;
+}
+
+/** What the daemon is holding open right now. */
+export interface DaemonActivity {
+  connections: number;
+  live_sessions: number;
+  idle_sessions: number;
+  running_threads: number;
+  terminals: number;
+  queued_messages: number;
+  idle_since?: DateTime | null;
+  idle_exit_at?: DateTime | null;
+  /** Absent when the daemon cannot tell. */
+  on_battery?: boolean | null;
 }
 
 export interface ProvidersListResult {
@@ -755,6 +773,16 @@ export interface ProviderSettings {
   env: Record<string, string>;
 }
 
+/** Limits on what the daemon keeps alive after work finishes. Minutes; 0 turns a limit off. */
+export interface BackgroundSettings {
+  session_idle_minutes: number;
+  max_idle_sessions: number;
+  terminal_idle_minutes: number;
+  daemon_idle_exit_minutes: number;
+  /** On battery, idle agents are released after a minute and automatic harness updates wait. */
+  save_power_on_battery: boolean;
+}
+
 export interface Settings {
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
@@ -764,6 +792,7 @@ export interface Settings {
   providers: Partial<Record<ProviderKind, ProviderSettings>>;
   notifications: boolean;
   auto_update_harnesses: boolean;
+  background: BackgroundSettings;
 }
 
 export interface SettingsUpdateParams {
@@ -978,6 +1007,7 @@ export interface Methods {
     Record<string, never>,
   ];
   "daemon.info": [Empty, DaemonInfo];
+  "daemon.activity": [Empty, DaemonActivity];
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];

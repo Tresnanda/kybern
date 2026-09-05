@@ -10,6 +10,7 @@ import type {
   JsonValue,
   NoticeLevel,
   RuntimeTask,
+  SessionReleaseReason,
   StopReason,
   Thread,
   ThreadEvent,
@@ -339,12 +340,29 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       blocks = [...blocks, { kind: "reverted", id: `revert:${ev.seq}`, turnId, at, seq: ev.seq, commit: ev.commit }]
       break
     case "provider_session_bound":
-    case "provider_session_released":
       break
+    case "provider_session_released": {
+      // Only the releases that can surprise: idle and update releases are the
+      // expected end of a quiet thread, and would add a row every cycle.
+      const text = releaseNoticeText(ev.reason)
+      if (text) blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: "info", text }]
+      break
+    }
     default:
       break
   }
   return { thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
+}
+
+function releaseNoticeText(reason: SessionReleaseReason): string | null {
+  switch (reason) {
+    case "capacity":
+      return "Agent process closed to stay under the warm limit. Your next message resumes it."
+    case "power":
+      return "Agent process closed to save battery. Your next message resumes it."
+    default:
+      return null
+  }
 }
 
 function isAssistantEvent(ev: ThreadEvent): boolean {

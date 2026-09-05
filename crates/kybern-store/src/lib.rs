@@ -406,6 +406,15 @@ impl Store {
         self.with(|c| Ok(c.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| r.get(0))?))
     }
 
+    /// When the most recent event was appended, if any. Every turn writes
+    /// events, so this is the last time an agent did work for a client.
+    pub fn events_latest_at(&self) -> Result<Option<DateTime<Utc>>> {
+        self.with(|c| {
+            let at: Option<String> = c.query_row("SELECT at FROM events ORDER BY seq DESC LIMIT 1", [], |r| r.get(0)).optional()?;
+            Ok(at.map(parse_time).transpose()?)
+        })
+    }
+
     /// Events with `seq > after`, optionally filtered by thread, ascending, at most `limit`.
     pub fn events_after(&self, thread_id: Option<ThreadId>, after: EventSeq, limit: u32) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {

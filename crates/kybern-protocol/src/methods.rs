@@ -51,6 +51,34 @@ pub struct DaemonInfo {
 method!(DaemonInfoMethod, "daemon.info", None, Empty, DaemonInfo);
 method!(DaemonShutdown, "daemon.shutdown", Some(Scope::AccessWrite), Empty, Empty);
 
+/// What the daemon is holding open right now. Lets clients and the CLI verify
+/// that finished work does not linger.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DaemonActivity {
+    /// Connected WebSocket clients.
+    pub connections: u32,
+    /// Threads with an agent process alive.
+    pub live_sessions: u32,
+    /// Live sessions with no turn, approval, or background work in progress.
+    pub idle_sessions: u32,
+    /// Threads running a turn or waiting for an approval.
+    pub running_threads: u32,
+    /// Shells and agent CLIs with a live pseudo-terminal.
+    pub terminals: u32,
+    /// Follow-ups waiting for their thread to become idle.
+    pub queued_messages: u32,
+    /// When the daemon last became fully idle, if it is idle now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the daemon will exit if it stays idle, per `background.daemon_idle_exit_minutes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_exit_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether the host is running on battery. Absent when the daemon cannot tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_battery: Option<bool>,
+}
+method!(DaemonActivityMethod, "daemon.activity", Some(Scope::OrchestrationRead), Empty, DaemonActivity);
+
 // ---- providers ----
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -832,6 +860,7 @@ macro_rules! registry {
 registry!(
     DaemonInfoMethod,
     DaemonShutdown,
+    DaemonActivityMethod,
     ProvidersList,
     HarnessUpdatesList,
     HarnessUpdatesRun,

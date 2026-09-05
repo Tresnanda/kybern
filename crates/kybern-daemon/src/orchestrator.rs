@@ -4,6 +4,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
@@ -14,7 +16,7 @@ use kybern_drivers::{
 use kybern_git::{Repo, checkpoint_ref};
 use kybern_protocol::*;
 use kybern_store::{Store, TurnUsageRow};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, Notify, broadcast};
 use uuid::Uuid;
 
 use crate::config::Paths;
@@ -37,10 +39,19 @@ struct Inner {
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
     /// Threads whose next session must fork the provider conversation at this point.
     pending_rewinds: Mutex<HashMap<ThreadId, RewindPoint>>,
+    /// Woken whenever a queued follow-up may have become dispatchable, so the
+    /// queue worker sleeps instead of polling the store.
+    queue_wakeup: Notify,
 }
 
 struct LiveSession {
     session: Box<dyn AgentSession>,
+    /// Last moment the user or the provider touched this session. Idle
+    /// release is measured from here.
+    last_activity: std::sync::Mutex<Instant>,
+    /// Set once the daemon decided to close this process on purpose, so the
+    /// provider's exit is not reported as a failure.
+    released: AtomicBool,
     /// The turn currently executing, if any.
     turn: Mutex<Option<ActiveTurn>>,
     /// Most recent parent turn. Provider task notifications can arrive after
@@ -106,6 +117,40 @@ impl PendingTurnCompletion {
     }
 }
 
+impl LiveSession {
+    fn touch(&self) {
+        *self.last_activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
+    }
+
+    fn last_activity(&self) -> Instant {
+        *self.last_activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn mark_released(&self) {
+        self.released.store(true, Ordering::Relaxed);
+    }
+
+    fn is_released(&self) -> bool {
+        self.released.load(Ordering::Relaxed)
+    }
+}
+
+/// One agent process the daemon closed because nothing needed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionRelease {
+    pub thread_id: ThreadId,
+    pub reason: SessionReleaseReason,
+}
+
+/// Live-session counts for `daemon.activity` and the idle-exit decision.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionActivity {
+    /// Threads with an agent process alive.
+    pub live: usize,
+    /// Live sessions with no turn, approval, or background work in progress.
+    pub idle: usize,
+}
+
 pub const DEFAULT_TITLE: &str = "New thread";
 
 impl Orchestrator {
@@ -128,8 +173,129 @@ impl Orchestrator {
                 sessions: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
                 pending_rewinds: Mutex::new(HashMap::new()),
+                queue_wakeup: Notify::new(),
             }),
         }
+    }
+
+    /// Resolves the next time a queued follow-up may be ready to dispatch.
+    pub async fn queue_changed(&self) {
+        self.inner.queue_wakeup.notified().await;
+    }
+
+    /// A client opened or subscribed to this thread. Counts as activity so a
+    /// thread someone is reading keeps its warm process.
+    pub async fn touch_session(&self, thread_id: ThreadId) {
+        if let Some(live) = self.inner.sessions.lock().await.get(&thread_id) {
+            live.touch();
+        }
+    }
+
+    /// Nothing in the daemon or the provider is using this session: no turn,
+    /// no pending approval, no provider-owned background work, and the thread
+    /// is not marked busy in the store.
+    async fn session_parked(&self, thread_id: ThreadId, live: &LiveSession) -> Result<bool> {
+        if live.turn.lock().await.is_some() {
+            return Ok(false);
+        }
+        if live.tasks.lock().await.values().any(|task| task.status.is_active()) {
+            return Ok(false);
+        }
+        if !live.pending.lock().await.is_empty() {
+            return Ok(false);
+        }
+        let Some(thread) = self.inner.store.thread_get(thread_id)? else { return Ok(true) };
+        Ok(!matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+    }
+
+    pub async fn session_activity(&self) -> Result<SessionActivity> {
+        let snapshot: Vec<(ThreadId, Arc<LiveSession>)> =
+            self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
+        let mut activity = SessionActivity { live: snapshot.len(), idle: 0 };
+        for (thread_id, live) in &snapshot {
+            if self.session_parked(*thread_id, live).await? {
+                activity.idle += 1;
+            }
+        }
+        Ok(activity)
+    }
+
+    /// Close agent processes that nothing needs: parked sessions idle for
+    /// longer than the policy allows, then the least recently used parked
+    /// sessions beyond the warm cap. Each closed thread resumes its provider
+    /// conversation on the next message.
+    ///
+    /// Candidates are chosen without holding the session map, then claimed
+    /// under it with the parked check repeated, so a message that arrived in
+    /// between keeps its live process.
+    ///
+    /// With `saving_power` the host is on battery and the policy asks to
+    /// spare it: every parked session is released after a short grace,
+    /// and the warm cap does not apply.
+    pub async fn release_idle_sessions(&self, policy: &BackgroundSettings, saving_power: bool) -> Result<Vec<SessionRelease>> {
+        self.release_idle_sessions_at(policy, saving_power, Instant::now()).await
+    }
+
+    async fn release_idle_sessions_at(&self, policy: &BackgroundSettings, saving_power: bool, now: Instant) -> Result<Vec<SessionRelease>> {
+        let (idle_limit, cap, idle_reason) = if saving_power {
+            (Some(BackgroundSettings::BATTERY_SESSION_IDLE), None, SessionReleaseReason::Power)
+        } else {
+            (policy.session_idle(), policy.idle_session_cap(), SessionReleaseReason::Idle)
+        };
+        let snapshot: Vec<(ThreadId, Arc<LiveSession>)> =
+            self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
+        let mut parked = Vec::new();
+        for (thread_id, live) in snapshot {
+            if self.session_parked(thread_id, &live).await? {
+                parked.push((thread_id, live));
+            }
+        }
+        parked.sort_by_key(|(_, live)| live.last_activity());
+        let mut planned = Vec::new();
+        let mut fresh = Vec::new();
+        for (thread_id, live) in parked {
+            match idle_limit {
+                Some(limit) if now.saturating_duration_since(live.last_activity()) >= limit => {
+                    planned.push((thread_id, live, idle_reason));
+                }
+                _ => fresh.push((thread_id, live)),
+            }
+        }
+        if let Some(cap) = cap
+            && fresh.len() > cap
+        {
+            let excess = fresh.len() - cap;
+            planned.extend(fresh.drain(..excess).map(|(thread_id, live)| (thread_id, live, SessionReleaseReason::Capacity)));
+        }
+        if planned.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut claimed = Vec::new();
+        {
+            let mut sessions = self.inner.sessions.lock().await;
+            for (thread_id, live, reason) in planned {
+                if !sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, &live)) {
+                    continue;
+                }
+                if !self.session_parked(thread_id, &live).await? {
+                    continue;
+                }
+                sessions.remove(&thread_id);
+                live.mark_released();
+                claimed.push((thread_id, live, reason));
+            }
+        }
+        let outcomes = futures::future::join_all(claimed.iter().map(|(_, live, _)| live.session.close())).await;
+        let mut released = Vec::with_capacity(claimed.len());
+        for ((thread_id, _, reason), outcome) in claimed.into_iter().zip(outcomes) {
+            if let Err(error) = outcome {
+                tracing::warn!(%thread_id, %error, "agent process did not close cleanly");
+            }
+            tracing::info!(%thread_id, ?reason, "released idle agent process");
+            self.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason })?;
+            released.push(SessionRelease { thread_id, reason });
+        }
+        Ok(released)
     }
 
     /// The write guard prevents sends and one-shot jobs from racing an update.
@@ -147,7 +313,9 @@ impl Orchestrator {
         for thread in threads.iter().filter(|thread| thread.provider.kind == kind) {
             let live = self.inner.sessions.lock().await.remove(&thread.id);
             if let Some(live) = live {
+                live.mark_released();
                 live.session.close().await?;
+                self.emit(thread.id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Update })?;
             }
         }
         Ok(Some(guard))
@@ -199,15 +367,22 @@ impl Orchestrator {
 
     pub async fn shutdown(&self) {
         let sessions: Vec<_> = self.inner.sessions.lock().await.drain().collect();
-        for (_, s) in sessions {
-            let _ = s.session.close().await;
+        for (_, live) in &sessions {
+            live.mark_released();
         }
+        let _ = futures::future::join_all(sessions.iter().map(|(_, live)| live.session.close())).await;
     }
 
     // ---- persistence helpers ----
 
     fn emit(&self, thread_id: ThreadId, turn_id: Option<TurnId>, payload: EventPayload) -> Result<ThreadEvent> {
         let ev = self.inner.store.event_append(thread_id, turn_id, payload)?;
+        if matches!(
+            ev.payload,
+            EventPayload::MessageQueued { .. } | EventPayload::ThreadUpdated { .. } | EventPayload::RuntimeTaskCompleted { .. }
+        ) {
+            self.inner.queue_wakeup.notify_one();
+        }
         let _ = self.inner.events.send(ev.clone());
         Ok(ev)
     }
@@ -347,6 +522,7 @@ impl Orchestrator {
     ) -> Result<()> {
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
         if let Some(live) = live {
+            live.touch();
             if let Some(mode) = mode {
                 live.session.set_permission_mode(mode).await?;
             }
@@ -369,6 +545,7 @@ impl Orchestrator {
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
         }
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
+            live.mark_released();
             let _ = live.session.close().await;
         }
         Ok(())
@@ -456,20 +633,26 @@ impl Orchestrator {
 
     /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
     /// Failed turns retain their queue until the user sends a new successful turn.
-    pub async fn drain_queues(&self) -> Result<()> {
+    ///
+    /// Returns whether a follow-up is still waiting on a thread that is busy
+    /// or finishing background work, so the worker knows to check back soon.
+    pub async fn drain_queues(&self) -> Result<bool> {
+        let mut waiting = false;
         for queued in self.inner.store.queue_list(None)? {
             let Some(thread) = self.inner.store.thread_get(queued.thread_id)? else { continue };
             if thread.status != ThreadStatus::Idle {
+                waiting |= matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval);
                 continue;
             }
             if self.inner.store.runtime_tasks_for_thread(thread.id)?.iter().any(|task| task.status.is_active()) {
+                waiting = true;
                 continue;
             }
             if let Err(error) = self.send_with_id(thread.id, queued.id, queued.message, true).await {
                 tracing::debug!(%error, "queue changed before dispatch");
             }
         }
-        Ok(())
+        Ok(waiting)
     }
 
     /// Bring up the session, snapshot the tree and hand the message to the agent.
@@ -492,7 +675,9 @@ impl Orchestrator {
                 return Err(error);
             }
         };
+        live.touch();
         if self.inner.store.thread_get(thread.id)?.is_some_and(|current| current.status == ThreadStatus::Archived) {
+            live.mark_released();
             let _ = live.session.close().await;
             self.inner.sessions.lock().await.remove(&thread.id);
             return Err(anyhow!("thread was archived during session startup"));
@@ -559,7 +744,10 @@ impl Orchestrator {
     pub async fn interrupt(&self, thread_id: ThreadId) -> Result<()> {
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
         match live {
-            Some(live) => Ok(live.session.interrupt().await?),
+            Some(live) => {
+                live.touch();
+                Ok(live.session.interrupt().await?)
+            }
             None => Err(anyhow!("thread has no live session")),
         }
     }
@@ -586,6 +774,7 @@ impl Orchestrator {
         if !task.capabilities.stop {
             return Err(anyhow!("{} does not expose a targeted stop control for this task", self.provider_name(thread_id)?));
         }
+        live.touch();
         live.session.stop_runtime_task(&task).await?;
         self.apply_runtime_task_update(
             thread_id,
@@ -619,6 +808,7 @@ impl Orchestrator {
         if !task.capabilities.background {
             return Err(anyhow!("{} cannot move this task to the background", self.provider_name(thread_id)?));
         }
+        live.touch();
         live.session.background_runtime_task(&task).await?;
         self.apply_runtime_task_update(
             thread_id,
@@ -653,6 +843,7 @@ impl Orchestrator {
             self.inner.sessions.lock().await.get(&approval.thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
         let mut pending = live.pending.lock().await;
         let request_id = pending.get(&approval_id).cloned().ok_or_else(|| anyhow!("approval no longer pending"))?;
+        live.touch();
         live.session.respond_permission(&request_id, &decision).await?;
         pending.remove(&approval_id);
         drop(pending);
@@ -910,6 +1101,7 @@ impl Orchestrator {
         self.emit(thread_id, Some(turn_id), EventPayload::WorkspaceReverted { to_turn_id: turn_id, commit: c.before.clone() })?;
 
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
+            live.mark_released();
             let _ = live.session.close().await;
         }
 
@@ -964,6 +1156,8 @@ impl Orchestrator {
         let SpawnedSession { session, events } = driver.spawn(config).await?;
         let live = Arc::new(LiveSession {
             session,
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            released: AtomicBool::new(false),
             turn: Mutex::new(None),
             last_turn_id: Mutex::new(None),
             tasks: Mutex::new(HashMap::new()),
@@ -1205,6 +1399,7 @@ impl Orchestrator {
     }
 
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
+        live.touch();
         let mut turn_guard = live.turn.lock().await;
         let turn_id = turn_guard.as_ref().map(|t| t.id);
         let response_event = matches!(
@@ -1529,7 +1724,7 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data })?;
             }
             DriverEvent::Exited { code, error } => {
-                if let Some(error) = error {
+                if let Some(error) = error.filter(|_| !live.is_released()) {
                     self.emit(
                         thread_id,
                         turn_id,
@@ -1712,6 +1907,8 @@ pub fn title_from_message(message: &UserMessage) -> String {
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
 
     use super::{ActiveTurn, LiveSession, Orchestrator, generic_runtime_task, generic_runtime_task_for_provider, output_indicates_running};
     use crate::config::Paths;
@@ -1724,7 +1921,10 @@ mod tests {
     use tokio::sync::{Mutex, broadcast};
     use uuid::Uuid;
 
-    struct TestSession;
+    #[derive(Default)]
+    struct TestSession {
+        closes: Arc<AtomicUsize>,
+    }
 
     #[async_trait::async_trait]
     impl AgentSession for TestSession {
@@ -1753,6 +1953,7 @@ mod tests {
         }
 
         async fn close(&self) -> kybern_drivers::Result<()> {
+            self.closes.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -1884,7 +2085,9 @@ mod tests {
             completed_at: None,
         };
         let live = Arc::new(LiveSession {
-            session: Box::new(TestSession),
+            session: Box::new(TestSession::default()),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            released: AtomicBool::new(false),
             turn: Mutex::new(Some(ActiveTurn {
                 id: turn_id,
                 started: std::time::Instant::now(),
@@ -2055,5 +2258,336 @@ mod tests {
         orchestrator.shutdown().await;
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    struct Fixture {
+        root: std::path::PathBuf,
+        store: Store,
+        orchestrator: Orchestrator,
+        project: Project,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
+            let paths = Paths::resolve(Some(root.clone())).unwrap();
+            let settings = SettingsStore::load(&paths.settings).unwrap();
+            let store = Store::open_in_memory().unwrap();
+            let now = chrono::Utc::now();
+            let project = Project {
+                id: Uuid::now_v7(),
+                name: "fixture".into(),
+                path: root.to_string_lossy().into_owned(),
+                is_git: false,
+                worktrees_default: None,
+                created_at: now,
+                updated_at: now,
+            };
+            store.project_insert(&project).unwrap();
+            let (events_tx, _) = broadcast::channel(64);
+            let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
+            Self { root, store, orchestrator, project }
+        }
+
+        fn thread(&self, status: ThreadStatus) -> Thread {
+            let now = chrono::Utc::now();
+            let thread = Thread {
+                id: Uuid::now_v7(),
+                project_id: self.project.id,
+                title: "Fixture".into(),
+                provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+                model: None,
+                effort: None,
+                permission_mode: PermissionMode::Supervised,
+                status,
+                worktree: None,
+                cwd: self.project.path.clone(),
+                provider_session_id: Some("provider-session".into()),
+                pinned: false,
+                created_at: now,
+                updated_at: now,
+                last_seq: 0,
+            };
+            self.store.thread_upsert(&thread).unwrap();
+            thread
+        }
+
+        /// Attach a parked session whose last activity was `last_activity`.
+        async fn park(&self, thread: &Thread, last_activity: Instant) -> (Arc<LiveSession>, Arc<AtomicUsize>) {
+            let closes = Arc::new(AtomicUsize::new(0));
+            let live = Arc::new(LiveSession {
+                session: Box::new(TestSession { closes: closes.clone() }),
+                last_activity: std::sync::Mutex::new(last_activity),
+                released: AtomicBool::new(false),
+                turn: Mutex::new(None),
+                last_turn_id: Mutex::new(None),
+                tasks: Mutex::new(HashMap::new()),
+                deferred_checkpoints: Mutex::new(HashSet::new()),
+                pending: Mutex::new(HashMap::new()),
+            });
+            self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+            (live, closes)
+        }
+
+        async fn has_session(&self, thread: &Thread) -> bool {
+            self.orchestrator.inner.sessions.lock().await.contains_key(&thread.id)
+        }
+
+        fn release_events(&self, thread: &Thread) -> Vec<SessionReleaseReason> {
+            self.store
+                .events_for_thread(thread.id)
+                .unwrap()
+                .iter()
+                .filter_map(|event| match event.payload {
+                    EventPayload::ProviderSessionReleased { reason } => Some(reason),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn policy(session_idle_minutes: u32, max_idle_sessions: u32) -> BackgroundSettings {
+        BackgroundSettings { session_idle_minutes, max_idle_sessions, ..BackgroundSettings::default() }
+    }
+
+    const MINUTE: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn idle_sessions_are_released_after_the_policy_window() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now();
+        let (_, closes) = fixture.park(&thread, started).await;
+
+        let early = fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 9 * MINUTE).await.unwrap();
+        assert!(early.is_empty());
+        assert!(fixture.has_session(&thread).await);
+
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 10 * MINUTE).await.unwrap();
+        assert_eq!(released, vec![super::SessionRelease { thread_id: thread.id, reason: SessionReleaseReason::Idle }]);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert!(!fixture.has_session(&thread).await);
+        assert_eq!(fixture.release_events(&thread), vec![SessionReleaseReason::Idle]);
+        // The thread itself is untouched: it resumes from the provider session on the next send.
+        let stored = fixture.store.thread_get(thread.id).unwrap().unwrap();
+        assert_eq!(stored.status, ThreadStatus::Idle);
+        assert_eq!(stored.provider_session_id.as_deref(), Some("provider-session"));
+    }
+
+    #[tokio::test]
+    async fn on_battery_every_parked_session_goes_after_a_short_grace() {
+        let fixture = Fixture::new();
+        let fresh = fixture.thread(ThreadStatus::Idle);
+        let older = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now();
+        fixture.park(&fresh, started).await;
+        let (_, closes) = fixture.park(&older, started - BackgroundSettings::BATTERY_SESSION_IDLE).await;
+
+        // The generous policy would keep both; on battery the older one goes now.
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(30, 4), true, started).await.unwrap();
+        assert_eq!(released, vec![super::SessionRelease { thread_id: older.id, reason: SessionReleaseReason::Power }]);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert!(fixture.has_session(&fresh).await, "a session inside the grace period is kept");
+        assert_eq!(fixture.release_events(&older), vec![SessionReleaseReason::Power]);
+
+        let released = fixture
+            .orchestrator
+            .release_idle_sessions_at(&policy(30, 4), true, started + BackgroundSettings::BATTERY_SESSION_IDLE)
+            .await
+            .unwrap();
+        assert_eq!(released.len(), 1);
+        assert!(!fixture.has_session(&fresh).await);
+    }
+
+    #[tokio::test]
+    async fn opening_a_thread_counts_as_activity() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now();
+        let (live, _) = fixture.park(&thread, started - 5 * MINUTE).await;
+        fixture.orchestrator.touch_session(thread.id).await;
+        assert!(live.last_activity() >= started);
+        fixture.orchestrator.touch_session(Uuid::now_v7()).await;
+    }
+
+    #[tokio::test]
+    async fn failed_threads_release_like_idle_ones() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Failed);
+        let started = Instant::now();
+        let (_, closes) = fixture.park(&thread, started).await;
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(1, 0), false, started + MINUTE).await.unwrap();
+        assert_eq!(released.len(), 1);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn sessions_with_work_in_flight_are_never_released() {
+        let fixture = Fixture::new();
+        let started = Instant::now();
+        let later = started + 60 * MINUTE;
+
+        let running = fixture.thread(ThreadStatus::Running);
+        let (_, running_closes) = fixture.park(&running, started).await;
+
+        let approving = fixture.thread(ThreadStatus::AwaitingApproval);
+        let (_, approving_closes) = fixture.park(&approving, started).await;
+
+        let with_turn = fixture.thread(ThreadStatus::Idle);
+        let (turn_live, turn_closes) = fixture.park(&with_turn, started).await;
+        *turn_live.turn.lock().await = Some(ActiveTurn {
+            id: Uuid::now_v7(),
+            started,
+            startup_started: started,
+            provider: ProviderKind::ClaudeCode,
+            session_reused: false,
+            first_event_observed: false,
+            messages: HashMap::new(),
+            active_messages: HashMap::new(),
+            terminal_message_id: None,
+            completed: false,
+            pending_completion: None,
+        });
+
+        let with_task = fixture.thread(ThreadStatus::Idle);
+        let (task_live, task_closes) = fixture.park(&with_task, started).await;
+        let now = chrono::Utc::now();
+        task_live.tasks.lock().await.insert(
+            "agent-1".into(),
+            RuntimeTask {
+                id: "agent-1".into(),
+                thread_id: with_task.id,
+                origin_turn_id: Uuid::now_v7(),
+                started_seq: 1,
+                updated_seq: 1,
+                kind: RuntimeTaskKind::Agent,
+                status: RuntimeTaskStatus::Running,
+                title: "Explore".into(),
+                detail: None,
+                provider_type: None,
+                parent_id: None,
+                tool_call_id: None,
+                provider_thread_id: None,
+                model: None,
+                effort: None,
+                backgrounded: true,
+                last_tool_name: None,
+                usage: None,
+                stats: RuntimeTaskStats::default(),
+                capabilities: RuntimeTaskCapabilities::default(),
+                started_at: now,
+                updated_at: now,
+                completed_at: None,
+            },
+        );
+
+        let with_approval = fixture.thread(ThreadStatus::Idle);
+        let (approval_live, approval_closes) = fixture.park(&with_approval, started).await;
+        approval_live.pending.lock().await.insert(Uuid::now_v7(), "req-1".into());
+
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(1, 1), false, later).await.unwrap();
+        assert!(released.is_empty());
+        for closes in [running_closes, approving_closes, turn_closes, task_closes, approval_closes] {
+            assert_eq!(closes.load(Ordering::SeqCst), 0);
+        }
+        assert_eq!(fixture.orchestrator.inner.sessions.lock().await.len(), 5);
+        let activity = fixture.orchestrator.session_activity().await.unwrap();
+        assert_eq!(activity, super::SessionActivity { live: 5, idle: 0 });
+    }
+
+    #[tokio::test]
+    async fn warm_cap_releases_the_least_recently_used_sessions_first() {
+        let fixture = Fixture::new();
+        let started = Instant::now();
+        let oldest = fixture.thread(ThreadStatus::Idle);
+        let middle = fixture.thread(ThreadStatus::Idle);
+        let newest = fixture.thread(ThreadStatus::Idle);
+        let (_, oldest_closes) = fixture.park(&oldest, started).await;
+        let (_, middle_closes) = fixture.park(&middle, started + MINUTE).await;
+        let (_, newest_closes) = fixture.park(&newest, started + 2 * MINUTE).await;
+
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(30, 2), false, started + 3 * MINUTE).await.unwrap();
+        assert_eq!(released, vec![super::SessionRelease { thread_id: oldest.id, reason: SessionReleaseReason::Capacity }]);
+        assert_eq!(oldest_closes.load(Ordering::SeqCst), 1);
+        assert_eq!(middle_closes.load(Ordering::SeqCst), 0);
+        assert_eq!(newest_closes.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.release_events(&oldest), vec![SessionReleaseReason::Capacity]);
+
+        // Expired sessions do not count against the cap; both rules apply in one pass.
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(2, 1), false, started + 4 * MINUTE).await.unwrap();
+        let mut reasons: Vec<_> = released.iter().map(|r| (r.thread_id, r.reason)).collect();
+        reasons.sort_by_key(|(thread_id, _)| *thread_id);
+        let mut expected = vec![(middle.id, SessionReleaseReason::Idle), (newest.id, SessionReleaseReason::Idle)];
+        expected.sort_by_key(|(thread_id, _)| *thread_id);
+        assert_eq!(reasons, expected);
+        assert!(fixture.orchestrator.inner.sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn activity_resets_the_idle_window_and_zero_disables_the_limits() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now();
+        let (live, closes) = fixture.park(&thread, started).await;
+
+        live.touch();
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 10 * MINUTE).await.unwrap();
+        assert!(released.is_empty(), "a touch just now keeps the session warm");
+
+        let far = started + 24 * 60 * MINUTE;
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(0, 0), false, far).await.unwrap();
+        assert!(released.is_empty(), "zero disables both limits");
+        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        assert!(fixture.has_session(&thread).await);
+    }
+
+    #[tokio::test]
+    async fn released_processes_do_not_report_their_exit_as_a_failure() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        live.mark_released();
+        fixture
+            .orchestrator
+            .handle_driver_event(thread.id, &live, DriverEvent::Exited { code: Some(1), error: Some("exit code 1".into()) })
+            .await
+            .unwrap();
+        let notices = fixture
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ProviderNotice { .. }))
+            .count();
+        assert_eq!(notices, 0);
+    }
+
+    #[tokio::test]
+    async fn queue_worker_is_woken_and_told_when_to_check_back() {
+        let fixture = Fixture::new();
+        let running = fixture.thread(ThreadStatus::Running);
+        let failed = fixture.thread(ThreadStatus::Failed);
+
+        let orchestrator = fixture.orchestrator.clone();
+        let woken = tokio::spawn(async move { orchestrator.queue_changed().await });
+        fixture
+            .orchestrator
+            .enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: failed.id, message: UserMessage::text("later") })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), woken).await.expect("enqueue wakes the queue worker").unwrap();
+
+        assert!(!fixture.orchestrator.drain_queues().await.unwrap(), "a failed thread keeps its queue without polling");
+
+        fixture
+            .orchestrator
+            .enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: running.id, message: UserMessage::text("next") })
+            .unwrap();
+        assert!(fixture.orchestrator.drain_queues().await.unwrap(), "a busy thread's follow-up dispatches soon");
     }
 }

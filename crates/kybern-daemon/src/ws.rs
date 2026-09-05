@@ -106,6 +106,9 @@ impl ConnectionCtx {
                 .await;
             return;
         }
+        if let Some(thread_id) = params.thread_id {
+            state.orchestrator.touch_session(thread_id).await;
+        }
         let subscription_id = self.subscribe(params.thread_id, head_seq).await;
         let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq }).unwrap();
         if self.out.send(ServerFrame::Response(RpcResponse::ok(request_id, result))).await.is_err() {
@@ -250,7 +253,27 @@ impl ConnectionCtx {
     }
 }
 
+/// Counts one open connection for the idle-exit decision; released on drop so
+/// every exit path, including panics, is covered.
+struct ConnectionSlot(AppState);
+
+impl ConnectionSlot {
+    fn claim(state: &AppState) -> Self {
+        state.connections.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // A client arriving ends any idle stretch at once, without waiting for a sweep.
+        *state.idle_since.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        Self(state.clone())
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.connections.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 async fn run(state: AppState, socket: WebSocket, principal: Principal) {
+    let _slot = ConnectionSlot::claim(&state);
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<ServerFrame>(1024);
     let ctx = Arc::new(ConnectionCtx {

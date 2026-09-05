@@ -4,6 +4,7 @@ expression: names
 ---
 - daemon.info
 - daemon.shutdown
+- daemon.activity
 - providers.list
 - harness_updates.list
 - harness_updates.run
