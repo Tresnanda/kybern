@@ -484,9 +484,8 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             </div>
           )}
           {!hasLiveWork && (
-            <div className="t-row-enter mt-1.5 flex items-center gap-2 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
-              <MatrixLoader variant="twinkle" className="text-foreground/70" />
-              <span className="shimmer">Thinking</span>
+            <div className="t-row-enter shimmer mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
+              Thinking
             </div>
           )}
         </div>
@@ -1120,7 +1119,7 @@ function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extr
         <div className="rounded-lg py-1">
           <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="group/tool-row flex w-full cursor-pointer items-center gap-2 text-left focus-visible:outline-none">
             <span className={cn("flex size-5 shrink-0 items-center justify-center", TONE)}>
-              <IconSwap active={block.complete ? "b" : "a"} a={<MatrixLoader variant="scan" className="text-muted-foreground" />} b={<BrainIcon className="size-4" />} />
+              <IconSwap active={block.complete ? "b" : "a"} a={<Spinner size={14} className="text-muted-foreground" />} b={<BrainIcon className="size-4" />} />
             </span>
             <div className="min-w-0 overflow-hidden">
               <p className={cn("truncate leading-6", TONE, !block.complete && "shimmer")} style={CHAT_FONT}>
