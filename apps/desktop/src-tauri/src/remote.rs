@@ -662,12 +662,8 @@ mod tests {
             crate::environments::environment_remove(handle.clone(), profile.id.clone()).await.expect("remove");
             assert!(TUNNELS.lock().await.as_ref().unwrap().get(&profile.id).is_none());
             // Stop the daemon the test started so the scratch directory can go.
-            let client = Client::connect(&endpoint(
-                ensure_tunnel("cleanup", &ssh).await.unwrap(),
-                &std::fs::read_to_string(std::path::Path::new(&remote_data_dir).join("daemon.token")).unwrap().trim().to_string(),
-            ))
-            .await
-            .unwrap();
+            let bootstrap_token = std::fs::read_to_string(std::path::Path::new(&remote_data_dir).join("daemon.token")).unwrap();
+            let client = Client::connect(&endpoint(ensure_tunnel("cleanup", &ssh).await.unwrap(), bootstrap_token.trim())).await.unwrap();
             let _ = client.call::<kybern_protocol::methods::DaemonShutdown>(Empty {}).await;
             stop_tunnel("cleanup").await;
         });
