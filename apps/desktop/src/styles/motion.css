@@ -542,6 +542,34 @@
   animation-timing-function: var(--ease-smooth-out);
 }
 
+
+/* ─── Hover marquee ─────────────────────────────────────────────────────────
+   A truncated label pans to reveal its tail while its row is hovered, then
+   pans back. The container is an inline-size query container so the child
+   can compute its own overflow in CSS: translateX(100cqw - 100%) is negative
+   only when the text is wider than the slot, and min() clamps it to zero
+   otherwise. A short delay keeps quick hover passes from starting a pan. */
+.t-marquee {
+  container-type: inline-size;
+}
+.t-marquee > span {
+  max-width: 100%;
+  transition:
+    transform var(--duration-slow) var(--ease-out),
+    max-width 0s var(--duration-slow);
+}
+[data-marquee-host]:hover .t-marquee > span,
+[data-marquee-host]:focus-within .t-marquee > span {
+  max-width: none;
+  width: max-content;
+  overflow: visible;
+  text-overflow: clip;
+  transform: translateX(min(0px, calc(100cqw - 100%)));
+  transition:
+    transform 2400ms linear 350ms,
+    max-width 0s 0s;
+}
+
 /* ─── Reduced motion ────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .t-matrix i,
@@ -567,7 +595,8 @@
   .t-pane,
   .t-reveal,
   .t-bar,
-  .t-img {
+  .t-img,
+  .t-marquee > span {
     transition: none !important;
   }
   .t-img[data-loaded="false"] {

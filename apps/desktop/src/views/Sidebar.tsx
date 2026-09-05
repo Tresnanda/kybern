@@ -428,6 +428,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
             if (!renaming) beginThreadPointerDrag(event, thread.id)
           }}
           data-active={selected || undefined}
+          data-marquee-host
           aria-current={selected ? "page" : undefined}
           className={cn(
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
@@ -459,7 +460,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
                 className="w-full rounded bg-background px-1 text-[length:var(--app-font-size-ui,12px)] outline-none ring-1 ring-ring"
               />
             ) : (
-              <TextSwap text={thread.title || "Untitled"} className={cn("flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")} />
+              <TextSwap text={thread.title || "Untitled"} className={cn("t-marquee flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")} />
             )}
             {thread.status === "awaiting-approval" && <span className="t-pop shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-300/90">Pending</span>}
           </div>
