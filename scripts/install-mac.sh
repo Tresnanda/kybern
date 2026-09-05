@@ -38,9 +38,12 @@ case "$(uname -m)" in
 esac
 
 if [ "$VERSION" = "latest" ]; then
-  MANIFEST="https://github.com/$REPO/releases/latest/download/latest.json"
-  URL="$(curl -fsSL "$MANIFEST" | sed -n 's/.*"url": *"\([^"]*-'"$ARCH"'-apple-darwin\.app\.tar\.gz\)".*/\1/p' | head -n 1)"
-  [ -n "$URL" ] || { echo "no macOS $ARCH build in the latest release" >&2; exit 1; }
+  # Newest release that already carries the macOS archive. A release that is
+  # still being published is skipped instead of failing the install.
+  URL="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=10" \
+    | grep -o '"browser_download_url": *"[^"]*-'"$ARCH"'-apple-darwin\.app\.tar\.gz"' \
+    | head -n 1 | sed 's/.*"\(https[^"]*\)"/\1/')"
+  [ -n "$URL" ] || { echo "no published macOS $ARCH build found for $REPO" >&2; exit 1; }
 else
   VERSION="${VERSION#v}"
   URL="https://github.com/$REPO/releases/download/v$VERSION/kybern-$VERSION-$ARCH-apple-darwin.app.tar.gz"
