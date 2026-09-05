@@ -254,6 +254,16 @@ pub enum ContentPart {
         /// may use only the name.
         path: String,
     },
+    /// A provider plugin or app the user pulled in with `@name`, such as
+    /// Codex's Computer Use. `path` is the provider's own id for it
+    /// (`plugin://name@marketplace` or `app://connector-id`); drivers without
+    /// a structured form send the mention as text.
+    Mention {
+        name: String,
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -280,6 +290,10 @@ impl UserMessage {
                     out.push('$');
                     out.push_str(name);
                 }
+                ContentPart::Mention { name, display_name, .. } => {
+                    out.push('@');
+                    out.push_str(display_name.as_deref().unwrap_or(name));
+                }
                 ContentPart::Image { .. } => out.push_str("[image]"),
                 ContentPart::Attachment { name, .. } => {
                     out.push('[');
@@ -301,6 +315,9 @@ pub enum SkillScope {
     System,
     Admin,
     App,
+    /// A provider plugin or connector mentioned with `@name` rather than
+    /// invoked as a `$skill`.
+    Plugin,
     Other,
 }
 

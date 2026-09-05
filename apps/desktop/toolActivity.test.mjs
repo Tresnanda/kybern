@@ -1,17 +1,20 @@
 import assert from "node:assert/strict"
+import { registerHooks } from "node:module"
 import test from "node:test"
 
-import { buildStructuredTextParts } from "./src/lib/composerTokens.ts"
-import { getAttachmentIconName, getFileIconName } from "./src/lib/synara/fileIcons.ts"
-import {
-  humanizeToolName,
-  isAgentLaunchTool,
-  runtimeActivityPrompt,
-  runtimeActivityResult,
-  summarizeToolCalls,
-  toolLine,
-  toolVisualKind,
-} from "./src/lib/toolActivity.ts"
+// Source modules import siblings without extensions; Node's loader wants them.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (/^\.\.?\//.test(specifier) && !/\.[cm]?[jt]sx?$/.test(specifier) && context.parentURL?.includes("/src/"))
+      return nextResolve(`${specifier}.ts`, context)
+    return nextResolve(specifier, context)
+  },
+})
+
+// Static imports would hoist above the hook, so these load after it.
+const { buildStructuredTextParts } = await import("./src/lib/composerTokens.ts")
+const { getAttachmentIconName, getFileIconName } = await import("./src/lib/synara/fileIcons.ts")
+const { humanizeToolName, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolLine, toolVisualKind } = await import("./src/lib/toolActivity.ts")
 
 const call = (name, input) => ({ id: "tool-1", name, input })
 
@@ -248,12 +251,12 @@ test("namespaced tools get recognizable labels and icons", () => {
     kind: "search",
   })
 
-  const browser = call("mcp__cua_repl__js", { title: "Open settings" })
-  assert.equal(humanizeToolName(browser.name), "Browser · Js")
-  assert.equal(toolVisualKind(browser), "web")
-  assert.deepEqual(toolLine(browser, true), {
+  const computer = call("mcp__cua_repl__js", { title: "Open settings" })
+  assert.equal(humanizeToolName(computer.name), "Computer use")
+  assert.equal(toolVisualKind(computer), "computer")
+  assert.deepEqual(toolLine(computer, true), {
     verb: "Used",
-    detail: "Browser · Js — Open settings",
+    detail: "Computer use — Open settings",
     mono: false,
     kind: "other",
   })
@@ -312,4 +315,36 @@ test("composer preserves spaced skill names as structured provider references", 
       { type: "text", text: " and keep $HOME." },
     ]
   )
+})
+
+const cua = (code, title) => call("mcp:cua_repl/js", { code, title })
+
+test("Codex screen-control calls read as computer use, not browser tools", () => {
+  assert.equal(toolVisualKind(cua("await app.getScreenshot();", "Take one screenshot")), "computer")
+  assert.equal(humanizeToolName("mcp:cua_repl/js"), "Computer use")
+  assert.equal(toolLine(cua("await cua.getState();", "Capture screen state")).detail, "Computer use — Capture screen state")
+  const summary = summarizeToolCalls([
+    { call: cua("await cua.getState();", "Capture screen state"), complete: true, isError: false },
+    { call: cua("await app.getScreenshot();", "Take one screenshot"), complete: true, isError: false },
+  ])
+  assert.deepEqual(summary, { label: "Used your computer 2 times", visual: "computer", entryCount: 2 })
+})
+
+test("plugin catalog entries become @ mentions by display name or slug, skills stay $ tokens", () => {
+  const computerUse = { name: "computer-use", display_name: "Computer Use", description: "Control Mac apps", path: "plugin://computer-use@openai-bundled", scope: "plugin", enabled: true }
+  const review = { name: "review", path: "/skills/review/SKILL.md", scope: "system", enabled: true }
+  const mention = { type: "mention", name: "computer-use", path: "plugin://computer-use@openai-bundled", display_name: "Computer Use" }
+  assert.deepEqual(buildStructuredTextParts("@Computer Use open Finder and $review it", new Set(), [computerUse, review]), [
+    mention,
+    { type: "text", text: " open Finder and " },
+    { type: "skill", name: "review", path: "/skills/review/SKILL.md" },
+    { type: "text", text: " it" },
+  ])
+  assert.deepEqual(buildStructuredTextParts("Use @computer-use, please", new Set(), [computerUse]), [
+    { type: "text", text: "Use " },
+    mention,
+    { type: "text", text: ", please" },
+  ])
+  assert.deepEqual(buildStructuredTextParts("@Computer Use", new Set(), [computerUse]), [mention])
+  assert.deepEqual(buildStructuredTextParts("email me@computer-use.dev", new Set(), [computerUse]), [{ type: "text", text: "email me@computer-use.dev" }])
 })

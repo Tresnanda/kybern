@@ -102,6 +102,36 @@ The generic fallback is intentionally observational. A provider tool completing
 must not leave an immortal active task in Kybern when that provider exposes no
 subsequent lifecycle channel.
 
+### Screen control
+
+Codex ships Computer Use as a bundled plugin (`unified-computer-use`). The
+harness runs it itself; Kybern neither enables nor configures it. Each action
+arrives as an `mcpToolCall` item from server `cua_repl`, tool `js`, whose
+`arguments` carry the model's step `title` and JavaScript `code`, and whose
+`result._meta["codex/toolSurface"]` names the surface (`computerUse` or
+`browserUse`) and the app (`{kind: "appId", appId}` or
+`{kind: "displayName", displayName}`). Screenshots come back as inline
+`image` blocks inside `result.content`. Per-app consent is an
+`mcpServer/elicitation/request` whose `_meta.codex_approval_kind` is
+`mcp_tool_call`, with `connector_name`, `subtitle`, `riskLevel`,
+`tool_params_display` and the accepted `persist` scopes. Replying
+`{action: "accept", content: {}, _meta: {persist: "session"}}` stops the
+harness asking again for that app; verified live against codex-cli 0.153.4.
+
+Users summon it the way the Codex app does: `@Computer Use` in the composer.
+The Codex skills catalog (`discover_skills`) also lists installed plugins from
+`plugin/installed` with scope `plugin`; the composer offers those under `@`,
+and the message carries a `mention` content part whose `path` is the
+`plugin://name@marketplace` id. The Codex driver sends `@<name>` in the text
+plus a structured `mention` input item; other drivers send the text only.
+
+The desktop detects the surface in `lib/toolSurface.ts` from the tool name
+while the call runs and from the result once it settles. Rows show the step
+title with the app name at the trailing edge, screenshots sit inside the row's
+disclosure instead of the turn's image gallery, and the consent card offers
+"Allow this session", "Allow once" and "Don't allow" with the usual digit
+shortcuts. Another harness that reports the same shape renders the same way.
+
 ## Model catalog parity
 
 Model selection follows each harness's own effective catalog instead of a

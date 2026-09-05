@@ -146,12 +146,13 @@ pub async fn discover_skills(cwd: &std::path::Path, binary: Option<&PathBuf>) ->
 
     let cwd_text = cwd.to_string_lossy().to_string();
     let result = catalog_call(&child, 2, "skills/list", json!({ "cwds": [&cwd_text] })).await;
+    let plugins = catalog_call(&child, 3, "plugin/installed", json!({})).await;
     child.kill().await;
     let result = result?;
     let entries = result.get("data")?.as_array()?;
     let entry =
         entries.iter().find(|entry| entry.get("cwd").and_then(Value::as_str) == Some(cwd_text.as_str())).or_else(|| entries.first())?;
-    let skills = entry
+    let mut skills: Vec<SkillInfo> = entry
         .get("skills")?
         .as_array()?
         .iter()
@@ -194,7 +195,50 @@ pub async fn discover_skills(cwd: &std::path::Path, binary: Option<&PathBuf>) ->
             })
         })
         .collect();
+    skills.extend(plugins.iter().flat_map(installed_plugins));
     Some(skills)
+}
+
+/// Installed plugins the composer can mention with `@name`, such as Computer
+/// Use. Codex hides plugins without a display name from its own picker, so
+/// they are skipped here too.
+fn installed_plugins(result: &Value) -> Vec<SkillInfo> {
+    let mut out = Vec::new();
+    let marketplaces = result.get("marketplaces").and_then(Value::as_array).into_iter().flatten();
+    for marketplace in marketplaces {
+        let plugins = marketplace.get("plugins").and_then(Value::as_array).into_iter().flatten();
+        for plugin in plugins {
+            let Some(id) = plugin.get("id").and_then(Value::as_str).map(str::trim).filter(|id| !id.is_empty()) else { continue };
+            let Some(name) = plugin.get("name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()) else { continue };
+            if plugin.get("installed").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+            let interface = plugin.get("interface");
+            let Some(display_name) = interface
+                .and_then(|value| value.get("displayName"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let description = interface
+                .and_then(|value| value.get("shortDescription"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            out.push(SkillInfo {
+                name: name.to_string(),
+                display_name: Some(display_name.to_string()),
+                description,
+                path: format!("plugin://{id}"),
+                scope: SkillScope::Plugin,
+                enabled: plugin.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+            });
+        }
+    }
+    out
 }
 
 #[async_trait]
@@ -1360,6 +1404,12 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
                 items.push(json!({ "type": "text", "text": format!("${name}"), "text_elements": [] }));
                 items.push(json!({ "type": "skill", "name": name, "path": path }));
             }
+            ContentPart::Mention { name, path, display_name } => {
+                // Plugins and apps: the `@name` token in the text plus a
+                // `mention` item carrying the exact `plugin://` or `app://` id.
+                items.push(json!({ "type": "text", "text": format!("@{name}"), "text_elements": [] }));
+                items.push(json!({ "type": "mention", "name": display_name.as_deref().unwrap_or(name), "path": path }));
+            }
             ContentPart::Image { media_type, data } => {
                 if base64::engine::general_purpose::STANDARD.decode(data).is_ok() {
                     items.push(json!({ "type": "image", "url": format!("data:{media_type};base64,{data}"), "detail": "auto" }));
@@ -1516,6 +1566,45 @@ mod tests {
     #[tokio::test]
     async fn questions_round_trip_and_withdraw_on_provider_resolution() {
         use super::*;
+
+    #[test]
+    fn installed_plugins_become_mentionable_catalog_entries() {
+        let result = json!({
+            "marketplaces": [{
+                "name": "openai-bundled",
+                "plugins": [
+                    { "id": "computer-use@openai-bundled", "name": "computer-use", "installed": true, "enabled": true,
+                      "interface": { "displayName": "Computer Use", "shortDescription": "Control Mac apps from ChatGPT" } },
+                    { "id": "unified-computer-use@openai-bundled", "name": "unified-computer-use", "installed": true, "enabled": true,
+                      "interface": { "displayName": null } },
+                    { "id": "sites@openai-bundled", "name": "sites", "installed": false, "enabled": true,
+                      "interface": { "displayName": "Sites" } }
+                ]
+            }]
+        });
+        let plugins = installed_plugins(&result);
+        assert_eq!(plugins.len(), 1);
+        let plugin = &plugins[0];
+        assert_eq!(plugin.name, "computer-use");
+        assert_eq!(plugin.display_name.as_deref(), Some("Computer Use"));
+        assert_eq!(plugin.path, "plugin://computer-use@openai-bundled");
+        assert_eq!(plugin.scope, SkillScope::Plugin);
+        assert!(plugin.enabled);
+    }
+
+    #[test]
+    fn plugin_mentions_send_the_token_and_a_structured_mention_item() {
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Mention { name: "computer-use".into(), path: "plugin://computer-use@openai-bundled".into(), display_name: Some("Computer Use".into()) },
+                ContentPart::Text { text: " open Finder".into() },
+            ],
+        };
+        let items = input_items(&message);
+        assert_eq!(items[0]["text"], "@computer-use");
+        assert_eq!(items[1], json!({ "type": "mention", "name": "Computer Use", "path": "plugin://computer-use@openai-bundled" }));
+        assert_eq!(items[2]["text"], " open Finder");
+    }
         let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(CodexSession {

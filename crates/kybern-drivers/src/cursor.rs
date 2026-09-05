@@ -509,6 +509,7 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
             ContentPart::Text { text } => out.push(ContentBlock::Text(TextContent::new(text.clone()))),
             ContentPart::FileMention { path } => out.push(ContentBlock::Text(TextContent::new(format!("@{path}")))),
             ContentPart::Skill { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("/{name}")))),
+            ContentPart::Mention { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("@{name}")))),
             ContentPart::Image { media_type, data } => out.push(ContentBlock::Image(ImageContent::new(data.clone(), media_type.clone()))),
             ContentPart::Attachment { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("[attached file: {name}]")))),
         }

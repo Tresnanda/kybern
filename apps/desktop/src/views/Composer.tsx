@@ -38,7 +38,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/synara/toolt
 import { buildStructuredTextParts } from "@/lib/composerTokens"
 import { PROVIDER_LABEL, basename } from "@/lib/format"
 import { CentralIcon } from "@/lib/synara/central-icons"
-import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
+import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
+  SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
@@ -126,6 +127,7 @@ type ComposerMenuItem =
   | { id: string; type: "file"; path: string }
   | { id: string; type: "command"; command: SlashCommand }
   | { id: string; type: "skill"; skill: SkillInfo }
+  | { id: string; type: "plugin"; skill: SkillInfo }
 
 function fuzzyScore(value: string, query: string): number | null {
   const haystack = value.toLowerCase()
@@ -146,9 +148,9 @@ function fuzzyScore(value: string, query: string): number | null {
   return 10 + (haystack.length - needle.length) / 100
 }
 
-function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12): SkillInfo[] {
+function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12, scope: "skill" | "plugin" = "skill"): SkillInfo[] {
   return skills
-    .filter((skill) => skill.enabled)
+    .filter((skill) => skill.enabled && (skill.scope === "plugin") === (scope === "plugin"))
     .flatMap((skill) => {
       const scores = [skill.name, skill.display_name ?? "", skill.description ?? ""].flatMap((value) => {
         const score = fuzzyScore(value, query)
@@ -171,6 +173,8 @@ function skillSourceLabel(scope: SkillInfo["scope"]): string {
       return "Personal"
     case "app":
       return "App"
+    case "plugin":
+      return "Plugin"
     case "system":
     case "admin":
       return "System"
@@ -335,7 +339,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [mention, projectId])
 
   const skillCatalogKey = projectId && provider ? `${projectId}:${provider.kind}` : ""
-  const needsSkills = !!skill || !!slash
+  const needsSkills = !!skill || !!slash || !!mention
   useEffect(() => {
     selectedSkills.current.clear()
   }, [skillCatalogKey])
@@ -353,7 +357,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const skills = useMemo(() => (skillCatalog.key === skillCatalogKey ? skillCatalog.skills : []), [skillCatalog, skillCatalogKey])
   const files = useMemo(() => (fileResult.query === mention?.query ? fileResult.files : []), [fileResult, mention?.query])
   const menuItems = useMemo<ComposerMenuItem[]>(() => {
-    if (mention) return files.map((path) => ({ id: `file:${path}`, type: "file", path }))
+    if (mention)
+      return [
+        ...rankSkills(skills, mention.query, 6, "plugin").map((item) => ({ id: `plugin:${item.path}`, type: "plugin" as const, skill: item })),
+        ...files.map((path) => ({ id: `file:${path}`, type: "file" as const, path })),
+      ]
     if (skill) return rankSkills(skills, skill.query).map((item) => ({ id: `skill:${item.name}`, type: "skill", skill: item }))
     if (!slash) return []
     const commandItems = slash.skillOnly
@@ -391,6 +399,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (cmd.name === "attach") fileInput.current?.click()
     else cmd.run()
   }
+  const pickPlugin = (item: SkillInfo) => {
+    if (!mention) return
+    selectedSkills.current.set(item.path, item)
+    const token = `@${item.display_name ?? item.name} `
+    const next = `${text.slice(0, mention.start)}${token}${text.slice(caret)}`
+    setTextAndCaret(next, mention.start + token.length)
+  }
   const pickSkill = (item: SkillInfo) => {
     selectedSkills.current.set(item.name.toLowerCase(), item)
     const trigger = skill ?? (slash)
@@ -404,6 +419,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!item) return
     if (item.type === "file") pickMention(item.path)
     else if (item.type === "command") pickCommand(item.command)
+    else if (item.type === "plugin") pickPlugin(item.skill)
     else pickSkill(item.skill)
   }
 
@@ -589,15 +605,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       menuItems.map((item, i) => {
                         const active = i === menuIndex
                         const previous = menuItems[i - 1]
-                        const section = item.type === "file" ? "Files" : item.type === "command" ? "Commands" : "Skills"
-                        const previousSection = previous?.type === "file" ? "Files" : previous?.type === "command" ? "Commands" : previous ? "Skills" : null
+                        const sectionOf = (entry: ComposerMenuItem | undefined) =>
+                          !entry ? null : entry.type === "file" ? "Files" : entry.type === "command" ? "Commands" : entry.type === "plugin" ? "Plugins" : "Skills"
+                        const section = sectionOf(item)
+                        const previousSection = sectionOf(previous)
                         const title =
                           item.type === "file"
                             ? basename(item.path)
                             : item.type === "command"
                               ? titleCase(item.command.name)
-                              : `$${item.skill.name}`
-                        const description = item.type === "command" ? item.command.hint : item.type === "skill" ? item.skill.description : null
+                              : item.type === "plugin"
+                                ? `@${item.skill.display_name ?? item.skill.name}`
+                                : `$${item.skill.name}`
+                        const description = item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
                         return (
                           <Fragment key={item.id}>
                             {section !== previousSection && (
@@ -620,6 +640,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                   <FileEntryIcon pathValue={item.path} kind="file" className="size-4" />
                                 ) : item.type === "skill" ? (
                                   <SkillCubeIcon className="size-4" />
+                                ) : item.type === "plugin" ? (
+                                  <PluginIcon className="size-4" />
                                 ) : (
                                   item.command.icon ?? <TerminalIcon className="size-4" />
                                 )}

@@ -24,6 +24,8 @@ UI reuses those before inventing anything.
    "Worked for Ns" disclosure with a hairline; tool rows are one line
    ("Reading `RTK.md`" while live, "Read `RTK.md`" when settled) and expand
    in place. A concrete live tool row replaces the generic "Thinking" fallback.
+   Screen-control rows (Codex Computer Use) keep the harness's step title,
+   name the app at the trailing edge, and unfold their screenshots inline.
    "Edited N files" cards unfold their diffs inline. A tick rail on the left
    navigates messages. Threads can split left/right or top/bottom into a
    persisted binary layout, capped at a 2×2 grid. `⌘\` opens a split to the

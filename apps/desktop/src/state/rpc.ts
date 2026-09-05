@@ -543,7 +543,9 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
                 ? `@${p.path}`
                 : p.type === "skill"
                   ? `$${p.name}`
-                  : `[${p.type}]`
+                  : p.type === "mention"
+                    ? `@${p.display_name ?? p.name}`
+                    : `[${p.type}]`
           )
           .join("")
         lines.push(`User:\n${text}`)

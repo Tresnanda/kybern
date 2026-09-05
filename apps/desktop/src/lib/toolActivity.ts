@@ -2,6 +2,7 @@
 // Keeps the wire payload untouched while deriving a concise, tense-aware activity row.
 
 import type { JsonValue, ToolCall } from "@/protocol"
+import { toolSurface } from "./toolSurface"
 
 type JsonRecord = Record<string, unknown>
 
@@ -267,8 +268,8 @@ export function humanizeToolName(name: string): string {
   if (parts.length > 1) {
     const tool = titleCaseWords(parts.at(-1)!)
     if (lower.includes("github")) return `GitHub · ${tool}`
-    if (/browser|playwright|computer|cua/.test(lower))
-      return `Browser · ${tool}`
+    if (/computer[_ -]?use|(^|[:/_])cua([_:/]|$)/.test(lower)) return "Computer use"
+    if (/browser|playwright/.test(lower)) return `Browser · ${tool}`
     const server = titleCaseWords(parts.at(-2)!.replace(/^codex[_-]apps?$/, "apps"))
     return `${server} · ${tool}`
   }
@@ -776,6 +777,7 @@ export type ToolVisualKind =
   | "web"
   | "mcp"
   | "skill"
+  | "computer"
 
 /** Pick a recognizable 16px glyph before falling back to the activity kind. */
 export function toolVisualKind(
@@ -789,6 +791,7 @@ export function toolVisualKind(
     actions.find((action) => action.command)?.command ??
     inputString(call.input, ["command", "cmd"])
   if (name.includes("github") || isGitCommand(rawCommand)) return "github"
+  if (toolSurface(call)?.kind === "computer") return "computer"
   if (/browser|playwright|computer|cua[_:]/.test(name)) return "web"
   if (name === "web__run" || WEB_SEARCH_TOOLS.has(tool) || activity.kind === "fetch")
     return "web"
@@ -822,7 +825,7 @@ export interface ToolCallSummary {
   entryCount: number
 }
 
-type SummaryCategory = "command" | "edit" | "read" | "search" | "agent" | "tool"
+type SummaryCategory = "command" | "edit" | "read" | "search" | "agent" | "computer" | "tool"
 
 const SUMMARY_ORDER: readonly SummaryCategory[] = [
   "command",
@@ -830,6 +833,7 @@ const SUMMARY_ORDER: readonly SummaryCategory[] = [
   "read",
   "search",
   "agent",
+  "computer",
   "tool",
 ]
 
@@ -847,7 +851,7 @@ export function summarizeToolCalls(
   const fileKeys = new Map<SummaryCategory, Set<string>>()
   for (const item of items) {
     const activity = toolLine(item.call, true)
-    const category = summaryCategory(activity.kind)
+    const category = toolSurface(item.call)?.kind === "computer" ? "computer" : summaryCategory(activity.kind)
     if (category === "read" || category === "edit") {
       const keys = summaryFileKeys(item.call, activity)
       if (keys.length > 0) {
@@ -919,6 +923,8 @@ function summaryPhrase(category: SummaryCategory, count: number): string {
       return `ran ${count} ${plural("search", "searches")}`
     case "agent":
       return `delegated ${count} ${plural("task")}`
+    case "computer":
+      return `used your computer ${count} ${plural("time")}`
     case "tool":
       return `used ${count} ${plural("tool")}`
   }

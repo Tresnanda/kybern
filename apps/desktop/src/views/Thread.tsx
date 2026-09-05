@@ -1,5 +1,5 @@
 import { Markdown } from "@/components/kybern/Markdown"
-import { isUserInput } from "@/lib/userInput"
+import { connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
 import { UserInputPanel } from "./UserInputPanel"
 // Thread route: Synara-style header (provider glyph, title, Hand off,
 // actions, dock toggle), the transcript scrolling under the frosted composer,
@@ -107,10 +107,19 @@ export function ThreadView({
 
   const running = thread?.status === "running" || thread?.status === "awaiting-approval"
   const approval = pending[0] ?? null
+  const connector = approval ? connectorApproval(approval) : null
 
   const answer = (n: number): boolean => {
-    if (!approval || isUserInput(approval) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
-    const decision = n === 1 ? ({ decision: "allow_once" } as const) : n === 2 ? ({ decision: "allow_always" } as const) : n === 3 ? ({ decision: "deny" } as const) : null
+    if (!approval || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
+    const decision = connector
+      ? n === 1
+        ? ({ decision: "submit", response: connectorApprovalResponse(connector.persist.includes("session") ? "session" : null) } as const)
+        : n === 2
+          ? ({ decision: "submit", response: connectorApprovalResponse(null) } as const)
+          : n === 3
+            ? ({ decision: "deny" } as const)
+            : null
+      : n === 1 ? ({ decision: "allow_once" } as const) : n === 2 ? ({ decision: "allow_always" } as const) : n === 3 ? ({ decision: "deny" } as const) : null
     if (!decision) {
       if (n === 4) void interrupt(threadId)
       return n === 4
@@ -169,7 +178,7 @@ export function ThreadView({
     await sendMessage(threadId, message)
   }
 
-  const placeholder = approval ? (isUserInput(approval) ? "Answer the questions above" : "Resolve this approval request to continue") : running ? "Ask for follow-up changes" : undefined
+  const placeholder = approval ? (isUserInput(approval) && !connector ? "Answer the questions above" : "Resolve this approval request to continue") : running ? "Ask for follow-up changes" : undefined
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
@@ -195,7 +204,7 @@ export function ThreadView({
               placeholder={placeholder}
               running={running}
               hideFooter={!!approval}
-              hideInput={!!approval && isUserInput(approval)}
+              hideInput={!!approval && isUserInput(approval) && !connector}
               onStop={() => void interrupt(threadId)}
               onSend={onSend}
               mode={thread.permission_mode}
@@ -215,7 +224,7 @@ export function ThreadView({
                   {queued.length > 0 && <QueuedPanel threadId={threadId} onEdit={(t) => composer.current?.setText(t)} />}
                   {approval && (
                     <div className="pb-2">
-                      {isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel approval={approval} count={pending.length} onChoose={answer} />}
+                      {connector ? <ConnectorApprovalPanel approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel approval={approval} count={pending.length} onChoose={answer} />}
                     </div>
                   )}
                 </>
@@ -358,6 +367,36 @@ export function ApprovalPanel({ approval, count, onChoose }: { approval: Approva
         <ComposerChoiceRow shortcut={1} label={approval.tool_name === "ExitPlanMode" ? "Start implementing" : "Approve once"} description={approval.tool_name === "ExitPlanMode" ? "Continue with the proposed plan" : "Allow just this request"} tone="primary" onSelect={() => onChoose(1)} />
         {approval.tool_name !== "ExitPlanMode" && <ComposerChoiceRow shortcut={2} label="Always allow this session" description="Don't ask again this session" onSelect={() => onChoose(2)} />}
         <ComposerChoiceRow shortcut={3} label="Decline" description="Reject and let the agent continue" tone="destructive" onSelect={() => onChoose(3)} />
+        <ComposerChoiceRow shortcut={4} label="Cancel turn" description="Stop the current turn" onSelect={() => onChoose(4)} />
+      </div>
+    </div>
+  )
+}
+
+/** Consent for a harness to drive an app on this machine. Same card as other approvals, so the digits work the same. */
+export function ConnectorApprovalPanel({ approval, connector, count, onChoose }: { approval: ApprovalRequest; connector: ConnectorApproval; count: number; onChoose: (n: number) => void }) {
+  const canPersist = connector.persist.includes("session")
+  const prompt = connector.app ? `Allow ${connector.connector} to use ${connector.app}?` : connector.message || `Allow ${connector.connector}?`
+  return (
+    <div className="chat-composer-surface overflow-hidden border border-[color:var(--surface-border)] px-3.5 py-3 shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] transition-colors duration-200 dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]">
+      <div className="flex items-start justify-between gap-3">
+        <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
+          {prompt}
+          <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">{approval.input && typeof approval.input === "object" && !Array.isArray(approval.input) && typeof approval.input.serverName === "string" ? approval.input.serverName : approval.tool_name}</span>
+        </p>
+        {count > 1 && (
+          <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium text-[var(--color-text-foreground-secondary)] tabular-nums">
+            1/{count}
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground/65">
+        {connector.subtitle || `${connector.connector} will see this app’s window and click and type in it. Watch what it does.`}
+      </p>
+      <div className="mt-2.5 space-y-0.5">
+        {canPersist && <ComposerChoiceRow shortcut={1} label="Allow this session" description={connector.app ? `Don’t ask again for ${connector.app} in this thread` : "Don’t ask again in this thread"} tone="primary" onSelect={() => onChoose(1)} />}
+        <ComposerChoiceRow shortcut={canPersist ? 2 : 1} label="Allow once" description="Ask again before the next action" tone={canPersist ? "neutral" : "primary"} onSelect={() => onChoose(canPersist ? 2 : 1)} />
+        <ComposerChoiceRow shortcut={3} label="Don’t allow" description="Refuse and let the agent continue" tone="destructive" onSelect={() => onChoose(3)} />
         <ComposerChoiceRow shortcut={4} label="Cancel turn" description="Stop the current turn" onSelect={() => onChoose(4)} />
       </div>
     </div>

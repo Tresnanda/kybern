@@ -1,7 +1,8 @@
 import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
-import { isUserInput } from "@/lib/userInput"
+import { surfaceOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
+import { connectorApproval, isUserInput } from "@/lib/userInput"
 // Transcript pane, to Synara's ChatTranscriptPane / MessagesTimeline spec:
 // centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
@@ -39,6 +40,7 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   CopyIcon,
+  DeviceLaptopIcon,
   EyeIcon,
   GitHubIcon,
   GlobeIcon,
@@ -46,6 +48,7 @@ import {
   McpIcon,
   PanelRightCloseIcon,
   PencilIcon,
+  PluginIcon,
   SearchIcon,
   SkillCubeIcon,
   TerminalIcon,
@@ -53,7 +56,7 @@ import {
   WebSearchIcon,
 } from "@/lib/synara/icons"
 import { cn } from "@/lib/utils"
-import type { ContentPart, Diff, RuntimeTask, ThreadId } from "@/protocol"
+import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { errorText, loadFileDiff, revertTo } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, groupTurns, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
@@ -432,7 +435,7 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
 }
 
 const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
-  const images = [...group.images.map((image) => ({ source: image.source, label: "Agent image" })), ...group.work.flatMap((block) => block.kind === "tool" && block.origin.kind === "root" ? responseImages(block.output) : [])].filter((image, index, all) => all.findIndex((other) => other.source === image.source) === index)
+  const images = [...group.images.map((image) => ({ source: image.source, label: "Agent image" })), ...group.work.flatMap((block) => block.kind === "tool" && block.origin.kind === "root" && !toolSurface(block.call, block.output) ? responseImages(block.output) : [])].filter((image, index, all) => all.findIndex((other) => other.source === image.source) === index)
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
@@ -674,6 +677,8 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
                   >
                     {p.type === "skill" ? (
                       <SkillCubeIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
+                    ) : p.type === "mention" ? (
+                      <PluginIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
                     ) : (
                       <FileEntryIcon
                         pathValue={p.type === "attachment" ? p.name : p.path}
@@ -682,7 +687,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
                         className="size-3.5"
                       />
                     )}
-                    <span className="min-w-0 truncate">{p.type === "attachment" ? p.name : p.type === "skill" ? `$${p.name}` : p.path}</span>
+                    <span className="min-w-0 truncate">{p.type === "attachment" ? p.name : p.type === "skill" ? `$${p.name}` : p.type === "mention" ? `@${p.display_name ?? p.name}` : p.path}</span>
                   </span>
                 ),
               )}
@@ -705,7 +710,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
 }
 
 function workIcon(kind: ToolVisualKind, isError: boolean) {
-  if (isError && !["github", "web", "mcp", "skill"].includes(kind))
+  if (isError && !["github", "web", "mcp", "skill", "computer"].includes(kind))
     return <CircleAlertIcon className="size-4 text-muted-foreground/50" />
   switch (kind) {
     case "github":
@@ -714,6 +719,8 @@ function workIcon(kind: ToolVisualKind, isError: boolean) {
       return <GlobeIcon className="size-3.5" />
     case "mcp":
       return <McpIcon className="size-3.5" />
+    case "computer":
+      return <DeviceLaptopIcon className="size-3.5" />
     case "skill":
       return <SkillCubeIcon className="size-3.5" />
     case "command":
@@ -771,6 +778,27 @@ function workLabel(
     return complete ? "Read a file" : "Reading a file"
   if (detail) return `${verb} ${detail}`
   return verb === name ? `Used ${name}` : verb
+}
+
+/** Screen-control rows keep the harness's own step title; without one they name the app. */
+function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean, isError: boolean): string {
+  const title = input && typeof input === "object" && !Array.isArray(input) && typeof input.title === "string" ? input.title.trim() : ""
+  const target = surface.app ?? (surface.kind === "browser" ? "the browser" : "your computer")
+  if (isError) return title ? `Failed to ${title.charAt(0).toLowerCase()}${title.slice(1)}` : `Failed to use ${target}`
+  if (title) return title
+  return complete ? `Used ${target}` : `Using ${target}`
+}
+
+/** One line for a pending or settled approval in the work log. */
+function approvalRowText(approval: ApprovalRequest, decision: { decision: string } | null): string {
+  const connector = connectorApproval(approval)
+  if (connector) {
+    const target = connector.app ? `${connector.connector} to use ${connector.app}` : connector.connector
+    return decision ? (decision.decision === "deny" ? `Declined ${target}` : `Allowed ${target}`) : `Waiting to allow ${target}`
+  }
+  if (isUserInput(approval))
+    return decision ? (decision.decision === "deny" ? "Input request declined" : "Answered the agent’s questions") : "Waiting for your input"
+  return `${decision ? (decision.decision === "deny" ? "Declined " : "Approved ") : "Waiting to approve "}${approval.summary || approval.tool_name}`
 }
 
 const TONE = "text-muted-foreground transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground"
@@ -942,9 +970,7 @@ function WorkRow({
               {block.decision ? <CheckIcon className="size-4 text-muted-foreground/50" /> : <Spinner size={14} />}
             </span>
             <p className="truncate leading-6 text-muted-foreground" style={CHAT_FONT}>
-              {isUserInput(block.approval)
-                ? block.decision ? block.decision.decision === "deny" ? "Input request declined" : "Answered the agent’s questions" : "Waiting for your input"
-                : <>{block.decision ? (block.decision.decision === "deny" ? "Declined " : "Approved ") : "Waiting to approve "}{block.approval.summary || block.approval.tool_name}</>}
+              {approvalRowText(block.approval, block.decision)}
             </p>
           </div>
         </div>
@@ -986,10 +1012,13 @@ function ToolRow({
   const active = !!task && isRuntimeTaskActive(task)
   const activity = toolLine(block.call, block.complete && !active)
   const visual = toolVisualKind(block.call, activity)
-  const out = outputText(block.output, block.stream)
+  const surface = toolSurface(block.call, block.output)
+  const screenshots = surface?.screenshots ?? []
+  const out = surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream)
+  const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
-  const hasOutput = out.trim().length > 0
+  const hasOutput = out.trim().length > 0 || screenshots.length > 0
   const opensFocusedActivity = isAgentLaunchBlock(block, task)
   const canExpand = !opensFocusedActivity && (hasChildActivity || hasOutput)
   const canOpen = opensFocusedActivity || canExpand
@@ -1016,9 +1045,12 @@ function ToolRow({
         </span>
         <div className="min-w-0 flex-1 overflow-hidden">
           <p className={cn("truncate leading-6", tone, (!block.complete || active) && "shimmer")} style={CHAT_FONT}>
-            <span data-work-entry-display-text>{workLabel(activity, block.call.name, block.complete && !active, block.isError)}</span>
+            <span data-work-entry-display-text>{label}</span>
           </p>
         </div>
+        {surface?.app && !label.endsWith(surface.app) && (
+          <span className="shrink-0 font-system-ui text-[11px] text-muted-foreground/55">{surface.app}</span>
+        )}
         {showTimestamp && <time dateTime={block.at} className="shrink-0 font-system-ui text-[11px] tabular-nums text-muted-foreground/38">{clockTime(block.at)}</time>}
         {opensFocusedActivity
           ? <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/tool-row:text-foreground" />
@@ -1039,14 +1071,21 @@ function ToolRow({
           {hasOutput && (
             <section aria-label={hasChildActivity ? "Result" : undefined}>
               {hasChildActivity && <p className="pb-1 font-system-ui text-[11px] leading-5 text-muted-foreground/45">Result</p>}
-              <pre
+              {screenshots.length > 0 && (
+                <div className={cn("flex flex-wrap gap-2", out.trim() && "pb-2")}>
+                  {screenshots.map((source, index) => (
+                    <ResponseImage key={source} source={source} label={surface?.app ? `Screenshot of ${surface.app}` : `Screenshot ${index + 1}`} compact />
+                  ))}
+                </div>
+              )}
+              {out.trim() && <pre
                 className={cn(
                   "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
                   block.isError ? "text-destructive/90" : "text-foreground/92",
                 )}
               >
                 {out}
-              </pre>
+              </pre>}
             </section>
           )}
         </DisclosureRegion>

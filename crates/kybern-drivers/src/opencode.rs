@@ -991,6 +991,7 @@ fn parts(message: &UserMessage) -> Vec<Value> {
             ContentPart::Text { text } => out.push(json!({ "type": "text", "text": text })),
             ContentPart::FileMention { path } => out.push(json!({ "type": "text", "text": format!("@{path}") })),
             ContentPart::Skill { name, .. } => out.push(json!({ "type": "text", "text": format!("/{name}") })),
+            ContentPart::Mention { name, .. } => out.push(json!({ "type": "text", "text": format!("@{name}") })),
             ContentPart::Image { media_type, data } => out.push(
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
@@ -1028,6 +1029,10 @@ fn skill_command(message: &UserMessage) -> Option<SkillCommand> {
             }
             ContentPart::Skill { name, .. } => {
                 arguments.push('/');
+                arguments.push_str(name);
+            }
+            ContentPart::Mention { name, .. } => {
+                arguments.push('@');
                 arguments.push_str(name);
             }
             ContentPart::Image { media_type, data } => files.push(

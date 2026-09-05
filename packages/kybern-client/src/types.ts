@@ -193,7 +193,8 @@ export type ContentPart =
       size: number;
     }
   | { type: "file_mention"; path: string }
-  | { type: "skill"; name: string; path: string };
+  | { type: "skill"; name: string; path: string }
+  | { type: "mention"; name: string; path: string; display_name?: string | null };
 
 export interface UserMessage {
   parts: ContentPart[];
@@ -914,7 +915,7 @@ export interface FilesReadResult {
 }
 
 export type SkillScope =
-  "project" | "repo" | "user" | "system" | "admin" | "app" | "other";
+  "project" | "repo" | "user" | "system" | "admin" | "app" | "plugin" | "other";
 
 export interface SkillInfo {
   name: string;

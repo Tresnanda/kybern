@@ -864,6 +864,33 @@ expression: schema_for!(ThreadEvent)
             "name",
             "path"
           ]
+        },
+        {
+          "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "display_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "mention"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
         }
       ]
     },

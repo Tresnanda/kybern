@@ -847,6 +847,10 @@ fn prompt_text(message: &UserMessage) -> String {
                 out.push_str("/skill:");
                 out.push_str(name);
             }
+            ContentPart::Mention { name, .. } => {
+                out.push('@');
+                out.push_str(name);
+            }
             ContentPart::Image { .. } => out.push_str("[image]"),
             ContentPart::Attachment { name, .. } => {
                 out.push('[');

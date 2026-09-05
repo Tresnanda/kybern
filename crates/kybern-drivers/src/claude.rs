@@ -938,6 +938,10 @@ fn content_blocks(message: &UserMessage) -> Vec<Value> {
             ContentPart::Attachment { name, .. } => {
                 trailing.push_str(&format!("\n[attached file: {name}]"));
             }
+            ContentPart::Mention { name, .. } => {
+                trailing.push('@');
+                trailing.push_str(name);
+            }
             ContentPart::Image { .. } => {
                 if let Some(block) = claude_block(part) {
                     trailing_media.push(block);
@@ -959,6 +963,7 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
         ContentPart::Text { text } => Some(json!({ "type": "text", "text": text })),
         ContentPart::FileMention { path } => Some(json!({ "type": "text", "text": format!("@{path}") })),
         ContentPart::Skill { name, .. } => Some(json!({ "type": "text", "text": format!("${name}") })),
+        ContentPart::Mention { name, .. } => Some(json!({ "type": "text", "text": format!("@{name}") })),
         ContentPart::Image { media_type, data } => {
             // Validate base64 so a bad upload fails here instead of as an API error mid-turn.
             base64::engine::general_purpose::STANDARD
