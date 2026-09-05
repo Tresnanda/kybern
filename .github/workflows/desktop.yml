@@ -4,7 +4,9 @@
 # Runs on the same tag push as release.yml (dist), in parallel with the daemon
 # builds rather than after them. Upload steps wait for dist to create the
 # GitHub Release, which happens near the end of its run, so the two pipelines
-# overlap almost completely. `workflow_dispatch` runs the same build as a dry
+# overlap almost completely. The release is turned into a draft the moment it
+# appears and published again only after latest.json is attached, so "latest"
+# never points at a release the desktop updater cannot read. `workflow_dispatch` runs the same build as a dry
 # run: nothing is uploaded to a release, the bundles are only kept as workflow
 # artifacts.
 #
@@ -108,10 +110,15 @@ jobs:
         shell: bash
         run: |
           for _ in $(seq 1 80); do
-            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then exit 0; fi
-            sleep 30
+            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
+              # Hide it from "latest" until latest.json and the desktop assets are
+              # attached, so installed apps never see a half-published release.
+              gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
+              exit 0
+            fi
+            sleep 15
           done
-          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 40 minutes" >&2
+          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 20 minutes" >&2
           exit 1
       - name: Upload to the GitHub Release
         if: steps.release.outputs.tag != ''
@@ -160,14 +167,21 @@ jobs:
         shell: bash
         run: |
           for _ in $(seq 1 80); do
-            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then exit 0; fi
-            sleep 30
+            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
+              # Hide it from "latest" until latest.json and the desktop assets are
+              # attached, so installed apps never see a half-published release.
+              gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
+              exit 0
+            fi
+            sleep 15
           done
-          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 40 minutes" >&2
+          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 20 minutes" >&2
           exit 1
-      - name: Upload to the GitHub Release
+      - name: Upload to the GitHub Release and publish it
         if: steps.release.outputs.tag != ''
-        run: gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh dist/kybern-mac-install.sh --clobber
+        run: |
+          gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh dist/kybern-mac-install.sh --clobber
+          gh release edit "${{ steps.release.outputs.tag }}" --draft=false --latest
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-manifest

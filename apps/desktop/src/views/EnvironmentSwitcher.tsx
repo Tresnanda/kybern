@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/kit/button"
 import { Input } from "@/components/kit/input"
@@ -33,6 +33,9 @@ import {
   Trash2,
 } from "@/lib/kit/icons"
 import { Spinner } from "@/components/kybern/bits"
+import { useSlidingPill } from "@/lib/kit/slidingPill"
+import { SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
+import { cn } from "@/lib/utils"
 import {
   listSshHosts,
   type BootstrapProgress,
@@ -214,12 +217,15 @@ function EnvironmentForm({
     sshAvailable && (!profile || profile.ssh) ? "ssh" : "address"
   )
   const [busy, setBusy] = useState(false)
+  const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(mode)
   const chooser = !profile && sshAvailable && (
     <div
+      ref={tabsRef}
       role="tablist"
       aria-label="How to reach the machine"
-      className="flex gap-1 rounded-lg bg-secondary/60 p-1"
+      className="t-tabs flex gap-1 rounded-lg bg-[var(--color-background-button-secondary)] p-1"
     >
+      <div aria-hidden className="t-tabs-pill z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />
       {(
         [
           ["ssh", "Over SSH"],
@@ -231,9 +237,13 @@ function EnvironmentForm({
           type="button"
           role="tab"
           aria-selected={mode === id}
+          data-tab-active={mode === id}
           disabled={busy}
           onClick={() => setMode(id)}
-          className={`flex-1 rounded-md px-3 py-1.5 text-[length:var(--app-font-size-ui-sm,13px)] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60 ${mode === id ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
+          className={cn(
+            "relative z-[1] flex-1 rounded-md px-3 py-1.5 text-[length:var(--app-font-size-ui-sm,13px)] outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60",
+            mode === id ? "text-[var(--sidebar-accent-foreground)]" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, "hover:text-foreground")
+          )}
         >
           {label}
         </button>
@@ -272,6 +282,7 @@ function SshEnvironmentForm({
   busy: boolean
   setBusy: (busy: boolean) => void
 }) {
+  const formId = useId()
   const [name, setName] = useState(profile?.name ?? "")
   const [target, setTarget] = useState(
     profile?.ssh
@@ -331,18 +342,18 @@ function SshEnvironmentForm({
   }
   const host = target.trim().replace(/^ssh:\/\//, "").replace(/^[^@]*@/, "")
   return (
-    <form onSubmit={submit} className="flex min-h-0 flex-col">
+    <>
       <DialogHeader>
         <DialogTitle>
           {profile ? "Edit environment" : "Add environment"}
         </DialogTitle>
         <DialogDescription>
-          Kybern signs in with your SSH keys, installs and starts the daemon on
-          that machine, and pairs this device through a tunnel it keeps open.
+          Switch between machines. Each keeps its own projects and threads.
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="flex flex-col gap-4 pt-3">
         {chooser}
+        <form id={formId} onSubmit={submit} className="flex flex-col gap-4">
         <label className={FIELD}>
           <span className={dialogFieldLabelClassName}>Name</span>
           <Input
@@ -377,10 +388,9 @@ function SshEnvironmentForm({
           </datalist>
         </label>
         <p className={ENVIRONMENT_HINT}>
-          Anything that works with <code className="font-mono">ssh</code>{" "}
-          works here, including aliases from ~/.ssh/config and a custom port
-          as host:port. Key or agent sign-in is required; passwords are never
-          asked for.
+          Kybern signs in with your SSH keys, never a password, installs and
+          starts the daemon there, and pairs this device through a tunnel it
+          keeps open. Aliases from ~/.ssh/config and host:port work too.
         </p>
         <details className={ENVIRONMENT_HINT}>
           <summary className="w-fit cursor-pointer rounded-md py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring">
@@ -464,10 +474,12 @@ function SshEnvironmentForm({
             )}
           </p>
         )}
+        </form>
       </DialogPanel>
       <DialogFooter>
         <Button
           type="submit"
+          form={formId}
           disabled={busy || !name.trim() || !target.trim()}
         >
           {busy && <Spinner size={13} />}
@@ -478,7 +490,7 @@ function SshEnvironmentForm({
               : "Set up and connect"}
         </Button>
       </DialogFooter>
-    </form>
+    </>
   )
 }
 
@@ -495,6 +507,7 @@ function AddressEnvironmentForm({
   busy: boolean
   setBusy: (busy: boolean) => void
 }) {
+  const formId = useId()
   const [name, setName] = useState(profile?.name ?? "")
   const [address, setAddress] = useState(profile?.url ?? "")
   const [code, setCode] = useState("")
@@ -559,7 +572,7 @@ function AddressEnvironmentForm({
     }
   }
   return (
-    <form onSubmit={submit} className="flex min-h-0 flex-col">
+    <>
       <DialogHeader>
         <DialogTitle>
           {profile ? "Edit environment" : "Add environment"}
@@ -570,6 +583,7 @@ function AddressEnvironmentForm({
       </DialogHeader>
       <DialogPanel className="flex flex-col gap-4 pt-3">
         {chooser}
+        <form id={formId} onSubmit={submit} className="flex flex-col gap-4">
         <label className={FIELD}>
           <span className={dialogFieldLabelClassName}>Name</span>
           <Input
@@ -665,10 +679,12 @@ function AddressEnvironmentForm({
             {error}
           </p>
         )}
+        </form>
       </DialogPanel>
       <DialogFooter>
         <Button
           type="submit"
+          form={formId}
           disabled={
             busy ||
             !name.trim() ||
@@ -680,7 +696,7 @@ function AddressEnvironmentForm({
           {busy ? "Connecting" : "Save and connect"}
         </Button>
       </DialogFooter>
-    </form>
+    </>
   )
 }
 

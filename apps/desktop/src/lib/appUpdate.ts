@@ -125,5 +125,11 @@ export function startAppUpdateChecks(): void {
 }
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  const text = error instanceof Error ? error.message : String(error)
+  // The feed is briefly absent while a release is being published, and
+  // unreachable offline; neither is worth the plugin's raw wording.
+  if (/release JSON|fetch|network|timed out|dns|connect/i.test(text)) {
+    return "The release feed is unavailable right now. Check your connection or try again in a few minutes."
+  }
+  return text
 }
