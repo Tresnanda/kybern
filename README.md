@@ -43,10 +43,24 @@ to it does not copy your laptop's projects or credentials.
 
 ### Desktop app
 
-Download the installer for your platform from
-[GitHub Releases](https://github.com/Tresnanda/kybern/releases/latest). Every
-package bundles `kybernd`; you do not need to install the daemon or CLI
-separately on a desktop.
+Every desktop package bundles `kybernd`; you do not need to install the daemon
+or CLI separately on a desktop.
+
+**macOS**: one command installs the app into Applications and opens it, with
+no Gatekeeper prompt:
+
+```sh
+curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-mac-install.sh | sh
+```
+
+The DMGs on the [release page](https://github.com/Tresnanda/kybern/releases/latest)
+work too, but the app is signed ad hoc and not notarized, so a browser download
+is blocked with "Apple could not verify" until you allow it under **System
+Settings → Privacy & Security → Open Anyway**. The installer above avoids that
+because files fetched with `curl` are never quarantined. Updates delivered by
+the app itself are not quarantined either.
+
+**Linux and Windows**: download from the release page.
 
 | Platform | Asset |
 | --- | --- |
@@ -59,15 +73,6 @@ The app checks the release feed after launch and every few hours, and offers
 to install a newer version; **Settings → About** has a manual check. Installing
 an update restarts the app and its local daemon, so agents running on that
 machine restart with it. Remote environments are unaffected.
-
-The macOS bundle is signed ad hoc and is not notarized. Follow macOS's
-**Privacy & Security → Open Anyway** flow if it blocks a downloaded app. For an
-ad-hoc bundle reported as damaged, you can remove its quarantine attribute after
-verifying where it came from:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/kybern.app
-```
 
 To build from source instead, install stable Rust, Node 22+, pnpm 11, and the
 [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), then:

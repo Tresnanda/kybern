@@ -148,13 +148,15 @@ jobs:
         run: |
           node scripts/updater-manifest.mjs --tag "${{ steps.release.outputs.tag }}"
           cp scripts/install-remote.sh dist/kybern-remote-install.sh
+          cp scripts/install-mac.sh dist/kybern-mac-install.sh
           cat dist/latest.json
       - name: Upload to the GitHub Release
         if: steps.release.outputs.tag != ''
-        run: gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh --clobber
+        run: gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh dist/kybern-mac-install.sh --clobber
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-manifest
           path: |
             dist/latest.json
             dist/kybern-remote-install.sh
+            dist/kybern-mac-install.sh
