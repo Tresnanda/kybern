@@ -295,8 +295,8 @@ export function Transcript({
         </MessageScroller>
         <div
           className={cn(
-            "pointer-events-none absolute inset-x-0 z-30 flex justify-center py-1 transition-[opacity,transform] duration-220 ease-out motion-reduce:transition-none",
-            !following ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0",
+            "pointer-events-none absolute inset-x-0 z-30 flex justify-center py-1 transition-[opacity,transform,filter] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none",
+            !following ? "translate-y-0 scale-100 opacity-100 blur-none" : "-translate-y-1 scale-95 opacity-0 blur-[2px]",
           )}
           style={{ bottom: bottomInset + 24 }}
         >
@@ -973,7 +973,7 @@ function WorkRow({
         <div className="rounded-lg py-1">
           <div className="flex w-full items-center gap-2">
             <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-              <IconSwap active={block.decision ? "b" : "a"} a={<MatrixLoader variant="pulse" />} b={<CheckIcon className="size-4 text-muted-foreground/50" />} />
+              <IconSwap active={block.decision ? "b" : "a"} a={<MatrixLoader variant="pulse" />} b={<CheckIcon className="t-success size-4 text-muted-foreground/50" />} />
             </span>
             <p className="truncate leading-6 text-muted-foreground" style={CHAT_FONT}>
               {approvalRowText(block.approval, block.decision)}
@@ -1137,7 +1137,7 @@ function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extr
         </div>
       )}
       {showText && (
-        <div className="chat-message-segment flex flex-col gap-1.5 pr-[2px] pl-[2px]">
+        <div className="chat-message-segment flex flex-col gap-1.5 pr-[2px] pl-[2px]" data-live={live && !block.complete ? "true" : undefined}>
           {tone === "bright" ? (
             <Markdown text={bodyText} style={TEXT} live={live && !block.complete} />
           ) : (

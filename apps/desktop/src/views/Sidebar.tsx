@@ -58,6 +58,7 @@ import {
 import { pickFolder, platform } from "@/lib/tauri"
 import { activeEnvironment } from "@/state/environments"
 import { cn } from "@/lib/utils"
+import { TextSwap } from "@/components/kybern/motion"
 import type { Project, Thread, ThreadActivityState } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
@@ -74,7 +75,7 @@ const HOVER_HIDE_PROJECT =
 const HOVER_HIDE_THREAD =
   "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0"
 const REVEAL_TOOLBAR =
-  "flex items-center gap-1.5 absolute top-1 right-1.5 pointer-events-none opacity-100 transition-opacity md:opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 md:has-[[data-state=open]]:pointer-events-auto md:has-[[data-state=open]]:opacity-100"
+  "t-reveal flex items-center gap-1.5 absolute top-1 right-1.5 pointer-events-none opacity-100 md:translate-x-1 md:opacity-0 md:group-hover/project-header:translate-x-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 md:has-[[data-state=open]]:pointer-events-auto md:has-[[data-state=open]]:opacity-100"
 
 export function ThreadSidebar() {
   const projects = useStore((s) => s.projects)
@@ -385,6 +386,8 @@ function ThreadRow({ thread }: { thread: Thread }) {
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
+  // Decided once on mount: a row for a thread created just now rises in.
+  const [fresh] = useState(() => Date.now() - Date.parse(thread.updated_at) < 3000)
 
   const open = () => {
     useStore.getState().selectThread(thread.id)
@@ -428,6 +431,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
           aria-current={selected ? "page" : undefined}
           className={cn(
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
+            fresh && "t-row-enter",
             "flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md pl-8 text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
             "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]",
             hasGlyph || thread.pinned ? "pr-[1.75rem]" : "pr-2",
@@ -455,9 +459,9 @@ function ThreadRow({ thread }: { thread: Thread }) {
                 className="w-full rounded bg-background px-1 text-[length:var(--app-font-size-ui,12px)] outline-none ring-1 ring-ring"
               />
             ) : (
-              <span title={thread.title || "Untitled"} className={cn("min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")}>{thread.title || "Untitled"}</span>
+              <TextSwap text={thread.title || "Untitled"} className={cn("flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")} />
             )}
-            {thread.status === "awaiting-approval" && <span className="shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-300/90">Pending</span>}
+            {thread.status === "awaiting-approval" && <span className="t-pop shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-300/90">Pending</span>}
           </div>
           {thread.worktree && (
             <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
@@ -472,7 +476,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
                 {hasGlyph ? <StatusGlyph status={thread.status} activity={activity} /> : <PinFilledIcon className="size-3 shrink-0" />}
               </span>
             )}
-            <div className="pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex items-center opacity-0 transition-opacity group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100">
+            <div className="t-reveal pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex translate-x-1 items-center opacity-0 group-hover/thread-row:translate-x-0 group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:translate-x-0 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100">
               <div className="pointer-events-auto inline-flex items-center gap-2">
                 <SidebarIconButton
                   icon={thread.pinned ? PinFilledIcon : PinIcon}

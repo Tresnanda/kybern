@@ -676,12 +676,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               <div className="-mx-1.5 -mt-1 mb-2 flex flex-wrap items-start gap-1.5">
                 {attachments.map((a) =>
                   a.preview ? (
-                    <div key={a.id} className="group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+                    <div key={a.id} className="t-pop group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                         <img src={a.preview} alt="" className="size-full object-cover outline -outline-offset-1 outline-black/10 dark:outline-white/10" />
                       <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </div>
                   ) : (
-                    <span key={a.id} className="group relative inline-flex h-14 w-60 max-w-full items-center gap-2.5 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] py-2 pr-8 pl-2 shadow-sm">
+                    <span key={a.id} className="t-pop group relative inline-flex h-14 w-60 max-w-full items-center gap-2.5 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] py-2 pr-8 pl-2 shadow-sm">
                       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] text-muted-foreground">
                         <FileEntryIcon pathValue={a.name} kind="file" mimeType={a.media_type} className="size-4" />
                       </span>

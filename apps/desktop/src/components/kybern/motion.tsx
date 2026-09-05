@@ -117,13 +117,13 @@ export function TextSwap({ text, className, as: Tag = "span" }: { text: string; 
     return () => window.clearTimeout(id)
   }, [state.leaving, state.shown])
   return (
-    <Tag className={cn("t-text-swap", className)}>
+    <Tag className={cn("t-text-swap min-w-0 max-w-full", className)}>
       {state.leaving !== null && (
-        <span key={`out:${state.leaving}`} data-swap="out" aria-hidden>
+        <span key={`out:${state.leaving}`} data-swap="out" aria-hidden className="truncate">
           {state.leaving}
         </span>
       )}
-      <span key={`in:${state.shown}`} data-swap={state.leaving !== null ? "in" : undefined}>
+      <span key={`in:${state.shown}`} data-swap={state.leaving !== null ? "in" : undefined} className="truncate">
         {state.shown}
       </span>
     </Tag>

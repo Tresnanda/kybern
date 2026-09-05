@@ -56,10 +56,10 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         <div ref={tabsRef} className="t-tabs flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <span aria-hidden className="t-tabs-pill z-0 rounded-lg bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />
           <DockTab active={tab === "activity"} onClick={() => set({ rightTab: "activity" })} icon={<WorkflowIcon className="size-3.5 shrink-0 opacity-70" />} label="Activity">
-            {activeTasks > 0 && <span className="ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
+            {activeTasks > 0 && <span key={activeTasks} className="t-pop ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
           </DockTab>
           <DockTab active={tab === "changes"} onClick={() => set({ rightTab: "changes" })} icon={<DiffIcon className="size-3.5 shrink-0 opacity-70" />} label="Diff">
-            {adds + dels > 0 && <DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" />}
+            {adds + dels > 0 && <span key={`${adds}:${dels}`} className="t-pop inline-flex"><DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" /></span>}
           </DockTab>
           <DockTab active={tab === "terminal"} onClick={() => set({ rightTab: "terminal" })} icon={<TerminalIcon className="size-3.5 shrink-0 opacity-70" />} label="Terminal" />
           <DockTab active={tab === "explorer"} onClick={() => set({ rightTab: "explorer" })} icon={<FoldersIcon className="size-3.5 shrink-0 opacity-70" />} label="Explorer" />

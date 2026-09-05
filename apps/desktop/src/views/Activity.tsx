@@ -30,7 +30,7 @@ export function ActivityPane({ threadId }: { threadId: ThreadId }) {
 
   if (tasks.length === 0) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center px-8 text-center font-system-ui">
+      <div className="t-stagger flex h-full w-full flex-col items-center justify-center px-8 text-center font-system-ui">
         <span className="mb-3 flex size-8 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] text-muted-foreground/70">
           <WorkflowIcon className="size-4" />
         </span>
@@ -49,7 +49,7 @@ export function ActivityPane({ threadId }: { threadId: ThreadId }) {
           <h2 id="active-work-heading" className={SECTION_LABEL}>
             Active · {plural(active.length, "task")}
           </h2>
-          <div className="px-1.5 pb-1.5">
+          <div className="t-stagger px-1.5 pb-1.5">
             {active.map((task) => (
               <RuntimeTaskRow key={task.id} task={task} now={now} />
             ))}
@@ -61,7 +61,7 @@ export function ActivityPane({ threadId }: { threadId: ThreadId }) {
           <h2 id="recent-work-heading" className={SECTION_LABEL}>
             Recent
           </h2>
-          <div className="px-1.5 pb-2">
+          <div className="t-stagger px-1.5 pb-2">
             {recent.map((task) => (
               <RuntimeTaskRow key={task.id} task={task} now={now} />
             ))}

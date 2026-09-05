@@ -206,7 +206,7 @@ export function PullRequests() {
           ) : (
             <div className="space-y-0.5">
               {groups.map(([pid, list], gi) => (
-                <div key={pid}>
+                <div key={pid} className="t-stagger">
                   <h2 className={cn("pb-0.5 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground/70", gi > 0 && "pt-2.5")}>{projects[pid]?.name}</h2>
                   {list.map((r) => (
                     <PullRequestRow key={`${pid}:${r.pr.number}`} row={r} />

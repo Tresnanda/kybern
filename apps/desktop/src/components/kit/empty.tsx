@@ -18,7 +18,7 @@ function Empty({ className, ...props }: React.ComponentProps<"div">) {
 function EmptyHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("flex max-w-sm flex-col items-center text-center", className)}
+      className={cn("t-stagger flex max-w-sm flex-col items-center text-center", className)}
       data-slot="empty-header"
       {...props}
     />

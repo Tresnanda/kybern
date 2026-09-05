@@ -335,16 +335,17 @@
   position: absolute;
   top: 0;
   left: 0;
-  height: 100%;
+  height: calc(var(--h, 0) * 1px);
   width: calc(var(--w, 0) * 1px);
-  transform: translateX(calc(var(--x, 0) * 1px));
+  transform: translate(calc(var(--x, 0) * 1px), calc(var(--y, 0) * 1px));
   border-radius: inherit;
   pointer-events: none;
   transition:
     transform var(--duration-fast) var(--ease-smooth-out),
     width var(--duration-fast) var(--ease-smooth-out),
+    height var(--duration-fast) var(--ease-smooth-out),
     opacity var(--duration-quick) var(--ease-out);
-  will-change: transform, width;
+  will-change: transform, width, height;
 }
 .t-tabs-pill[data-ready="false"] {
   transition: none;
@@ -445,6 +446,92 @@
   }
 }
 
+
+/* ─── Stagger index by position ─────────────────────────────────────────────
+   Lists can use .t-stagger without inline --i; the first eight children get
+   their own slot and later ones share the last so the budget stays bounded. */
+.t-stagger > :nth-child(2) { --i: 1; }
+.t-stagger > :nth-child(3) { --i: 2; }
+.t-stagger > :nth-child(4) { --i: 3; }
+.t-stagger > :nth-child(5) { --i: 4; }
+.t-stagger > :nth-child(6) { --i: 5; }
+.t-stagger > :nth-child(7) { --i: 6; }
+.t-stagger > :nth-child(8) { --i: 7; }
+.t-stagger > :nth-child(n + 9) { --i: 7; }
+
+/* ─── Hover-revealed actions ────────────────────────────────────────────────
+   Row actions that appear on hover slide in from the right a touch instead of
+   only fading. Pair the hidden/shown state with the row's own group-hover. */
+.t-reveal {
+  transition:
+    opacity var(--duration-quick) var(--ease-out),
+    transform var(--duration-quick) var(--ease-out);
+}
+
+/* ─── Streaming caret ───────────────────────────────────────────────────────
+   A thin bar after the last block of live prose, blinking on a step curve so
+   it reads as a caret and not a pulse. Removed the moment the text settles. */
+.chat-message-segment[data-live="true"] > .chat-markdown > :last-child::after,
+.chat-message-segment[data-live="true"] > div > .chat-markdown > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.7;
+  animation: t-caret-blink 1s steps(2, jump-none) infinite;
+}
+@keyframes t-caret-blink {
+  from { opacity: 0.7; }
+  to { opacity: 0; }
+}
+
+/* ─── Bar grow ──────────────────────────────────────────────────────────────
+   Chart bars scale in from the left with a per-row delay. */
+.t-bar {
+  transform-origin: left center;
+  transition:
+    transform var(--duration-very-slow) var(--ease-smooth-out),
+    width var(--duration-very-slow) var(--ease-smooth-out);
+  transition-delay: calc(var(--i, 0) * 40ms), 0ms;
+}
+@starting-style {
+  .t-bar {
+    transform: scaleX(0);
+  }
+}
+
+/* ─── Image reveal ──────────────────────────────────────────────────────────
+   Images sit blurred and faint until decoded, then resolve. */
+.t-img {
+  transition:
+    opacity var(--duration-slow) var(--ease-smooth-out),
+    filter var(--duration-slow) var(--ease-smooth-out),
+    transform var(--duration-slow) var(--ease-smooth-out);
+}
+.t-img[data-loaded="false"] {
+  opacity: 0;
+  filter: blur(var(--blur-large));
+  transform: scale(0.985);
+}
+.t-img[data-loaded="true"] {
+  opacity: 1;
+  filter: blur(0.01px);
+  transform: scale(1);
+}
+
+/* ─── Theme switch ──────────────────────────────────────────────────────────
+   The whole document cross-fades between palettes through a view transition
+   (the provider wraps the class flip in startViewTransition). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 280ms;
+  animation-timing-function: var(--ease-smooth-out);
+}
+
 /* ─── Reduced motion ────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .t-matrix i,
@@ -467,8 +554,24 @@
   .t-stream-w,
   .t-icon-swap > *,
   .t-tabs-pill,
-  .t-pane {
+  .t-pane,
+  .t-reveal,
+  .t-bar,
+  .t-img {
     transition: none !important;
+  }
+  .t-img[data-loaded="false"] {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+  .chat-message-segment[data-live="true"] > .chat-markdown > :last-child::after,
+  .chat-message-segment[data-live="true"] > div > .chat-markdown > :last-child::after {
+    animation: none;
+  }
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
   }
   .t-stream-w {
     filter: none !important;

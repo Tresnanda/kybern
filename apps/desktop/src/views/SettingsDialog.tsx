@@ -25,8 +25,9 @@ import {
   SETTINGS_SECTION_LABEL_CLASS_NAME,
   SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
 } from "@/lib/kit/settingsPanelStyles"
-import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_ACTIVE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
+import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
+import { useSlidingPill } from "@/lib/kit/slidingPill"
 import type { PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
@@ -46,6 +47,7 @@ export function SettingsDialog() {
   const set = useStore((s) => s.set)
   const tab = useStore((s) => s.settingsTab)
   const current = TABS.find((t) => t[0] === tab) ?? TABS[0]!
+  const [navRef, pillStyle, pillReady] = useSlidingPill<HTMLUListElement>(tab)
   return (
     <Dialog open={open} onOpenChange={(o) => set({ settingsOpen: o })}>
       <DialogPopup className="app-settings-surface h-[min(680px,90dvh)] max-w-[920px] flex-col sm:flex-row overflow-hidden p-0" bottomStickOnMobile={false}>
@@ -53,14 +55,16 @@ export function SettingsDialog() {
         <DialogDescription className="sr-only">Configure kybern</DialogDescription>
         <nav className="flex shrink-0 flex-col border-b border-[color:var(--color-border-light)] bg-[var(--color-background-button-secondary)] p-3 sm:w-44 sm:border-r sm:border-b-0 sm:py-5 font-system-ui">
           <h2 className="px-2 py-1 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground">Settings</h2>
-          <ul className="mt-3 flex gap-1 overflow-x-auto sm:flex-col">
+          <ul ref={navRef} className="t-tabs mt-3 flex gap-1 overflow-x-auto sm:flex-col">
+            <li aria-hidden className="t-tabs-pill z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />
             {TABS.map(([v, label]) => (
-              <li key={v}>
+              <li key={v} className="relative z-[1]">
                 <button
                   type="button"
                   aria-current={tab === v ? "page" : undefined}
+                  data-tab-active={tab === v}
                   onClick={() => set({ settingsTab: v })}
-                  className={cn("w-full", SIDEBAR_HEADER_ROW_CLASS_NAME, tab === v ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}
+                  className={cn("w-full", SIDEBAR_HEADER_ROW_CLASS_NAME, tab === v ? "text-[var(--sidebar-accent-foreground)]" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}
                 >
                   {(() => { const Icon = { general: SettingsIcon, agents: TerminalIcon, appearance: AppearanceIcon, usage: ClockIcon, about: InfoIcon }[v]; return <Icon className="size-4 shrink-0" /> })()}
                   <span className="truncate">{label}</span>
@@ -358,7 +362,7 @@ function Usage() {
       {data && (
         <Section title="Breakdown">
           {data.rows.length === 0 && <Row title="No usage recorded yet" />}
-          {data.rows.map((r) => {
+          {data.rows.map((r, i) => {
             const n = r.usage.input_tokens + r.usage.output_tokens
             return (
               <div key={r.key} className={SETTINGS_CARD_ROW_CLASS_NAME}>
@@ -369,7 +373,7 @@ function Usage() {
                   </span>
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-background-button-secondary-hover)]">
-                  <div className="h-full rounded-full bg-foreground/70 transition-[width] duration-500 ease-out" style={{ width: `${(n / max) * 100}%` }} />
+                  <div className="t-bar h-full rounded-full bg-foreground/70" style={{ width: `${(n / max) * 100}%`, "--i": Math.min(i, 8) } as React.CSSProperties} />
                 </div>
               </div>
             )

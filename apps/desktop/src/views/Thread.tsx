@@ -1,6 +1,7 @@
 import { Markdown } from "@/components/kybern/Markdown"
 import { connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
 import { UserInputPanel } from "./UserInputPanel"
+import { TextSwap } from "@/components/kybern/motion"
 // Thread route: Header (provider glyph, title, Hand off,
 // actions, dock toggle), the transcript scrolling under the frosted composer,
 // queued follow-ups stacked above the input and the approval card.
@@ -250,7 +251,7 @@ function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
   const foreground = tasks.find((task) => !task.backgrounded)
   const detail = foreground?.title ?? tasks[0]?.title
   return (
-    <ComposerStackedPanel>
+    <ComposerStackedPanel className="t-panel-enter">
       <ComposerStackedPanelRow>
         <ComposerStackedPanelRowMain>
           <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
@@ -286,7 +287,7 @@ function QueuedPanel({ threadId, onEdit }: { threadId: ThreadId; onEdit: (text: 
       {queued.map((q, i) => {
         const text = messageText(q.message) || "Queued follow-up"
         return (
-          <ComposerStackedPanelRow key={q.id} compact data-testid="queued-follow-up-row" className={cn(i > 0 && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
+          <ComposerStackedPanelRow key={q.id} compact data-testid="queued-follow-up-row" className={cn("t-row-enter", i > 0 && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
             <ComposerStackedPanelRowMain>
               <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
               <span className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}>{text}</span>
@@ -537,7 +538,7 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
                 }}
                 className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground"
               >
-                {thread.title || "Untitled"}
+                <TextSwap text={thread.title || "Untitled"} />
               </h2>
             )}
           </div>

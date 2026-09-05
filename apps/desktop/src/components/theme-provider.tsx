@@ -98,6 +98,7 @@ export function ThemeProvider({
     [storageKey]
   )
 
+  const appliedOnce = React.useRef(false)
   const applyTheme = React.useCallback(
     (nextTheme: Theme) => {
       const restoreTransitions = disableTransitionOnChange
@@ -105,7 +106,17 @@ export function ThemeProvider({
         : null
 
       // The kit's runtime tokens (color math, density, typography) live on <html>.
-      applyAppearance(nextTheme)
+      // After the first paint, flip palettes inside a view transition so the
+      // whole window cross-fades instead of snapping (per-element transitions
+      // stay disabled above; this is one document-level fade).
+      const doc = document as Document & { startViewTransition?: (update: () => void) => unknown }
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      if (appliedOnce.current && doc.startViewTransition && !reduceMotion) {
+        doc.startViewTransition(() => applyAppearance(nextTheme))
+      } else {
+        applyAppearance(nextTheme)
+      }
+      appliedOnce.current = true
       // The macOS window material (sidebar vibrancy) follows the NSWindow appearance,
       // not our CSS, so a light theme on a dark desktop kept a dark sidebar.
       void syncWindowAppearance(nextTheme)
