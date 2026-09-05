@@ -31,6 +31,9 @@ targets = [
 ]
 # Host release artifacts on GitHub Releases
 hosting = ["github"]
+# Build only the shipped packages (`--package`), not the whole workspace: the
+# Tauri desktop crate cannot build for headless musl targets and is not needed.
+precise-builds = true
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Ship `kybernd-update` / `kybern-update` next to each binary so daemon-only
