@@ -5,6 +5,14 @@ import {
   normalizeDaemonUrl,
 } from "../../../../packages/kybern-client/src/address"
 
+/** How Kybern reaches a machine it set up over SSH; the tunnel is managed by the shell. */
+export interface SshConfig {
+  target: string
+  port?: number
+  remote_port: number
+  local_port: number
+  data_dir?: string
+}
 export interface EnvironmentProfile {
   id: string
   name: string
@@ -12,6 +20,19 @@ export interface EnvironmentProfile {
   environment_id: string | null
   hostname: string | null
   local: boolean
+  ssh?: SshConfig | null
+}
+export interface BootstrapRemote {
+  id?: string
+  name: string
+  target: string
+  data_dir?: string
+}
+export type BootstrapStep = "connect" | "install" | "start" | "pair"
+export interface BootstrapProgress {
+  step: BootstrapStep | "failed"
+  state: "running" | "done" | "failed"
+  detail?: string
 }
 export interface EnvironmentRegistry {
   selected_id: string
@@ -198,4 +219,30 @@ export async function removeEnvironment(id: string): Promise<void> {
   if (index >= 0) previewProfiles.splice(index, 1)
   previewCredentials.delete(id)
   if (previewSelected === id) previewSelected = "local"
+}
+
+/** Set up a machine over SSH and save it. Progress arrives per step while the shell works. */
+export async function bootstrapRemote(
+  input: BootstrapRemote,
+  onProgress: (progress: BootstrapProgress) => void
+): Promise<EnvironmentProfile> {
+  if (!isTauri())
+    throw new Error("Adding a machine over SSH needs the desktop app")
+  const { invoke } = await import("@tauri-apps/api/core")
+  const { listen } = await import("@tauri-apps/api/event")
+  const unlisten = await listen<BootstrapProgress>("remote-bootstrap", (event) =>
+    onProgress(event.payload)
+  )
+  try {
+    return await invoke("remote_bootstrap", { input })
+  } finally {
+    unlisten()
+  }
+}
+
+/** Host aliases from ~/.ssh/config, offered as suggestions. */
+export async function listSshHosts(): Promise<string[]> {
+  if (!isTauri()) return []
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("remote_ssh_hosts")
 }

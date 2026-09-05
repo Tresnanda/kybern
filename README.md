@@ -45,8 +45,33 @@ to it does not copy your laptop's projects or credentials.
 
 ### Desktop app
 
-**Build from source today.** There is no published release available at the
-time of writing. Install stable Rust, Node 22+, pnpm 11, and the
+Download the installer for your platform from
+[GitHub Releases](https://github.com/Tresnanda/kybern/releases/latest). Every
+package bundles `kybernd`; you do not need to install the daemon or CLI
+separately on a desktop.
+
+| Platform | Asset |
+| --- | --- |
+| macOS, Apple silicon | `kybern-<version>-aarch64-apple-darwin.dmg` |
+| macOS, Intel | `kybern-<version>-x86_64-apple-darwin.dmg` |
+| Linux x86_64 | `kybern-<version>-x86_64-unknown-linux-gnu.AppImage` or `.deb` |
+| Windows x86_64 | `kybern-<version>-x86_64-pc-windows-msvc-setup.exe` |
+
+The app checks the release feed after launch and every few hours, and offers
+to install a newer version; **Settings → About** has a manual check. Installing
+an update restarts the app and its local daemon, so agents running on that
+machine restart with it. Remote environments are unaffected.
+
+The macOS bundle is signed ad hoc and is not notarized. Follow macOS's
+**Privacy & Security → Open Anyway** flow if it blocks a downloaded app. For an
+ad-hoc bundle reported as damaged, you can remove its quarantine attribute after
+verifying where it came from:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/kybern.app
+```
+
+To build from source instead, install stable Rust, Node 22+, pnpm 11, and the
 [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), then:
 
 ```sh
@@ -56,48 +81,35 @@ pnpm install --frozen-lockfile
 pnpm tauri build
 ```
 
-Install the generated package under `target/release/bundle/` at the repository
-root. On macOS, open the DMG and drag **kybern.app** into Applications. The build
-bundles `kybernd`; you do not need to install the daemon or CLI separately.
-
-Tagged releases are configured to publish macOS DMGs to
-[GitHub Releases](https://github.com/Tresnanda/kybern/releases), named
-`kybern-<version>-<arch>-apple-darwin.dmg` (`aarch64` for Apple silicon,
-`x86_64` for Intel). Windows and Linux desktop packages currently require a
-source build.
-
-The macOS bundle is signed ad hoc and is not notarized. Follow macOS's
-**Privacy & Security → Open Anyway** flow if it blocks the app you built or
-intentionally downloaded. For an ad-hoc bundle reported as damaged, you can
-remove its quarantine attribute after verifying where it came from:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/kybern.app
-```
+The package lands under `target/release/bundle/` at the repository root. Source
+builds do not self-update.
 
 ### Daemon only: VPS or remote machine
 
-From a checkout, install the daemon with stable Rust and your platform's native
-build tools. This builds only the Rust host; it does not build the desktop app.
+The easiest path needs nothing on the machine but SSH access: in the desktop
+app choose **Switch environment → Add environment → Over SSH**, enter
+`user@host`, and Kybern installs the daemon, starts it, and pairs through a
+tunnel it manages. See [docs/remote-environments.md](docs/remote-environments.md).
+
+To set the machine up yourself instead, one command installs the daemon and the `kybern` CLI into `~/.cargo/bin`
+without Rust, Node or a desktop. Add `--service` on a Linux machine with systemd
+to keep the daemon running as a user service:
 
 ```sh
-git clone https://github.com/Tresnanda/kybern.git
-cd kybern
-cargo install --locked --path crates/kybern-daemon
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Tresnanda/kybern/releases/latest/download/kybern-remote-install.sh | sh -s -- --service
 ```
 
-Cargo normally installs `kybernd` in `~/.cargo/bin`; make sure it is on `PATH`.
-For headless administration and fresh invitations without restarting the daemon,
-also install the optional CLI:
+Other options: `--daemon-only` skips the CLI, `--version 0.2.0` pins a release,
+`--port` and `--bind` set the service's listener (default `127.0.0.1:4173`).
+The release page also has the individual `kybern-daemon-installer.sh`,
+`kybern-cli-installer.sh` and PowerShell installers, plus archives for macOS
+(Apple silicon/Intel), Linux (x86_64/arm64 musl) and Windows (x86_64). Upgrade
+in place later with `kybern-daemon-update` and `kybern-cli-update`.
 
-```sh
-cargo install --locked --path crates/kybern-cli
-```
-
-Once binary releases are published, the release page will also provide
-standalone daemon and CLI archives and shell/PowerShell installers. Release
-builds target macOS (Apple silicon/Intel), Linux (x86_64/arm64 musl), and Windows
-(x86_64). Until then, use the source commands above.
+From a checkout, `cargo install --locked --path crates/kybern-daemon` (and
+`crates/kybern-cli`) builds the same binaries with stable Rust and your
+platform's native build tools.
 
 #### Connect over Tailscale
 

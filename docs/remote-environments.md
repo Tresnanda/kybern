@@ -19,6 +19,35 @@ an action to the local machine.
 
 ## Connect another desktop
 
+### Over SSH (recommended)
+
+If you can `ssh user@host` to the machine with a key or agent, the desktop does
+the rest. Choose **Switch environment → Add environment → Over SSH**, enter a
+name and `user@host` (an alias from `~/.ssh/config` or `host:port` also work),
+and choose **Set up and connect**. Kybern then, over that SSH connection:
+
+1. checks the machine and installs `kybernd` and `kybern` from the latest
+   release when they are missing (`curl` is required there);
+2. starts the daemon on the remote loopback, as a systemd user service where
+   one exists (with lingering, so it survives logout and reboot) and detached
+   with `nohup` elsewhere;
+3. opens a port-forward tunnel from a loopback port on the desktop to the
+   daemon, reads the daemon's bootstrap token to mint a one-time pairing code,
+   and pairs this device with it like any other client.
+
+The saved environment keeps the SSH target. Opening it reopens the tunnel, and
+a tunnel that drops (sleep, network change) is respawned on the same local
+port with backoff, so the client reconnects on its own. Passwords are never
+prompted for; a machine that needs one fails with the `ssh-copy-id` command to
+run first. **Advanced** sets the daemon's data directory on that machine when it
+is not `~/.kybern`. Removing the environment closes the tunnel and forgets the
+credential; the daemon on the machine keeps running.
+
+Agent CLIs still need to be installed and signed in on that machine; open a
+terminal there from Kybern to run `claude login` or the equivalent.
+
+### By address or invitation
+
 1. Install `kybernd`, the desired coding-agent CLIs, and their credentials on
    the machine that will run the work. Install `kybern` there for headless setup.
 2. Make the daemon reachable using one of the network options below.
@@ -158,11 +187,19 @@ HTTPS or an encrypted private network/tunnel for remote credentials and work.
 ## Keep a VPS running after logout and reboot
 
 On a Linux VPS with systemd, run Kybern as the same ordinary user who owns the
-projects and authenticated agent CLIs. Install both the daemon and optional CLI
-as described in the [README](../README.md#daemon-only-vps-or-remote-machine).
-Stop a foreground daemon with Ctrl+C before starting the service.
+projects and authenticated agent CLIs. The release installer does all of this
+in one step:
 
-Create `~/.config/systemd/user/kybernd.service` (create its parent directory if
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Tresnanda/kybern/releases/latest/download/kybern-remote-install.sh | sh -s -- --service
+```
+
+It installs the daemon and CLI as described in the
+[README](../README.md#daemon-only-vps-or-remote-machine), writes the unit
+below, enables it, and prints the remaining steps. Stop a foreground daemon with
+Ctrl+C before starting the service. To set it up by hand instead, create
+`~/.config/systemd/user/kybernd.service` (create its parent directory if
 needed):
 
 ```ini

@@ -1,11 +1,14 @@
 import { create } from "zustand"
 import { reloadOnHotUpdate } from "@/lib/hot"
 import {
+  bootstrapRemote,
   listEnvironments,
   openEnvironment,
   selectEnvironment,
   removeEnvironment,
   saveEnvironment,
+  type BootstrapProgress,
+  type BootstrapRemote,
   type EnvironmentProfile,
   type SaveEnvironment,
 } from "@/lib/environments"
@@ -112,6 +115,16 @@ export async function switchEnvironment(id: string) {
 
 export async function saveAndConnectEnvironment(input: SaveEnvironment) {
   const profile = await saveEnvironment(input)
+  const registry = await listEnvironments()
+  useEnvironments.setState({ profiles: registry.environments })
+  await switchEnvironment(profile.id)
+}
+
+export async function bootstrapAndConnectRemote(
+  input: BootstrapRemote,
+  onProgress: (progress: BootstrapProgress) => void
+) {
+  const profile = await bootstrapRemote(input, onProgress)
   const registry = await listEnvironments()
   useEnvironments.setState({ profiles: registry.environments })
   await switchEnvironment(profile.id)

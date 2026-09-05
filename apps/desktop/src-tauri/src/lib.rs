@@ -15,6 +15,7 @@ use tauri::Manager;
 
 mod environments;
 mod notifications;
+mod remote;
 
 static ENDPOINT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static STARTING_ENDPOINT: tokio::sync::Mutex<Option<StartingEndpoint>> = tokio::sync::Mutex::const_new(None);
@@ -301,6 +302,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             notifications::setup();
             if cfg!(debug_assertions) {
@@ -323,6 +326,8 @@ pub fn run() {
             environments::environment_select,
             environments::environment_save,
             environments::environment_remove,
+            remote::remote_bootstrap,
+            remote::remote_ssh_hosts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

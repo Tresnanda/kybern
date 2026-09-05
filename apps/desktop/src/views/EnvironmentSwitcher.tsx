@@ -32,7 +32,13 @@ import {
   Trash2,
 } from "@/lib/synara/icons"
 import { Spinner } from "@/components/kybern/bits"
-import type { EnvironmentProfile } from "@/lib/environments"
+import {
+  listSshHosts,
+  type BootstrapProgress,
+  type BootstrapStep,
+  type EnvironmentProfile,
+} from "@/lib/environments"
+import { isTauri } from "@/lib/tauri"
 import {
   parsePairingInvitation,
   pairingInvitation,
@@ -40,6 +46,7 @@ import {
 } from "../../../../packages/kybern-client/src/address"
 import {
   activeEnvironment,
+  bootstrapAndConnectRemote,
   forgetEnvironment,
   saveAndConnectEnvironment,
   switchEnvironment,
@@ -55,6 +62,12 @@ import {
 } from "./environmentStyles"
 
 const FIELD = "flex flex-col gap-1.5"
+const BOOTSTRAP_STEPS: { id: BootstrapStep; label: string }[] = [
+  { id: "connect", label: "Connect over SSH" },
+  { id: "install", label: "Install kybernd" },
+  { id: "start", label: "Start the daemon" },
+  { id: "pair", label: "Pair this device" },
+]
 
 export function EnvironmentSwitcher() {
   const profiles = useEnvironments((s) => s.profiles)
@@ -195,6 +208,292 @@ function EnvironmentForm({
   profile: EnvironmentProfile | null
   onDone: () => void
 }) {
+  const sshAvailable = isTauri()
+  const [mode, setMode] = useState<"ssh" | "address">(
+    sshAvailable && (!profile || profile.ssh) ? "ssh" : "address"
+  )
+  const [busy, setBusy] = useState(false)
+  const chooser = !profile && sshAvailable && (
+    <div
+      role="tablist"
+      aria-label="How to reach the machine"
+      className="flex gap-1 rounded-lg bg-secondary/60 p-1"
+    >
+      {(
+        [
+          ["ssh", "Over SSH"],
+          ["address", "Address or invitation"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={mode === id}
+          disabled={busy}
+          onClick={() => setMode(id)}
+          className={`flex-1 rounded-md px-3 py-1.5 text-[length:var(--app-font-size-ui-sm,13px)] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60 ${mode === id ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+  return mode === "ssh" ? (
+    <SshEnvironmentForm
+      profile={profile}
+      onDone={onDone}
+      chooser={chooser}
+      busy={busy}
+      setBusy={setBusy}
+    />
+  ) : (
+    <AddressEnvironmentForm
+      profile={profile}
+      onDone={onDone}
+      chooser={chooser}
+      busy={busy}
+      setBusy={setBusy}
+    />
+  )
+}
+
+function SshEnvironmentForm({
+  profile,
+  onDone,
+  chooser,
+  busy,
+  setBusy,
+}: {
+  profile: EnvironmentProfile | null
+  onDone: () => void
+  chooser: React.ReactNode
+  busy: boolean
+  setBusy: (busy: boolean) => void
+}) {
+  const [name, setName] = useState(profile?.name ?? "")
+  const [target, setTarget] = useState(
+    profile?.ssh
+      ? profile.ssh.port
+        ? `${profile.ssh.target}:${profile.ssh.port}`
+        : profile.ssh.target
+      : ""
+  )
+  const [dataDir, setDataDir] = useState(profile?.ssh?.data_dir ?? "")
+  const [hosts, setHosts] = useState<string[]>([])
+  const [steps, setSteps] = useState<
+    Partial<Record<BootstrapStep, BootstrapProgress>>
+  >({})
+  const [error, setError] = useState<string | null>(null)
+  const started = Object.keys(steps).length > 0
+  useEffect(() => {
+    let cancelled = false
+    void listSshHosts().then((found) => {
+      if (!cancelled) setHosts(found)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    setSteps({})
+    let current: BootstrapStep = "connect"
+    try {
+      await bootstrapAndConnectRemote(
+        {
+          id: profile?.id,
+          name,
+          target,
+          data_dir: dataDir.trim() || undefined,
+        },
+        (progress) => {
+          if (progress.step === "failed") {
+            setSteps((previous) => ({
+              ...previous,
+              [current]: { step: current, state: "failed", detail: progress.detail },
+            }))
+            return
+          }
+          current = progress.step
+          setSteps((previous) => ({ ...previous, [progress.step]: progress }))
+        }
+      )
+      onDone()
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const host = target.trim().replace(/^ssh:\/\//, "").replace(/^[^@]*@/, "")
+  return (
+    <form onSubmit={submit} className="flex min-h-0 flex-col">
+      <DialogHeader>
+        <DialogTitle>
+          {profile ? "Edit environment" : "Add environment"}
+        </DialogTitle>
+        <DialogDescription>
+          Kybern signs in with your SSH keys, installs and starts the daemon on
+          that machine, and pairs this device through a tunnel it keeps open.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogPanel className="flex flex-col gap-4 pt-3">
+        {chooser}
+        <label className={FIELD}>
+          <span className={dialogFieldLabelClassName}>Name</span>
+          <Input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Dev server"
+            maxLength={80}
+            required
+            disabled={busy}
+          />
+        </label>
+        <label className={FIELD}>
+          <span className={dialogFieldLabelClassName}>Machine</span>
+          <Input
+            value={target}
+            aria-label="SSH machine"
+            dir="ltr"
+            list="kybern-ssh-hosts"
+            onChange={(e) => setTarget(e.target.value)}
+            placeholder="user@host"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            required
+            disabled={busy}
+          />
+          <datalist id="kybern-ssh-hosts">
+            {hosts.map((item) => (
+              <option key={item} value={item} />
+            ))}
+          </datalist>
+        </label>
+        <p className={ENVIRONMENT_HINT}>
+          Anything that works with <code className="font-mono">ssh</code>{" "}
+          works here, including aliases from ~/.ssh/config and a custom port
+          as host:port. Key or agent sign-in is required; passwords are never
+          asked for.
+        </p>
+        <details className={ENVIRONMENT_HINT}>
+          <summary className="w-fit cursor-pointer rounded-md py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring">
+            Advanced
+          </summary>
+          <label className={`${FIELD} mt-3`}>
+            <span className={dialogFieldLabelClassName}>
+              Data directory on that machine (optional)
+            </span>
+            <Input
+              value={dataDir}
+              dir="ltr"
+              onChange={(e) => setDataDir(e.target.value)}
+              placeholder="~/.kybern"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              disabled={busy}
+            />
+          </label>
+        </details>
+        {started && (
+          <ol
+            aria-label="Setup progress"
+            className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
+          >
+            {BOOTSTRAP_STEPS.map((step) => {
+              const state = steps[step.id]?.state ?? "pending"
+              return (
+                <li key={step.id} className="flex items-start gap-2.5">
+                  <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+                    {state === "running" ? (
+                      <Spinner size={13} />
+                    ) : state === "done" ? (
+                      <CheckIcon className="size-3.5 text-emerald-500" />
+                    ) : state === "failed" ? (
+                      <span
+                        aria-hidden="true"
+                        className="size-2 rounded-full bg-destructive"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="size-1.5 rounded-full bg-muted-foreground/40"
+                      />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className={`block text-[length:var(--app-font-size-ui-sm,13px)] leading-snug ${state === "pending" ? "text-muted-foreground" : "text-foreground"}`}
+                    >
+                      {step.label}
+                      <span className="sr-only">
+                        {state === "running"
+                          ? ", in progress"
+                          : state === "done"
+                            ? ", done"
+                            : state === "failed"
+                              ? ", failed"
+                              : ""}
+                      </span>
+                    </span>
+                    {steps[step.id]?.detail && state !== "failed" && (
+                      <span className={`${ENVIRONMENT_HINT} block break-words`}>
+                        {steps[step.id]?.detail}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+        )}
+        {error && (
+          <p role="alert" className={ENVIRONMENT_ERROR}>
+            {error}
+            {/Permission denied|ssh-copy-id/.test(error) && host && (
+              <span className="mt-1 block font-mono text-[length:var(--app-font-size-ui-sm,13px)] text-foreground select-text">
+                ssh-copy-id {target.trim()}
+              </span>
+            )}
+          </p>
+        )}
+      </DialogPanel>
+      <DialogFooter>
+        <Button
+          type="submit"
+          disabled={busy || !name.trim() || !target.trim()}
+        >
+          {busy && <Spinner size={13} />}
+          {busy
+            ? "Setting up"
+            : profile
+              ? "Set up again and connect"
+              : "Set up and connect"}
+        </Button>
+      </DialogFooter>
+    </form>
+  )
+}
+
+function AddressEnvironmentForm({
+  profile,
+  onDone,
+  chooser,
+  busy,
+  setBusy,
+}: {
+  profile: EnvironmentProfile | null
+  onDone: () => void
+  chooser: React.ReactNode
+  busy: boolean
+  setBusy: (busy: boolean) => void
+}) {
   const [name, setName] = useState(profile?.name ?? "")
   const [address, setAddress] = useState(profile?.url ?? "")
   const [code, setCode] = useState("")
@@ -202,7 +501,6 @@ function EnvironmentForm({
     undefined
   )
   const [token, setToken] = useState("")
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [addressError, setAddressError] = useState<string | null>(null)
   const validateAddress = () => {
@@ -267,6 +565,7 @@ function EnvironmentForm({
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="flex flex-col gap-4 pt-3">
+        {chooser}
         <label className={FIELD}>
           <span className={dialogFieldLabelClassName}>Name</span>
           <Input
@@ -413,7 +712,9 @@ function ManageEnvironments({
                 dir="auto"
                 className={`${ENVIRONMENT_HINT} break-all select-text`}
               >
-                {profile.url ?? profile.hostname ?? "Managed by Kybern"}
+                {profile.ssh
+                  ? `ssh ${profile.ssh.port ? `${profile.ssh.target}:${profile.ssh.port}` : profile.ssh.target}`
+                  : (profile.url ?? profile.hostname ?? "Managed by Kybern")}
               </div>
             </div>
             {profile.id !== "local" && (

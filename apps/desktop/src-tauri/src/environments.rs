@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::EndpointInfo;
+use crate::remote::{self, SshConfig};
 
 const LOCAL: &str = "local";
 const SERVICE: &str = "dev.kybern.desktop.environments";
@@ -26,6 +27,9 @@ pub struct EnvironmentProfile {
     pub environment_id: Option<String>,
     pub hostname: Option<String>,
     pub local: bool,
+    /// Present for machines reached through an SSH tunnel that Kybern manages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshConfig>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,6 +58,8 @@ pub struct SaveEnvironment {
     pub code: Option<String>,
     pub expected_environment_id: Option<String>,
     pub token: Option<String>,
+    #[serde(default)]
+    pub ssh: Option<SshConfig>,
 }
 
 fn local_profile() -> EnvironmentProfile {
@@ -72,10 +78,11 @@ fn local_profile() -> EnvironmentProfile {
         url: external,
         environment_id: None,
         hostname: None,
+        ssh: None,
     }
 }
 
-fn registry_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+fn registry_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf> {
     let root = match std::env::var_os("KYBERN_CLIENT_CONFIG_DIR") {
         Some(path) => PathBuf::from(path),
         None => app.path().app_config_dir()?,
@@ -137,7 +144,7 @@ fn resolve_profile(registry: &EnvironmentRegistry, id: &str) -> Result<Environme
 }
 
 #[tauri::command]
-pub async fn environments_list(app: tauri::AppHandle) -> Result<EnvironmentRegistry, String> {
+pub async fn environments_list<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<EnvironmentRegistry, String> {
     let _guard = REGISTRY_LOCK.lock().await;
     let result = (|| -> Result<_> {
         let mut registry = read_registry(&registry_path(&app)?)?;
@@ -148,8 +155,8 @@ pub async fn environments_list(app: tauri::AppHandle) -> Result<EnvironmentRegis
 }
 
 #[tauri::command]
-pub async fn environment_open(app: tauri::AppHandle, id: String) -> Result<EnvironmentEndpoint, String> {
-    async fn inner(app: tauri::AppHandle, id: String) -> Result<EnvironmentEndpoint> {
+pub async fn environment_open<R: tauri::Runtime>(app: tauri::AppHandle<R>, id: String) -> Result<EnvironmentEndpoint, String> {
+    async fn inner<R: tauri::Runtime>(app: tauri::AppHandle<R>, id: String) -> Result<EnvironmentEndpoint> {
         let mut profile = {
             let _guard = REGISTRY_LOCK.lock().await;
             resolve_profile(&read_registry(&registry_path(&app)?)?, &id)?
@@ -167,8 +174,34 @@ pub async fn environment_open(app: tauri::AppHandle, id: String) -> Result<Envir
             profile.hostname = Some(info.hostname);
             endpoint
         } else {
-            let token = tokio::task::spawn_blocking(move || read_token(&id)).await??;
-            let url = profile.url.clone().context("This environment has no address; edit it and reconnect")?;
+            let token = tokio::task::spawn_blocking({
+                let id = id.clone();
+                move || read_token(&id)
+            })
+            .await??;
+            let url = if let Some(ssh) = &profile.ssh {
+                let port = remote::ensure_tunnel(&id, ssh).await?;
+                let url = format!("ws://127.0.0.1:{port}/ws");
+                if port != ssh.local_port || profile.url.as_deref() != Some(&url) {
+                    let _guard = REGISTRY_LOCK.lock().await;
+                    let path = registry_path(&app)?;
+                    let mut registry = read_registry(&path)?;
+                    if let Some(saved) = registry.environments.iter_mut().find(|p| p.id == id) {
+                        saved.url = Some(url.clone());
+                        if let Some(saved_ssh) = &mut saved.ssh {
+                            saved_ssh.local_port = port;
+                        }
+                        write_registry(&path, &registry)?;
+                    }
+                    profile.url = Some(url.clone());
+                    if let Some(profile_ssh) = &mut profile.ssh {
+                        profile_ssh.local_port = port;
+                    }
+                }
+                url
+            } else {
+                profile.url.clone().context("This environment has no address; edit it and reconnect")?
+            };
             EndpointInfo { http_base: address::http_base(&url)?, url, token, spawned: false }
         };
         Ok(EnvironmentEndpoint { profile, endpoint })
@@ -177,7 +210,7 @@ pub async fn environment_open(app: tauri::AppHandle, id: String) -> Result<Envir
 }
 
 #[tauri::command]
-pub async fn environment_select(app: tauri::AppHandle, id: String) -> Result<(), String> {
+pub async fn environment_select<R: tauri::Runtime>(app: tauri::AppHandle<R>, id: String) -> Result<(), String> {
     let _guard = REGISTRY_LOCK.lock().await;
     (|| -> Result<()> {
         let path = registry_path(&app)?;
@@ -190,15 +223,22 @@ pub async fn environment_select(app: tauri::AppHandle, id: String) -> Result<(),
 }
 
 #[tauri::command]
-pub async fn environment_save(app: tauri::AppHandle, input: SaveEnvironment) -> Result<EnvironmentProfile, String> {
-    async fn inner(app: tauri::AppHandle, input: SaveEnvironment) -> Result<EnvironmentProfile> {
+pub async fn environment_save<R: tauri::Runtime>(app: tauri::AppHandle<R>, input: SaveEnvironment) -> Result<EnvironmentProfile, String> {
+    save_environment(&app, input).await.map_err(|e| format!("{e:#}"))
+}
+
+/// Pair (or re-use a credential), verify the identity and persist the profile.
+pub(crate) async fn save_environment<R: tauri::Runtime>(app: &tauri::AppHandle<R>, input: SaveEnvironment) -> Result<EnvironmentProfile> {
+    {
         let _guard = REGISTRY_LOCK.lock().await;
-        let path = registry_path(&app)?;
+        let path = registry_path(app)?;
         let mut registry = read_registry(&path)?;
         if input.id.as_deref() == Some(LOCAL) {
             bail!("The local environment is managed by Kybern");
         }
-        let existing = input.id.as_ref().map(|id| resolve_profile(&registry, id)).transpose()?;
+        // An id that is not saved yet (an SSH bootstrap chooses its id before
+        // pairing so the tunnel is keyed by it) creates the profile.
+        let existing = input.id.as_ref().and_then(|id| registry.environments.iter().find(|p| &p.id == id).cloned());
         let name = input.name.trim();
         if name.is_empty() || name.chars().count() > 80 {
             bail!("Enter an environment name of 1–80 characters");
@@ -261,6 +301,7 @@ pub async fn environment_save(app: tauri::AppHandle, input: SaveEnvironment) -> 
             environment_id: Some(info.environment_id),
             hostname: Some(info.hostname),
             local: false,
+            ssh: input.ssh.or_else(|| existing.as_ref().and_then(|p| p.ssh.clone())),
         };
         let old_token = existing.as_ref().and_then(|p| read_token(&p.id).ok());
         credential(&id)?.set_password(&token).context("Save the device credential in the system credential store")?;
@@ -276,12 +317,14 @@ pub async fn environment_save(app: tauri::AppHandle, input: SaveEnvironment) -> 
         }
         Ok(profile)
     }
-    inner(app, input).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
-pub async fn environment_remove(app: tauri::AppHandle, id: String) -> Result<(), String> {
+pub async fn environment_remove<R: tauri::Runtime>(app: tauri::AppHandle<R>, id: String) -> Result<(), String> {
     let _guard = REGISTRY_LOCK.lock().await;
+    // Forgetting a connection never shuts down or changes the remote host; it
+    // only closes this device's tunnel.
+    remote::stop_tunnel(&id).await;
     (|| -> Result<()> {
         if id == LOCAL {
             bail!("The local environment cannot be removed");
@@ -289,7 +332,6 @@ pub async fn environment_remove(app: tauri::AppHandle, id: String) -> Result<(),
         let path = registry_path(&app)?;
         let mut registry = read_registry(&path)?;
         resolve_profile(&registry, &id)?;
-        // Forgetting a connection never shuts down or changes the remote host.
         let entry = credential(&id)?;
         let previous_token = match entry.get_password() {
             Ok(token) => Some(token),
@@ -332,6 +374,7 @@ mod tests {
                 environment_id: Some("stable".into()),
                 hostname: Some("host".into()),
                 local: false,
+                ssh: None,
             }],
         };
         write_registry(&path, &registry).unwrap();
