@@ -1,3 +1,4 @@
+import { observeResizeFrame } from "@/lib/resizeObserver"
 import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
 import { Markdown } from "@/components/kybern/Markdown"
 import { connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
@@ -112,9 +113,10 @@ export function ThreadView({
   useLayoutEffect(() => {
     const el = overlay.current
     if (!el) return
-    const ro = new ResizeObserver(([entry]) => setOverlayHeight(Math.round(entry?.contentRect.height ?? 0)))
-    ro.observe(el)
-    return () => ro.disconnect()
+    return observeResizeFrame(el, ([entry]) => {
+      const height = Math.round(entry?.contentRect.height ?? 0)
+      setOverlayHeight((current) => current === height ? current : height)
+    })
   }, [])
 
   const running = thread?.status === "running" || thread?.status === "awaiting-approval"

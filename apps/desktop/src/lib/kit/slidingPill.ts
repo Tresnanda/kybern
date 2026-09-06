@@ -3,6 +3,7 @@
 // Layer: UI motion hook
 // Exports: useSlidingPill
 
+import { observeResizeFrame } from "@/lib/resizeObserver"
 import { useCallback, useEffect, useLayoutEffect, useState, type CSSProperties } from "react";
 
 /**
@@ -37,9 +38,7 @@ export function useSlidingPill<T extends HTMLElement>(
       setPill((p) => (p.x === next.x && p.y === next.y && p.w === next.w && p.h === next.h ? p : next));
     };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
+    return observeResizeFrame(node, measure);
   }, [node, activeKey]);
 
   // Mark ready one frame after the first real measurement so the pill snaps

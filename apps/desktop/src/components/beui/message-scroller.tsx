@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/immutability -- ported from beui.dev as-is */
 // beui.dev/components/agents/message-scroller
 
+import { observeResizeFrame } from "@/lib/resizeObserver"
 import { useReducedMotion } from "motion/react";
 import {
   type ComponentPropsWithRef,
@@ -322,14 +323,11 @@ export function MessageScroller({
     const content = contentRef.current;
     if (!content || typeof ResizeObserver === "undefined") return;
 
-    const observer = new ResizeObserver(() => {
+    return observeResizeFrame(content, () => {
       scheduleRailSync();
       if (!followOutput || !followingRef.current) return;
       scrollToEnd(reduce || !smooth ? "auto" : "smooth");
     });
-    observer.observe(content);
-
-    return () => observer.disconnect();
   }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth]);
 
   useEffect(() => {
