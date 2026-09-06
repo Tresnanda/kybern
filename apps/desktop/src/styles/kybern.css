@@ -478,7 +478,7 @@ html[data-full-translucency][data-window-material="translucent"] :is([data-slot=
   line-height: 1.5;
   text-wrap: pretty;
 }
-.provider-usage-trigger[data-usage-tone="warning"] { color: var(--warning-foreground); }
+.provider-usage-trigger[data-usage-tone="warning"] { color: var(--warning); }
 .provider-usage-trigger[data-usage-tone="critical"] { color: var(--destructive); }
-[data-usage-tone="warning"] .provider-usage-meter > span { background: var(--warning-foreground); }
+[data-usage-tone="warning"] .provider-usage-meter > span { background: var(--warning); }
 [data-usage-tone="critical"] .provider-usage-meter > span { background: var(--destructive); }
