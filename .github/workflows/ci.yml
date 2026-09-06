@@ -44,6 +44,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+      - name: Native WebKit window material
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: swift scripts/check-window-material.swift src/styles/kybern.css
       - name: clippy
         run: >
           cargo clippy --workspace --all-targets
