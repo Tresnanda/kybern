@@ -104,7 +104,9 @@ async function run() {
   const firstTick = document.querySelector<HTMLButtonElement>('nav[aria-label="Message navigation"] button')!
   history[0]!.textContent = "Corrected history"
   await sleep(100)
-  firstTick.focus()
+  // Programmatic focus after a click is not :focus-visible on every WebKit.
+  // Exercise the actual hover handler without relying on OS keyboard modality.
+  firstTick.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse", pointerId: 1 }))
   await sleep(200)
   const railEditPass = document.querySelector('[data-slot="preview-rail-title"]')?.textContent === "Corrected history"
   firstTick.click()
