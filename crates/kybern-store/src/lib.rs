@@ -446,7 +446,7 @@ impl Store {
         self.with(|c| {
             let mut st = c.prepare(
                 "SELECT seq, thread_id, turn_id, at, payload FROM events
-                 WHERE thread_id = ?1 AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed')
+                 WHERE thread_id = ?1 AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound')
                  ORDER BY seq",
             )?;
             let events = st.query_map([thread_id.to_string()], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
@@ -762,5 +762,35 @@ mod tests {
         assert_eq!(stored.last_seq, 2);
         assert_eq!(stored.effort.as_deref(), Some("high"));
         assert_eq!(s.threads_list(None, false).unwrap().len(), 1);
+        let task = RuntimeTask {
+            id: "phantom".into(),
+            thread_id: t.id,
+            origin_turn_id: turn,
+            started_seq: 0,
+            updated_seq: 0,
+            kind: RuntimeTaskKind::Agent,
+            status: RuntimeTaskStatus::Waiting,
+            title: "Subagent".into(),
+            detail: None,
+            provider_type: None,
+            parent_id: None,
+            tool_call_id: None,
+            provider_thread_id: Some("root-session".into()),
+            model: None,
+            effort: None,
+            backgrounded: false,
+            last_tool_name: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities::default(),
+            started_at: now,
+            updated_at: now,
+            completed_at: None,
+        };
+        s.event_append(t.id, Some(turn), EventPayload::RuntimeTaskStarted { task }).unwrap();
+        assert_eq!(s.runtime_tasks_for_thread(t.id).unwrap().len(), 1);
+        s.event_append(t.id, Some(turn), EventPayload::ProviderSessionBound { session_id: "root-session".into(), model: None }).unwrap();
+        assert!(s.runtime_tasks_for_thread(t.id).unwrap().is_empty(), "the targeted SQL query must include root bindings");
+        assert_eq!(s.events_for_thread(t.id).unwrap().len(), 4, "projection repair must not delete history");
     }
 }

@@ -3,10 +3,27 @@
 use kybern_protocol::*;
 use serde_json::Value;
 
+// Older Codex resume notifications could register the root as its own child
+// before binding. Repair the read projection without rewriting event history.
+fn root_sessions(events: &[ThreadEvent]) -> std::collections::HashSet<(ThreadId, String)> {
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::ProviderSessionBound { session_id, .. } => Some((event.thread_id, session_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_root_task(task: &RuntimeTask, roots: &std::collections::HashSet<(ThreadId, String)>) -> bool {
+    task.kind == RuntimeTaskKind::Agent && task.provider_thread_id.as_ref().is_some_and(|id| roots.contains(&(task.thread_id, id.clone())))
+}
+
 /// Fold append-only runtime task events into one latest-state row per task.
 pub fn project_runtime_tasks(events: &[ThreadEvent]) -> Vec<RuntimeTask> {
     use std::collections::hash_map::Entry;
 
+    let roots = root_sessions(events);
     let mut tasks = std::collections::HashMap::<String, RuntimeTask>::new();
     for event in events {
         let task = match &event.payload {
@@ -15,6 +32,9 @@ pub fn project_runtime_tasks(events: &[ThreadEvent]) -> Vec<RuntimeTask> {
             | EventPayload::RuntimeTaskCompleted { task } => task,
             _ => continue,
         };
+        if is_root_task(task, &roots) {
+            continue;
+        }
         let mut task = task.clone();
         if task.started_seq == 0 {
             task.started_seq = event.seq;
@@ -117,6 +137,7 @@ pub fn project_thread_activity(thread_id: ThreadId, tasks: &[RuntimeTask]) -> Th
 }
 
 pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
+    let roots = root_sessions(events);
     let mut out: Vec<TranscriptEntry> = Vec::new();
     let mut turn_started_at = std::collections::HashMap::new();
     let mut last_turn_id = None;
@@ -324,6 +345,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             EventPayload::RuntimeTaskStarted { task }
             | EventPayload::RuntimeTaskUpdated { task }
             | EventPayload::RuntimeTaskCompleted { task } => {
+                if is_root_task(task, &roots) { continue; }
                 let turn_id = turn_id.unwrap_or(task.origin_turn_id);
                 let mut incoming = task.clone();
                 if incoming.started_seq == 0 {
@@ -602,6 +624,39 @@ mod tests {
 
     fn event(seq: EventSeq, task: RuntimeTask, payload: fn(RuntimeTask) -> EventPayload) -> ThreadEvent {
         ThreadEvent { seq, thread_id: task.thread_id, turn_id: Some(task.origin_turn_id), at: task.updated_at, payload: payload(task) }
+    }
+
+    #[test]
+    fn historical_root_as_child_is_hidden_even_when_binding_arrived_later() {
+        let mut phantom = runtime_task("root", RuntimeTaskKind::Agent, RuntimeTaskStatus::Waiting, 0);
+        phantom.provider_thread_id = Some("root-session".into());
+        let mut child = runtime_task("child", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 1);
+        child.provider_thread_id = Some("child-session".into());
+        let mut process = runtime_task("process", RuntimeTaskKind::Process, RuntimeTaskStatus::Running, 2);
+        process.provider_thread_id = Some("root-session".into());
+        let events = vec![
+            event(1, phantom.clone(), |task| EventPayload::RuntimeTaskStarted { task }),
+            ThreadEvent {
+                seq: 2,
+                thread_id: phantom.thread_id,
+                turn_id: Some(phantom.origin_turn_id),
+                at: phantom.updated_at,
+                payload: EventPayload::ProviderSessionBound { session_id: "root-session".into(), model: None },
+            },
+            event(3, child, |task| EventPayload::RuntimeTaskStarted { task }),
+            event(4, process, |task| EventPayload::RuntimeTaskStarted { task }),
+            event(5, phantom, |task| EventPayload::RuntimeTaskUpdated { task }),
+        ];
+        let reloaded: Vec<ThreadEvent> = serde_json::from_str(&serde_json::to_string(&events).unwrap()).unwrap();
+        let tasks = project_runtime_tasks(&reloaded);
+        assert_eq!(tasks.iter().map(|task| task.id.as_str()).collect::<Vec<_>>(), ["child", "process"]);
+        let rows = project_transcript(&reloaded);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| matches!(row, TranscriptEntry::RuntimeTask { task, .. } if task.id != "root")));
+        // Without a root binding, unknown agents must be retained.
+        let unbound: Vec<_> =
+            reloaded.into_iter().filter(|event| !matches!(event.payload, EventPayload::ProviderSessionBound { .. })).collect();
+        assert_eq!(project_runtime_tasks(&unbound).len(), 3);
     }
 
     #[test]

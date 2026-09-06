@@ -199,3 +199,12 @@ active-turn steering, explicit answers, duplicate submissions, late/startup
 rejection, idle resumption, and frontend reload/history behavior. A lifecycle
 test's fixed startup timer was replaced with a readiness/gate handshake after it
 raced process startup during a loaded build.
+
+
+Historical phantom activity is also excluded during transcript and runtime-task
+projection when an agent's provider thread ID exactly matches a root session
+bound in that conversation. The targeted activity SQL query includes binding
+events, so task lists and sidebar summaries agree with transcript hydration.
+Bindings are collected before folding, covering notifications that preceded the
+root binding. Real child IDs, processes, and unbound/unknown agents are retained.
+The event log is preserved; this does not stop or signal any process.
