@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.8
+
+- Fix Translucent app mode remaining opaque outside the sidebar on macOS.
+- Add native WebKit regression coverage for window materials, settings, floating surfaces, and accessibility fallbacks.
+
 ## 0.1.7
 
 - Reduce running-indicator repaint work and pause looping indicators when they are hidden or offscreen.
