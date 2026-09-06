@@ -83,3 +83,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: apps/desktop
         run: node --experimental-strip-types scripts/check-window-material.mjs
+      - name: Native WebKit rendering
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs

@@ -4,7 +4,7 @@ import { imageSource } from "@/lib/responseImages"
 // Code blocks get the `.chat-markdown-codeblock` chrome: language label,
 // wrap toggle and copy action in the header, shiki-highlighted body.
 
-import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react"
+import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -16,42 +16,12 @@ import { cn } from "@/lib/utils"
 import { IconSwap, StreamWords } from "@/components/kybern/motion"
 import type { InlineTokenKind } from "@/components/kybern/InlineToken"
 import { renderWithTokens } from "@/lib/inlineTokens"
+import { shouldHighlightSource, streamingHighlightInterval } from "@/lib/workload"
 
-type Highlighter = {
-  codeToHtml: (code: string, opts: { lang: string; theme: string }) => string
-  loadLanguage: (lang: unknown) => Promise<void>
-  getLoadedLanguages: () => string[]
-}
-let highlighterPromise: Promise<Highlighter> | null = null
+import { highlightToHtml } from "@/lib/highlight"
+export { highlightToHtml } from "@/lib/highlight"
+
 const ALIASES: Record<string, string> = { js: "javascript", ts: "typescript", sh: "bash", shell: "bash", zsh: "bash", py: "python", rs: "rust", yml: "yaml", md: "markdown", kt: "kotlin", "c++": "cpp" }
-
-function getHighlighter(): Promise<Highlighter> {
-  if (!highlighterPromise) {
-    highlighterPromise = (async () => {
-      const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, { bundledThemes }] = await Promise.all([
-        import("shiki/core"),
-        import("shiki/engine/javascript"),
-        import("shiki/themes"),
-      ])
-      const hl = await createHighlighterCore({
-        themes: [bundledThemes["github-dark-default"], bundledThemes["github-light-default"]],
-        langs: [],
-        engine: createJavaScriptRegexEngine({ forgiving: true }),
-      })
-      return hl as unknown as Highlighter
-    })()
-  }
-  return highlighterPromise
-}
-
-async function ensureLang(hl: Highlighter, lang: string): Promise<boolean> {
-  if (hl.getLoadedLanguages().includes(lang)) return true
-  const { bundledLanguages } = await import("shiki/langs")
-  const loader = (bundledLanguages as Record<string, unknown>)[lang]
-  if (!loader) return false
-  await hl.loadLanguage(loader)
-  return true
-}
 
 /** Language id for a file path, or null when shiki has no grammar for it. */
 export function languageForPath(path: string): string | null {
@@ -92,38 +62,52 @@ export function languageForPath(path: string): string | null {
   return lang ? lang : null
 }
 
-/** Highlights `code` with shiki, or returns null when the language is unknown. */
-export async function highlightToHtml(code: string, lang: string | null, dark: boolean): Promise<string | null> {
-  if (!lang) return null
-  const h = await getHighlighter()
-  if (!(await ensureLang(h, lang))) return null
-  return h.codeToHtml(code, { lang, theme: dark ? "github-dark-default" : "github-light-default" })
-}
-
 export function useIsDark(): boolean {
   const { theme } = useTheme()
   return theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
 }
 
-export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+export const CodeBlock = memo(function CodeBlock({ code, lang, live = false }: { code: string; lang?: string; live?: boolean }) {
   const dark = useIsDark()
-  const [html, setHtml] = useState<string | null>(null)
+  const [highlight, setHighlight] = useState<{ code: string; name: string; dark: boolean; html: string } | null>(null)
+  const markup = useMemo(() => highlight ? { __html: highlight.html } : null, [highlight])
+  const highlightedAt = useRef(0)
+  const inFlight = useRef<{ code: string; name: string; dark: boolean; abort: AbortController } | null>(null)
   const [wrap, setWrap] = useState(false)
   const [copied, setCopied] = useState(false)
   const name = lang ? (ALIASES[lang.toLowerCase()] ?? lang.toLowerCase()) : null
+  const highlightable = !!name && shouldHighlightSource(code)
+  const currentHighlight = highlight && highlight.name === name && highlight.dark === dark &&
+    (highlight.code === code || (live && code.startsWith(highlight.code)))
   useEffect(() => {
-    let live = true
-    if (!name) return
-    getHighlighter()
-      .then(async (h) => {
-        if (!(await ensureLang(h, name)) || !live) return
-        setHtml(h.codeToHtml(code, { lang: name, theme: dark ? "github-dark-default" : "github-light-default" }))
-      })
-      .catch(() => setHtml(null))
-    return () => {
-      live = false
+    const pending = inFlight.current
+    if (pending) {
+      // Let an in-progress prefix finish while more text arrives. Cancelling on
+      // every token would starve highlighting throughout a continuous stream.
+      if (live && pending.name === name && pending.dark === dark && code.startsWith(pending.code)) return
+      inFlight.current = null
+      pending.abort.abort()
     }
-  }, [code, name, dark])
+    if (!name || !highlightable || (highlight?.code === code && highlight.name === name && highlight.dark === dark)) return
+    const wait = live ? Math.max(0, highlightedAt.current + streamingHighlightInterval(code.length) - performance.now()) : 0
+    const timer = window.setTimeout(() => {
+      const job = { code, name, dark, abort: new AbortController() }
+      inFlight.current = job
+      void highlightToHtml(code, name, dark, { signal: job.abort.signal, live })
+        .then((html) => {
+          if (inFlight.current !== job) return
+          inFlight.current = null
+          highlightedAt.current = performance.now()
+          setHighlight(html ? { code, name, dark, html } : null)
+        })
+    }, wait)
+    return () => window.clearTimeout(timer)
+  }, [code, name, dark, live, highlightable, highlight])
+
+  useEffect(() => () => {
+    inFlight.current?.abort.abort()
+    inFlight.current = null
+  }, [])
 
   return (
     <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : undefined}>
@@ -154,8 +138,8 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
         </span>
       </div>
       <div className="chat-markdown-codeblock__body [&_pre]:!bg-transparent">
-        {html && name ? (
-          <div dangerouslySetInnerHTML={{ __html: html }} />
+        {markup && highlightable && currentHighlight ? (
+          <div dangerouslySetInnerHTML={markup} />
         ) : (
           <pre>
             <code>{code}</code>
@@ -164,7 +148,7 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
       </div>
     </div>
   )
-}
+})
 
 function extractText(node: ReactNode): string {
   if (typeof node === "string") return node
@@ -194,6 +178,35 @@ function textComponents(transform: TextTransform) {
 const streamTransform: TextTransform = (text, key) => <StreamWords key={key} text={text} />
 const LIVE_TEXT_COMPONENTS = textComponents(streamTransform)
 
+const MarkdownLiveContext = createContext(false)
+
+function MarkdownCode({ children }: { children?: ReactNode }) {
+  const live = useContext(MarkdownLiveContext)
+  const child = Array.isArray(children) ? children[0] : children
+  const props = (child as { props?: { className?: string; children?: ReactNode } } | null)?.props
+  const lang = /language-([\w+-]+)/.exec(props?.className ?? "")?.[1]
+  const code = extractText(props?.children).replace(/\n$/, "")
+  return <CodeBlock code={code} lang={lang} live={live} />
+}
+
+// Stable component types preserve code-block state and highlighting across deltas.
+const BASE_COMPONENTS: import("react-markdown").Components = {
+  img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline"
+      onClick={(e) => {
+        e.preventDefault()
+        if (href) void openExternal(href)
+      }}
+    >
+      {children}
+    </a>
+  ),
+  pre: MarkdownCode,
+}
+
 export const Markdown = memo(function Markdown({
   text,
   className,
@@ -220,35 +233,18 @@ export const Markdown = memo(function Markdown({
       className={cn("chat-markdown selectable w-full min-w-0 text-sm leading-relaxed text-foreground", variant === "user" && "chat-markdown--user", className)}
       style={style}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        urlTransform={(url, key) => key === "src" ? (imageSource(url) ? url : "") : defaultUrlTransform(url)}
-        components={{
-          ...(live ? LIVE_TEXT_COMPONENTS : tokenComponents),
-          img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline"
-              onClick={(e) => {
-                e.preventDefault()
-                if (href) void openExternal(href)
-              }}
-            >
-              {children}
-            </a>
-          ),
-          pre: ({ children }) => {
-            const child = Array.isArray(children) ? children[0] : children
-            const props = (child as { props?: { className?: string; children?: ReactNode } } | null)?.props
-            const lang = /language-([\w+-]+)/.exec(props?.className ?? "")?.[1]
-            const code = extractText(props?.children).replace(/\n$/, "")
-            return <CodeBlock code={code} lang={lang} />
-          },
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+      <MarkdownLiveContext value={live}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          urlTransform={(url, key) => key === "src" ? (imageSource(url) ? url : "") : defaultUrlTransform(url)}
+          components={{
+            ...(live ? LIVE_TEXT_COMPONENTS : tokenComponents),
+            ...BASE_COMPONENTS,
+          }}
+        >
+          {text}
+        </ReactMarkdown>
+      </MarkdownLiveContext>
     </div>
   )
 })

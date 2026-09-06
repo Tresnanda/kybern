@@ -262,13 +262,15 @@ const FileViewer = memo(function FileViewer({ projectId, path, projectName, proj
   useEffect(() => {
     if (!active || !file || file.binary || !file.content || !shouldHighlightSource(file.content)) return
     let live = true
+    const abort = new AbortController()
     const timer = window.setTimeout(() => {
-      highlightToHtml(file.content, languageForPath(path), dark)
+      highlightToHtml(file.content, languageForPath(path), dark, { signal: abort.signal })
         .then((h) => live && setHtml(h))
         .catch(() => live && setHtml(null))
     }, 0)
     return () => {
       live = false
+      abort.abort()
       window.clearTimeout(timer)
     }
   }, [active, file, path, dark])

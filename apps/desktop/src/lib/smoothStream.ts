@@ -46,3 +46,10 @@ export function smoothAdvance(state: SmoothState, target: number, elapsedMs: num
   const shown = state.shown + vel * dt
   return shown >= target ? { shown: target, vel: 0 } : { shown, vel }
 }
+
+/** Keep motion continuous without rebuilding growing Markdown at display refresh rate. */
+export const REVEAL_COMMIT_INTERVAL_MS = 32
+
+export function shouldCommitReveal(previous: number, next: number, target: number, elapsedMs: number): boolean {
+  return next !== previous && (next >= target || elapsedMs >= REVEAL_COMMIT_INTERVAL_MS)
+}

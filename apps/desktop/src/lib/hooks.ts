@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 
-import { smoothAdvance, type SmoothState } from "./smoothStream"
+import { shouldCommitReveal, smoothAdvance, type SmoothState } from "./smoothStream"
 
 /**
  * Reveal streaming text at a steady, provider-agnostic cadence. `target` is the
@@ -13,10 +13,12 @@ export function useSmoothStream(target: string, live: boolean, complete = false)
   const [shownLen, setShownLen] = useState(() => (live ? 0 : target.length))
   // Loop bookkeeping and the latest inputs, read only inside effects / the rAF
   // callback so a flurry of deltas never restarts (and re-times) the animation.
-  const loop = useRef<{ state: SmoothState; raf: number; last: number }>({
+  const loop = useRef<{ state: SmoothState; raf: number; last: number; emitted: number; lastEmit: number }>({
     state: { shown: live ? 0 : target.length, vel: 0 },
     raf: 0,
     last: 0,
+    emitted: live ? 0 : target.length,
+    lastEmit: 0,
   })
   const latest = useRef({ target, complete })
 
@@ -34,6 +36,8 @@ export function useSmoothStream(target: string, live: boolean, complete = false)
       if (l.raf) cancelAnimationFrame(l.raf)
       l.raf = 0
       l.state = { shown: target.length, vel: 0 }
+      l.emitted = target.length
+      l.lastEmit = 0
       return
     }
     if (l.state.shown > target.length) l.state = { shown: 0, vel: 0 } // shrank: restart
@@ -44,7 +48,12 @@ export function useSmoothStream(target: string, live: boolean, complete = false)
       const last = l.last || now
       l.last = now
       l.state = smoothAdvance(l.state, t.length, now - last, done)
-      setShownLen(Math.floor(l.state.shown))
+      const next = Math.floor(l.state.shown)
+      if (shouldCommitReveal(l.emitted, next, t.length, l.lastEmit ? now - l.lastEmit : Infinity)) {
+        l.emitted = next
+        l.lastEmit = now
+        setShownLen(next)
+      }
       l.raf = l.state.shown < t.length ? requestAnimationFrame(tick) : 0
     }
     l.raf = requestAnimationFrame(tick)

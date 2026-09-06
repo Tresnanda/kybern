@@ -8,6 +8,7 @@ const host = process.env.TAURI_DEV_HOST
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "./src") } },
+  worker: { format: "es" },
   clearScreen: false,
   server: {
     port: 1420,

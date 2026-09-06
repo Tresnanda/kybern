@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.9
+
+- Make cards, controls, message bubbles, menus, and dialogs consistently translucent in Translucent app mode.
+- Improve long-thread scrolling by preserving settled turn identities and removing collapsed work details from the rendered page.
+- Move syntax highlighting off the interface thread, bound queued work and cached results, and pace highlighting while code streams.
+- Preserve code-block wrapping and highlighted content while surrounding Markdown updates.
+- Reduce streaming Markdown updates and cache message-navigation previews to avoid repeatedly reading historical messages.
+- Add native WebKit rendering regression coverage using the production content security policy.
+
 ## 0.1.8
 
 - Fix Translucent app mode remaining opaque outside the sidebar on macOS.

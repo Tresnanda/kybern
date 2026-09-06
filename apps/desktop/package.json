@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test toolActivity.test.mjs transcript.test.mjs performance.test.mjs loopVisibility.test.mjs uiDiagnostics.test.mjs splitView.test.mjs smoothStream.test.mjs environments.test.mjs userInput.test.mjs responseImages.test.mjs toolSurface.test.mjs",
+    "test": "node --experimental-strip-types --test toolActivity.test.mjs transcript.test.mjs performance.test.mjs loopVisibility.test.mjs uiDiagnostics.test.mjs splitView.test.mjs smoothStream.test.mjs environments.test.mjs userInput.test.mjs responseImages.test.mjs toolSurface.test.mjs highlightQueue.test.mjs",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b --noEmit",

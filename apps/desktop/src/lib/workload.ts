@@ -87,3 +87,8 @@ export function virtualRange(
     after: (total - end) * rowHeight,
   }
 }
+
+/** Bound repeated tokenization while a code fence grows; settled code is immediate. */
+export function streamingHighlightInterval(length: number): number {
+  return Math.round(160 + Math.min(1, Math.max(0, length - 8_000) / 72_000) * 840)
+}

@@ -28,26 +28,48 @@ function truncateMessageText(text: string, limit: number) {
   return `${excerpt.slice(0, boundary > limit * 0.65 ? boundary : limit).trim()}…`;
 }
 
-function getMessageText(message: HTMLElement) {
+function getMessageText(message: HTMLElement, cache: WeakMap<HTMLElement, string>) {
+  const cached = cache.get(message);
+  if (cached !== undefined) return cached;
   const surface =
     message.querySelector<HTMLElement>('[data-slot="message-bubble-content"]') ??
     message.querySelector<HTMLElement>('[data-slot="message-content"]') ??
     message;
-  return (surface.textContent ?? "").replace(/\s+/g, " ").trim();
+  // A rail preview needs only a short prefix, never a whole highlighted block.
+  const walker = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT);
+  const limit = PREVIEW_TITLE_LENGTH + PREVIEW_DESCRIPTION_LENGTH + 2;
+  let text = "";
+  let space = false;
+  for (let node = walker.nextNode(); node && text.length <= limit; node = walker.nextNode()) {
+    const value = node.nodeValue ?? "";
+    for (let index = 0; index < value.length && text.length <= limit; index++) {
+      const char = value[index]!;
+      if (/\s/.test(char)) {
+        space = text.length > 0;
+      } else {
+        if (space) text += " ";
+        text += char;
+        space = false;
+      }
+    }
+  }
+  cache.set(message, text);
+  return text;
 }
 
 function getMessagePreview(
   message: HTMLElement,
+  cache: WeakMap<HTMLElement, string>,
   assistantResponse?: HTMLElement,
 ) {
-  const text = getMessageText(message);
+  const text = getMessageText(message, cache);
   if (!text) {
     return { label: "Message", description: undefined };
   }
 
   if (text.length <= PREVIEW_TITLE_LENGTH) {
     const responseText = assistantResponse
-      ? getMessageText(assistantResponse)
+      ? getMessageText(assistantResponse, cache)
       : "";
     return {
       label: text,
@@ -65,7 +87,7 @@ function getMessagePreview(
       : PREVIEW_TITLE_LENGTH;
   const label = `${text.slice(0, titleEnd).trim()}…`;
   const responseText = assistantResponse
-    ? getMessageText(assistantResponse)
+    ? getMessageText(assistantResponse, cache)
     : text.slice(titleEnd).trim();
   return {
     label,
@@ -139,6 +161,8 @@ export function MessageScroller({
   const scrollTimerRef = useRef<number | undefined>(undefined);
   const frameRef = useRef<number | undefined>(undefined);
   const railFrameRef = useRef<number | undefined>(undefined);
+  const activeRailFrameRef = useRef<number | undefined>(undefined);
+  const railTextCacheRef = useRef(new WeakMap<HTMLElement, string>());
   const railIdRef = useRef(new WeakMap<HTMLElement, string>());
   const railIdCounterRef = useRef(0);
   const railTargetsRef = useRef(new Map<string, HTMLElement>());
@@ -239,7 +263,7 @@ export function MessageScroller({
               .slice(index + 1)
               .find((candidate) => candidate.dataset.from === "assistant")
           : undefined;
-      const preview = getMessagePreview(message, assistantResponse);
+      const preview = getMessagePreview(message, railTextCacheRef.current, assistantResponse);
 
       return {
         id,
@@ -269,12 +293,21 @@ export function MessageScroller({
 
   const scheduleRailSync = useCallback(() => {
     if (navigation !== "rail") return;
-    if (railFrameRef.current) cancelAnimationFrame(railFrameRef.current);
+    if (railFrameRef.current) return;
     railFrameRef.current = requestAnimationFrame(() => {
+      railFrameRef.current = undefined;
       syncRailItems();
       updateActiveRailItem();
     });
   }, [navigation, syncRailItems, updateActiveRailItem]);
+
+  const scheduleActiveRailItem = useCallback(() => {
+    if (navigation !== "rail" || activeRailFrameRef.current) return;
+    activeRailFrameRef.current = requestAnimationFrame(() => {
+      activeRailFrameRef.current = undefined;
+      updateActiveRailItem();
+    });
+  }, [navigation, updateActiveRailItem]);
 
   const scrollToEnd = useCallback((behavior: ScrollBehavior) => {
     const viewport = viewportRef.current;
@@ -299,8 +332,8 @@ export function MessageScroller({
     const distance =
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     setFollowing(distance <= followThreshold);
-    updateActiveRailItem();
-  }, [followThreshold, setFollowing, updateActiveRailItem]);
+    scheduleActiveRailItem();
+  }, [followThreshold, setFollowing, scheduleActiveRailItem]);
 
   const leaveLiveEdge = useCallback(() => {
     programmaticScrollRef.current = false;
@@ -346,7 +379,26 @@ export function MessageScroller({
     const mutationObserver =
       typeof MutationObserver === "undefined"
         ? null
-        : new MutationObserver(scheduleRailSync);
+        : new MutationObserver((records) => {
+            for (const record of records) {
+              const element = record.target.nodeType === 1
+                ? record.target as Element
+                : record.target.parentElement;
+              const message = element?.closest<HTMLElement>('[data-slot="message"]');
+              if (message) {
+                railTextCacheRef.current.delete(message);
+              } else {
+                // Reinserted message nodes may have changed while detached.
+                for (const node of record.addedNodes) {
+                  if (node.nodeType !== 1) continue;
+                  const added = node as HTMLElement;
+                  if (added.matches('[data-slot="message"]')) railTextCacheRef.current.delete(added);
+                  for (const row of added.querySelectorAll<HTMLElement>('[data-slot="message"]')) railTextCacheRef.current.delete(row);
+                }
+              }
+            }
+            scheduleRailSync();
+          });
     mutationObserver?.observe(content, {
       childList: true,
       characterData: true,
@@ -371,6 +423,7 @@ export function MessageScroller({
       if (scrollTimerRef.current) window.clearTimeout(scrollTimerRef.current);
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
       if (railFrameRef.current) cancelAnimationFrame(railFrameRef.current);
+      if (activeRailFrameRef.current) cancelAnimationFrame(activeRailFrameRef.current);
     },
     [],
   );

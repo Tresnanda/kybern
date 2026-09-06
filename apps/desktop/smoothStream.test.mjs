@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-const { smoothAdvance } = await import("./src/lib/smoothStream.ts")
+const { smoothAdvance, shouldCommitReveal } = await import("./src/lib/smoothStream.ts")
 
 const start = () => ({ shown: 0, vel: 0 })
 
@@ -77,4 +77,24 @@ test("complete drains faster than live", () => {
     return frames
   }
   assert.ok(framesToFinish(true) < framesToFinish(false))
+})
+
+
+test("reveal commits are bounded across 60 Hz and 120 Hz displays without losing the tail", () => {
+  for (const hz of [60, 120]) {
+    let previous = 0
+    let lastAt = -Infinity
+    let commits = 0
+    for (let frame = 1; frame <= hz * 2; frame++) {
+      const now = frame * 1000 / hz
+      if (shouldCommitReveal(previous, frame, 10_000, now - lastAt)) {
+        previous = frame
+        lastAt = now
+        commits++
+      }
+    }
+    assert.ok(commits <= 63, `${hz} Hz produced ${commits} commits in 2 seconds`)
+    assert.equal(shouldCommitReveal(previous, 10_000, 10_000, 1), true)
+    assert.equal(shouldCommitReveal(10_000, 10_000, 10_000, 100), false)
+  }
 })
