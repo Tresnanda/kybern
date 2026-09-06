@@ -36,6 +36,8 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         <aside data-slot="popover-popup">Popover</aside>
         <aside data-slot="menu-popup">Menu</aside>
         <aside data-slot="menu-sub-content">Submenu</aside>
+        <aside data-slot="context-menu-content">Context menu</aside>
+        <aside data-slot="context-menu-sub-content">Context submenu</aside>
         <aside data-slot="tooltip-popup">Tooltip</aside>
         <aside data-slot="select-popup">Select</aside>
         <aside data-slot="combobox-popup">Combobox</aside>

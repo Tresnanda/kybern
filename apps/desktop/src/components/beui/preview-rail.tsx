@@ -13,6 +13,7 @@ import { useDismiss } from "@/lib/beui/use-dismiss";
 import { useHoverGesture } from "@/lib/beui/use-hover-gesture";
 import { useTapGesture } from "@/lib/beui/use-tap-gesture";
 import { cn } from "@/lib/utils";
+import { VirtualPreviewRail } from "./virtual-preview-rail";
 
 export interface PreviewRailItem {
   id: string;
@@ -25,7 +26,7 @@ export interface PreviewRailItem {
 }
 
 export interface PreviewRailProps {
-  items: PreviewRailItem[];
+  items: readonly PreviewRailItem[];
   label?: string;
   orientation?: "vertical" | "horizontal";
   activeId?: string;
@@ -147,7 +148,21 @@ export function PreviewRail({
         className,
       )}
     >
-      <nav
+      {!isHorizontal && items.length > 80 && items.every((item) => !item.href) ? (
+        <VirtualPreviewRail
+          items={items}
+          label={label}
+          activeId={selectedId}
+          itemSize={itemSize}
+          onSelect={(item) => { selectItem(item.id); onItemSelect?.(item); }}
+          renderPreview={renderPreview ?? ((item) => <DefaultPreview item={item} />)}
+          showPreview={showPreview}
+          rootRef={rootRef}
+          railClassName={railClassName}
+          previewContainerClassName={previewContainerClassName}
+          previewClassName={previewClassName}
+        />
+      ) : <><nav
         aria-label={label}
         onPointerLeave={(event) => {
           // A touch pointer leaves on lift, which would clear the tick the tap
@@ -380,6 +395,7 @@ export function PreviewRail({
         </div>
       ) : null}
 
+      </>}
       {children ? (
         <div className="min-h-0 min-w-0 flex-1">{children}</div>
       ) : null}

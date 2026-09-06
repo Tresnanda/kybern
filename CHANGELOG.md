@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- Virtualize long conversation histories, expanded tool groups, and agent activity to keep mounted interface work bounded.
+- Move large Markdown parsing off the interface thread and reuse completed blocks as text streams, preserving GFM, links, footnotes, code controls, and exact final output.
+- Navigate every message through a virtualized rail with keyboard support and bounded geometry reads.
+- Preserve reading position, following, selections, focus, wrapping, and expansion state while virtual rows mount and unmount.
+- Fix sidebar context menus and submenus appearing transparent without blur in Translucent app mode.
+- Add M1 native WebKit measurements and regression checks for large histories, growing Markdown, navigation, tool expansion, and menu materials.
+
 ## 0.1.9
 
 - Make cards, controls, message bubbles, menus, and dialogs consistently translucent in Translucent app mode.

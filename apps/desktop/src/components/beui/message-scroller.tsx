@@ -97,6 +97,13 @@ function getMessagePreview(
   };
 }
 
+export interface MessageNavigationModel {
+  items: readonly PreviewRailItem[];
+  activeId: (viewport: HTMLElement) => string;
+  scrollToItem: (id: string) => void;
+  scrollToEnd: () => void;
+}
+
 export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
   /** Keep streamed output pinned while the reader remains near the end. */
   followOutput?: boolean;
@@ -114,6 +121,8 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
   busy?: boolean;
   /** Adds a compact rail for navigating between rendered Message rows. */
   navigation?: "rail";
+  /** Data-backed navigation for virtual transcripts; avoids reading unmounted DOM. */
+  navigationModel?: MessageNavigationModel;
   /** Accessible label for the optional message navigation rail. */
   navigationLabel?: string;
   /** Which edge the rail sits on. */
@@ -141,6 +150,7 @@ export function MessageScroller({
   label = "Conversation",
   busy,
   navigation,
+  navigationModel,
   navigationLabel = "Message navigation",
   navigationSide = "right",
   viewportClassName,
@@ -154,6 +164,8 @@ export function MessageScroller({
   ...props
 }: MessageScrollerProps) {
   const reduce = useReducedMotion() ?? false;
+  const navigationModelRef = useRef(navigationModel);
+  useLayoutEffect(() => { navigationModelRef.current = navigationModel; }, [navigationModel]);
   const viewportRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(followOutput);
@@ -166,7 +178,7 @@ export function MessageScroller({
   const railIdRef = useRef(new WeakMap<HTMLElement, string>());
   const railIdCounterRef = useRef(0);
   const railTargetsRef = useRef(new Map<string, HTMLElement>());
-  const [railItems, setRailItems] = useState<PreviewRailItem[]>([]);
+  const [railItems, setRailItems] = useState<readonly PreviewRailItem[]>([]);
   const [activeRailId, setActiveRailId] = useState("");
   const [railOverflowing, setRailOverflowing] = useState(false);
   const {
@@ -201,6 +213,13 @@ export function MessageScroller({
   const updateActiveRailItem = useCallback(() => {
     if (navigation !== "rail") return;
     const viewport = viewportRef.current;
+    if (viewport && navigationModel) {
+      const id = viewport.scrollTop <= followThreshold ? navigationModel.items[0]?.id ?? ""
+        : viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= followThreshold ? navigationModel.items.at(-1)?.id ?? ""
+        : navigationModel.activeId(viewport);
+      setActiveRailId((current) => current === id ? current : id);
+      return;
+    }
     const targets = [...railTargetsRef.current.entries()];
     if (!viewport || targets.length === 0) return;
 
@@ -236,13 +255,19 @@ export function MessageScroller({
     setActiveRailId((current) =>
       current === nearestId ? current : nearestId,
     );
-  }, [followThreshold, navigation]);
+  }, [followThreshold, navigation, navigationModel]);
 
   const syncRailItems = useCallback(() => {
     if (navigation !== "rail") return;
     const content = contentRef.current;
     const viewport = viewportRef.current;
     if (!content || !viewport) return;
+
+    if (navigationModel) {
+      setRailItems(navigationModel.items);
+      setRailOverflowing(viewport.scrollHeight > viewport.clientHeight + 1 && navigationModel.items.length > 1);
+      return;
+    }
 
     const messages = Array.from(
       content.querySelectorAll<HTMLElement>('[data-slot="message"]'),
@@ -289,7 +314,7 @@ export function MessageScroller({
     setRailOverflowing(
       viewport.scrollHeight > viewport.clientHeight + 1 && messages.length > 1,
     );
-  }, [navigation]);
+  }, [navigation, navigationModel]);
 
   const scheduleRailSync = useCallback(() => {
     if (navigation !== "rail") return;
@@ -314,7 +339,9 @@ export function MessageScroller({
     if (!viewport) return;
 
     programmaticScrollRef.current = true;
-    if (typeof viewport.scrollTo === "function") {
+    if (navigationModelRef.current) {
+      navigationModelRef.current.scrollToEnd();
+    } else if (typeof viewport.scrollTo === "function") {
       viewport.scrollTo({ top: viewport.scrollHeight, behavior });
     } else {
       viewport.scrollTop = viewport.scrollHeight;
@@ -377,7 +404,7 @@ export function MessageScroller({
 
     scheduleRailSync();
     const mutationObserver =
-      typeof MutationObserver === "undefined"
+      navigationModel || typeof MutationObserver === "undefined"
         ? null
         : new MutationObserver((records) => {
             for (const record of records) {
@@ -416,7 +443,7 @@ export function MessageScroller({
       mutationObserver?.disconnect();
       resizeObserver?.disconnect();
     };
-  }, [navigation, scheduleRailSync]);
+  }, [navigation, navigationModel, scheduleRailSync]);
 
   useEffect(
     () => () => {
@@ -432,7 +459,7 @@ export function MessageScroller({
     (item: PreviewRailItem) => {
       const viewport = viewportRef.current;
       const target = railTargetsRef.current.get(item.id);
-      if (!viewport || !target) return;
+      if (!viewport || (!navigationModel && !target)) return;
 
       const lastItem = railItems.at(-1)?.id === item.id;
       setActiveRailId(item.id);
@@ -444,8 +471,14 @@ export function MessageScroller({
 
       setFollowing(false);
       programmaticScrollRef.current = true;
+      if (navigationModel) {
+        navigationModel.scrollToItem(item.id);
+        if (scrollTimerRef.current) window.clearTimeout(scrollTimerRef.current);
+        scrollTimerRef.current = window.setTimeout(() => { programmaticScrollRef.current = false; }, 320);
+        return;
+      }
       const viewportRect = viewport.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
+      const targetRect = target!.getBoundingClientRect();
       const top =
         viewport.scrollTop +
         targetRect.top -
@@ -463,7 +496,7 @@ export function MessageScroller({
         programmaticScrollRef.current = false;
       }, behavior === "smooth" ? 320 : 0);
     },
-    [railItems, reduce, scrollToEnd, setFollowing, smooth],
+    [railItems, reduce, scrollToEnd, setFollowing, smooth, navigationModel],
   );
 
   const viewport = (

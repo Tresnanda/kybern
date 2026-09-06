@@ -40,16 +40,31 @@ final class Bench: NSObject, WKScriptMessageHandler {
   window.title = "Kybern rendering checks"
   window.contentView = web
   window.orderFront(nil)
-  web.load(URLRequest(url: URL(string: "tauri://localhost/perf/rendering.html")!))
+  let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
+  web.load(URLRequest(url: URL(string: "tauri://localhost/perf/\(fixture).html")!))
  }
  func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
   print(message.body)
   let json = (message.body as? String)?.data(using: .utf8)
   let result = json.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-  exit(result?["pass"] as? Bool == true ? 0 : 1)
+  if result?["stage"] != nil { fflush(stdout); return }
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" {
+   print("Preview window id: \(window.windowNumber), pid: \(ProcessInfo.processInfo.processIdentifier)")
+   fflush(stdout)
+   return
+  }
+  let status: Int32 = result?["pass"] as? Bool == true ? 0 : 1
+  if CommandLine.arguments.count > 4 {
+   web.takeSnapshot(with: nil) { image, error in
+    if let image, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+     try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[4]))
+    } else { print("Snapshot failed: \(String(describing: error))") }
+    exit(status)
+   }
+  } else { exit(status) }
  }
 }
 let bench = Bench()
 bench.run()
-DispatchQueue.main.asyncAfter(deadline: .now() + 30) { print("Rendering check timed out"); exit(2) }
+DispatchQueue.main.asyncAfter(deadline: .now() + (ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" ? 180 : 30)) { print("Rendering check timed out"); exit(2) }
 app.run()

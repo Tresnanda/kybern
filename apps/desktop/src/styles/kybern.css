@@ -326,14 +326,14 @@ html[data-full-translucency][data-window-material="translucent"] {
 html[data-full-translucency][data-window-material="translucent"] :is(.chat-content-card, .app-settings-surface) {
   background: var(--app-glass-surface);
 }
-html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="menu-sub-content"], [data-slot="tooltip-popup"], [data-slot="select-popup"], [data-slot="combobox-popup"], [data-slot="preview-card-popup"], [data-slot="sheet-popup"]) {
+html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="menu-sub-content"], [data-slot="context-menu-content"], [data-slot="context-menu-sub-content"], [data-slot="tooltip-popup"], [data-slot="select-popup"], [data-slot="combobox-popup"], [data-slot="preview-card-popup"], [data-slot="sheet-popup"]) {
   background: var(--app-glass-popup-surface);
   -webkit-backdrop-filter: var(--app-glass-backdrop-filter);
   backdrop-filter: var(--app-glass-backdrop-filter);
 }
 /* Popup primitives already provide a blur pseudo-element. Use one blur layer,
    including for dialogs and sheets that do not have that pseudo-element. */
-html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="menu-sub-content"], [data-slot="tooltip-popup"], [data-slot="select-popup"], [data-slot="combobox-popup"], [data-slot="preview-card-popup"], [data-slot="sheet-popup"])::before {
+html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="menu-sub-content"], [data-slot="context-menu-content"], [data-slot="context-menu-sub-content"], [data-slot="tooltip-popup"], [data-slot="select-popup"], [data-slot="combobox-popup"], [data-slot="preview-card-popup"], [data-slot="sheet-popup"])::before {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }

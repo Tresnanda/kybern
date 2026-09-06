@@ -8,7 +8,7 @@ import { connectorApproval, isUserInput } from "@/lib/userInput"
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useDeferredValue, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -33,7 +33,11 @@ import {
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
 import { isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
-import { MessageScroller } from "@/components/beui/message-scroller"
+import { MessageScroller, type MessageNavigationModel } from "@/components/beui/message-scroller"
+import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
+import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
+import { useTranscriptRowState } from "@/lib/transcriptRowState"
+import { TranscriptStateRoot } from "@/components/kybern/TranscriptStateScope"
 import {
   ArrowDownIcon,
   BotIcon,
@@ -72,6 +76,12 @@ const EMPTY_RUNTIME_TASKS: RuntimeTask[] = []
 const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]"
 const HOVER_REVEAL =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
+
+const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
+const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?.text.length ?? 0) / 75 * 20)
+const blockKey = (block: Block) => block.id
+const estimateWorkSize = () => 32
+const chunkKey = (chunk: WorkChunk) => chunk.kind === "single" ? chunk.block.id : `group:${chunk.blocks[0]!.id}`
 
 type ToolBlock = Extract<Block, { kind: "tool" }>
 type AgentActivityTarget =
@@ -244,11 +254,71 @@ export function Transcript({
     }
   }
   const viewport = useRef<HTMLElement>(null)
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null)
+  const virtualViewport = useMemo(() => ({ current: scrollElement }), [scrollElement])
+  const setViewport = useCallback((element: HTMLElement | null) => {
+    viewport.current = element
+    setScrollElement(element)
+  }, [])
+  const rows = useRef<VirtualRowsController>(null)
+  const navigationFrame = useRef(0)
+  useEffect(() => () => cancelAnimationFrame(navigationFrame.current), [threadId])
+  const buildNavigation = useMemo(() => createTranscriptNavigation(), [])
+  const navigationItems = useMemo(() => buildNavigation(groups), [buildNavigation, groups])
+  const navigationModel = useMemo<MessageNavigationModel>(() => {
+    const byId = new Map(navigationItems.map((item) => [item.id, item]))
+    const byTurn = new Map<number, typeof navigationItems>()
+    for (const item of navigationItems) {
+      const turn = byTurn.get(item.turnIndex) ?? []
+      turn.push(item)
+      byTurn.set(item.turnIndex, turn)
+    }
+    return {
+      items: navigationItems,
+      scrollToEnd() { rows.current?.scrollToEnd() },
+      activeId(scroll) {
+        const index = rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0
+        const candidates = byTurn.get(index) ?? []
+        const group = groups[index]
+        if (!group) return ""
+        const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(group, index))}"]`)
+        const middle = scroll.getBoundingClientRect().top + scroll.clientHeight / 2
+        let closest = candidates[0]?.id ?? ""
+        let distance = Infinity
+        for (const item of candidates) {
+          const message = turn?.querySelector(`[data-message-role="${item.role}"]`)
+          if (!message) continue
+          const rect = message.getBoundingClientRect()
+          const next = Math.abs(rect.top + rect.height / 2 - middle)
+          if (next < distance) { closest = item.id; distance = next }
+        }
+        return closest
+      },
+      scrollToItem(id) {
+        const item = byId.get(id)
+        const scroll = viewport.current
+        if (!item || !scroll) return
+        cancelAnimationFrame(navigationFrame.current)
+        rows.current?.scrollToIndex(item.turnIndex, { align: "start" })
+        let attempts = 0
+        const refine = () => {
+          const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
+          const message = turn?.querySelector(`[data-message-role="${item.role}"]`)
+          if (!message && attempts++ < 10) { navigationFrame.current = requestAnimationFrame(refine); return }
+          if (!message) return
+          const rect = message.getBoundingClientRect()
+          const top = scroll.scrollTop + rect.top - scroll.getBoundingClientRect().top - Math.max(0, (scroll.clientHeight - rect.height) / 2)
+          rows.current?.scrollToOffset(top)
+        }
+        navigationFrame.current = requestAnimationFrame(refine)
+      },
+    }
+  }, [groups, navigationItems])
   const [following, setFollowing] = useState(true)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
     setFollowing(true)
-    viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: "smooth" })
+    rows.current?.scrollToEnd()
   }
 
   if (!state?.loaded) {
@@ -273,6 +343,7 @@ export function Transcript({
       >
         <MessageScroller
           navigation={surfaceMode === "split" ? undefined : "rail"}
+          navigationModel={navigationModel}
           navigationLabel="Message navigation"
           navigationSide="left"
           followOutput
@@ -280,7 +351,7 @@ export function Transcript({
           followThreshold={56}
           onFollowChange={setFollowing}
           busy={busy}
-          viewportRef={viewport}
+          viewportRef={setViewport}
           className="h-full min-h-0"
           style={{ "--rail-bottom": `${bottomInset + 24}px` } as CSSProperties}
           railClassName="!top-3 !bottom-[var(--rail-bottom)] text-muted-foreground/70"
@@ -293,7 +364,9 @@ export function Transcript({
               <p className="text-sm text-muted-foreground/30">Send a message to start the conversation.</p>
             </div>
           ) : (
-            groups.map((g, i) => <Turn key={g.turnId || i} group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} />)
+            <TranscriptStateRoot key={threadId}><VirtualRows items={groups} getKey={turnKey} estimateSize={estimateTurnSize} viewport={virtualViewport} controllerRef={rows}>
+              {(g, i) => <div data-turn-id={turnKey(g, i)}><Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} /></div>}
+            </VirtualRows></TranscriptStateRoot>
           )}
         </MessageScroller>
         <div
@@ -317,13 +390,15 @@ export function Transcript({
         </div>
       </div>
       {agentActivityDetail && (
-        <AgentActivityDetailView detail={agentActivityDetail} bottomInset={bottomInset} onBack={closeAgentActivity} onOpenAgentActivity={openAgentActivity} />
+        <AgentActivityDetailView key={selectedActivity?.kind === "tool" ? selectedActivity.toolCallId : selectedActivity?.taskId} detail={agentActivityDetail} bottomInset={bottomInset} onBack={closeAgentActivity} onOpenAgentActivity={openAgentActivity} />
       )}
     </div></ImageThreadContext>
   )
 }
 
 function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActivity }: { detail: AgentActivityDetail; bottomInset: number; onBack: () => void; onOpenAgentActivity: OpenAgentActivity }) {
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null)
+  const activityViewport = useMemo(() => ({ current: scrollElement }), [scrollElement])
   const promptTitle = detail.kind === "process" ? "Command" : detail.kind === "monitor" ? "Request" : "Prompt"
   const resultTitle = detail.kind === "process" ? "Output" : "Result"
   const missingPrompt = detail.kind === "process" ? "The command was not exposed by this harness." : "The delegated prompt was not exposed by this harness."
@@ -333,6 +408,7 @@ function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActiv
 
   return (
     <div
+      ref={setScrollElement}
       data-agent-activity-detail="true"
       data-chat-scroll-container="true"
       className={cn("runtime-activity-detail-enter absolute inset-0 z-20 overflow-x-hidden overflow-y-auto overscroll-y-contain bg-background py-3 [scrollbar-gutter:stable] sm:py-4", CHAT_COLUMN_GUTTER)}
@@ -377,7 +453,7 @@ function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActiv
           ) : <AgentActivityEmpty>{missingResult}</AgentActivityEmpty>}
         </AgentActivitySection>
         <AgentActivitySection title="Activity">
-          <AgentActivityEntries entries={detail.entries} tasksByToolCall={detail.tasksByToolCall} childrenByParent={detail.childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
+          <TranscriptStateRoot><AgentActivityEntries viewport={activityViewport} entries={detail.entries} tasksByToolCall={detail.tasksByToolCall} childrenByParent={detail.childrenByParent} onOpenAgentActivity={onOpenAgentActivity} /></TranscriptStateRoot>
         </AgentActivitySection>
       </div>
     </div>
@@ -397,18 +473,17 @@ function AgentActivityEmpty({ children }: { children: ReactNode }) {
   return <p className="font-system-ui text-muted-foreground/52" style={CHAT_FONT}>{children}</p>
 }
 
-function AgentActivityEntries({ entries, tasksByToolCall, childrenByParent, onOpenAgentActivity }: { entries: readonly AgentActivityEntry[]; tasksByToolCall: ReadonlyMap<string, RuntimeTask>; childrenByParent: ReadonlyMap<string, ToolBlock[]>; onOpenAgentActivity: OpenAgentActivity }) {
+const activityEntryKey = (entry: AgentActivityEntry) => entry.kind === "tool" ? entry.block.id : entry.task.id
+const estimateActivitySize = () => 48
+function AgentActivityEntries({ viewport, entries, tasksByToolCall, childrenByParent, onOpenAgentActivity }: { viewport: { current: HTMLElement | null }; entries: readonly AgentActivityEntry[]; tasksByToolCall: ReadonlyMap<string, RuntimeTask>; childrenByParent: ReadonlyMap<string, ToolBlock[]>; onOpenAgentActivity: OpenAgentActivity }) {
   if (entries.length === 0) return <AgentActivityEmpty>No child activity was reported.</AgentActivityEmpty>
   return (
-    <div className="divide-y divide-border/45">
-      {entries.map((entry) => entry.kind === "tool" ? (
-        <div key={entry.block.id} className="py-2 first:pt-0 last:pb-0">
-          <ToolRow block={entry.block} task={tasksByToolCall.get(entry.block.call.id)} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} showTimestamp />
-        </div>
-      ) : (
-        <RuntimeTaskActivityEntry key={entry.task.id} task={entry.task} navigable={entry.navigable} onOpenAgentActivity={onOpenAgentActivity} />
-      ))}
-    </div>
+    <VirtualRows viewport={viewport} items={entries} getKey={activityEntryKey} estimateSize={estimateActivitySize}>{(entry, index) => (
+      <div className={cn("border-b border-border/45", entry.kind === "tool" ? "py-2" : "py-3", index === 0 && "pt-0", index === entries.length - 1 && "border-b-0 pb-0")}>
+        {entry.kind === "tool" ? <ToolRow block={entry.block} task={tasksByToolCall.get(entry.block.call.id)} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} showTimestamp />
+          : <RuntimeTaskActivityEntry task={entry.task} navigable={entry.navigable} onOpenAgentActivity={onOpenAgentActivity} />}
+      </div>
+    )}</VirtualRows>
   )
 }
 
@@ -430,9 +505,9 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
       {navigable && <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/tool-row:text-foreground" />}
     </>
   )
-  if (!navigable) return <div className="group/tool-row flex min-w-0 items-center gap-1.5 py-3 first:pt-0 last:pb-0">{body}</div>
+  if (!navigable) return <div className="group/tool-row flex min-w-0 items-center gap-1.5">{body}</div>
   return (
-    <button type="button" onClick={() => onOpenAgentActivity({ kind: "task", turnId: task.origin_turn_id, taskId: task.id })} className="group/tool-row flex w-full min-w-0 cursor-pointer items-center gap-1.5 py-3 text-start first:pt-0 last:pb-0 focus-visible:outline-none">
+    <button type="button" onClick={() => onOpenAgentActivity({ kind: "task", turnId: task.origin_turn_id, taskId: task.id })} className="group/tool-row flex w-full min-w-0 cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none">
       {body}
     </button>
   )
@@ -869,7 +944,7 @@ function WorkRows({
   onOpenAgentActivity: OpenAgentActivity
 }) {
   const chunks: WorkChunk[] = compact ? chunkWork(blocks, tasksByToolCall) : blocks.map((block) => ({ kind: "single", block }))
-  return chunks.map((chunk) =>
+  return <VirtualRows items={chunks} getKey={chunkKey} estimateSize={estimateWorkSize}>{(chunk) =>
     chunk.kind === "single" ? (
       <WorkRow
         key={chunk.block.id}
@@ -883,14 +958,14 @@ function WorkRows({
       />
     ) : (
       <ToolGroupRow
-        key={`${chunk.blocks[0]!.id}:${chunk.blocks.at(-1)!.id}`}
+        key={chunk.blocks[0]!.id}
         blocks={chunk.blocks}
         tasksByToolCall={tasksByToolCall}
         childrenByParent={childrenByParent}
         onOpenAgentActivity={onOpenAgentActivity}
       />
-    ),
-  )
+    )
+  }</VirtualRows>
 }
 
 function ToolGroupRow({
@@ -904,7 +979,7 @@ function ToolGroupRow({
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
   onOpenAgentActivity: OpenAgentActivity
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useTranscriptRowState("open", false)
   const summary = summarizeToolCalls(blocks.map((block) => ({ call: block.call, complete: block.complete, isError: block.isError })))
   if (!summary)
     return blocks.map((block) => (
@@ -934,7 +1009,7 @@ function ToolGroupRow({
         <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
       </button>
       <DisclosureRegion open={open} contentClassName="ms-5 mt-0.5 space-y-0.5 ps-0.5">
-        {blocks.map((block) => (
+        <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{(block) => (
           <ToolRow
             key={block.id}
             block={block}
@@ -943,7 +1018,7 @@ function ToolGroupRow({
             childrenByParent={childrenByParent}
             onOpenAgentActivity={onOpenAgentActivity}
           />
-        ))}
+        )}</VirtualRows>
       </DisclosureRegion>
     </div>
   )
@@ -1021,7 +1096,7 @@ function ToolRow({
   onOpenAgentActivity: OpenAgentActivity
   showTimestamp?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useTranscriptRowState("open", false)
   const active = !!task && isRuntimeTaskActive(task)
   const activity = toolLine(block.call, block.complete && !active)
   const visual = toolVisualKind(block.call, activity)
@@ -1110,7 +1185,7 @@ function ToolRow({
 }
 
 function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extract<Block, { kind: "assistant" }>; tone?: WorkTone; live?: boolean }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useTranscriptRowState("thinking", false)
   // Smooth the reasoning stream too, but only while it is both live and expanded.
   const thinking = useSmoothStream(block.thinking, !block.complete && open)
   // Smooth only the segment currently receiving deltas. Its keyed row remains

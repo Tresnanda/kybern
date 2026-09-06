@@ -87,3 +87,15 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs
+      - name: Native WebKit context menus
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs materials
+      - name: Native WebKit large transcript scaling
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs scaling
+      - name: Native WebKit virtual transcript interactions
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs interaction

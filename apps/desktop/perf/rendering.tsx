@@ -101,7 +101,10 @@ async function run() {
   const finalCode = document.querySelector(".chat-markdown-codeblock__body")?.textContent?.trim()
   const finalTextPass = finalCode === stream.slice(6).trim()
   const viewport = document.querySelector<HTMLElement>('section[aria-label="Conversation"]')!
-  const firstTick = document.querySelector<HTMLButtonElement>('nav[aria-label="Message navigation"] button')!
+  const rail = document.querySelector<HTMLElement>('nav[aria-label="Message navigation"]')!
+  rail.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }))
+  await sleep(100)
+  const firstTick = rail.querySelector<HTMLButtonElement>('[data-rail-index="0"]') ?? rail.querySelector<HTMLButtonElement>("button")!
   history[0]!.textContent = "Corrected history"
   await sleep(100)
   // Programmatic focus after a click is not :focus-visible on every WebKit.
@@ -112,8 +115,10 @@ async function run() {
   firstTick.click()
   await sleep(350)
   const railNavigationPass = viewport.scrollTop < viewport.clientHeight
-  const ticks = document.querySelectorAll<HTMLButtonElement>('nav[aria-label="Message navigation"] button')
-  ticks[ticks.length - 1]!.click()
+  rail.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
+  await sleep(100)
+  const ticks = rail.querySelectorAll<HTMLButtonElement>("button")
+  ;(rail.querySelector<HTMLButtonElement>('[data-rail-index="121"]') ?? ticks[ticks.length - 1]!).click()
   await sleep(100)
   const followPass = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 60
   viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
