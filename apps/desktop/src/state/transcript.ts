@@ -77,6 +77,7 @@ export interface ThreadState {
   blocks: Block[]
   pendingApprovals: ApprovalRequest[]
   checkpoints: Checkpoint[]
+  providerCommands?: import("@/protocol").ProviderCommand[]
   providerUsage?: ProviderUsage
   lastSeq: number
   loaded: boolean
@@ -93,6 +94,7 @@ export const emptyThreadState = (): ThreadState => ({
 
 export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadState {
   return {
+    providerCommands: res.provider_commands ?? [],
     providerUsage: res.provider_usage ?? {},
     thread: res.thread,
     blocks: res.transcript.map(entryToBlock).filter((b): b is Block => !!b),
@@ -331,6 +333,8 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         },
       ]
       break
+    case "provider_commands_updated":
+      return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
     case "provider_usage_updated":
       return { ...state, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
     case "provider_notice":
@@ -356,11 +360,13 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     default:
       break
   }
-  return { providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
+  return { providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {
   switch (reason) {
+    case "manual":
+      return "Agent released. Your next message resumes the saved conversation."
     case "capacity":
       return "Agent process closed to stay under the warm limit. Your next message resumes it."
     case "power":

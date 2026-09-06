@@ -353,7 +353,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id), reason.notice_text()) else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at });
             }
-            EventPayload::ProviderUsageUpdated { .. }
+            EventPayload::ProviderCommandsUpdated { .. } | EventPayload::ProviderUsageUpdated { .. }
             | EventPayload::ThreadCreated { .. }
             | EventPayload::ThreadUpdated { .. }
             | EventPayload::MessageQueued { .. }

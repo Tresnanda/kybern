@@ -15,7 +15,7 @@ registerHooks({
   },
 })
 
-const { applyEvent, buildWorkHierarchy, emptyThreadState, groupTurns, shouldRevealLiveText } = await import(
+const { seedFromGet, applyEvent, buildWorkHierarchy, emptyThreadState, groupTurns, shouldRevealLiveText } = await import(
   "./src/state/transcript.ts"
 )
 
@@ -373,4 +373,14 @@ test("sparse quota updates retain a known window and reset time", () => {
   state = applyEvent(state, { seq: 1, thread_id: "thread", at: AT, kind: "provider_usage_updated", usage: { limits: [{ name: "Primary", used_percent: 20, window_minutes: 300, resets_at: 1900000000 }] } })
   state = applyEvent(state, { seq: 2, thread_id: "thread", at: AT, kind: "provider_usage_updated", usage: { limits: [{ name: "Primary", used_percent: 30, window_minutes: null, resets_at: null }] } })
   assert.deepEqual(state.providerUsage.limits, [{ name: "Primary", used_percent: 30, window_minutes: 300, resets_at: 1900000000 }])
+})
+
+
+test("native command catalogs survive unrelated events and reload", () => {
+  const thread = { id: "thread-1", last_seq: 0 }
+  let state = seedFromGet({ thread, transcript: [], pending_approvals: [], provider_commands: [{ name: "review", description: "Review changes" }] })
+  assert.equal(state.providerCommands[0].name, "review")
+  state = applyEvent(state, { kind: "provider_commands_updated", commands: [{ name: "check", description: "Check" }], seq: 1, thread_id: thread.id })
+  state = applyEvent(state, { kind: "provider_notice", level: "info", text: "ready", seq: 2, thread_id: thread.id })
+  assert.equal(state.providerCommands[0].name, "check")
 })

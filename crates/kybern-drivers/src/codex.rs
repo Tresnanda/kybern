@@ -342,6 +342,7 @@ impl AgentDriver for CodexDriver {
             pending_approvals: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                manual_compaction: false,
                 deferred_notifications: Vec::new(),
                 thread_id: None,
                 turn_id: None,
@@ -435,6 +436,7 @@ fn sandbox_policy_for(mode: PermissionMode, cwd: &std::path::Path) -> Value {
 }
 
 struct State {
+    manual_compaction: bool,
     deferred_notifications: Vec<(String, Value)>,
     thread_id: Option<String>,
     turn_id: Option<String>,
@@ -1089,6 +1091,7 @@ impl CodexSession {
                         cache_read_tokens: total.cache_read_tokens.saturating_sub(prev.cache_read_tokens),
                         cache_write_tokens: total.cache_write_tokens.saturating_sub(prev.cache_write_tokens),
                     },
+                    None if st.manual_compaction => Usage::default(),
                     None => total.clone(),
                 };
                 st.last_total_tokens = Some(total);
@@ -1105,6 +1108,7 @@ impl CodexSession {
                 {
                     let mut st = self.state.lock().await;
                     st.turn_id = None;
+                    st.manual_compaction = false;
                     st.message_ids.clear();
                     st.file_changes.clear();
                 }
@@ -1501,6 +1505,17 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
 
 #[async_trait]
 impl AgentSession for Handle {
+    async fn compact(&self) -> Result<()> {
+        let thread_id = self.0.state.lock().await.thread_id.clone().ok_or_else(|| DriverError::Protocol("no Codex thread".into()))?;
+        self.0.state.lock().await.manual_compaction = true;
+        *self.0.turn_usage.lock().await = None;
+        let result = self.0.call("thread/compact/start", json!({ "threadId": thread_id })).await;
+        if result.is_err() {
+            self.0.state.lock().await.manual_compaction = false;
+        }
+        result.map(|_| ())
+    }
+
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
         let (thread_id, mode, model, effort, cwd) = {
@@ -1673,6 +1688,7 @@ mod tests {
             pending_approvals: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                manual_compaction: false,
                 deferred_notifications: Vec::new(),
                 thread_id: Some("test".into()),
                 turn_id: None,
@@ -1892,6 +1908,7 @@ wait
             pending_approvals: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                manual_compaction: false,
                 deferred_notifications: Vec::new(),
                 thread_id: Some("test".into()),
                 turn_id: None,
@@ -1945,6 +1962,7 @@ wait
             pending_approvals: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                manual_compaction: false,
                 deferred_notifications: Vec::new(),
                 thread_id: None,
                 turn_id: None,
@@ -1998,6 +2016,73 @@ wait
         assert_eq!(root_prose, "root prose", "early root prose must survive binding");
         assert!(!session.state.lock().await.subagents.contains_key("root"));
         child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_uses_native_rpc_and_waits_for_turn_completion() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: Some("test".into()),
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+
+        let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        let task = tokio::spawn(async move {
+            let result = handle.compact().await;
+            (handle, result)
+        });
+        let request = tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+        assert_eq!(request["method"], "thread/compact/start");
+        assert_eq!(request["params"], json!({"threadId":"test"}));
+        session.pending.lock().await.remove(&request["id"].as_i64().unwrap()).unwrap().send(Ok(json!({}))).unwrap();
+        let (handle, result) = task.await.unwrap();
+        result.unwrap();
+        assert!(rx.try_recv().is_err(), "request acceptance is not completion");
+        session.handle_notification("turn/started", &json!({"threadId":"test", "turn":{"id":"compact-turn"}})).await;
+        session
+            .handle_notification("turn/completed", &json!({"threadId":"test", "turn":{"id":"compact-turn", "status":"completed"}}))
+            .await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { .. })));
+        let task = tokio::spawn(async move {
+            let result = handle.compact().await;
+            (handle, result)
+        });
+        let request = tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+        session
+            .pending
+            .lock()
+            .await
+            .remove(&request["id"].as_i64().unwrap())
+            .unwrap()
+            .send(Err("unsupported installed version".into()))
+            .unwrap();
+        let (handle, result) = task.await.unwrap();
+        assert!(result.is_err());
+        assert!(!session.state.lock().await.manual_compaction);
+        handle.close().await.unwrap();
     }
 
     #[test]

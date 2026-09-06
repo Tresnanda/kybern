@@ -210,6 +210,7 @@ pub enum DriverEvent {
     TurnFailed {
         error: String,
     },
+    CommandsUpdated(Vec<kybern_protocol::ProviderCommand>),
     UsageUpdated(kybern_protocol::ProviderUsage),
     Notice {
         level: NoticeLevel,
@@ -228,6 +229,10 @@ pub trait AgentSession: Send + Sync {
     /// Queue a user turn. `message_id` is kybern's id for the message; drivers that
     /// accept a client-chosen id use it so rewinds can reference the turn.
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()>;
+    /// Initiate native compaction; report completion through the usual turn events.
+    async fn compact(&self) -> Result<()> {
+        Err(DriverError::Unsupported("This harness does not expose manual compaction. Automatic compaction remains available.".into()))
+    }
     async fn interrupt(&self) -> Result<()>;
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()>;
     async fn set_model(&self, model: &str) -> Result<()>;
@@ -320,4 +325,23 @@ mod lifecycle_tests {
             assert!(!root.path().join("escaped").exists(), "{kind} left a startup descendant running");
         }
     }
+}
+
+/// Preserve only usable advertised command names; never manufacture terminal commands.
+pub(crate) fn provider_commands(value: &Value) -> Vec<kybern_protocol::ProviderCommand> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|command| {
+            let name = command.as_str().or_else(|| command.get("name").and_then(Value::as_str))?.trim_start_matches('/');
+            if name.is_empty() || name.chars().any(char::is_whitespace) {
+                return None;
+            }
+            Some(kybern_protocol::ProviderCommand {
+                name: name.to_string(),
+                description: command.get("description").and_then(Value::as_str).unwrap_or("Run harness command").to_string(),
+            })
+        })
+        .collect()
 }

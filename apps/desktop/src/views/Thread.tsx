@@ -151,9 +151,25 @@ export function ThreadView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approval?.id, isFocused])
 
+  const nativeCommands = useStore((s) => s.transcripts[threadId]?.providerCommands ?? EMPTY)
+  const canCompact = !!thread?.provider_session_id && (
+    ["codex", "pi", "omp", "opencode"].includes(thread.provider.kind) || nativeCommands.some((command) => command.name === "compact")
+  )
   const commands = useMemo<SlashCommand[]>(
     () => [
+      ...(canCompact ? [{ name: "compact", hint: "Compact context and keep conversation history", icon: <WorkflowIcon className="size-4" />, run: () => {
+        void rpc().call("threads.compact", { thread_id: threadId }).catch((error) => toast.error("Unable to compact context", { description: errorText(error) }))
+      } }] : []),
+      ...nativeCommands.filter((command) => command.name !== "compact").map((command) => ({
+        name: ["new", "stop", "activity", "attach", "changes", "terminal", "files", "environment", "pr", "archive", "settings", "usage"].includes(command.name) ? `harness:${command.name}` : command.name,
+        invocation: command.name,
+        hint: `${PROVIDER_LABEL[thread?.provider.kind ?? "codex"]} · ${command.description}`,
+        insert: true, run: () => {},
+      })),
       { name: "new", hint: "Start a new thread in this project", icon: <NewThreadIcon className="size-4" />, run: () => newThread(thread?.project_id) },
+      { name: "reconnect", hint: "Release the idle agent; resume history on your next message", icon: <WorkflowIcon className="size-4" />, run: () => {
+        void rpc().call("threads.release", { thread_id: threadId }).then(() => toast("Agent released", { description: "Your next message resumes the saved conversation." })).catch((error) => toast.error("Unable to release agent", { description: errorText(error) }))
+      } },
       { name: "stop", hint: "Interrupt the running turn", icon: <StopIcon className="size-4" />, run: () => void interrupt(threadId) },
       { name: "activity", hint: "Show agents and background processes", icon: <WorkflowIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "activity" }) },
       { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
@@ -175,7 +191,7 @@ export function ThreadView({
       { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
       { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
     ],
-    [threadId, thread?.project_id, set],
+    [threadId, thread?.project_id, thread?.provider, canCompact, nativeCommands, set],
   )
 
   if (!thread) return null

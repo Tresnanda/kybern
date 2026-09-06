@@ -25,6 +25,8 @@ expression: names
 - queue.add
 - queue.list
 - queue.remove
+- threads.release
+- threads.compact
 - threads.interrupt
 - tasks.list
 - tasks.stop

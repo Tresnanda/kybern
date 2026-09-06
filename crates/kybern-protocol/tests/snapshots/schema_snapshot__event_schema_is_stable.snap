@@ -511,6 +511,25 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderCommand"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "provider_commands_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "commands"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "usage": {
           "$ref": "#/$defs/ProviderUsage"
         },
@@ -930,6 +949,11 @@ expression: schema_for!(ThreadEvent)
     "SessionReleaseReason": {
       "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
       "oneOf": [
+        {
+          "description": "The user released a parked process to reconnect on the next message.",
+          "type": "string",
+          "const": "manual"
+        },
         {
           "description": "The thread was idle for longer than `background.session_idle_minutes`.",
           "type": "string",
@@ -1387,6 +1411,22 @@ expression: schema_for!(ThreadEvent)
         "interrupted",
         "max_turns",
         "error"
+      ]
+    },
+    "ProviderCommand": {
+      "description": "A command advertised by a live harness's native protocol.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
       ]
     },
     "ProviderUsage": {

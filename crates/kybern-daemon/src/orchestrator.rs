@@ -210,6 +210,35 @@ impl Orchestrator {
         Ok(!matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
     }
 
+    /// Release only a parked session owned by this daemon. Never adopt or kill
+    /// an unidentified process merely because it holds a provider writer lock.
+    pub async fn release_session(&self, thread_id: ThreadId) -> Result<()> {
+        let (live, done) = {
+            let mut sessions = self.inner.sessions.lock().await;
+            let live = sessions.get(&thread_id).cloned().ok_or_else(|| anyhow!("Kybern has no live agent process for this thread. If another app owns the conversation, close that session there and retry."))?;
+            if !self.session_parked(thread_id, &live).await? {
+                return Err(anyhow!("This agent has active work or approvals. Wait for them to finish before reconnecting."));
+            }
+            let (done, waiting) = tokio::sync::watch::channel(());
+            self.inner.releasing.lock().await.insert(thread_id, waiting);
+            sessions.remove(&thread_id);
+            live.mark_released();
+            (live, done)
+        };
+        let this = self.clone();
+        // Disconnecting the requesting client must not cancel cleanup.
+        tokio::spawn(async move {
+            let result = live.session.close().await;
+            this.inner.releasing.lock().await.remove(&thread_id);
+            drop(done);
+            result?;
+            this.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual })?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        Ok(())
+    }
+
     pub async fn session_activity(&self) -> Result<SessionActivity> {
         let snapshot: Vec<(ThreadId, Arc<LiveSession>)> =
             self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
@@ -599,6 +628,29 @@ impl Orchestrator {
             return Err(anyhow!("thread is archived"));
         }
 
+        if is_compact_message(&message) {
+            let events = self.inner.store.events_for_thread(thread_id)?;
+            let advertised = events
+                .iter()
+                .rev()
+                .find_map(|event| match &event.payload {
+                    EventPayload::ProviderCommandsUpdated { commands } => Some(commands.iter().any(|command| command.name == "compact")),
+                    _ => None,
+                })
+                .unwrap_or(false);
+            if !matches!(kind, ProviderKind::Codex | ProviderKind::Pi | ProviderKind::Omp | ProviderKind::Opencode) && !advertised {
+                return Err(anyhow!("This harness does not expose manual compaction. Automatic compaction remains available."));
+            }
+            if thread.provider_session_id.is_none() {
+                return Err(anyhow!("Send a message before compacting this conversation."));
+            }
+            if kybern_store::project_runtime_tasks(&self.inner.store.events_for_thread(thread_id)?)
+                .iter()
+                .any(|task| task.status.is_active())
+            {
+                return Err(anyhow!("Wait for agents and background tasks to finish before compacting."));
+            }
+        }
         let turn_id = Uuid::now_v7();
         if thread.title == DEFAULT_TITLE {
             thread.title = title_from_message(&message);
@@ -737,7 +789,12 @@ impl Orchestrator {
             elapsed_ms = startup_started.elapsed().as_millis() as u64,
         );
 
-        if let Err(e) = live.session.send_message(&message_id.to_string(), &message).await {
+        let delivery = if is_compact_message(&message) {
+            live.session.compact().await
+        } else {
+            live.session.send_message(&message_id.to_string(), &message).await
+        };
+        if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
             let mut t = thread;
             t.status = ThreadStatus::Failed;
@@ -1743,6 +1800,9 @@ impl Orchestrator {
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
             }
+            DriverEvent::CommandsUpdated(commands) => {
+                self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
+            }
             DriverEvent::UsageUpdated(usage) => {
                 self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
             }
@@ -1927,6 +1987,10 @@ pub fn title_from_message(message: &UserMessage) -> String {
         title.push('…');
     }
     title
+}
+
+fn is_compact_message(message: &UserMessage) -> bool {
+    matches!(message.parts.as_slice(), [kybern_protocol::ContentPart::Text { text }] if text.trim() == "/compact")
 }
 
 #[cfg(test)]
@@ -2383,6 +2447,42 @@ mod tests {
     }
 
     const MINUTE: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn compaction_rejects_busy_unsupported_and_empty_conversations_without_writing_a_turn() {
+        let fixture = Fixture::new();
+        let mut thread = fixture.thread(ThreadStatus::Running);
+        assert!(fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("busy"));
+        thread.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&thread).unwrap();
+        assert!(
+            fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("does not expose")
+        );
+        thread.id = Uuid::now_v7();
+        thread.provider = ProviderInstance::default_for(ProviderKind::Codex);
+        thread.provider_session_id = None;
+        fixture.store.thread_upsert(&thread).unwrap();
+        assert!(
+            fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("Send a message")
+        );
+        assert!(fixture.store.events_for_thread(thread.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn manual_release_preserves_history_and_refuses_active_sessions() {
+        let fixture = Fixture::new();
+        let mut thread = fixture.thread(ThreadStatus::Running);
+        let (_, closes) = fixture.park(&thread, Instant::now()).await;
+        assert!(fixture.orchestrator.release_session(thread.id).await.is_err());
+        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        thread.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&thread).unwrap();
+        fixture.orchestrator.release_session(thread.id).await.unwrap();
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id, thread.provider_session_id);
+        assert!(!fixture.has_session(&thread).await);
+        assert!(fixture.orchestrator.release_session(thread.id).await.unwrap_err().to_string().contains("no live agent"));
+    }
 
     #[tokio::test]
     async fn resume_waits_for_the_previous_writer_to_close() {

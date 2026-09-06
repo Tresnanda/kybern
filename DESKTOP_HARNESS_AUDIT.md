@@ -17,9 +17,9 @@ is static; the existing kit supplies tooltip motion and reduced-motion behavior.
 | --- | --- |
 | Faster harness availability | Environment-scoped, 24-hour last-known catalog appears immediately while the authoritative catalog refreshes. Typing is independent of provider discovery; sending still needs a provider. A first-ever probe still takes time. |
 | Subscription limits | Codex account read plus account update notifications; Claude reported rate-limit events. Named windows merge independently and survive thread reload. No credentials are scraped and no missing limits are invented. |
-| Context indicator | Composer ring with focus/hover details, exact reported token counts, quota windows, and local reset times. Codex uses the last context snapshot, not cumulative spending; Claude uses the latest root message and its reported model window; Cursor uses ACP context usage. Pi/OMP use explicit contextUsage when returned by session stats. OpenCode has no new context bridge in this change. |
-| Compaction investigation | Native automatic compaction remains owned by the harness. Start/completion notices improved for Codex and Pi/OMP; Claude no longer displays a fabricated zero post-compaction count. Manual compaction is not exposed by Kybern. See below. |
-| Slash-command investigation | App commands and native skill dispatch exist, but arbitrary terminal-interface commands are not universally supported. See below. |
+| Context indicator | Composer ring with focus/hover details, exact reported token counts, quota windows, and local reset times. Codex uses the last context snapshot, not cumulative spending; Claude uses the latest root message and its reported model window; Cursor uses ACP context usage. Pi/OMP use the last assistant usage and reported model window, with explicit contextUsage when available. OpenCode combines completed root-message usage with the native provider model window. |
+| Compaction investigation | Native automatic compaction remains owned by the harness. Start/completion notices improved for Codex and Pi/OMP; Claude no longer displays a fabricated zero post-compaction count. Manual `/compact`, `threads.compact`, and `kybern compact` now use native operations. See below. |
+| Slash-command investigation | Live command discovery now covers Claude, Cursor ACP, Pi/OMP, and OpenCode. Codex skills/plugins and native compact are supported. Terminal-only interfaces cannot be exported where the harness has no protocol operation. |
 | Full translucency | Opt-in Appearance setting extends macOS material to content routes and floating surfaces, including the terminal canvas. Reduced transparency and increased contrast retain opaque content. Native desktop blur requires native verification. |
 | Composer scrolling/spacing | Explicit shared editor metrics, matched scrollbar width, scroll synchronization after resize and native caret scrolling, and disabled automatic text correction/capitalization. Typing stays immediate. |
 | Session/process cleanup | Actual stdin pipe closure; exit waits no longer hold the child mutex; owned process groups/trees; startup/handle lifetime guards; Cursor and OpenCode worker cancellation; release/resume barriers. Only session-owned processes are targeted. |
@@ -28,10 +28,15 @@ is static; the existing kit supplies tooltip motion and reduced-motion behavior.
 
 There is no Kybern summarizer that silently replaces or truncates stored history.
 The agent manages its context; Kybern persists the conversation and provider notices.
-`AgentSession` has no compact method, the RPC registry has no compact operation,
-and the composer has no built-in `/compact` action. Typing `/compact` is not a
-portable way to invoke compaction: an unrecognized slash string is submitted as
-prompt text, and each native protocol decides what that means.
+`AgentSession::compact`, the `threads.compact` RPC, the `kybern compact` CLI,
+and the thread composer's `/compact` action now expose manual compaction. The
+action runs as a persisted turn: concurrent sends and idle release are blocked,
+normal interruption/completion/error recovery apply, and the full Kybern
+transcript remains intact. Running agents/background tasks prevent compaction.
+Codex uses `thread/compact/start`, Pi/OMP use RPC `compact`, and OpenCode uses
+`session/{id}/summarize` with the selected model. Claude and Cursor only gain the
+action if their installed native protocol explicitly advertises `compact`.
+No guessed terminal prompt is used for a harness that does not advertise it.
 
 | Harness | Native automatic-compaction integration in Kybern | Manual native surface verified in comparison sources |
 | --- | --- | --- |
@@ -41,10 +46,13 @@ prompt text, and each native protocol decides what that means.
 | OpenCode | `session.compacted` becomes a notice. | T3Code and Synara expose native session summarization. |
 | Cursor | ACP context-usage notifications are supported; no explicit compaction control is wired. | Synara marks thread compaction unsupported for Cursor. |
 
-Adding a reliable manual action should use an explicit native operation and
-track its full lifecycle, including concurrent sends, idle release, failure,
-completion, and model/version capability. This change does not pretend that a
-slash prompt is such an operation.
+Command discovery consumes Claude's initialize response, Cursor ACP's available
+commands update, Pi/OMP's `get_commands`, and OpenCode's `/command`. Catalogs
+survive thread reload and update with the live session. Selecting a native
+command inserts its invocation so arguments can be edited before sending.
+Collisions with Kybern actions appear as `harness:<name>` in the picker and
+retain their real native invocation. Codex does not export a universal terminal
+slash-command catalog; its native skill/plugin catalogs remain available.
 
 Evidence:
 - [Codex app-server protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
@@ -109,7 +117,10 @@ turns, approvals, and active background work remain in place.
 Process cleanup uses only the process group/tree created for that specific
 spawn. It never searches process names or kills a writer found from an error
 string. A writer-conflict error preserves the source conversation and tells the
-user to let the owning session finish, close it, and retry. It does not silently
+user to let the owning session finish, close it, and retry. `/reconnect`,
+`threads.release`, and `kybern release` explicitly release an idle process owned
+by this daemon, with a resume barrier and history preservation. Active turns,
+background tasks, and approvals are refused; unidentified processes are not adopted. It does not silently
 fork/reset history or stop another application's legitimate writer.
 
 Limits: arbitrary pre-existing orphans cannot safely be identified solely from
@@ -121,16 +132,24 @@ from this macOS environment.
 
 ## Verification
 
-- 45 Rust driver unit/regression tests with fake processes; no real live-driver turns.
-- 59 daemon tests with isolated stores, including active-session protection and resume barriers.
+- 48 Rust driver unit/regression tests with fake processes; no real live-driver turns.
+- 61 daemon tests with isolated stores, including active-session protection and resume barriers.
 - 10 protocol tests; schemas reviewed and the additive event snapshot updated.
-- 8 store tests and 71 frontend tests, including sparse quota merges and context shrinkage.
+- 8 store tests and 72 frontend tests, including sparse quota merges and context shrinkage.
 - Rust formatting and affected-crate Clippy checks; desktop typecheck, lint, and production web build. The web build retains its existing large-chunk and mixed-import warnings.
 - Browser renderer against `/tmp/kybern-desktop-harness-health-qa`, using a fake
   Codex process: long input, capped-editor end scrolling, context ring, keyboard
   tooltip details, exact token counts, and both quota reset times.
-- Native macOS WindowServer/vibrancy appearance is not visually verified, since
-  the user's running packaged Kybern was deliberately kept open.
+- Scratch end-to-end native Codex compaction: accepted request, progress notices,
+  concurrent-send rejection, completion, preserved transcript, context shrinks
+  from 68,000 to 8,000 tokens.
+- Native desktop builds with `RUSTFLAGS="-C strip=none"`. This local workaround
+  avoids the macOS 27 LINKEDIT loading problem in stripped proc-macro libraries
+  ([Rust issue](https://github.com/rust-lang/rust/issues/157750)); no global
+  compiler settings were changed.
+- Native macOS WindowServer/vibrancy visual verification awaits permission for
+  an isolated QA window alongside the user's app, an exception to AGENTS.md's
+  one-Kybern-UI rule. The main app and daemon have remained open.
 
 All builds use the new worktree's own `target` and frontend output. No merge,
 installation, release, main-daemon restart, or mobile edits were performed.
@@ -144,3 +163,13 @@ under a notification lock. Root IDs are also rejected by the shared subagent
 registration path and collaboration-item updates. A regression covers early
 root turns and prose, genuine child activity, and self-referencing collaboration
 items. Existing stored phantom rows are not rewritten by this change.
+
+
+## Native protocol sources used for the completion pass
+
+- [Pi RPC mode](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/rpc/rpc-mode.ts): native `compact`, `get_commands`, and idle state after immediately handled extension commands.
+- [Pi command discovery](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md): extension, template and skill commands; interactive-only builtins are not included.
+- Codex app-server and the pinned T3Code/Synara sources linked above.
+
+Quota percentages/reset times still require native account telemetry. Missing
+account quotas are shown as unavailable rather than inferred from token usage.

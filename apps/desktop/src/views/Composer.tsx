@@ -67,6 +67,8 @@ export interface SlashCommand {
   name: string
   hint: string
   icon?: React.ReactNode
+  invocation?: string
+  insert?: boolean
   run: () => void
 }
 
@@ -431,6 +433,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }
   const pickCommand = (cmd: SlashCommand) => {
     if (!slash) return
+    if (cmd.insert) {
+      const invocation = `/${cmd.invocation ?? cmd.name} `
+      setTextAndCaret(`${text.slice(0, slash.start)}${invocation}${text.slice(caret)}`, slash.start + invocation.length)
+      return
+    }
     setTextAndCaret(`${text.slice(0, slash.start)}${text.slice(caret)}`, slash.start)
     if (cmd.name === "attach") fileInput.current?.click()
     else cmd.run()

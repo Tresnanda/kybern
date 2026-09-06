@@ -48,6 +48,10 @@ expression: scopes
   - "orchestration:read"
 - - queue.remove
   - "orchestration:operate"
+- - threads.release
+  - "orchestration:operate"
+- - threads.compact
+  - "orchestration:operate"
 - - threads.interrupt
   - "orchestration:operate"
 - - tasks.list

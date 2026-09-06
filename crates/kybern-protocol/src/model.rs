@@ -115,6 +115,13 @@ pub struct ProviderModel {
     pub is_default: bool,
 }
 
+/// A command advertised by a live harness's native protocol.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderCommand {
+    pub name: String,
+    pub description: String,
+}
+
 /// Availability and selectable capabilities of a provider binary on the daemon host.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderStatus {
@@ -946,6 +953,8 @@ impl BackgroundSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionReleaseReason {
+    /// The user released a parked process to reconnect on the next message.
+    Manual,
     /// The thread was idle for longer than `background.session_idle_minutes`.
     Idle,
     /// More idle processes were alive than `background.max_idle_sessions`.
@@ -962,6 +971,7 @@ impl SessionReleaseReason {
     /// Mirrored in `apps/desktop/src/state/transcript.ts` for live events.
     pub fn notice_text(self) -> Option<&'static str> {
         match self {
+            Self::Manual => Some("Agent released. Your next message resumes the saved conversation."),
             Self::Capacity => Some("Agent process closed to stay under the warm limit. Your next message resumes it."),
             Self::Power => Some("Agent process closed to save battery. Your next message resumes it."),
             Self::Idle | Self::Update => None,

@@ -352,6 +352,10 @@ async fn run_connection(
                     SessionUpdate::Plan(p) => {
                         let _ = ev.send(DriverEvent::Notice { level: NoticeLevel::Info, text: format!("plan updated ({} entries)", p.entries.len()), data: serde_json::to_value(&p).ok() }).await;
                     }
+                    SessionUpdate::AvailableCommandsUpdate(update) => {
+                        let commands = update.available_commands.into_iter().map(|c| kybern_protocol::ProviderCommand { name: c.name, description: c.description }).collect();
+                        let _ = ev.send(DriverEvent::CommandsUpdated(commands)).await;
+                    }
                     SessionUpdate::UsageUpdate(u) => {
                         let _ = ev.send(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: Some(kybern_protocol::ContextUsage { used_tokens: u.used, window_tokens: u.size }), limits: None })).await;
                     }
@@ -526,6 +530,10 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
 
 #[async_trait]
 impl AgentSession for Handle {
+    async fn compact(&self) -> Result<()> {
+        self.send_message(&uuid::Uuid::now_v7().to_string(), &UserMessage::text("/compact")).await
+    }
+
     async fn send_message(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
         self.commands
             .send(SessionCommand::Prompt { blocks: blocks(message) })

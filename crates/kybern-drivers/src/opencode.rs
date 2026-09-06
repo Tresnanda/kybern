@@ -247,6 +247,9 @@ impl AgentDriver for OpencodeDriver {
             child: Mutex::new(child),
             events: tx,
             state: Mutex::new(State {
+                compact_operation: None,
+                commands: Vec::new(),
+                context_windows: HashMap::new(),
                 session_id: None,
                 model: config.model.clone(),
                 mode: config.permission_mode,
@@ -295,7 +298,15 @@ impl AgentDriver for OpencodeDriver {
                 if let Some((provider, model)) = config.model.as_deref().and_then(split_model) {
                     body["model"] = json!({ "providerID": provider, "id": model });
                 }
-                let r = session.http.post(format!("{base}/session")).query(&[("directory", &dir)]).json(&body).send().await.map_err(net)?;
+                let r = session
+                    .http
+                    .post(format!("{base}/session"))
+                    .query(&[("directory", &dir)])
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(600))
+                    .send()
+                    .await
+                    .map_err(net)?;
                 let v: Value = r.json().await.map_err(net)?;
                 v.get("id")
                     .and_then(|i| i.as_str())
@@ -307,7 +318,9 @@ impl AgentDriver for OpencodeDriver {
         session.emit(DriverEvent::SessionBound { session_id, model: config.model.clone() }).await;
 
         let reader = session.clone();
-        let worker = crate::process_tree::SessionTask(tokio::spawn(async move { reader.event_loop().await }));
+        let worker = crate::process_tree::SessionTask(tokio::spawn(async move {
+            tokio::join!(reader.discover_metadata(), reader.clone().event_loop());
+        }));
 
         Ok(SpawnedSession { session: Box::new(Handle(session, std::sync::Mutex::new(Some(tree)), Some(worker))), events: rx })
     }
@@ -463,6 +476,9 @@ fn opencode_child_session(info: &Value, parent_id: Option<String>) -> Option<(St
 }
 
 struct State {
+    compact_operation: Option<String>,
+    context_windows: HashMap<String, u64>,
+    commands: Vec<kybern_protocol::ProviderCommand>,
     session_id: Option<String>,
     model: Option<String>,
     mode: PermissionMode,
@@ -498,6 +514,42 @@ struct Handle(
 );
 
 impl OpencodeSession {
+    async fn discover_metadata(&self) {
+        let read = |path: &'static str| async move {
+            let response = self
+                .http
+                .get(format!("{}{path}", self.base))
+                .query(&[("directory", &self.dir)])
+                .timeout(std::time::Duration::from_secs(3))
+                .send()
+                .await
+                .ok()?;
+            if !response.status().is_success() {
+                return None;
+            }
+            response.json::<Value>().await.ok()
+        };
+        let (commands, providers) = tokio::join!(read("/command"), read("/provider"));
+        if let Some(value) = commands {
+            let commands = crate::provider_commands(&value);
+            self.state.lock().await.commands = commands.clone();
+            self.emit(DriverEvent::CommandsUpdated(commands)).await;
+        }
+        if let Some(value) = providers {
+            let mut windows = HashMap::new();
+            for provider in value["all"].as_array().into_iter().flatten() {
+                if let (Some(id), Some(models)) = (provider["id"].as_str(), provider["models"].as_object()) {
+                    for (model, value) in models {
+                        if let Some(window) = value.pointer("/limit/context").and_then(Value::as_u64).filter(|w| *w > 0) {
+                            windows.insert(format!("{id}/{model}"), window);
+                        }
+                    }
+                }
+            }
+            self.state.lock().await.context_windows = windows;
+        }
+    }
+
     async fn emit(&self, ev: DriverEvent) {
         let _ = self.events.send(ev).await;
     }
@@ -668,6 +720,21 @@ impl OpencodeSession {
             }
             "message.updated" => {
                 let info = &p["info"];
+                if info["role"].as_str() == Some("assistant") && info.pointer("/time/completed").and_then(Value::as_u64).is_some() {
+                    let model = format!("{}/{}", info["providerID"].as_str().unwrap_or(""), info["modelID"].as_str().unwrap_or(""));
+                    let window = self.state.lock().await.context_windows.get(&model).copied();
+                    if let (Some(window_tokens), Some(tokens)) = (window, info.get("tokens")) {
+                        let used_tokens = ["/input", "/output", "/reasoning", "/cache/read", "/cache/write"]
+                            .iter()
+                            .filter_map(|path| tokens.pointer(path).and_then(Value::as_u64))
+                            .sum();
+                        self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                            context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
+                            limits: None,
+                        }))
+                        .await;
+                    }
+                }
                 if let (Some(id), Some(role)) = (info.get("id").and_then(Value::as_str), info.get("role").and_then(Value::as_str)) {
                     let pending = {
                         let mut st = self.state.lock().await;
@@ -767,6 +834,7 @@ impl OpencodeSession {
                 let (usage, cost, duration_ms, active, anchors) = {
                     let mut st = self.state.lock().await;
                     let active = st.active;
+                    st.compact_operation = None;
                     st.active = false;
                     let d = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
                     let anchors = crate::TurnAnchors { turn_id: st.current_message_id.take(), previous_end: None };
@@ -790,6 +858,7 @@ impl OpencodeSession {
                 let active = {
                     let mut st = self.state.lock().await;
                     let a = st.active;
+                    st.compact_operation = None;
                     st.active = false;
                     st.turn_started = None;
                     a
@@ -981,7 +1050,15 @@ impl OpencodeSession {
     }
 
     async fn post(&self, path: &str, body: Value) -> Result<Value> {
-        let r = self.http.post(format!("{}{path}", self.base)).query(&[("directory", &self.dir)]).json(&body).send().await.map_err(net)?;
+        let r = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .query(&[("directory", &self.dir)])
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(600))
+            .send()
+            .await
+            .map_err(net)?;
         let status = r.status();
         let text = r.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -1053,6 +1130,50 @@ fn skill_command(message: &UserMessage) -> Option<SkillCommand> {
 
 #[async_trait]
 impl AgentSession for Handle {
+    async fn compact(&self) -> Result<()> {
+        let operation = uuid::Uuid::now_v7().to_string();
+        let (id, provider, model) = {
+            let mut state = self.0.state.lock().await;
+            let id = state.session_id.clone().ok_or_else(|| DriverError::Protocol("no OpenCode session".into()))?;
+            let (provider, model) = state
+                .model
+                .as_deref()
+                .and_then(split_model)
+                .ok_or_else(|| DriverError::Unsupported("Choose a provider/model before compacting.".into()))?;
+            state.active = true;
+            state.turn_started = Some(std::time::Instant::now());
+            state.turn_usage = Usage::default();
+            state.turn_cost = 0.0;
+            state.current_message_id = None;
+            state.compact_operation = Some(operation.clone());
+            (id, provider, model)
+        };
+        self.0.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "Compacting context…".into(), data: None }).await;
+        let result =
+            self.0.post(&format!("/session/{id}/summarize"), json!({ "providerID": provider, "modelID": model, "auto": false })).await;
+        let active = {
+            let mut state = self.0.state.lock().await;
+            if state.compact_operation.as_deref() != Some(&operation) {
+                return Ok(());
+            }
+            state.compact_operation = None;
+            std::mem::take(&mut state.active)
+        };
+        result?;
+        if active {
+            self.0
+                .emit(DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 0,
+                    anchors: crate::TurnAnchors::default(),
+                })
+                .await;
+        }
+        Ok(())
+    }
+
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
         let (session_id, model) = {
@@ -1061,7 +1182,26 @@ impl AgentSession for Handle {
         };
         // OpenCode ids must start with "msg"; derive a stable one from ours.
         let oc_message_id = format!("msg_{}", message_id.replace('-', ""));
-        let command = skill_command(message);
+        let commands = s.state.lock().await.commands.clone();
+        let command = skill_command(message).or_else(|| {
+            let text = message
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let rest = text.trim().strip_prefix('/')?;
+            let (name, arguments) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            // Only advertised commands are routed to /command; prose stays prose.
+            commands.iter().any(|command| command.name == name).then(|| SkillCommand {
+                name: name.into(),
+                arguments: arguments.trim().into(),
+                files: parts(message).into_iter().filter(|part| part["type"] == "file").collect(),
+            })
+        });
         let mut body = match &command {
             Some(command) => json!({
                 "messageID": oc_message_id,
@@ -1170,6 +1310,92 @@ impl AgentSession for Handle {
 mod tests {
 
     #[tokio::test]
+    async fn native_compaction_and_advertised_commands_use_their_own_endpoints() {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut requests = vec![];
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![];
+                loop {
+                    let mut chunk = [0; 4096];
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    let text = String::from_utf8_lossy(&bytes);
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let length: usize = text[..end]
+                            .lines()
+                            .find_map(|line| line.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap()))
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                requests.push(String::from_utf8(bytes).unwrap());
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        let (events, mut rx) = mpsc::channel(8);
+        let mut command = Command::new("sleep");
+        command.arg("30").kill_on_drop(true);
+        let session = Arc::new(OpencodeSession {
+            http: reqwest::Client::new(),
+            base,
+            dir: "/tmp".into(),
+            child: Mutex::new(command.spawn().unwrap()),
+            events,
+            state: Mutex::new(State {
+                compact_operation: None,
+                commands: vec![kybern_protocol::ProviderCommand { name: "review".into(), description: "Review".into() }],
+                context_windows: HashMap::new(),
+                session_id: Some("root".into()),
+                model: Some("test/model".into()),
+                mode: PermissionMode::Supervised,
+                parts: HashMap::new(),
+                message_roles: HashMap::new(),
+                pending_images: HashMap::new(),
+                turn_usage: Usage::default(),
+                turn_cost: 0.0,
+                turn_started: None,
+                active: true,
+                pending: HashMap::new(),
+                current_message_id: None,
+                children: HashMap::new(),
+            }),
+        });
+
+        let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+        handle.compact().await.unwrap();
+        assert!(matches!(rx.recv().await, Some(DriverEvent::Notice { .. })));
+        assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { .. })));
+        handle.send_message("message", &UserMessage::text("/review changed files")).await.unwrap();
+        let requests = tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap();
+        assert!(requests[0].starts_with("POST /session/root/summarize?"));
+        let body: Value = serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body, json!({"providerID":"test", "modelID":"model", "auto":false}));
+        assert!(requests[1].starts_with("POST /session/root/command?"));
+        let body: Value = serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["command"], "review");
+        assert_eq!(body["arguments"], "changed files");
+        session.state.lock().await.context_windows.insert("test/model".into(), 200000);
+        session.handle_event(&json!({"type":"message.updated", "properties":{"info":{"id":"context", "sessionID":"root", "role":"assistant", "providerID":"test", "modelID":"model", "time":{"completed":1}, "tokens":{"input":1000,"output":100,"reasoning":10,"cache":{"read":200,"write":0}}}}})).await;
+        let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("missing context usage") };
+        let context = usage.context.unwrap();
+        assert_eq!(context.used_tokens, 1310);
+        assert_eq!(context.window_tokens, 200000);
+        handle.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn questions_reply_to_native_endpoint_and_can_be_declined() {
         use super::*;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1214,6 +1440,9 @@ mod tests {
             child: Mutex::new(command.spawn().unwrap()),
             events,
             state: Mutex::new(State {
+                compact_operation: None,
+                commands: Vec::new(),
+                context_windows: HashMap::new(),
                 session_id: Some("root".into()),
                 model: None,
                 mode: PermissionMode::Supervised,

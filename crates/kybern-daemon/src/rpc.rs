@@ -157,7 +157,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.touch_session(p.thread_id).await;
             let store = state.store.clone();
             let id = p.thread_id;
-            let (transcript, pending_approvals, runtime_tasks, provider_usage) =
+            let (transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands) =
                 tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                     let events = store.events_for_thread(id)?;
                     Ok((
@@ -165,12 +165,20 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                         store.approvals_pending(Some(id))?,
                         kybern_store::project_runtime_tasks(&events),
                         kybern_store::project_provider_usage(&events),
+                        events
+                            .iter()
+                            .rev()
+                            .find_map(|event| match &event.payload {
+                                EventPayload::ProviderCommandsUpdated { commands } => Some(commands.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or_default(),
                     ))
                 })
                 .await
                 .map_err(internal)?
                 .map_err(internal)?;
-            ok(ThreadsGetResult { thread, transcript, pending_approvals, runtime_tasks, provider_usage })
+            ok(ThreadsGetResult { thread, transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
@@ -206,6 +214,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: QueueRemoveParams = parse(params)?;
             state.orchestrator.remove_queued(p.thread_id, p.id).map_err(bad)?;
             ok(Empty {})
+        }
+        ThreadsRelease::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            state.orchestrator.release_session(p.thread_id).await.map_err(bad)?;
+            ok(Empty {})
+        }
+        ThreadsCompact::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            let (turn_id, message_id) = state.orchestrator.send(p.thread_id, UserMessage::text("/compact")).await.map_err(bad)?;
+            ok(ThreadsSendResult { turn_id, message_id })
         }
         ThreadsInterrupt::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;

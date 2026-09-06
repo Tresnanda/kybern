@@ -117,6 +117,10 @@ enum Cmd {
     },
     /// Interrupt the running turn.
     Interrupt { thread: String },
+    /// Compact context using the harness native operation.
+    Compact { thread: String },
+    /// Release an idle agent process; preserve its conversation for resume.
+    Release { thread: String },
     /// Inspect or control provider-owned agents and background processes.
     Tasks {
         thread: String,
@@ -494,6 +498,13 @@ pub async fn run() -> Result<()> {
             let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
             let sub = client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after }).await?;
             render::watch(&client, sub.subscription_id, json).await?;
+        }
+        Cmd::Release { thread } => {
+            client.call::<ThreadsRelease>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+        }
+        Cmd::Compact { thread } => {
+            let result = client.call::<ThreadsCompact>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Interrupt { thread } => {
             client.call::<ThreadsInterrupt>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;

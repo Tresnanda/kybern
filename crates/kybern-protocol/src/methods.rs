@@ -218,6 +218,8 @@ pub struct ThreadsGetParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
     #[serde(default)]
+    pub provider_commands: Vec<crate::ProviderCommand>,
+    #[serde(default)]
     pub provider_usage: crate::ProviderUsage,
     pub thread: Thread,
     pub transcript: Vec<TranscriptEntry>,
@@ -266,6 +268,8 @@ method!(ThreadsSend, "threads.send", Some(Scope::OrchestrationOperate), ThreadsS
 pub struct ThreadsInterruptParams {
     pub thread_id: ThreadId,
 }
+method!(ThreadsRelease, "threads.release", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Empty);
+method!(ThreadsCompact, "threads.compact", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, ThreadsSendResult);
 method!(ThreadsInterrupt, "threads.interrupt", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Empty);
 
 // ---- daemon-owned follow-ups ----
@@ -910,6 +914,8 @@ registry!(
     QueueAdd,
     QueueList,
     QueueRemove,
+    ThreadsRelease,
+    ThreadsCompact,
     ThreadsInterrupt,
     TasksList,
     TaskStop,

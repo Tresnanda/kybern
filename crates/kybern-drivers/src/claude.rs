@@ -437,6 +437,9 @@ impl ClaudeSession {
         match ty {
             "control_response" => {
                 let resp = &v["response"];
+                if let Some(commands) = resp.pointer("/response/commands") {
+                    self.emit(DriverEvent::CommandsUpdated(crate::provider_commands(commands))).await;
+                }
                 let id = resp.get("request_id").and_then(|r| r.as_str()).unwrap_or("").to_string();
                 if let Some(tx) = self.pending_control.lock().await.remove(&id) {
                     let out = if resp.get("subtype").and_then(|s| s.as_str()) == Some("success") {
@@ -1027,6 +1030,10 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
 
 #[async_trait]
 impl AgentSession for SessionHandle {
+    async fn compact(&self) -> Result<()> {
+        self.send_message(&uuid::Uuid::now_v7().to_string(), &UserMessage::text("/compact")).await
+    }
+
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let session_id = self.0.session_id.lock().await.clone();
         self.0.state.lock().await.current_user_uuid = Some(message_id.to_string());

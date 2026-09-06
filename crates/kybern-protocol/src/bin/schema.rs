@@ -71,6 +71,8 @@ fn main() {
     method::<QueueAdd>(&mut methods);
     method::<QueueList>(&mut methods);
     method::<QueueRemove>(&mut methods);
+    method::<ThreadsRelease>(&mut methods);
+    method::<ThreadsCompact>(&mut methods);
     method::<ThreadsInterrupt>(&mut methods);
     method::<TasksList>(&mut methods);
     method::<TaskStop>(&mut methods);

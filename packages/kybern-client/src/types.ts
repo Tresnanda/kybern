@@ -417,7 +417,7 @@ export interface Diff {
 export type NoticeLevel = "info" | "warning" | "error";
 
 /** Why the daemon closed an agent process; the next message resumes the conversation. */
-export type SessionReleaseReason = "idle" | "capacity" | "update" | "power";
+export type SessionReleaseReason = "manual" | "idle" | "capacity" | "update" | "power";
 
 export type EventPayload =
   | { kind: "thread_created"; thread: Thread }
@@ -474,6 +474,7 @@ export type EventPayload =
       duration_ms: number;
       terminal_message_id?: MessageId | null;
     }
+  | { kind: "provider_commands_updated"; commands: ProviderCommand[] }
   | { kind: "provider_usage_updated"; usage: ProviderUsage }
   | { kind: "turn_failed"; error: string }
   | {
@@ -588,6 +589,7 @@ export interface ThreadsGetParams {
 }
 
 export interface ThreadsGetResult {
+  provider_commands?: ProviderCommand[];
   provider_usage?: ProviderUsage;
   thread: Thread;
   transcript: TranscriptEntry[];
@@ -1054,6 +1056,8 @@ export interface Methods {
   "threads.update": [ThreadsUpdateParams, Thread];
   "threads.archive": [ThreadsArchiveParams, Empty];
   "threads.send": [ThreadsSendParams, ThreadsSendResult];
+  "threads.release": [ThreadsInterruptParams, Empty];
+  "threads.compact": [ThreadsInterruptParams, ThreadsSendResult];
   "threads.interrupt": [ThreadsInterruptParams, Empty];
   "tasks.list": [TasksListParams, TasksListResult];
   "tasks.stop": [TaskControlParams, RuntimeTask];
@@ -1102,6 +1106,8 @@ export interface HarnessUpdate {
   version: string | null;
   checked_at: DateTime | null;
 }
+
+export interface ProviderCommand { name: string; description: string }
 
 export interface ProviderUsage {
   context?: { used_tokens: number; window_tokens: number };

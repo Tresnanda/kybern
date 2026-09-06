@@ -122,6 +122,9 @@ pub enum EventPayload {
     TurnFailed {
         error: String,
     },
+    ProviderCommandsUpdated {
+        commands: Vec<crate::ProviderCommand>,
+    },
     ProviderUsageUpdated {
         usage: ProviderUsage,
     },
