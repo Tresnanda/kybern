@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm"
 import remarkRehype from "remark-rehype"
 import { urlAttributes } from "html-url-attributes"
 import { defaultUrlTransform } from "react-markdown"
-import { imageSource } from "./responseImages"
+import { imageSource, localImageLink } from "./responseImages"
 
 // The same GFM, HTML-as-text and URL policy as our ReactMarkdown renderer.
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true })
@@ -19,7 +19,7 @@ function sanitize(node: MarkdownTreeNode): MarkdownTreeNode {
     for (const [key, tags] of Object.entries(urlAttributes)) {
       if (Object.hasOwn(node.properties, key) && (tags === null || tags.includes(node.tagName))) {
         const url = String(node.properties[key] || "")
-        node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : defaultUrlTransform(url)
+        node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : key === "href" && localImageLink(url) ? url : defaultUrlTransform(url)
       }
     }
     node.children = node.children.map(sanitize) as typeof node.children

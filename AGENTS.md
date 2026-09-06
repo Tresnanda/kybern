@@ -121,6 +121,18 @@ the app window by id (`screencapture -l <id>`), never the full screen. See
 the packaged app before launching `pnpm tauri dev`, and target the dev process's
 window id rather than opening the installed app by bundle name.
 
+## Sharing image previews
+
+Kybern can display local images only inside the conversation's original working
+folder. A separate checkout or worktree does not change that folder. Before
+calling an image-view tool or sharing an image, copy the final preview into a
+dedicated artifact subfolder inside the conversation's folder and verify it
+exists. Do not share `/tmp` paths or paths in a different worktree.
+
+Use `![Description](<relative/path.png>)` for an inline preview. Keep generated
+previews out of commits unless the user asks to include them. Follow the
+thread-specific artifact guidance when Kybern provides the exact folder.
+
 ## Data directory
 
 `~/.kybern/`: `state.sqlite`, `settings.json`, `keybindings.json`, `themes/`,

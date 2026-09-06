@@ -103,3 +103,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs questions
+      - name: Native WebKit artifact previews
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs artifacts

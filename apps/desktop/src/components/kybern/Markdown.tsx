@@ -1,4 +1,5 @@
 import { ResponseImage } from "./ResponseImage"
+import { localImageLink } from "@/lib/responseImages"
 // Chat markdown, styled by the `.chat-markdown` rules (styles/kit.css).
 // Code blocks get the `.chat-markdown-codeblock` chrome: language label,
 // wrap toggle and copy action in the header, shiki-highlighted body.
@@ -196,7 +197,7 @@ function MarkdownCode({ children, node }: { children?: ReactNode; node?: { posit
 // Stable component types preserve code-block state and highlighting across deltas.
 const BASE_COMPONENTS: import("react-markdown").Components = {
   img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
-  a: ({ href, children }) => (
+  a: ({ href, children }) => href && localImageLink(href) ? <ResponseImage source={href} label={extractText(children) || "Image preview"} linkLabel={children} /> : (
     <a
       href={href}
       className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline"
