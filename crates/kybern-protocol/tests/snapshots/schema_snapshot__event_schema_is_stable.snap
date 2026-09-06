@@ -401,6 +401,54 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "request": {
+          "$ref": "#/$defs/AsyncQuestionRequest"
+        },
+        "kind": {
+          "type": "string",
+          "const": "async_questions_requested"
+        }
+      },
+      "required": [
+        "kind",
+        "request"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "async_questions_answered"
+        }
+      },
+      "required": [
+        "kind",
+        "request_id",
+        "answers",
+        "message_id",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "approval": {
           "$ref": "#/$defs/ApprovalRequest"
         },
@@ -1287,6 +1335,43 @@ expression: schema_for!(ThreadEvent)
           "default": false
         }
       }
+    },
+    "AsyncQuestionRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AsyncQuestion"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "questions"
+      ]
+    },
+    "AsyncQuestion": {
+      "description": "A provider question that does not pause the running turn.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "title"
+      ]
     },
     "ApprovalRequest": {
       "description": "A pending or resolved request for the user to approve a tool call.",

@@ -1173,6 +1173,15 @@ impl CodexSession {
         match ty {
             "agentMessage" => {
                 if completed {
+                    if item.get("delivery").and_then(Value::as_str) == Some("async")
+                        && let Some(questions) = item
+                            .get("questions")
+                            .and_then(|v| serde_json::from_value::<Vec<kybern_protocol::AsyncQuestion>>(v.clone()).ok())
+                        && !id.is_empty()
+                        && !questions.is_empty()
+                    {
+                        self.emit(DriverEvent::AsyncQuestions(kybern_protocol::AsyncQuestionRequest { id: id.clone(), questions })).await;
+                    }
                     let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
                     self.emit(DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
@@ -1547,6 +1556,26 @@ impl AgentSession for Handle {
             s.state.lock().await.turn_id = Some(id.to_string());
         }
         Ok(())
+    }
+
+    async fn steer(&self, message_id: &str, message: &UserMessage) -> Result<()> {
+        let (thread_id, turn_id) = {
+            let state = self.0.state.lock().await;
+            (state.thread_id.clone(), state.turn_id.clone())
+        };
+        let (Some(thread_id), Some(turn_id)) = (thread_id, turn_id) else {
+            return Err(DriverError::Protocol("The turn has ended. Submit your answer again to continue the conversation.".into()));
+        };
+        self.0
+            .call(
+                "turn/steer",
+                json!({
+                    "threadId": thread_id, "expectedTurnId": turn_id,
+                    "clientUserMessageId": message_id, "input": input_items(message),
+                }),
+            )
+            .await
+            .map(|_| ())
     }
 
     async fn interrupt(&self) -> Result<()> {
@@ -2082,6 +2111,67 @@ wait
         let (handle, result) = task.await.unwrap();
         assert!(result.is_err());
         assert!(!session.state.lock().await.manual_compaction);
+        handle.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn async_questions_keep_native_fields_and_answers_steer_the_current_turn() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: Some("test".into()),
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+        session.state.lock().await.turn_id = Some("active-turn".into());
+        let item = json!({"type":"agentMessage", "id":"call-question", "text":"Choose a window", "delivery":"async",
+            "questions":[{"title":"Allow a QA window?", "options":["Allow", "Keep current window"]}, {"title":"Any constraints?", "options":null}]});
+        session.handle_item(&item, false).await;
+        assert!(rx.try_recv().is_err());
+        session.handle_item(&item, true).await;
+        let Some(DriverEvent::AsyncQuestions(request)) = rx.recv().await else { panic!("missing structured question") };
+        assert_eq!(request.id, "call-question");
+        assert_eq!(request.questions[0].options, ["Allow", "Keep current window"]);
+        assert!(request.questions[1].options.is_empty());
+        assert!(matches!(rx.recv().await, Some(DriverEvent::MessageCompleted { .. })));
+        assert!(session.pending_approvals.lock().await.is_empty());
+        let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        let task = tokio::spawn(async move {
+            let result = handle.steer("answer-id", &UserMessage::text("Keep current window")).await;
+            (handle, result)
+        });
+        let request = tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+        assert_eq!(request["method"], "turn/steer");
+        assert_eq!(request["params"]["expectedTurnId"], "active-turn");
+        assert_eq!(request["params"]["clientUserMessageId"], "answer-id");
+        assert_eq!(request["params"]["input"][0]["text"], "Keep current window");
+        session.pending.lock().await.remove(&request["id"].as_i64().unwrap()).unwrap().send(Ok(json!({}))).unwrap();
+        let (handle, result) = task.await.unwrap();
+        result.unwrap();
+        assert!(rx.try_recv().is_err(), "steering must not complete or interrupt the turn");
+        session.state.lock().await.turn_id = None;
+        assert!(handle.steer("late", &UserMessage::text("late answer")).await.unwrap_err().to_string().contains("turn has ended"));
         handle.close().await.unwrap();
     }
 

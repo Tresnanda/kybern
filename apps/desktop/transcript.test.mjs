@@ -384,3 +384,23 @@ test("native command catalogs survive unrelated events and reload", () => {
   state = applyEvent(state, { kind: "provider_notice", level: "info", text: "ready", seq: 2, thread_id: thread.id })
   assert.equal(state.providerCommands[0].name, "check")
 })
+
+
+test("async questions stay answerable through completion and reload without blocking approvals", () => {
+  const request = { id: "question", questions: [{ title: "Window?", options: ["Allow", "Keep current"] }, { title: "Constraints?", options: [] }] }
+  const state = fold([start, { kind: "async_questions_requested", request }, done, { kind: "provider_session_released", reason: "idle" }])
+  assert.deepEqual(state.pendingQuestions, [request])
+  assert.deepEqual(state.pendingApprovals, [])
+  const loaded = seedFromGet({ thread: { last_seq: 4 }, transcript: [], pending_approvals: [], pending_questions: state.pendingQuestions })
+  assert.deepEqual(loaded.pendingQuestions, [request])
+  const answered = applyEvent(state, { seq: 5, turn_id: T, at: AT, kind: "async_questions_answered", request_id: request.id, answers: ["Keep current", "Use scratch data"], message_id: "answer", message: { parts: [{ type: "text", text: "Keep current. Use scratch data." }] } })
+  assert.deepEqual(answered.pendingQuestions, [])
+  const [group] = groupTurns(answered.blocks)
+  assert.equal(group.user.id, "u1", "an answer must not replace the original prompt")
+  assert.equal(group.work.filter(block => block.kind === "user").length, 1)
+})
+
+test("an idle async answer has one user bubble when its turn and receipt arrive", () => {
+  const state = fold([start, { kind: "async_questions_answered", request_id: "q", answers: ["hi"], message_id: start.message_id, message: start.message }])
+  assert.equal(state.blocks.filter(block => block.kind === "user").length, 1)
+})

@@ -52,6 +52,8 @@ expression: scopes
   - "orchestration:operate"
 - - threads.compact
   - "orchestration:operate"
+- - threads.answer
+  - "orchestration:operate"
 - - threads.interrupt
   - "orchestration:operate"
 - - tasks.list

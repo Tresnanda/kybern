@@ -1,3 +1,4 @@
+import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
 import { Markdown } from "@/components/kybern/Markdown"
 import { connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
 import { UserInputPanel } from "./UserInputPanel"
@@ -86,6 +87,7 @@ export function ThreadView({
   const thread = useStore((s) => s.threads[threadId])
   const providerUsage = useStore((s) => s.transcripts[threadId]?.providerUsage)
   const loaded = useStore((s) => s.transcripts[threadId]?.loaded)
+  const questions = useStore((s) => s.transcripts[threadId]?.pendingQuestions ?? EMPTY)
   const pending = useStore((s) => s.transcripts[threadId]?.pendingApprovals ?? EMPTY)
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
   const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_TASKS)
@@ -250,6 +252,7 @@ export function ThreadView({
                 <>
                   {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
                   {queued.length > 0 && <QueuedPanel threadId={threadId} onEdit={(t) => composer.current?.setText(t)} />}
+                  {!approval && questions[0] && <div className="t-panel-enter pb-2"><AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} /></div>}
                   {approval && (
                     <div key={approval.id} className="t-panel-enter pb-2">
                       {connector ? <ConnectorApprovalPanel approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel approval={approval} count={pending.length} onChoose={answer} />}

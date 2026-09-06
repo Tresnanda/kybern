@@ -173,3 +173,29 @@ items. Existing stored phantom rows are not rewritten by this change.
 
 Quota percentages/reset times still require native account telemetry. Missing
 account quotas are shown as unavailable rather than inferred from token usage.
+
+
+## Asynchronous Codex questions
+
+The installed Codex app-server schema and captured rollout confirm that
+`request_user_input_async` produces a completed `agentMessage` with
+`delivery: "async"` and `questions: [{ title, options }]`. It is not a blocking
+`item/tool/requestUserInput` server request. Kybern previously kept only `text`,
+which explains the plain paragraph and bullet list in the screenshot.
+
+The driver now preserves this metadata as an append-only question event. The
+composer shows an explicit answer form, including free-text input, without
+changing the thread to awaiting approval. Unanswered requests survive turn
+completion, session release and `threads.get` hydration. `threads.answer`
+(`kybern answer`) validates complete answers and serializes duplicate
+submissions. Active Codex turns receive `turn/steer` with `expectedTurnId`;
+idle conversations start a normal resumable turn. Rejected delivery leaves the
+form pending and shows the error. Answers are retained in the transcript without
+replacing the original prompt. Existing plain-text history cannot recover the
+previously discarded metadata automatically; the live database is not rewritten.
+
+Regression coverage includes the native item shape, nullable/missing options,
+active-turn steering, explicit answers, duplicate submissions, late/startup
+rejection, idle resumption, and frontend reload/history behavior. A lifecycle
+test's fixed startup timer was replaced with a readiness/gate handshake after it
+raced process startup during a loaded build.

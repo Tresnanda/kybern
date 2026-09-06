@@ -420,6 +420,8 @@ export type NoticeLevel = "info" | "warning" | "error";
 export type SessionReleaseReason = "manual" | "idle" | "capacity" | "update" | "power";
 
 export type EventPayload =
+  | { kind: "async_questions_requested"; request: AsyncQuestionRequest }
+  | { kind: "async_questions_answered"; request_id: string; answers: string[]; message_id: MessageId; message: UserMessage }
   | { kind: "thread_created"; thread: Thread }
   | { kind: "thread_updated"; thread: Thread }
   | { kind: "thread_archived" }
@@ -588,7 +590,10 @@ export interface ThreadsGetParams {
   thread_id: ThreadId;
 }
 
+export interface AsyncQuestionRequest { id: string; questions: { title: string; options: string[] }[] }
+export interface ThreadsAnswerParams { thread_id: ThreadId; request_id: string; answers: string[] }
 export interface ThreadsGetResult {
+  pending_questions?: AsyncQuestionRequest[];
   provider_commands?: ProviderCommand[];
   provider_usage?: ProviderUsage;
   thread: Thread;
@@ -1057,6 +1062,7 @@ export interface Methods {
   "threads.archive": [ThreadsArchiveParams, Empty];
   "threads.send": [ThreadsSendParams, ThreadsSendResult];
   "threads.release": [ThreadsInterruptParams, Empty];
+  "threads.answer": [ThreadsAnswerParams, Empty];
   "threads.compact": [ThreadsInterruptParams, ThreadsSendResult];
   "threads.interrupt": [ThreadsInterruptParams, Empty];
   "tasks.list": [TasksListParams, TasksListResult];

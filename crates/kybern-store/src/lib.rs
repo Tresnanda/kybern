@@ -6,7 +6,9 @@
 mod projection;
 mod schema;
 
-pub use projection::{project_provider_usage, project_runtime_tasks, project_thread_activity, project_transcript};
+pub use projection::{
+    project_pending_questions, project_provider_usage, project_runtime_tasks, project_thread_activity, project_transcript,
+};
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};

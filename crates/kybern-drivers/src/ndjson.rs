@@ -177,12 +177,17 @@ mod lifecycle_tests {
     async fn dropping_session_owner_stops_launcher_and_children_only() {
         let dir = tempfile::tempdir().unwrap();
         let mut cmd = Command::new("sh");
-        cmd.current_dir(dir.path()).args(["-c", "(sleep 0.3; touch escaped) & wait"]);
+        cmd.current_dir(dir.path())
+            .args(["-c", "(while [ ! -f proceed ]; do sleep 0.02; done; touch escaped) & printf '{\"ready\":true}\\n'; wait"]);
         let child = Arc::new(NdjsonChild::spawn(cmd).unwrap());
         let mut unrelated = Command::new("sleep").arg("30").kill_on_drop(true).spawn().unwrap();
         let lifetime = SessionLifetime::new(child.clone());
+        tokio::time::timeout(Duration::from_secs(2), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
         drop(lifetime);
         tokio::time::timeout(Duration::from_secs(2), child.wait()).await.unwrap();
+        // Release the child only after cleanup, rather than racing a 300 ms
+        // timer against process startup on a loaded machine.
+        std::fs::write(dir.path().join("proceed"), "").unwrap();
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert!(!dir.path().join("escaped").exists());
         assert!(unrelated.try_wait().unwrap().is_none());

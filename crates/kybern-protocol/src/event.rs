@@ -100,6 +100,15 @@ pub enum EventPayload {
     RuntimeTaskCompleted {
         task: RuntimeTask,
     },
+    AsyncQuestionsRequested {
+        request: AsyncQuestionRequest,
+    },
+    AsyncQuestionsAnswered {
+        request_id: String,
+        answers: Vec<String>,
+        message_id: MessageId,
+        message: UserMessage,
+    },
     UserInputRequested {
         approval: ApprovalRequest,
     },

@@ -29,6 +29,7 @@ pub struct Orchestrator {
 
 struct Inner {
     commands: std::sync::Mutex<()>,
+    question_answers: Mutex<()>,
     thread_updates: std::sync::Mutex<()>,
     store: Store,
     drivers: DriverRegistry,
@@ -165,6 +166,7 @@ impl Orchestrator {
         Self {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
+                question_answers: Mutex::new(()),
                 thread_updates: std::sync::Mutex::new(()),
                 store,
                 drivers,
@@ -906,6 +908,70 @@ impl Orchestrator {
         Ok(self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?.provider.kind.display_name())
     }
 
+    /// Async questions are ordinary user input, not provider permission responses.
+    /// Serialize submissions so two clients cannot answer the same question twice.
+    pub async fn answer_questions(&self, params: methods::ThreadsAnswerParams) -> Result<()> {
+        let _answer = self.inner.question_answers.lock().await;
+        let events = self.inner.store.events_for_thread(params.thread_id)?;
+        if let Some(previous) = events.iter().find_map(|event| match &event.payload {
+            EventPayload::AsyncQuestionsAnswered { request_id, answers, .. } if request_id == &params.request_id => Some(answers),
+            _ => None,
+        }) {
+            return if previous == &params.answers {
+                Ok(())
+            } else {
+                Err(anyhow!("This question has already been answered. Send a new message to change your answer."))
+            };
+        }
+        let request = kybern_store::project_pending_questions(&events)
+            .into_iter()
+            .find(|r| r.id == params.request_id)
+            .ok_or_else(|| anyhow!("Question not found. Refresh the conversation and try again."))?;
+        if request.questions.len() != params.answers.len() || params.answers.iter().any(|a| a.trim().is_empty()) {
+            return Err(anyhow!("Answer each question before submitting."));
+        }
+        let message = UserMessage::text(
+            request
+                .questions
+                .iter()
+                .zip(&params.answers)
+                .map(|(question, answer)| format!("{}\nAnswer: {}", question.title, answer.trim()))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+        let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if thread.status == ThreadStatus::Archived {
+            return Err(anyhow!("Unarchive this conversation before answering."));
+        }
+        let message_id = Uuid::now_v7();
+        let turn_id = if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            let live = self
+                .inner
+                .sessions
+                .lock()
+                .await
+                .get(&params.thread_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("The agent is starting. Submit your answer again in a moment."))?;
+            let turn = live.turn.lock().await;
+            let active = turn
+                .as_ref()
+                .filter(|turn| !turn.completed)
+                .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
+            live.touch();
+            live.session.steer(&message_id.to_string(), &message).await?;
+            active.id
+        } else {
+            self.send_with_id(params.thread_id, message_id, message.clone(), false).await?.0
+        };
+        self.emit(
+            params.thread_id,
+            Some(turn_id),
+            EventPayload::AsyncQuestionsAnswered { request_id: params.request_id, answers: params.answers, message_id, message },
+        )?;
+        Ok(())
+    }
+
     pub async fn respond_approval(&self, approval_id: ApprovalId, decision: ApprovalDecision) -> Result<()> {
         let (approval, resolved) = self.inner.store.approval_get(approval_id)?.ok_or_else(|| anyhow!("approval not found"))?;
         if resolved {
@@ -1534,6 +1600,12 @@ impl Orchestrator {
                 let id = map_message_delta(&mut turn_guard, &origin, &message_id);
                 self.emit(thread_id, turn_id, EventPayload::AssistantThinkingDelta { message_id: id, origin, delta })?;
             }
+            DriverEvent::AsyncQuestions(request) => {
+                let events = self.inner.store.events_for_thread(thread_id)?;
+                if !events.iter().any(|event| matches!(&event.payload, EventPayload::AsyncQuestionsRequested { request: previous } if previous.id == request.id)) {
+                    self.emit(thread_id, turn_id, EventPayload::AsyncQuestionsRequested { request })?;
+                }
+            }
             DriverEvent::MessageCompleted { message_id, origin, text, thinking } => {
                 let id = map_message_completion(&mut turn_guard, &origin, &message_id);
                 if origin.is_root()
@@ -2022,6 +2094,10 @@ mod tests {
             Ok(())
         }
 
+        async fn steer(&self, _message_id: &str, _message: &UserMessage) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
         async fn interrupt(&self) -> kybern_drivers::Result<()> {
             Ok(())
         }
@@ -2447,6 +2523,118 @@ mod tests {
     }
 
     const MINUTE: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn async_answers_are_explicit_durable_and_do_not_replace_the_active_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Running);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let turn_id = Uuid::now_v7();
+        *live.turn.lock().await = Some(ActiveTurn {
+            id: turn_id,
+            started: Instant::now(),
+            startup_started: Instant::now(),
+            provider: ProviderKind::Codex,
+            session_reused: false,
+            first_event_observed: false,
+            messages: HashMap::new(),
+            active_messages: HashMap::new(),
+            terminal_message_id: None,
+            completed: false,
+            pending_completion: None,
+        });
+        fixture
+            .orchestrator
+            .emit(
+                thread.id,
+                Some(turn_id),
+                EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("original prompt") },
+            )
+            .unwrap();
+        let request = AsyncQuestionRequest {
+            id: "question".into(),
+            questions: vec![AsyncQuestion { title: "Window?".into(), options: vec!["Yes".into(), "No".into()] }],
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::AsyncQuestions(request.clone())).await.unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::AsyncQuestions(request)).await.unwrap();
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+        assert!(fixture.store.approvals_pending(Some(thread.id)).unwrap().is_empty());
+        let mut params = methods::ThreadsAnswerParams { thread_id: thread.id, request_id: "question".into(), answers: vec![] };
+        assert!(fixture.orchestrator.answer_questions(params.clone()).await.unwrap_err().to_string().contains("each question"));
+        assert_eq!(kybern_store::project_pending_questions(&fixture.store.events_for_thread(thread.id).unwrap()).len(), 1);
+        params.answers = vec!["No, keep this window".into()];
+        fixture.orchestrator.answer_questions(params.clone()).await.unwrap();
+        fixture.orchestrator.answer_questions(params.clone()).await.unwrap();
+        params.answers = vec!["Yes".into()];
+        assert!(fixture.orchestrator.answer_questions(params).await.unwrap_err().to_string().contains("already been answered"));
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert_eq!(events.iter().filter(|e| matches!(e.payload, EventPayload::AsyncQuestionsAnswered { .. })).count(), 1);
+        assert_eq!(events.iter().filter(|e| matches!(e.payload, EventPayload::TurnStarted { .. })).count(), 1);
+        assert!(kybern_store::project_pending_questions(&events).is_empty());
+        assert_eq!(live.turn.lock().await.as_ref().unwrap().id, turn_id);
+        assert_eq!(
+            kybern_store::project_transcript(&events).iter().filter(|entry| matches!(entry, TranscriptEntry::User { .. })).count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn async_answer_during_startup_stays_pending_and_does_not_start_another_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Running);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::AsyncQuestions(AsyncQuestionRequest {
+                    id: "question".into(),
+                    questions: vec![AsyncQuestion { title: "Continue?".into(), options: vec![] }],
+                }),
+            )
+            .await
+            .unwrap();
+        let result = fixture
+            .orchestrator
+            .answer_questions(methods::ThreadsAnswerParams {
+                thread_id: thread.id,
+                request_id: "question".into(),
+                answers: vec!["Yes".into()],
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("Submit your answer again"));
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert_eq!(kybern_store::project_pending_questions(&events).len(), 1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::AsyncQuestionsAnswered { .. } | EventPayload::TurnStarted { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn async_question_survives_completion_and_idle_answer_starts_one_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let request = AsyncQuestionRequest {
+            id: "question".into(),
+            questions: vec![AsyncQuestion { title: "Constraints?".into(), options: vec![] }],
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::AsyncQuestions(request)).await.unwrap();
+        let params =
+            methods::ThreadsAnswerParams { thread_id: thread.id, request_id: "question".into(), answers: vec!["Use scratch data".into()] };
+        fixture.orchestrator.answer_questions(params.clone()).await.unwrap();
+        fixture.orchestrator.answer_questions(params).await.unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(kybern_store::project_pending_questions(&events).is_empty());
+        assert_eq!(events.iter().filter(|e| matches!(e.payload, EventPayload::TurnStarted { .. })).count(), 1);
+        assert_eq!(
+            kybern_store::project_transcript(&events).iter().filter(|entry| matches!(entry, TranscriptEntry::User { .. })).count(),
+            1
+        );
+    }
 
     #[tokio::test]
     async fn compaction_rejects_busy_unsupported_and_empty_conversations_without_writing_a_turn() {

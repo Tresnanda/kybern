@@ -167,6 +167,7 @@ pub enum DriverEvent {
         delta: String,
     },
     /// Full text of an assistant message once the provider finalizes it.
+    AsyncQuestions(kybern_protocol::AsyncQuestionRequest),
     MessageCompleted {
         message_id: String,
         origin: EventOrigin,
@@ -229,6 +230,10 @@ pub trait AgentSession: Send + Sync {
     /// Queue a user turn. `message_id` is kybern's id for the message; drivers that
     /// accept a client-chosen id use it so rewinds can reference the turn.
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()>;
+    /// Deliver explicit user input to the current turn without interrupting it.
+    async fn steer(&self, _message_id: &str, _message: &UserMessage) -> Result<()> {
+        Err(DriverError::Unsupported("This harness does not support answering during a turn. Try again when it finishes.".into()))
+    }
     /// Initiate native compaction; report completion through the usual turn events.
     async fn compact(&self) -> Result<()> {
         Err(DriverError::Unsupported("This harness does not expose manual compaction. Automatic compaction remains available.".into()))

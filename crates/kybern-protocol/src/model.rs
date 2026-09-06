@@ -1103,3 +1103,21 @@ pub struct UsageLimit {
     pub window_minutes: Option<u64>,
     pub resets_at: Option<i64>,
 }
+
+/// A provider question that does not pause the running turn.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AsyncQuestion {
+    pub title: String,
+    #[serde(default, deserialize_with = "deserialize_null_options")]
+    pub options: Vec<String>,
+}
+
+fn deserialize_null_options<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AsyncQuestionRequest {
+    pub id: String,
+    pub questions: Vec<AsyncQuestion>,
+}

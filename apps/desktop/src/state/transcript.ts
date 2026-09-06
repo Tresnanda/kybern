@@ -75,6 +75,7 @@ export type Block =
 export interface ThreadState {
   thread: Thread | null
   blocks: Block[]
+  pendingQuestions?: import("@/protocol").AsyncQuestionRequest[]
   pendingApprovals: ApprovalRequest[]
   checkpoints: Checkpoint[]
   providerCommands?: import("@/protocol").ProviderCommand[]
@@ -99,6 +100,7 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
     thread: res.thread,
     blocks: res.transcript.map(entryToBlock).filter((b): b is Block => !!b),
     pendingApprovals: res.pending_approvals,
+    pendingQuestions: res.pending_questions ?? [],
     checkpoints: prev?.checkpoints ?? [],
     lastSeq: res.thread.last_seq,
     loaded: true,
@@ -170,6 +172,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
   // turn id. Recover it onto the most recent turn instead of creating a second
   // anonymous "Worked" group.
   const turnId = ev.turn_id ?? (isAssistantEvent(ev) ? latestTurnId(blocks) : "")
+  let pendingQuestions = state.pendingQuestions ?? []
   let pending = state.pendingApprovals
   let checkpoints = state.checkpoints
   let thread = state.thread
@@ -181,6 +184,13 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       break
     case "thread_archived":
       if (thread) thread = { ...thread, status: "archived" }
+      break
+    case "async_questions_requested":
+      if (!pendingQuestions.some((request) => request.id === ev.request.id)) pendingQuestions = [...pendingQuestions, ev.request]
+      break
+    case "async_questions_answered":
+      pendingQuestions = pendingQuestions.filter((request) => request.id !== ev.request_id)
+      if (!blocks.some((block) => block.kind === "user" && block.id === ev.message_id)) blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
       break
     case "turn_started":
       blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
@@ -360,7 +370,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     default:
       break
   }
-  return { providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
+  return { pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {
@@ -654,7 +664,8 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
     switch (b.kind) {
       case "image": g.images.push(b); break
       case "user":
-        g.user = b
+        if (!g.user) g.user = b
+        else g.work.push(b)
         break
       case "approval":
         g.approvals.push(b)

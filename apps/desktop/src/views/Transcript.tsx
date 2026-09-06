@@ -965,6 +965,8 @@ function WorkRow({
   onOpenAgentActivity: OpenAgentActivity
 }) {
   switch (block.kind) {
+    case "user":
+      return <UserBubble message={block.message} at={block.at} />
     case "tool":
       return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
     case "assistant":

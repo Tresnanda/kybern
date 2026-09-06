@@ -157,7 +157,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.touch_session(p.thread_id).await;
             let store = state.store.clone();
             let id = p.thread_id;
-            let (transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands) =
+            let (transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands, pending_questions) =
                 tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                     let events = store.events_for_thread(id)?;
                     Ok((
@@ -173,12 +173,21 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                                 _ => None,
                             })
                             .unwrap_or_default(),
+                        kybern_store::project_pending_questions(&events),
                     ))
                 })
                 .await
                 .map_err(internal)?
                 .map_err(internal)?;
-            ok(ThreadsGetResult { thread, transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands })
+            ok(ThreadsGetResult {
+                thread,
+                transcript,
+                pending_approvals,
+                runtime_tasks,
+                provider_usage,
+                provider_commands,
+                pending_questions,
+            })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
@@ -218,6 +227,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsRelease::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
             state.orchestrator.release_session(p.thread_id).await.map_err(bad)?;
+            ok(Empty {})
+        }
+        ThreadsAnswer::NAME => {
+            state.orchestrator.answer_questions(parse(params)?).await.map_err(bad)?;
             ok(Empty {})
         }
         ThreadsCompact::NAME => {

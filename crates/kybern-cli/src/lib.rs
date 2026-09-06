@@ -119,6 +119,13 @@ enum Cmd {
     Interrupt { thread: String },
     /// Compact context using the harness native operation.
     Compact { thread: String },
+    /// Answer a non-blocking question; provide one answer per question in order.
+    Answer {
+        thread: String,
+        request_id: String,
+        #[arg(required = true)]
+        answers: Vec<String>,
+    },
     /// Release an idle agent process; preserve its conversation for resume.
     Release { thread: String },
     /// Inspect or control provider-owned agents and background processes.
@@ -501,6 +508,9 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Release { thread } => {
             client.call::<ThreadsRelease>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+        }
+        Cmd::Answer { thread, request_id, answers } => {
+            client.call::<ThreadsAnswer>(ThreadsAnswerParams { thread_id: thread.parse()?, request_id, answers }).await?;
         }
         Cmd::Compact { thread } => {
             let result = client.call::<ThreadsCompact>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;

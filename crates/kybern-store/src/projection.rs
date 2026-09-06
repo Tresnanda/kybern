@@ -125,11 +125,12 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
     for ev in events {
         let turn_id = ev.turn_id;
         match &ev.payload {
-            EventPayload::TurnStarted { message_id, message } => {
+            EventPayload::TurnStarted { message_id, message } | EventPayload::AsyncQuestionsAnswered { message_id, message, .. } => {
+                if out.iter().any(|entry| matches!(entry, TranscriptEntry::User { id, .. } if id == message_id)) { continue; }
                 let Some(turn_id) = turn_id else { continue };
                 last_turn_id = Some(turn_id);
                 unscoped_assistant_message = None;
-                turn_started_at.insert(turn_id, ev.at);
+                turn_started_at.entry(turn_id).or_insert(ev.at);
                 out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
             }
             EventPayload::ImageReceived { id, origin, source } => {
@@ -353,7 +354,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id), reason.notice_text()) else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at });
             }
-            EventPayload::ProviderCommandsUpdated { .. } | EventPayload::ProviderUsageUpdated { .. }
+            EventPayload::AsyncQuestionsRequested { .. } | EventPayload::ProviderCommandsUpdated { .. } | EventPayload::ProviderUsageUpdated { .. }
             | EventPayload::ThreadCreated { .. }
             | EventPayload::ThreadUpdated { .. }
             | EventPayload::MessageQueued { .. }
@@ -540,6 +541,27 @@ pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
         }
     }
     result
+}
+
+/// Async questions survive turn completion, session release, and client reload.
+pub fn project_pending_questions(events: &[ThreadEvent]) -> Vec<AsyncQuestionRequest> {
+    let mut requests = Vec::<AsyncQuestionRequest>::new();
+    let mut answered = std::collections::HashSet::new();
+    for event in events {
+        match &event.payload {
+            EventPayload::AsyncQuestionsRequested { request } => {
+                if !answered.contains(&request.id) && !requests.iter().any(|r| r.id == request.id) {
+                    requests.push(request.clone());
+                }
+            }
+            EventPayload::AsyncQuestionsAnswered { request_id, .. } => {
+                answered.insert(request_id.clone());
+                requests.retain(|r| r.id != *request_id);
+            }
+            _ => {}
+        }
+    }
+    requests
 }
 
 #[cfg(test)]
