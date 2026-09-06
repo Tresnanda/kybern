@@ -21,6 +21,7 @@ import type { InlineTokenKind } from "@/components/kybern/InlineToken"
 import { partToken } from "@/lib/composerTokens"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/kit/collapsible"
 import { DiffStatLabel } from "@/components/kit/chat/DiffStatLabel"
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
 import { MessageActionButton } from "@/components/kit/chat/MessageActionButton"
@@ -61,7 +62,7 @@ import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { errorText, loadFileDiff, revertTo } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
-import { buildWorkHierarchy, groupTurns, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
+import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
 const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
@@ -219,7 +220,8 @@ export function Transcript({
   const state = useStore((s) => s.transcripts[threadId])
   const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
   const blocks = state?.blocks
-  const groups = useMemo(() => groupTurns(blocks ?? []), [blocks])
+  const groupTurns = useMemo(() => createTurnGrouper(), [])
+  const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
   const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
   const selectedActivity = agentActivityTrail.at(-1)
   const agentActivityDetail = useMemo(
@@ -513,11 +515,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                 </div>
               )}
               {hasDisclosedWork && (
-                <div className="group/collapsed-work py-1">
-                  <button
+                <Collapsible open={open} onOpenChange={() => toggle(group.turnId)} className="group/collapsed-work py-1">
+                  <CollapsibleTrigger
                     type="button"
-                    aria-expanded={open}
-                    onClick={() => toggle(group.turnId)}
                     className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
                   >
                     <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
@@ -527,17 +527,19 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                       {group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : "Worked"}
                     </span>
                     <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
-                  </button>
-                  <DisclosureRegion open={open} contentClassName="ms-5 mt-0.5 space-y-0.5 ps-0.5">
-                    <WorkRows
-                      blocks={settledWork.disclosureBlocks}
-                      tasksByToolCall={settledWork.tasksByToolCall}
-                      childrenByParent={settledWork.childrenByParent}
-                      compact
-                      onOpenAgentActivity={onOpenAgentActivity}
-                    />
-                  </DisclosureRegion>
-                </div>
+                  </CollapsibleTrigger>
+                  <CollapsiblePanel>
+                    <div className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
+                      <WorkRows
+                        blocks={settledWork.disclosureBlocks}
+                        tasksByToolCall={settledWork.tasksByToolCall}
+                        childrenByParent={settledWork.childrenByParent}
+                        compact
+                        onOpenAgentActivity={onOpenAgentActivity}
+                      />
+                    </div>
+                  </CollapsiblePanel>
+                </Collapsible>
               )}
               <div className="mt-1 h-px w-full bg-border" />
             </div>

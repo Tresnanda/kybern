@@ -44,10 +44,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
-      - name: Native WebKit window material
-        if: runner.os == 'macOS'
-        working-directory: apps/desktop
-        run: swift scripts/check-window-material.swift src/styles/kybern.css
       - name: clippy
         run: >
           cargo clippy --workspace --all-targets
@@ -56,8 +52,12 @@ jobs:
         run: cargo test --workspace
 
   desktop:
-    name: desktop (typecheck + lint + build)
-    runs-on: ubuntu-24.04
+    name: desktop (typecheck + lint + build, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@v4
@@ -79,3 +79,7 @@ jobs:
       - name: build
         working-directory: apps/desktop
         run: pnpm build
+      - name: Native WebKit window materials
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node --experimental-strip-types scripts/check-window-material.mjs

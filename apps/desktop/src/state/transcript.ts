@@ -647,6 +647,33 @@ function joinSegments(segs: AssistantBlock[]): AssistantBlock {
   }
 }
 
+/** Keep unchanged turns referentially stable while another turn streams.
+ * Each transcript owns its cache; rewinds and thread switches release old entries. */
+export function createTurnGrouper(): (blocks: Block[]) => TurnGroup[] {
+  let cache = new Map<TurnId, { blocks: Block[]; group: TurnGroup }>()
+  return (blocks) => {
+    const byTurn = new Map<TurnId, Block[]>()
+    for (const block of blocks) {
+      const turn = byTurn.get(block.turnId)
+      if (turn) turn.push(block)
+      else byTurn.set(block.turnId, [block])
+    }
+    const next = new Map<TurnId, { blocks: Block[]; group: TurnGroup }>()
+    const groups: TurnGroup[] = []
+    for (const [turnId, turnBlocks] of byTurn) {
+      const previous = cache.get(turnId)
+      const entry = previous && previous.blocks.length === turnBlocks.length &&
+        turnBlocks.every((block, index) => block === previous.blocks[index])
+        ? previous
+        : { blocks: turnBlocks, group: groupTurns(turnBlocks)[0]! }
+      next.set(turnId, entry)
+      groups.push(entry.group)
+    }
+    cache = next
+    return groups
+  }
+}
+
 export function groupTurns(blocks: Block[]): TurnGroup[] {
   const groups: TurnGroup[] = []
   const byId = new Map<string, TurnGroup>()

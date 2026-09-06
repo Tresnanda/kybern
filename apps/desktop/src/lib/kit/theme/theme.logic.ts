@@ -841,14 +841,22 @@ export function buildThemeCssVariables(
     "--warning-foreground": pack.theme.surface,
   };
 
-  return {
-    material,
-    variables: {
-      ...codexVariables,
-      ...resolvedTokens.aliases,
-      ...appVariables,
-    },
+  const variables = {
+    ...codexVariables,
+    ...resolvedTokens.aliases,
+    ...appVariables,
   };
+  // CSS can opt every surface into the window material without mutating its
+  // theme seed or feeding an already-translucent value back into color-mix.
+  for (const role of [
+    "background", "card", "popover", "input", "muted", "secondary",
+    "color-background-panel", "color-background-control", "color-background-control-opaque",
+    "color-background-elevated-primary", "color-background-elevated-primary-opaque",
+    "color-background-elevated-secondary",
+  ]) {
+    variables[`--app-opaque-${role}`] = variables[`--${role}`]!;
+  }
+  return { material, variables };
 }
 
 export function buildResolvedThemeTokens(

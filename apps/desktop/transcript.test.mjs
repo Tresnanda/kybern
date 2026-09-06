@@ -15,7 +15,7 @@ registerHooks({
   },
 })
 
-const { seedFromGet, applyEvent, buildWorkHierarchy, emptyThreadState, groupTurns, shouldRevealLiveText } = await import(
+const { seedFromGet, applyEvent, buildWorkHierarchy, emptyThreadState, groupTurns, createTurnGrouper, shouldRevealLiveText } = await import(
   "./src/state/transcript.ts"
 )
 
@@ -403,4 +403,32 @@ test("async questions stay answerable through completion and reload without bloc
 test("an idle async answer has one user bubble when its turn and receipt arrive", () => {
   const state = fold([start, { kind: "async_questions_answered", request_id: "q", answers: ["hi"], message_id: start.message_id, message: start.message }])
   assert.equal(state.blocks.filter(block => block.kind === "user").length, 1)
+})
+
+test("streaming a later turn preserves earlier turn groups for memoized views", () => {
+  const group = createTurnGrouper()
+  const older = { kind: "user", id: "old-user", turnId: "old", at: AT, seq: 1, message: { content: [{ type: "text", text: "Earlier request" }] } }
+  const current = { kind: "assistant", id: "current#0", messageId: "current", turnId: "current", at: AT, seq: 2, origin: ROOT, segment: 0, text: "Hello", thinking: "", complete: false }
+  const before = group([older, current])
+  const changed = { ...current, text: "Hello world" }
+  const after = group([older, changed])
+  assert.equal(after[0], before[0], "An unchanged earlier turn must not rerender on a new delta")
+  assert.notEqual(after[1], before[1])
+  assert.deepEqual(after, groupTurns([older, changed]))
+  assert.equal(group([older, changed])[1], after[1])
+})
+
+test("turn grouping updates late events, follows ordering, and drops rewound turns", () => {
+  const group = createTurnGrouper()
+  const a = { kind: "notice", id: "a", turnId: "a", at: AT, seq: 1, level: "info", text: "First" }
+  const b = { ...a, id: "b", turnId: "b", seq: 2 }
+  const before = group([a, b])
+  const late = { ...a, text: "Updated" }
+  const after = group([b, late])
+  assert.equal(after[0], before[1])
+  assert.notEqual(after[1], before[0])
+  assert.deepEqual(after, groupTurns([b, late]))
+  assert.deepEqual(group([late]), groupTurns([late]))
+  assert.deepEqual(group([]), [])
+  assert.deepEqual(group([a, b]), groupTurns([a, b]))
 })

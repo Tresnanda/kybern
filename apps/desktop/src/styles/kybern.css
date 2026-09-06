@@ -286,31 +286,66 @@ html[data-thread-pointer-dragging="true"] * {
 }
 
 /* Opt-in window material. Native macOS vibrancy supplies the desktop blur.
-   Apply glass by default, then opt out for supported accessibility preferences.
-   WebKit can treat both an unsupported media feature and its negation as false. */
+   Surface roles share the material, so cards and controls cannot stay opaque
+   over a glass page. Keep text/icon colors separate from these background fills.
+   Positive accessibility queries also work when WebKit does not know a feature. */
 html[data-full-translucency][data-window-material="translucent"] {
   --app-full-translucency: 1;
+  --app-glass-panel-opacity: 58%;
+  --app-glass-popup-opacity: 64%;
+  --app-glass-control-opacity: 40%;
   --app-glass-surface: color-mix(in srgb, var(--app-opaque-content-surface) 72%, transparent);
-  --app-glass-popup-surface: color-mix(in srgb, var(--popover) 82%, transparent);
-  --app-glass-backdrop-filter: blur(24px);
+  --app-glass-popup-surface: color-mix(in srgb, var(--app-opaque-popover) var(--app-glass-popup-opacity), transparent);
+  --app-glass-backdrop-filter: blur(16px) saturate(125%);
   --color-background-surface: var(--app-glass-surface) !important;
-  --app-settings-surface: var(--app-glass-surface);
-  --app-settings-backdrop-filter: var(--app-glass-backdrop-filter);
+  --app-settings-surface: var(--app-glass-surface) !important;
+  /* Settings is already over native vibrancy; a second full-pane blur adds no detail. */
+  --app-settings-backdrop-filter: none !important;
+  --background: color-mix(in srgb, var(--app-opaque-background) var(--app-glass-control-opacity), transparent) !important;
+  --card: color-mix(in srgb, var(--app-opaque-card) var(--app-glass-panel-opacity), transparent) !important;
+  --popover: var(--app-glass-popup-surface) !important;
+  --input: color-mix(in srgb, var(--app-opaque-input) var(--app-glass-control-opacity), transparent) !important;
+  --muted: color-mix(in srgb, var(--app-opaque-muted) var(--app-glass-control-opacity), transparent) !important;
+  --secondary: color-mix(in srgb, var(--app-opaque-secondary) var(--app-glass-control-opacity), transparent) !important;
+  --color-background-panel: color-mix(in srgb, var(--app-opaque-color-background-panel) var(--app-glass-panel-opacity), transparent) !important;
+  --color-background-control: color-mix(in srgb, var(--app-opaque-color-background-control) var(--app-glass-control-opacity), transparent) !important;
+  --color-background-control-opaque: color-mix(in srgb, var(--app-opaque-color-background-control-opaque) var(--app-glass-control-opacity), transparent) !important;
+  --color-background-elevated-primary: color-mix(in srgb, var(--app-opaque-color-background-elevated-primary) var(--app-glass-popup-opacity), transparent) !important;
+  --color-background-elevated-primary-opaque: color-mix(in srgb, var(--app-opaque-color-background-elevated-primary-opaque) var(--app-glass-popup-opacity), transparent) !important;
+  --color-background-elevated-secondary: color-mix(in srgb, var(--app-opaque-color-background-elevated-secondary) var(--app-glass-control-opacity), transparent) !important;
+  --app-chat-code-surface: var(--color-background-control-opaque) !important;
+  --app-user-message-background: var(--color-background-control-opaque) !important;
+  --app-composer-picker-surface: var(--app-glass-popup-surface) !important;
+  --app-composer-picker-backdrop-filter: var(--app-glass-backdrop-filter) !important;
+  --composer-surface: var(--color-background-control-opaque) !important;
+  --composer-glass-surface: var(--app-opaque-popover) !important;
+  --composer-glass-opacity: var(--app-glass-panel-opacity) !important;
+  --composer-glass-stacked-opacity: var(--app-glass-control-opacity) !important;
+  --composer-glass-filter: var(--app-glass-backdrop-filter) !important;
 }
 html[data-full-translucency][data-window-material="translucent"] :is(.chat-content-card, .app-settings-surface) {
   background: var(--app-glass-surface);
 }
-html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="tooltip-popup"], [data-slot="select-popup"]) {
+html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="menu-sub-content"], [data-slot="tooltip-popup"], [data-slot="select-popup"], [data-slot="combobox-popup"], [data-slot="preview-card-popup"], [data-slot="sheet-popup"]) {
   background: var(--app-glass-popup-surface);
   -webkit-backdrop-filter: var(--app-glass-backdrop-filter);
   backdrop-filter: var(--app-glass-backdrop-filter);
 }
+/* Popup primitives already provide a blur pseudo-element. Use one blur layer,
+   including for dialogs and sheets that do not have that pseudo-element. */
+html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="menu-sub-content"], [data-slot="tooltip-popup"], [data-slot="select-popup"], [data-slot="combobox-popup"], [data-slot="preview-card-popup"], [data-slot="sheet-popup"])::before {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   html[data-full-translucency][data-window-material="translucent"] {
     --app-full-translucency: 0;
+    --app-glass-panel-opacity: 100%;
+    --app-glass-popup-opacity: 100%;
+    --app-glass-control-opacity: 100%;
     --app-glass-surface: var(--app-opaque-content-surface);
-    --app-glass-popup-surface: var(--popover);
     --app-glass-backdrop-filter: none;
+    --composer-glass-surface: var(--app-opaque-color-background-control-opaque) !important;
   }
 }
 /* Runtime notices also work before the React tree has mounted. */
