@@ -7,9 +7,8 @@ import { MatrixLoader } from "@/components/kybern/motion";
 import { cn } from "@/lib/utils";
 
 // A 4×4 matrix dot loader (orbit pattern, corners hidden) sized to the 12px
-// glyph slot. It sits on the translucent sidebar, so the cycle is kept slow:
-// each frame re-blurs the backdrop-filtered surface, and fewer colour steps
-// per second is the only lever that keeps that cheap.
+// glyph slot. Keep the relaxed 1.6s orbit on the translucent sidebar; the
+// shared loader composites opacity instead of repainting each dot's colour.
 export function ThreadRunningSpinner({ className }: { className?: string }) {
   return (
     <MatrixLoader
