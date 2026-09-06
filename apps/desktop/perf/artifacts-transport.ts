@@ -8,6 +8,6 @@ export async function fetchThreadImage(_thread: string, path: string, signal: Ab
   if (path.endsWith("retry.png") && attempts.get(path) === 1) throw new Error("Connection interrupted")
   if (path.startsWith("/tmp/")) throw new Error("image must be inside the thread folder")
   signal.throwIfAborted()
-  const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), (char) => char.charCodeAt(0))
+  const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="), (char) => char.charCodeAt(0))
   return new Blob([bytes], { type: "image/png" })
 }

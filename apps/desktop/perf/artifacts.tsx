@@ -18,6 +18,7 @@ async function run() {
   check(!!document.querySelector('[role="dialog"] img'), `Local image link did not open a preview: ${document.body.innerText}; fetched=${fetched.join(",")}; images=${document.querySelectorAll("img").length}`)
   check(fetched.includes("/workspace/artifacts/question.png"), "Preview bypassed the thread image endpoint")
   const image = document.querySelector<HTMLImageElement>('[role="dialog"] img')!
+  await Promise.race([image.decode(), sleep(3000).then(() => { throw new Error("Preview image decoding timed out") })])
   check(image.complete && image.naturalWidth > 0, "Preview image did not decode")
   for (const source of ["file:///workspace/artifacts/first%20pass.png", "artifacts/next.png"]) {
     render(`[Preview](${source})`)
