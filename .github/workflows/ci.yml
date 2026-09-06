@@ -99,3 +99,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs interaction
+      - name: Native WebKit question forms
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs questions

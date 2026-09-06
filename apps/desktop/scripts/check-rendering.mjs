@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["rendering", "materials", "scaling", "interaction"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["rendering", "materials", "scaling", "interaction", "questions"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 try {
   const dist = path.join(scratch, "dist")

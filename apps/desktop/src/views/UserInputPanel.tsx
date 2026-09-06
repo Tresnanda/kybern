@@ -63,27 +63,31 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
     } catch (error) { setError(errorText(error)) }
   }
 
-  return <ComposerStackedPanel className="t-border-beam overflow-hidden !rounded-b-xl">
-    <form onSubmit={onSubmit} className="flex max-h-[min(32rem,65dvh)] flex-col text-[length:var(--app-font-size-ui)]">
-      <div className="px-4 pt-4 pb-3">
-        <h2 className="font-semibold text-foreground">{count > 1 ? `Your input is needed · ${count} requests` : "Your input is needed"}</h2>
-        {!questions.length && <p className="mt-1 leading-relaxed text-muted-foreground">{approval.summary}</p>}
+  return <ComposerStackedPanel className="question-panel overflow-hidden !rounded-b-xl border-b">
+    <form onSubmit={onSubmit} className="question-panel-form question-panel-form-blocking" aria-label="Answer agent request" aria-busy={busy}>
+      <div className="question-panel-header">
+        <h2>{questions.length ? questions.length > 1 ? "Questions" : "Question" : "Input needed"}</h2>
+        {count > 1 && <span className="question-panel-count">{count} requests</span>}
       </div>
-      <fieldset disabled={busy} className="min-h-0 space-y-5 overflow-y-auto overscroll-contain px-4 pb-3">
-        {questions.map((q, index) => <fieldset key={q.id} className="space-y-2">
-          <legend className="mb-2 leading-relaxed font-medium text-foreground">{questions.length > 1 && `${index + 1}. `}{q.title}</legend>
+      <fieldset disabled={busy} className="question-panel-body">
+        {!questions.length && <p className="question-panel-title">{approval.summary}</p>}
+        {questions.map((q, index) => <fieldset key={q.id} className="question-panel-question">
+          <legend className="question-panel-title">{questions.length > 1 && `${index + 1}. `}{q.title}</legend>
           {q.multiple && <p className="text-xs text-muted-foreground">Select all that apply.</p>}
-          {q.options.map((option) => <label key={option.label} className="flex cursor-pointer items-start gap-2.5 rounded-lg bg-[var(--color-background-button-secondary)] px-3 py-2 has-checked:ring-1 has-checked:ring-[var(--color-border-focus)]">
-            <input type={q.multiple ? "checkbox" : "radio"} name={`${id}:${q.id}`} checked={(selected[q.id] ?? []).includes(option.label)} className="mt-1 accent-[var(--color-text-foreground)]" onChange={() => {
+          {q.options.map((option) => <label key={option.label} className="question-panel-option">
+            <input type={q.multiple ? "checkbox" : "radio"} name={`${id}:${q.id}`} checked={(selected[q.id] ?? []).includes(option.label)} className="question-panel-choice" onChange={() => {
               setSelected((previous) => ({ ...previous, [q.id]: q.multiple ? (previous[q.id] ?? []).includes(option.label) ? previous[q.id]!.filter((v) => v !== option.label) : [...previous[q.id] ?? [], option.label] : [option.label] }))
               if (!q.multiple) setCustom((previous) => ({ ...previous, [q.id]: "" }))
             }} />
             <span className="min-w-0 leading-relaxed"><span className="font-medium">{option.label}</span>{option.description && <span className="block text-xs text-muted-foreground">{option.description}</span>}</span>
           </label>)}
-          {(q.custom || !q.options.length) && <label className="block space-y-1.5 text-xs text-muted-foreground"><span>{q.options.length ? "Write an answer" : "Answer"}</span><input type={q.secret ? "password" : "text"} autoComplete="off" className={FIELD} value={custom[q.id] ?? ""} onChange={(event) => {
+          {(q.custom || !q.options.length) && <label className="question-panel-answer"><span>{q.options.length ? q.multiple ? "Add an answer" : "Or write an answer" : "Your answer"}</span>{q.secret ? <input type="password" autoComplete="off" className="question-panel-field" value={custom[q.id] ?? ""} onChange={(event) => {
             setCustom((previous) => ({ ...previous, [q.id]: event.target.value }))
             if (!q.multiple) setSelected((previous) => ({ ...previous, [q.id]: [] }))
-          }} /></label>}
+          }} /> : <textarea rows={3} autoComplete="off" className="question-panel-field" value={custom[q.id] ?? ""} onChange={(event) => {
+            setCustom((previous) => ({ ...previous, [q.id]: event.target.value }))
+            if (!q.multiple) setSelected((previous) => ({ ...previous, [q.id]: [] }))
+          }} />}</label>}
         </fieldset>)}
         {approval.tool_name === "ui_select" && <label className="block space-y-2"><span>Choose an option</span><select className={FIELD} required value={value} onChange={(event) => setValue(event.target.value)}><option value="" disabled>Select…</option>{array(input.options).map((option) => <option key={String(option)}>{String(option)}</option>)}</select></label>}
         {approval.tool_name === "ui_confirm" && <p className="leading-relaxed">{string(input.message)}</p>}
@@ -91,10 +95,13 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
         {elicitation && !isUrl && Object.entries(properties).map(([key, spec]) => <SchemaField key={key} name={key} schema={record(spec)} required={required.includes(key)} />)}
         {isUrl && <div className="space-y-3"><p className="break-all text-xs text-muted-foreground">{url}</p><Button type="button" variant="chrome-outline" size="sm" disabled={!/^https?:\/\//i.test(url)} onClick={() => void openExternal(url).then(() => setUrlOpened(true)).catch((e) => setError(errorText(e)))}>Open in browser</Button><p className="text-xs text-muted-foreground">Complete the request in your browser, then continue.</p></div>}
       </fieldset>
-      {error && <p role="alert" className="px-4 py-2 text-xs text-destructive">{error}</p>}
-      <div className="flex shrink-0 justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
-        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void submit()}>Decline</Button>
-        {approval.tool_name === "ui_confirm" ? <><Button type="button" variant="chrome-outline" size="sm" disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button><Button type="button" size="sm" disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button></> : <Button type="submit" size="sm" disabled={busy || (isUrl && !urlOpened)}><TextSwap text={busy ? "Sending…" : "Submit answer"} /></Button>}
+      {error && <p role="alert" className="question-panel-error">{error}</p>}
+      <div className="question-panel-footer">
+        {!!questions.length && <p className="question-panel-hint">The agent is waiting for your answer.</p>}
+        <div className="question-panel-actions">
+          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void submit()}>Decline</Button>
+          {approval.tool_name === "ui_confirm" ? <><Button type="button" variant="chrome-outline" size="sm" disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button><Button type="button" size="sm" disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button></> : <Button type="submit" size="sm" disabled={busy || (isUrl && !urlOpened)}><TextSwap text={busy ? "Sending…" : questions.length > 1 ? "Send answers" : questions.length ? "Send answer" : "Submit"} /></Button>}
+        </div>
       </div>
     </form>
   </ComposerStackedPanel>
