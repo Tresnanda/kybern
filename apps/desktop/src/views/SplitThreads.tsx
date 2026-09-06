@@ -295,7 +295,7 @@ function SplitThreadPane({
       }
       data-focused={focused}
       data-split-thread-pane={pane.id}
-      className="split-thread-pane relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--color-background-surface)]"
+      className="split-thread-pane relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-transparent"
       onPointerDownCapture={focus}
       onFocusCapture={focus}
     >

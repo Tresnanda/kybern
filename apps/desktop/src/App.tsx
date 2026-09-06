@@ -104,7 +104,8 @@ function Workspace() {
 
       <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
         {sidebarOpen && <ResizeHandle edge="left" label="Resize sidebar" onPointerDown={sidebar.onPointerDown} dragging={sidebar.dragging} className="z-[25]" />}
-        <SidebarInset className="h-dvh min-h-0 overscroll-y-none text-foreground">
+        {/* The content card owns the fill; an opaque inset behind it hides native vibrancy. */}
+        <SidebarInset className="h-dvh min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
           <div
             data-slot="sidebar-inset-surface"
             className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card relative z-[15] overflow-hidden"
