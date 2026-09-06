@@ -111,6 +111,42 @@ ubuntu and macos.
 - Dependencies are exact-pinned; `.npmrc` sets `save-exact` and
   `ignore-scripts`. Check socket.dev before adding a package.
 
+## Performance and visual quality
+
+Responsiveness and visual quality are joint acceptance criteria. Preserve the
+kit's hierarchy, materials, typography, and useful motion while reducing work.
+Before changing transcripts, Markdown, state subscriptions, navigation rails,
+window materials, or animations, read [the performance guide](apps/desktop/perf/README.md)
+and the report for the affected path. Earlier reports describe historical
+baselines; the guide identifies which follow-up work has already shipped.
+
+- Keep settled turn objects, row keys, Markdown component types, and highlighted
+  DOM stable. A streaming update should invalidate the affected content only.
+- Bound mounted history and large expanded work through the existing virtual
+  rows. Unmount closed details after their exit; preserve selection, focus,
+  wrapping, expansion, reading position, and follow behavior across remounts.
+- Keep large Markdown parsing and syntax highlighting in the existing workers.
+  Retain bounded queues/caches, cancellation, prefix progress, final catch-up,
+  and readable failure fallbacks. Assert actual formatted output as well as text.
+- Derive navigation from transcript data, cache bounded previews, and coalesce
+  geometry reads once per frame. Offscreen messages must remain reachable.
+- Reuse paced streaming and visibility-aware motion. Pause loops offscreen, in
+  hidden windows, and in inactive panes; prefer opacity/transform over repainting
+  colors. Keep typing and interaction feedback immediate.
+- Use one intentional blur layer for a floating surface. Keep structural
+  wrappers compatible with translucency, avoid duplicate pane tints, and verify
+  light/dark, opaque, reduced-transparency, and increased-contrast states.
+- Measure the failing workload before and after; verify appearance alongside
+  timing. Run the relevant native WebKit fixtures under the production CSP,
+  plus the normal checks. A readable fallback, empty list, lost content, or
+  removed visual effect does not count as an optimization.
+
+The v0.1.9 → v0.2.0 M1 synthetic comparison reduced streaming frame-interval
+p95 from 105 ms to 18–19 ms and mounted history messages from 802 to 8. These
+are regression evidence, not a universal frame-rate or battery guarantee.
+Report CPU, commit time, frame intervals, input probes, and energy separately;
+include the workload, runtime, hardware, and limitations with measurements.
+
 ## Verifying UI
 
 There is no GUI test harness. Launch the app against a scratch daemon, drive

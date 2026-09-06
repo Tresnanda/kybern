@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- Redesign agent question forms with clearer hierarchy, multiline answers, quieter choices, and responsive action layouts.
+- Fix context usage warnings turning near-black instead of amber at 80–94% usage.
+- Open local image links in an authenticated in-app preview and provide useful recovery guidance for blocked image paths.
+- Give agents thread-specific artifact guidance and document preview placement in the repository instructions.
+- Preserve the desktop performance findings and visual-quality requirements in AGENTS.md, CLAUDE.md, and the performance guide.
+- Add native WebKit regression checks for question forms and artifact previews.
+
 ## 0.2.0
 
 - Virtualize long conversation histories, expanded tool groups, and agent activity to keep mounted interface work bounded.
