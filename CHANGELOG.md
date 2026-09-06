@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.7
+
+- Reduce running-indicator repaint work and pause looping indicators when they are hidden or offscreen.
+- Fix full-app translucency being hidden by an opaque content wrapper, and avoid stacking an extra tint in split panes.
+- Redesign the context-usage popover with clearer token counts, usage meters, separate account limits, and keyboard access.
+- Keep native ResizeObserver layout diagnostics out of fatal error banners and defer resize work to the next frame.
+- Replace raw interface-error banners with a compact notice with expandable technical details, copy, and dismiss actions.
+- Rebuild the mobile client around native tabs and Liquid Glass surfaces, with updated connection, thread, approval, and settings screens.
+
 ## 0.1.6
 
 - Start drafting immediately while harness discovery refreshes, with cached harness choices on subsequent launches.
