@@ -154,7 +154,6 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsGet::NAME => {
             let p: ThreadsGetParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
-            state.orchestrator.touch_session(p.thread_id).await;
             let store = state.store.clone();
             let id = p.thread_id;
             let (transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands, pending_questions) =

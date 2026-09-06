@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
@@ -69,7 +69,7 @@ struct LiveSession {
     session: Box<dyn AgentSession>,
     /// Last moment the user or the provider touched this session. Idle
     /// release is measured from here.
-    last_activity: std::sync::Mutex<Instant>,
+    last_activity: std::sync::Mutex<SessionActivityTime>,
     /// Set once the daemon decided to close this process on purpose, so the
     /// provider's exit is not reported as a failure.
     released: AtomicBool,
@@ -84,6 +84,26 @@ struct LiveSession {
     deferred_checkpoints: Mutex<HashSet<TurnId>>,
     /// Approval id -> provider request id, for pending permission requests.
     pending: Mutex<HashMap<ApprovalId, String>>,
+}
+
+/// Idle expiry includes suspend time, which `Instant` does not count on macOS.
+/// Keep both clocks so moving the wall clock backward cannot extend a session
+/// beyond its normal awake-time limit. A forward clock change can expire an
+/// idle process early; its conversation remains resumable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionActivityTime {
+    monotonic: Instant,
+    wall: SystemTime,
+}
+
+impl SessionActivityTime {
+    fn now() -> Self {
+        Self { monotonic: Instant::now(), wall: SystemTime::now() }
+    }
+
+    fn idle_for(self, now: Instant, wall_now: SystemTime) -> Duration {
+        now.saturating_duration_since(self.monotonic).max(wall_now.duration_since(self.wall).unwrap_or_default())
+    }
 }
 
 struct ActiveTurn {
@@ -140,10 +160,10 @@ impl PendingTurnCompletion {
 
 impl LiveSession {
     fn touch(&self) {
-        *self.last_activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
+        *self.last_activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = SessionActivityTime::now();
     }
 
-    fn last_activity(&self) -> Instant {
+    fn last_activity(&self) -> SessionActivityTime {
         *self.last_activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
@@ -204,14 +224,6 @@ impl Orchestrator {
     /// Resolves the next time a queued follow-up may be ready to dispatch.
     pub async fn queue_changed(&self) {
         self.inner.queue_wakeup.notified().await;
-    }
-
-    /// A client opened or subscribed to this thread. Counts as activity so a
-    /// thread someone is reading keeps its warm process.
-    pub async fn touch_session(&self, thread_id: ThreadId) {
-        if let Some(live) = self.inner.sessions.lock().await.get(&thread_id) {
-            live.touch();
-        }
     }
 
     /// Nothing in the daemon or the provider is using this session: no turn,
@@ -285,10 +297,16 @@ impl Orchestrator {
     /// spare it: every parked session is released after a short grace,
     /// and the warm cap does not apply.
     pub async fn release_idle_sessions(&self, policy: &BackgroundSettings, saving_power: bool) -> Result<Vec<SessionRelease>> {
-        self.release_idle_sessions_at(policy, saving_power, Instant::now()).await
+        self.release_idle_sessions_at(policy, saving_power, Instant::now(), SystemTime::now()).await
     }
 
-    async fn release_idle_sessions_at(&self, policy: &BackgroundSettings, saving_power: bool, now: Instant) -> Result<Vec<SessionRelease>> {
+    async fn release_idle_sessions_at(
+        &self,
+        policy: &BackgroundSettings,
+        saving_power: bool,
+        now: Instant,
+        wall_now: SystemTime,
+    ) -> Result<Vec<SessionRelease>> {
         let (idle_limit, cap, idle_reason) = if saving_power {
             (Some(BackgroundSettings::BATTERY_SESSION_IDLE), None, SessionReleaseReason::Power)
         } else {
@@ -299,25 +317,30 @@ impl Orchestrator {
         let mut parked = Vec::new();
         for (thread_id, live) in snapshot {
             if self.session_parked(thread_id, &live).await? {
-                parked.push((thread_id, live));
+                let last_activity = live.last_activity();
+                parked.push((thread_id, live, last_activity));
             }
         }
-        parked.sort_by_key(|(_, live)| live.last_activity());
+        parked.sort_by_key(|(_, _, last_activity)| last_activity.monotonic);
         let mut planned = Vec::new();
         let mut fresh = Vec::new();
-        for (thread_id, live) in parked {
+        for (thread_id, live, last_activity) in parked {
             match idle_limit {
-                Some(limit) if now.saturating_duration_since(live.last_activity()) >= limit => {
-                    planned.push((thread_id, live, idle_reason));
+                Some(limit) if last_activity.idle_for(now, wall_now) >= limit => {
+                    planned.push((thread_id, live, idle_reason, last_activity));
                 }
-                _ => fresh.push((thread_id, live)),
+                _ => fresh.push((thread_id, live, last_activity)),
             }
         }
         if let Some(cap) = cap
             && fresh.len() > cap
         {
             let excess = fresh.len() - cap;
-            planned.extend(fresh.drain(..excess).map(|(thread_id, live)| (thread_id, live, SessionReleaseReason::Capacity)));
+            planned.extend(
+                fresh
+                    .drain(..excess)
+                    .map(|(thread_id, live, last_activity)| (thread_id, live, SessionReleaseReason::Capacity, last_activity)),
+            );
         }
         if planned.is_empty() {
             return Ok(Vec::new());
@@ -325,11 +348,13 @@ impl Orchestrator {
         let mut claimed = Vec::new();
         {
             let mut sessions = self.inner.sessions.lock().await;
-            for (thread_id, live, reason) in planned {
+            for (thread_id, live, reason, last_activity) in planned {
                 if !sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, &live)) {
                     continue;
                 }
-                if !self.session_parked(thread_id, &live).await? {
+                if !self.session_parked(thread_id, &live).await? || live.last_activity() != last_activity {
+                    // Work can start and finish while the sweep is selecting
+                    // candidates. Give that newly quiet session its full grace.
                     continue;
                 }
                 let (done, waiting) = tokio::sync::watch::channel(());
@@ -1321,7 +1346,7 @@ impl Orchestrator {
         let SpawnedSession { session, events } = driver.spawn(config).await?;
         let live = Arc::new(LiveSession {
             session,
-            last_activity: std::sync::Mutex::new(Instant::now()),
+            last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
             turn: Mutex::new(None),
             last_turn_id: Mutex::new(None),
@@ -2089,9 +2114,12 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime};
 
-    use super::{ActiveTurn, LiveSession, Orchestrator, generic_runtime_task, generic_runtime_task_for_provider, output_indicates_running};
+    use super::{
+        ActiveTurn, LiveSession, Orchestrator, SessionActivityTime, generic_runtime_task, generic_runtime_task_for_provider,
+        output_indicates_running,
+    };
     use crate::config::Paths;
     use crate::settings::SettingsStore;
     use kybern_drivers::registry::DriverRegistry;
@@ -2273,7 +2301,7 @@ mod tests {
         };
         let live = Arc::new(LiveSession {
             session: Box::new(TestSession::default()),
-            last_activity: std::sync::Mutex::new(Instant::now()),
+            last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
             turn: Mutex::new(Some(ActiveTurn {
                 id: turn_id,
@@ -2514,7 +2542,7 @@ mod tests {
             let messages = Arc::new(Mutex::new(Vec::new()));
             let live = Arc::new(LiveSession {
                 session: Box::new(TestSession { closes: closes.clone(), messages: messages.clone() }),
-                last_activity: std::sync::Mutex::new(last_activity),
+                last_activity: std::sync::Mutex::new(SessionActivityTime { monotonic: last_activity, wall: SystemTime::now() }),
                 released: AtomicBool::new(false),
                 turn: Mutex::new(None),
                 last_turn_id: Mutex::new(None),
@@ -2779,11 +2807,13 @@ mod tests {
         let started = Instant::now();
         let (_, closes) = fixture.park(&thread, started).await;
 
-        let early = fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 9 * MINUTE).await.unwrap();
+        let early =
+            fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 9 * MINUTE, SystemTime::now()).await.unwrap();
         assert!(early.is_empty());
         assert!(fixture.has_session(&thread).await);
 
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 10 * MINUTE).await.unwrap();
+        let released =
+            fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 10 * MINUTE, SystemTime::now()).await.unwrap();
         assert_eq!(released, vec![super::SessionRelease { thread_id: thread.id, reason: SessionReleaseReason::Idle }]);
         assert_eq!(closes.load(Ordering::SeqCst), 1);
         assert!(!fixture.has_session(&thread).await);
@@ -2804,7 +2834,7 @@ mod tests {
         let (_, closes) = fixture.park(&older, started - BackgroundSettings::BATTERY_SESSION_IDLE).await;
 
         // The generous policy would keep both; on battery the older one goes now.
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(30, 4), true, started).await.unwrap();
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(30, 4), true, started, SystemTime::now()).await.unwrap();
         assert_eq!(released, vec![super::SessionRelease { thread_id: older.id, reason: SessionReleaseReason::Power }]);
         assert_eq!(closes.load(Ordering::SeqCst), 1);
         assert!(fixture.has_session(&fresh).await, "a session inside the grace period is kept");
@@ -2812,7 +2842,7 @@ mod tests {
 
         let released = fixture
             .orchestrator
-            .release_idle_sessions_at(&policy(30, 4), true, started + BackgroundSettings::BATTERY_SESSION_IDLE)
+            .release_idle_sessions_at(&policy(30, 4), true, started + BackgroundSettings::BATTERY_SESSION_IDLE, SystemTime::now())
             .await
             .unwrap();
         assert_eq!(released.len(), 1);
@@ -2820,14 +2850,114 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_a_thread_counts_as_activity() {
+    async fn sleeping_past_the_idle_deadline_releases_sessions_below_the_warm_cap() {
+        let fixture = Fixture::new();
+        let first = fixture.thread(ThreadStatus::Idle);
+        let second = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now();
+        let (_, first_closes) = fixture.park(&first, started).await;
+        let (_, second_closes) = fixture.park(&second, started).await;
+
+        let before_deadline = SystemTime::now() + 9 * MINUTE;
+        assert!(fixture.orchestrator.release_idle_sessions_at(&policy(10, 4), false, started, before_deadline).await.unwrap().is_empty());
+
+        // macOS can suspend the monotonic clock while wall time advances.
+        // Neither agent has accumulated ten minutes of awake time.
+        let after_sleep = SystemTime::now() + 60 * MINUTE;
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(10, 4), false, started + MINUTE, after_sleep).await.unwrap();
+        assert_eq!(released.len(), 2, "the first sweep after an hour asleep must close both idle processes");
+        assert_eq!(first_closes.load(Ordering::SeqCst), 1);
+        assert_eq!(second_closes.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.release_events(&first), vec![SessionReleaseReason::Idle]);
+        assert_eq!(fixture.release_events(&second), vec![SessionReleaseReason::Idle]);
+    }
+
+    #[tokio::test]
+    async fn reopening_and_subscribing_do_not_extend_an_idle_session() {
+        use axum::{Router, routing::get};
+        use kybern_client::{Client, Endpoint};
+        use kybern_protocol::methods::*;
+
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now() - 11 * MINUTE;
+        let (live, closes) = fixture.park(&thread, started).await;
+        let last_activity = live.last_activity();
+        let paths = Paths::resolve(Some(fixture.root.clone())).unwrap();
+        let mut state = crate::state::AppState::initialize(&paths).unwrap();
+        let inner = Arc::get_mut(&mut state.inner).unwrap();
+        inner.store = fixture.store.clone();
+        inner.orchestrator = fixture.orchestrator.clone();
+        // Authentication uses the same in-memory store as the fixture.
+        inner.bootstrap_token = crate::auth::ensure_bootstrap(&inner.store, &paths.token_file).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = Endpoint { url: format!("ws://{}/ws", listener.local_addr().unwrap()), token: state.bootstrap_token.clone() };
+        let app = Router::new().route("/ws", get(crate::ws::upgrade)).with_state(state);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = Client::connect(&endpoint).await.unwrap();
+        client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id }).await.unwrap();
+        client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None }).await.unwrap();
+        client.call::<DaemonActivityMethod>(Empty {}).await.unwrap();
+        server.abort();
+
+        assert_eq!(live.last_activity(), last_activity, "reading or reconnecting must not refresh the process lifetime");
+        let released = fixture.orchestrator.release_idle_sessions(&policy(10, 4), false).await.unwrap();
+        assert_eq!(released.len(), 1);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn battery_idle_grace_counts_sleep_time() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
         let started = Instant::now();
-        let (live, _) = fixture.park(&thread, started - 5 * MINUTE).await;
-        fixture.orchestrator.touch_session(thread.id).await;
-        assert!(live.last_activity() >= started);
-        fixture.orchestrator.touch_session(Uuid::now_v7()).await;
+        let (live, closes) = fixture.park(&thread, started).await;
+        let wall = live.last_activity().wall;
+        let before = fixture
+            .orchestrator
+            .release_idle_sessions_at(&policy(30, 4), true, started, wall + MINUTE - Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert!(before.is_empty());
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(30, 4), true, started, wall + MINUTE).await.unwrap();
+        assert_eq!(released, vec![super::SessionRelease { thread_id: thread.id, reason: SessionReleaseReason::Power }]);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn backward_wall_clock_changes_do_not_extend_the_awake_idle_limit() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now();
+        let (live, closes) = fixture.park(&thread, started).await;
+        let wall = live.last_activity().wall - 60 * MINUTE;
+        let early = fixture.orchestrator.release_idle_sessions_at(&policy(10, 4), false, started + 9 * MINUTE, wall).await.unwrap();
+        assert!(early.is_empty());
+        let released = fixture.orchestrator.release_idle_sessions_at(&policy(10, 4), false, started + 10 * MINUTE, wall).await.unwrap();
+        assert_eq!(released.len(), 1);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn activity_during_idle_candidate_selection_keeps_the_session() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let started = Instant::now() - 11 * MINUTE;
+        let (live, closes) = fixture.park(&thread, started).await;
+        let policy = policy(10, 4);
+        let turn = live.turn.lock().await;
+        let mut sweep = std::pin::pin!(fixture.orchestrator.release_idle_sessions(&policy, false));
+        // Stop after snapshotting the map, before checking whether it is parked.
+        assert!(futures::poll!(&mut sweep).is_pending());
+        let sessions = fixture.orchestrator.inner.sessions.lock().await;
+        drop(turn);
+        // Finish candidate selection, but block the claim of that candidate.
+        assert!(futures::poll!(&mut sweep).is_pending());
+        live.touch();
+        drop(sessions);
+        assert!(sweep.await.unwrap().is_empty());
+        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        assert!(fixture.has_session(&thread).await);
     }
 
     #[tokio::test]
@@ -2836,7 +2966,8 @@ mod tests {
         let thread = fixture.thread(ThreadStatus::Failed);
         let started = Instant::now();
         let (_, closes) = fixture.park(&thread, started).await;
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(1, 0), false, started + MINUTE).await.unwrap();
+        let released =
+            fixture.orchestrator.release_idle_sessions_at(&policy(1, 0), false, started + MINUTE, SystemTime::now()).await.unwrap();
         assert_eq!(released.len(), 1);
         assert_eq!(closes.load(Ordering::SeqCst), 1);
     }
@@ -2905,8 +3036,10 @@ mod tests {
         let (approval_live, approval_closes) = fixture.park(&with_approval, started).await;
         approval_live.pending.lock().await.insert(Uuid::now_v7(), "req-1".into());
 
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(1, 1), false, later).await.unwrap();
-        assert!(released.is_empty());
+        for (monotonic, wall) in [(later, SystemTime::now()), (started, SystemTime::now() + 60 * MINUTE)] {
+            let released = fixture.orchestrator.release_idle_sessions_at(&policy(1, 1), false, monotonic, wall).await.unwrap();
+            assert!(released.is_empty(), "neither awake time nor sleep can expire active work");
+        }
         for closes in [running_closes, approving_closes, turn_closes, task_closes, approval_closes] {
             assert_eq!(closes.load(Ordering::SeqCst), 0);
         }
@@ -2926,7 +3059,8 @@ mod tests {
         let (_, middle_closes) = fixture.park(&middle, started + MINUTE).await;
         let (_, newest_closes) = fixture.park(&newest, started + 2 * MINUTE).await;
 
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(30, 2), false, started + 3 * MINUTE).await.unwrap();
+        let released =
+            fixture.orchestrator.release_idle_sessions_at(&policy(30, 2), false, started + 3 * MINUTE, SystemTime::now()).await.unwrap();
         assert_eq!(released, vec![super::SessionRelease { thread_id: oldest.id, reason: SessionReleaseReason::Capacity }]);
         assert_eq!(oldest_closes.load(Ordering::SeqCst), 1);
         assert_eq!(middle_closes.load(Ordering::SeqCst), 0);
@@ -2934,7 +3068,8 @@ mod tests {
         assert_eq!(fixture.release_events(&oldest), vec![SessionReleaseReason::Capacity]);
 
         // Expired sessions do not count against the cap; both rules apply in one pass.
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(2, 1), false, started + 4 * MINUTE).await.unwrap();
+        let released =
+            fixture.orchestrator.release_idle_sessions_at(&policy(2, 1), false, started + 4 * MINUTE, SystemTime::now()).await.unwrap();
         let mut reasons: Vec<_> = released.iter().map(|r| (r.thread_id, r.reason)).collect();
         reasons.sort_by_key(|(thread_id, _)| *thread_id);
         let mut expected = vec![(middle.id, SessionReleaseReason::Idle), (newest.id, SessionReleaseReason::Idle)];
@@ -2950,12 +3085,15 @@ mod tests {
         let started = Instant::now();
         let (live, closes) = fixture.park(&thread, started).await;
 
+        live.last_activity.lock().unwrap().wall -= 60 * MINUTE;
         live.touch();
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 10 * MINUTE).await.unwrap();
+        let released =
+            fixture.orchestrator.release_idle_sessions_at(&policy(10, 0), false, started + 10 * MINUTE, SystemTime::now()).await.unwrap();
         assert!(released.is_empty(), "a touch just now keeps the session warm");
 
         let far = started + 24 * 60 * MINUTE;
-        let released = fixture.orchestrator.release_idle_sessions_at(&policy(0, 0), false, far).await.unwrap();
+        let released =
+            fixture.orchestrator.release_idle_sessions_at(&policy(0, 0), false, far, SystemTime::now() + 24 * 60 * MINUTE).await.unwrap();
         assert!(released.is_empty(), "zero disables both limits");
         assert_eq!(closes.load(Ordering::SeqCst), 0);
         assert!(fixture.has_session(&thread).await);

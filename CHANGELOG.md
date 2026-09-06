@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Count time asleep toward idle agent expiry, so overdue processes close on the first cleanup sweep after waking.
+- Stop opening threads, reconnecting, and subscribing to events from extending idle agent lifetimes. Conversations still resume on the next message.
+- Preserve active work and approval waits, and recheck activity before closing a selected idle process.
+
 ## 0.2.1
 
 - Redesign agent question forms with clearer hierarchy, multiline answers, quieter choices, and responsive action layouts.
