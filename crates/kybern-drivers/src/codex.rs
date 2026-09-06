@@ -340,7 +340,9 @@ impl AgentDriver for CodexDriver {
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                deferred_notifications: Vec::new(),
                 thread_id: None,
                 turn_id: None,
                 mode: config.permission_mode,
@@ -397,14 +399,7 @@ impl AgentDriver for CodexDriver {
             .ok_or_else(|| DriverError::Protocol(format!("{method}: no thread id in response")))?
             .to_string();
         let model = resp.get("model").and_then(|m| m.as_str()).map(str::to_string);
-        {
-            let mut st = session.state.lock().await;
-            st.thread_id = Some(thread_id.clone());
-            if model.is_some() {
-                st.model = model.clone();
-            }
-        }
-        session.emit(DriverEvent::SessionBound { session_id: thread_id, model }).await;
+        session.bind_thread(thread_id, model).await;
         let usage_session = session.clone();
         lifetime.track(tokio::spawn(async move {
             if let Ok(value) = usage_session.call("account/rateLimits/read", json!({})).await
@@ -440,6 +435,7 @@ fn sandbox_policy_for(mode: PermissionMode, cwd: &std::path::Path) -> Value {
 }
 
 struct State {
+    deferred_notifications: Vec<(String, Value)>,
     thread_id: Option<String>,
     turn_id: Option<String>,
     mode: PermissionMode,
@@ -460,6 +456,7 @@ struct State {
 }
 
 struct CodexSession {
+    notification_gate: Mutex<()>,
     child: Arc<NdjsonChild>,
     events: mpsc::Sender<DriverEvent>,
     next_id: AtomicI64,
@@ -806,9 +803,12 @@ impl CodexSession {
         }
     }
 
-    async fn ensure_subagent(&self, thread_id: &str) {
+    async fn ensure_subagent(&self, thread_id: &str) -> bool {
         let is_new = {
             let mut state = self.state.lock().await;
+            if state.thread_id.as_deref().is_none_or(|root| root == thread_id) {
+                return false;
+            }
             if let std::collections::hash_map::Entry::Vacant(entry) = state.subagents.entry(thread_id.to_string()) {
                 entry.insert(None);
                 true
@@ -837,10 +837,13 @@ impl CodexSession {
             }))
             .await;
         }
+        true
     }
 
     async fn handle_subagent_notification(&self, thread_id: &str, method: &str, p: &Value) {
-        self.ensure_subagent(thread_id).await;
+        if !self.ensure_subagent(thread_id).await {
+            return;
+        }
         match method {
             "turn/started" => {
                 let turn_id = p.pointer("/turn/id").and_then(Value::as_str).map(str::to_string);
@@ -973,7 +976,37 @@ impl CodexSession {
         }
     }
 
+    // Serialize binding with notifications so early root events are replayed in
+    // wire order only after the start/resume/fork response identifies the root.
+    async fn bind_thread(&self, thread_id: String, model: Option<String>) {
+        let _gate = self.notification_gate.lock().await;
+        let deferred = {
+            let mut state = self.state.lock().await;
+            state.thread_id = Some(thread_id.clone());
+            if model.is_some() {
+                state.model = model.clone();
+            }
+            std::mem::take(&mut state.deferred_notifications)
+        };
+        self.emit(DriverEvent::SessionBound { session_id: thread_id, model }).await;
+        for (method, params) in deferred {
+            self.handle_bound_notification(&method, &params).await;
+        }
+    }
+
     async fn handle_notification(&self, method: &str, p: &Value) {
+        let _gate = self.notification_gate.lock().await;
+        {
+            let mut state = self.state.lock().await;
+            if state.thread_id.is_none() {
+                state.deferred_notifications.push((method.to_string(), p.clone()));
+                return;
+            }
+        }
+        self.handle_bound_notification(method, p).await;
+    }
+
+    async fn handle_bound_notification(&self, method: &str, p: &Value) {
         if method == "thread/started" {
             self.handle_thread_started(&p["thread"]).await;
             return;
@@ -1277,7 +1310,9 @@ impl CodexSession {
                 }
                 if let Some(states) = item.get("agentsStates").and_then(Value::as_object) {
                     for (thread_id, state) in states {
-                        self.ensure_subagent(thread_id).await;
+                        if !self.ensure_subagent(thread_id).await {
+                            continue;
+                        }
                         let status = codex_agent_status(state.get("status").and_then(Value::as_str).unwrap_or("running"));
                         let update = DriverRuntimeTaskUpdate {
                             id: thread_id.clone(),
@@ -1300,7 +1335,9 @@ impl CodexSession {
             }
             "subAgentActivity" => {
                 let Some(thread_id) = item.get("agentThreadId").and_then(Value::as_str) else { return };
-                self.ensure_subagent(thread_id).await;
+                if !self.ensure_subagent(thread_id).await {
+                    return;
+                }
                 let status = match item.get("kind").and_then(Value::as_str).unwrap_or("started") {
                     "interrupted" => RuntimeTaskStatus::Interrupted,
                     "completed" => RuntimeTaskStatus::Completed,
@@ -1634,7 +1671,9 @@ mod tests {
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                deferred_notifications: Vec::new(),
                 thread_id: Some("test".into()),
                 turn_id: None,
                 mode: PermissionMode::Supervised,
@@ -1851,7 +1890,9 @@ wait
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                deferred_notifications: Vec::new(),
                 thread_id: Some("test".into()),
                 turn_id: None,
                 mode: PermissionMode::Supervised,
@@ -1889,6 +1930,73 @@ wait
             .await;
         let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("missing account usage") };
         assert_eq!(usage.limits.unwrap()[0].used_percent, 42.0);
+        child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn early_resume_notifications_never_register_the_root_as_a_subagent() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(64);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                deferred_notifications: Vec::new(),
+                thread_id: None,
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+
+        // Codex may notify before returning thread/resume (also start/fork).
+        session.handle_notification("turn/started", &json!({"threadId":"root", "turn":{"id":"root-turn"}})).await;
+        session.handle_notification("item/agentMessage/delta", &json!({"threadId":"root", "itemId":"message", "delta":"root prose"})).await;
+        session.handle_notification("turn/started", &json!({"threadId":"child", "turn":{"id":"child-turn"}})).await;
+        assert!(rx.try_recv().is_err());
+        assert!(session.state.lock().await.subagents.is_empty());
+        session.bind_thread("root".into(), None).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::SessionBound { session_id, .. }) if session_id == "root"));
+        assert_eq!(session.state.lock().await.turn_id.as_deref(), Some("root-turn"));
+        assert!(session.state.lock().await.subagents.contains_key("child"));
+        assert!(!session.ensure_subagent("root").await);
+        session.handle_notification("item/started", &json!({"threadId":"root", "item":{"type":"collabAgentToolCall", "id":"collab", "receiverThreadIds":["root"], "agentsStates":{"root":{"status":"running"}}}})).await;
+        session
+            .handle_notification(
+                "item/started",
+                &json!({"threadId":"root", "item":{"type":"subAgentActivity", "id":"activity", "agentThreadId":"root"}}),
+            )
+            .await;
+        let mut child_started = false;
+        let mut root_prose = String::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                DriverEvent::TextDelta { origin: EventOrigin::Root, delta, .. } => root_prose.push_str(&delta),
+                DriverEvent::RuntimeTaskStarted(task) => {
+                    assert_ne!(task.id, "root");
+                    child_started |= task.id == "child";
+                }
+                DriverEvent::RuntimeTaskUpdated(task) | DriverEvent::RuntimeTaskCompleted(task) => assert_ne!(task.id, "root"),
+                _ => {}
+            }
+        }
+        assert!(child_started, "real child activity must still be delivered");
+        assert_eq!(root_prose, "root prose", "early root prose must survive binding");
+        assert!(!session.state.lock().await.subagents.contains_key("root"));
         child.kill().await;
     }
 

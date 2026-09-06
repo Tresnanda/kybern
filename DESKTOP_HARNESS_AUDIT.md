@@ -121,7 +121,7 @@ from this macOS environment.
 
 ## Verification
 
-- 44 Rust driver unit/regression tests with fake processes; no real live-driver turns.
+- 45 Rust driver unit/regression tests with fake processes; no real live-driver turns.
 - 59 daemon tests with isolated stores, including active-session protection and resume barriers.
 - 10 protocol tests; schemas reviewed and the additive event snapshot updated.
 - 8 store tests and 71 frontend tests, including sparse quota merges and context shrinkage.
@@ -134,3 +134,13 @@ from this macOS environment.
 
 All builds use the new worktree's own `target` and frontend output. No merge,
 installation, release, main-daemon restart, or mobile edits were performed.
+
+## Follow-up: phantom subagent on Codex resume
+
+Early notifications were routed before the start/resume/fork response bound the
+root thread ID. Comparing a notification ID against `None` classified the root
+as child activity. Notifications now wait for root binding and replay in order
+under a notification lock. Root IDs are also rejected by the shared subagent
+registration path and collaboration-item updates. A regression covers early
+root turns and prose, genuine child activity, and self-referencing collaboration
+items. Existing stored phantom rows are not rewritten by this change.
