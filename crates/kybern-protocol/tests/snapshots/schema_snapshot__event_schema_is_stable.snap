@@ -509,6 +509,22 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "type": "object",
+      "properties": {
+        "usage": {
+          "$ref": "#/$defs/ProviderUsage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "provider_usage_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "usage"
+      ]
+    },
+    {
       "description": "Provider emitted an informational notice (compaction, status, warnings).",
       "type": "object",
       "properties": {
@@ -1371,6 +1387,81 @@ expression: schema_for!(ThreadEvent)
         "interrupted",
         "max_turns",
         "error"
+      ]
+    },
+    "ProviderUsage": {
+      "description": "Authoritative context occupancy, distinct from cumulative billable tokens.",
+      "type": "object",
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/UsageLimit"
+          }
+        }
+      }
+    },
+    "ContextUsage": {
+      "type": "object",
+      "properties": {
+        "used_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "window_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "used_tokens",
+        "window_tokens"
+      ]
+    },
+    "UsageLimit": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "used_percent": {
+          "type": "number",
+          "format": "double"
+        },
+        "window_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "resets_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "used_percent"
       ]
     },
     "NoticeLevel": {

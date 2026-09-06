@@ -84,6 +84,7 @@ export function ThreadView({
   showSidebarControls?: boolean
 }) {
   const thread = useStore((s) => s.threads[threadId])
+  const providerUsage = useStore((s) => s.transcripts[threadId]?.providerUsage)
   const loaded = useStore((s) => s.transcripts[threadId]?.loaded)
   const pending = useStore((s) => s.transcripts[threadId]?.pendingApprovals ?? EMPTY)
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
@@ -208,6 +209,8 @@ export function ThreadView({
         >
           <div className="pointer-events-auto">
             <Composer
+              showProviderUsage
+              providerUsage={providerUsage}
               draftKey={`thread:${threadId}`}
               ref={composer}
               placeholder={placeholder}

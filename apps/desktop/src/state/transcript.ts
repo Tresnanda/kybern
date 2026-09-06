@@ -1,3 +1,4 @@
+import type { ProviderUsage } from "@/protocol"
 // Client-side transcript projection. Seeds from `threads.get`, then folds live
 // `ThreadEvent`s into blocks the views render directly.
 
@@ -76,6 +77,7 @@ export interface ThreadState {
   blocks: Block[]
   pendingApprovals: ApprovalRequest[]
   checkpoints: Checkpoint[]
+  providerUsage?: ProviderUsage
   lastSeq: number
   loaded: boolean
 }
@@ -91,6 +93,7 @@ export const emptyThreadState = (): ThreadState => ({
 
 export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadState {
   return {
+    providerUsage: res.provider_usage ?? {},
     thread: res.thread,
     blocks: res.transcript.map(entryToBlock).filter((b): b is Block => !!b),
     pendingApprovals: res.pending_approvals,
@@ -328,6 +331,8 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         },
       ]
       break
+    case "provider_usage_updated":
+      return { ...state, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
     case "provider_notice":
       blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: ev.level, text: ev.text }]
       break
@@ -351,7 +356,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     default:
       break
   }
-  return { thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
+  return { providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {
@@ -695,3 +700,12 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
 
 // Stateful module: a hot update would drop the live connection, so reload instead.
 reloadOnHotUpdate(import.meta.hot)
+
+function mergeProviderUsage(previous: ProviderUsage | undefined, next: ProviderUsage): ProviderUsage {
+  const limits = new Map(previous?.limits?.map((limit) => [limit.name, limit]))
+  for (const limit of next.limits ?? []) {
+    const old = limits.get(limit.name)
+    limits.set(limit.name, { ...limit, window_minutes: limit.window_minutes ?? old?.window_minutes ?? null, resets_at: limit.resets_at ?? old?.resets_at ?? null })
+  }
+  return { ...previous, ...next, limits: [...limits.values()] }
+}

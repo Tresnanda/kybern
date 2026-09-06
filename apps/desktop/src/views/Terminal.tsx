@@ -69,8 +69,9 @@ function surfaceColor(): string {
 }
 
 function xtermTheme(dark: boolean) {
-  const bg = surfaceColor()
-  return { ...(dark ? DARK : LIGHT), background: bg, cursorAccent: bg }
+  const glass = getComputedStyle(document.documentElement).getPropertyValue("--app-full-translucency").trim() === "1"
+  const bg = glass ? "#00000000" : surfaceColor()
+  return { ...(dark ? DARK : LIGHT), background: bg, cursorAccent: glass ? (dark ? "#181818" : "#ffffff") : bg }
 }
 
 function useIsDark(): boolean {
@@ -242,7 +243,16 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
   }, [active])
 
   useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = xtermTheme(dark)
+    const update = () => { if (termRef.current) termRef.current.options.theme = xtermTheme(dark) }
+    update()
+    const observer = new MutationObserver(update)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-full-translucency", "data-window-material", "style"] })
+    const preferences = [matchMedia("(prefers-reduced-transparency: reduce)"), matchMedia("(prefers-contrast: more)")]
+    for (const preference of preferences) preference.addEventListener("change", update)
+    return () => {
+      observer.disconnect()
+      for (const preference of preferences) preference.removeEventListener("change", update)
+    }
   }, [dark])
 
   // Coming back on screen: fit to the real box, repaint, tell the pty, focus.
@@ -272,6 +282,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       cursorBlink: true,
       cursorStyle: "bar",
       allowProposedApi: true,
+      allowTransparency: true,
       customGlyphs: true,
       theme: xtermTheme(dark),
       scrollback: 5000,

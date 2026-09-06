@@ -36,6 +36,7 @@ struct Inner {
     paths: Paths,
     settings: SettingsStore,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
+    releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
     /// Threads whose next session must fork the provider conversation at this point.
     pending_rewinds: Mutex<HashMap<ThreadId, RewindPoint>>,
@@ -171,6 +172,7 @@ impl Orchestrator {
                 paths,
                 settings,
                 sessions: Mutex::new(HashMap::new()),
+                releasing: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
                 pending_rewinds: Mutex::new(HashMap::new()),
                 queue_wakeup: Notify::new(),
@@ -280,20 +282,34 @@ impl Orchestrator {
                 if !self.session_parked(thread_id, &live).await? {
                     continue;
                 }
+                let (done, waiting) = tokio::sync::watch::channel(());
+                self.inner.releasing.lock().await.insert(thread_id, waiting);
                 sessions.remove(&thread_id);
                 live.mark_released();
-                claimed.push((thread_id, live, reason));
+                claimed.push((thread_id, live, reason, done));
             }
         }
-        let outcomes = futures::future::join_all(claimed.iter().map(|(_, live, _)| live.session.close())).await;
-        let mut released = Vec::with_capacity(claimed.len());
-        for ((thread_id, _, reason), outcome) in claimed.into_iter().zip(outcomes) {
-            if let Err(error) = outcome {
-                tracing::warn!(%thread_id, %error, "agent process did not close cleanly");
-            }
-            tracing::info!(%thread_id, ?reason, "released idle agent process");
-            self.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason })?;
-            released.push(SessionRelease { thread_id, reason });
+        // Once claimed, cleanup must finish even if the maintenance caller is
+        // cancelled. Keep each resume barrier until its own process is closed.
+        let closing = claimed
+            .into_iter()
+            .map(|(thread_id, live, reason, done)| {
+                let this = self.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = live.session.close().await {
+                        tracing::warn!(%thread_id, %error, "agent process did not close cleanly");
+                    }
+                    this.inner.releasing.lock().await.remove(&thread_id);
+                    drop(done);
+                    tracing::info!(%thread_id, ?reason, "released idle agent process");
+                    this.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason })?;
+                    Ok::<_, anyhow::Error>(SessionRelease { thread_id, reason })
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut released = Vec::with_capacity(closing.len());
+        for outcome in futures::future::join_all(closing).await {
+            released.push(outcome??);
         }
         Ok(released)
     }
@@ -1128,8 +1144,15 @@ impl Orchestrator {
     }
 
     async fn ensure_session(&self, thread: &Thread) -> Result<(Arc<LiveSession>, bool)> {
-        if let Some(live) = self.inner.sessions.lock().await.get(&thread.id).cloned() {
-            return Ok((live, true));
+        let waiting = {
+            let sessions = self.inner.sessions.lock().await;
+            if let Some(live) = sessions.get(&thread.id).cloned() {
+                return Ok((live, true));
+            }
+            self.inner.releasing.lock().await.get(&thread.id).cloned()
+        };
+        if let Some(mut waiting) = waiting {
+            let _ = waiting.changed().await;
         }
         let rewind = self.inner.pending_rewinds.lock().await.remove(&thread.id);
         self.spawn_session(thread, rewind).await.map(|live| (live, false))
@@ -1719,6 +1742,9 @@ impl Orchestrator {
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error })?;
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
+            }
+            DriverEvent::UsageUpdated(usage) => {
+                self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
             }
             DriverEvent::Notice { level, text, data } => {
                 self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data })?;
@@ -2357,6 +2383,23 @@ mod tests {
     }
 
     const MINUTE: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn resume_waits_for_the_previous_writer_to_close() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (done, waiting) = tokio::sync::watch::channel(());
+        fixture.orchestrator.inner.releasing.lock().await.insert(thread.id, waiting);
+        let orchestrator = fixture.orchestrator.clone();
+        let resume = tokio::spawn(async move { orchestrator.ensure_session(&thread).await });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!resume.is_finished(), "must not attempt a second writer during release");
+        drop(done);
+        let result = tokio::time::timeout(Duration::from_secs(1), resume).await.unwrap().unwrap();
+        // This fixture has no drivers: getting this error proves spawn only ran
+        // after the old writer's close barrier completed.
+        assert!(result.is_err());
+    }
 
     #[tokio::test]
     async fn idle_sessions_are_released_after_the_policy_window() {

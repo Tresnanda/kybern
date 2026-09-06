@@ -49,26 +49,27 @@ impl AgentDriver for ClaudeDriver {
         let bin = resolve(ProviderKind::ClaudeCode, binary)?;
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            Command::new(&bin)
-                .current_dir(cwd)
-                .args([
-                    "-p",
-                    "--output-format",
-                    "text",
-                    "--model",
-                    "haiku",
-                    "--max-turns",
-                    "1",
-                    "--no-session-persistence",
-                    "--permission-mode",
-                    "dontAsk",
-                    "--disallowedTools",
-                    "*",
-                ])
-                .arg(prompt)
-                .env_remove("NODE_OPTIONS")
-                .stdin(std::process::Stdio::null())
-                .output(),
+            crate::process_tree::output(
+                Command::new(&bin)
+                    .current_dir(cwd)
+                    .args([
+                        "-p",
+                        "--output-format",
+                        "text",
+                        "--model",
+                        "haiku",
+                        "--max-turns",
+                        "1",
+                        "--no-session-persistence",
+                        "--permission-mode",
+                        "dontAsk",
+                        "--disallowedTools",
+                        "*",
+                    ])
+                    .arg(prompt)
+                    .env_remove("NODE_OPTIONS")
+                    .stdin(std::process::Stdio::null()),
+            ),
         )
         .await
         .map_err(|_| DriverError::Protocol("claude one-shot timed out".into()))??;
@@ -125,6 +126,7 @@ impl AgentDriver for ClaudeDriver {
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), session_id, "spawning claude");
 
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
+        let mut lifetime = crate::ndjson::SessionLifetime::new(child.clone());
         let (tx, rx) = mpsc::channel(1024);
         let session = Arc::new(ClaudeSession {
             child: child.clone(),
@@ -139,9 +141,9 @@ impl AgentDriver for ClaudeDriver {
         session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"] })).await?;
 
         let reader = session.clone();
-        tokio::spawn(async move { reader.read_loop().await });
+        lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
 
-        Ok(SpawnedSession { session: Box::new(SessionHandle(session)), events: rx })
+        Ok(SpawnedSession { session: Box::new(SessionHandle(session, lifetime)), events: rx })
     }
 }
 
@@ -201,8 +203,11 @@ impl ClaudeDriver {
         }
         if status.available {
             let config = crate::claude_config::resolve(context, &bin).await;
-            if let Ok(Ok(output)) =
-                tokio::time::timeout(std::time::Duration::from_secs(2), contextual_command(&bin, context).arg("--help").output()).await
+            if let Ok(Ok(output)) = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                crate::process_tree::output(contextual_command(&bin, context).arg("--help")),
+            )
+            .await
             {
                 let help = String::from_utf8_lossy(&output.stdout);
                 let efforts = claude_efforts(&help);
@@ -342,6 +347,7 @@ fn friendly_model_id(model: &str) -> String {
 
 #[derive(Default)]
 struct TurnState {
+    last_context: Option<(String, u64)>,
     /// Accumulated final text per API message id, so multi-block messages coalesce.
     text: HashMap<String, String>,
     thinking: HashMap<String, String>,
@@ -366,7 +372,7 @@ struct ClaudeSession {
 }
 
 /// Thin wrapper so the daemon owns a `Box<dyn AgentSession>` while the reader task keeps an Arc.
-struct SessionHandle(Arc<ClaudeSession>);
+struct SessionHandle(Arc<ClaudeSession>, #[allow(dead_code)] crate::ndjson::SessionLifetime);
 
 impl ClaudeSession {
     async fn emit(&self, ev: DriverEvent) {
@@ -456,6 +462,26 @@ impl ClaudeSession {
             "result" => self.handle_result(&v).await,
             "rate_limit_event" => {
                 let info = &v["rate_limit_info"];
+                if let (Some(kind), Some(utilization)) =
+                    (info.get("rateLimitType").and_then(Value::as_str), info.get("utilization").and_then(Value::as_f64))
+                {
+                    let (name, window_minutes) = match kind {
+                        "five_hour" => ("5-hour", Some(300)),
+                        "seven_day" => ("Weekly", Some(10080)),
+                        _ => (kind, None),
+                    };
+                    self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                        context: None,
+                        limits: Some(vec![kybern_protocol::UsageLimit {
+                            name: name.into(),
+                            used_percent: utilization * 100.0,
+                            window_minutes,
+                            resets_at: info.get("resetsAt").and_then(Value::as_i64),
+                        }]),
+                    }))
+                    .await;
+                }
+
                 if info.get("status").and_then(|s| s.as_str()).is_some_and(|s| !s.starts_with("allowed") && s != "ok") {
                     self.emit(DriverEvent::Notice {
                         level: NoticeLevel::Warning,
@@ -560,11 +586,10 @@ impl ClaudeSession {
                 let meta = &v["compact_metadata"];
                 self.emit(DriverEvent::Notice {
                     level: NoticeLevel::Info,
-                    text: format!(
-                        "context compacted ({} → {} tokens)",
-                        meta.get("pre_tokens").and_then(|t| t.as_u64()).unwrap_or(0),
-                        meta.get("post_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
-                    ),
+                    text: match meta.get("post_tokens").and_then(Value::as_u64) {
+                        Some(after) => format!("Context compacted to {after} tokens"),
+                        None => "Context compacted".into(),
+                    },
                     data: Some(meta.clone()),
                 })
                 .await;
@@ -670,6 +695,16 @@ impl ClaudeSession {
             self.state.lock().await.last_assistant_uuid = Some(u.to_string());
         }
         let msg = &v["message"];
+        if parent.is_none()
+            && let (Some(model), Some(usage)) = (msg.get("model").and_then(Value::as_str), msg.get("usage"))
+        {
+            let used = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+                .iter()
+                .map(|key| usage.get(*key).and_then(Value::as_u64).unwrap_or(0))
+                .sum();
+            self.state.lock().await.last_context = Some((model.into(), used));
+        }
+
         let message_id = msg.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
         if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
             self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("API error: {err}"), data: Some(msg.clone()) }).await;
@@ -733,6 +768,21 @@ impl ClaudeSession {
     }
 
     async fn handle_result(&self, v: &Value) {
+        let context = self.state.lock().await.last_context.clone();
+        if let Some((model, used_tokens)) = context
+            && let Some(window_tokens) = v
+                .get("modelUsage")
+                .and_then(|models| models.get(&model))
+                .and_then(|model| model.get("contextWindow"))
+                .and_then(Value::as_u64)
+        {
+            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
+                limits: None,
+            }))
+            .await;
+        }
+
         let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
         let usage = v.get("usage").map(parse_usage).unwrap_or_default();
         let duration_ms = v.get("duration_ms").and_then(|d| d.as_u64()).unwrap_or(0);
@@ -1077,12 +1127,7 @@ impl AgentSession for SessionHandle {
     }
 
     async fn close(&self) -> Result<()> {
-        let _ = self.0.child.close_stdin().await;
-        let child = self.0.child.clone();
-        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
-            Ok(_) => {}
-            Err(_) => child.kill().await,
-        }
+        self.0.child.close().await;
         Ok(())
     }
 }
@@ -1103,7 +1148,7 @@ mod tests {
             state: Mutex::new(TurnState::default()),
             session_id: Mutex::new("test".into()),
         });
-        let handle = SessionHandle(session.clone());
+        let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
         let questions = json!([{ "question": "Which sections?", "options": [{"label":"Intro"},{"label":"Summary"}], "multiSelect": true }]);
         session.handle_control_request(&json!({ "request_id": "question", "request": { "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "input": { "questions": questions } } })).await;
         assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == "AskUserQuestion"));

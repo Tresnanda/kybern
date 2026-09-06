@@ -1,0 +1,136 @@
+# Desktop harness audit
+
+Worktree: `ade-desktop-harness-health`; branch: `feat/desktop-harness-health`.
+Kybern baseline: `0409a2c04e8c2855b703d5267598fa739c3684c7`.
+Source review: 2026-09-06. T3Code: `eee05575ebd514db36f61d7eb05d2258a10c96bd`.
+Synara: `562c5fea77cff1dacb29d5e6216ed94a05f1b6a1`.
+
+The baseline references `docs/architecture.md`, `docs/design.md`, and
+`docs/harness-parity.md`, but those files are absent from this checkout.
+The existing kit, theme, composer, and driver contracts were used instead.
+The requested eight design skills informed the implementation. The new ring
+is static; the existing kit supplies tooltip motion and reduced-motion behavior.
+
+## Requested changes
+
+| Request | Result |
+| --- | --- |
+| Faster harness availability | Environment-scoped, 24-hour last-known catalog appears immediately while the authoritative catalog refreshes. Typing is independent of provider discovery; sending still needs a provider. A first-ever probe still takes time. |
+| Subscription limits | Codex account read plus account update notifications; Claude reported rate-limit events. Named windows merge independently and survive thread reload. No credentials are scraped and no missing limits are invented. |
+| Context indicator | Composer ring with focus/hover details, exact reported token counts, quota windows, and local reset times. Codex uses the last context snapshot, not cumulative spending; Claude uses the latest root message and its reported model window; Cursor uses ACP context usage. Pi/OMP use explicit contextUsage when returned by session stats. OpenCode has no new context bridge in this change. |
+| Compaction investigation | Native automatic compaction remains owned by the harness. Start/completion notices improved for Codex and Pi/OMP; Claude no longer displays a fabricated zero post-compaction count. Manual compaction is not exposed by Kybern. See below. |
+| Slash-command investigation | App commands and native skill dispatch exist, but arbitrary terminal-interface commands are not universally supported. See below. |
+| Full translucency | Opt-in Appearance setting extends macOS material to content routes and floating surfaces, including the terminal canvas. Reduced transparency and increased contrast retain opaque content. Native desktop blur requires native verification. |
+| Composer scrolling/spacing | Explicit shared editor metrics, matched scrollbar width, scroll synchronization after resize and native caret scrolling, and disabled automatic text correction/capitalization. Typing stays immediate. |
+| Session/process cleanup | Actual stdin pipe closure; exit waits no longer hold the child mutex; owned process groups/trees; startup/handle lifetime guards; Cursor and OpenCode worker cancellation; release/resume barriers. Only session-owned processes are targeted. |
+
+## Compaction: what Kybern actually does
+
+There is no Kybern summarizer that silently replaces or truncates stored history.
+The agent manages its context; Kybern persists the conversation and provider notices.
+`AgentSession` has no compact method, the RPC registry has no compact operation,
+and the composer has no built-in `/compact` action. Typing `/compact` is not a
+portable way to invoke compaction: an unrecognized slash string is submitted as
+prompt text, and each native protocol decides what that means.
+
+| Harness | Native automatic-compaction integration in Kybern | Manual native surface verified in comparison sources |
+| --- | --- | --- |
+| Codex | `contextCompaction` item start/completion becomes a transcript notice. | `thread/compact/start`; T3Code and Synara invoke it explicitly. |
+| Claude Code | `system/status: compacting` and `compact_boundary` become notices. Resume-return choices also map “Compact and continue” to the native `compact` response. | A terminal slash command is different from an SDK operation. Synara explicitly marks thread compaction unsupported for its Claude adapter. |
+| Pi / OMP | `compaction_start` / `auto_compaction_start` and completion events become notices. | Synara's Pi adapter invokes `session.compact()`. This does not prove identical support in every OMP version. |
+| OpenCode | `session.compacted` becomes a notice. | T3Code and Synara expose native session summarization. |
+| Cursor | ACP context-usage notifications are supported; no explicit compaction control is wired. | Synara marks thread compaction unsupported for Cursor. |
+
+Adding a reliable manual action should use an explicit native operation and
+track its full lifecycle, including concurrent sends, idle release, failure,
+completion, and model/version capability. This change does not pretend that a
+slash prompt is such an operation.
+
+Evidence:
+- [Codex app-server protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+- [T3Code Codex runtime](https://github.com/pingdotgg/t3code/blob/eee05575ebd514db36f61d7eb05d2258a10c96bd/apps/server/src/provider/Layers/CodexSessionRuntime.ts)
+- [T3Code OpenCode adapter](https://github.com/pingdotgg/t3code/blob/eee05575ebd514db36f61d7eb05d2258a10c96bd/apps/server/src/provider/Layers/OpenCodeAdapter.ts)
+- [Synara Codex manager](https://github.com/Emanuele-web04/synara/blob/562c5fea77cff1dacb29d5e6216ed94a05f1b6a1/apps/server/src/codexAppServerManager.ts)
+- [Synara Pi adapter](https://github.com/Emanuele-web04/synara/blob/562c5fea77cff1dacb29d5e6216ed94a05f1b6a1/apps/server/src/provider/Layers/PiAdapter.ts)
+- [Synara Claude adapter](https://github.com/Emanuele-web04/synara/blob/562c5fea77cff1dacb29d5e6216ed94a05f1b6a1/apps/server/src/provider/Layers/ClaudeAdapter.ts)
+- [Synara Cursor adapter](https://github.com/Emanuele-web04/synara/blob/562c5fea77cff1dacb29d5e6216ed94a05f1b6a1/apps/server/src/provider/Layers/CursorAdapter.ts)
+
+Local evidence: `crates/kybern-drivers/src/{lib,codex,claude,pi,opencode,cursor}.rs`,
+`crates/kybern-protocol/src/methods.rs`, `crates/kybern-store/src/projection.rs`,
+`apps/desktop/src/state/transcript.ts`, and `apps/desktop/src/views/{Draft,Thread,Composer}.tsx`.
+
+## Slash commands: three different features
+
+1. **Kybern actions**: `/attach`, `/settings`, `/usage`, and thread actions such as
+   `/changes`, `/terminal`, `/files`, `/activity`, and `/archive` are composer actions.
+2. **Skills/plugins**: discovered through `skills.list` and provider-native catalogs
+   or configured directories. Selecting a skill produces a structured content part.
+3. **Native terminal commands**: not automatically exported by a subprocess's JSON,
+   HTTP, or ACP protocol. Kybern does not proxy every terminal UI command.
+
+| Harness | Selected skill delivery |
+| --- | --- |
+| Codex | Visible `$skill` plus native structured `skill` input; plugins use `mention` input. |
+| Claude Code | Native `/skill-name` invocation; the last selected skill is dispatched as the command. |
+| OpenCode | Native session command contract. |
+| Pi / OMP | `/skill:name` in the native prompt. |
+| Cursor | `/name` as ACP text. |
+
+T3Code has an explicit provider slash-command catalog and a capability-specific
+`compact` command. Synara likewise separates compaction operations and runtime
+capabilities. Neither repository supports the conclusion that all terminal slash
+commands can be forwarded unchanged through every harness protocol.
+
+Evidence: Kybern `crates/kybern-daemon/src/skills.rs`, driver skill-dispatch tests,
+`apps/desktop/src/views/Composer.tsx`,
+[T3Code provider snapshots](https://github.com/pingdotgg/t3code/blob/eee05575ebd514db36f61d7eb05d2258a10c96bd/apps/server/src/provider/providerSnapshot.ts),
+and the pinned adapter sources above.
+
+## Cleanup findings and recovery
+
+`kill_on_drop(true)` alone was insufficient: reader tasks retain `Arc<Session>`,
+so the child may not be dropped when startup fails. Codex and Pi/OMP start their
+reader before fallible protocol setup. Claude also needs ownership independent
+of its reader after successful startup. Each public stdio session now owns a
+lifetime guard that aborts its tasks and closes its own process tree on drop.
+Cursor's startup worker and OpenCode's event worker have cancellation guards.
+
+`AsyncWrite::shutdown` was not an actual pipe drop. Closing stdin now takes and
+drops the pipe. `wait()` used to hold the child mutex across process exit;
+stdout could close first and leave cleanup blocked behind the waiter. The new
+wait loop checks exit under a short lock and permits kill to proceed.
+
+An idle session was removed from the session map before close completed. A new
+send could therefore race its writer lock. A per-thread completion barrier now
+keeps resume behind close. Once idle release is claimed, detached cleanup tasks
+finish it even if the maintenance caller is cancelled. Existing checks for
+turns, approvals, and active background work remain in place.
+
+Process cleanup uses only the process group/tree created for that specific
+spawn. It never searches process names or kills a writer found from an error
+string. A writer-conflict error preserves the source conversation and tells the
+user to let the owning session finish, close it, and retry. It does not silently
+fork/reset history or stop another application's legitimate writer.
+
+Limits: arbitrary pre-existing orphans cannot safely be identified solely from
+a writer-conflict message. SIGKILL/power loss cannot execute Rust cleanup. The
+regressions exercise owned startup failure, cancellation/drop, EOF, blocked
+exit waits, descendants, and ordinary daemon lifecycle paths; they do not claim
+to reclaim every pre-existing orphan or to validate Windows process-tree behavior
+from this macOS environment.
+
+## Verification
+
+- 44 Rust driver unit/regression tests with fake processes; no real live-driver turns.
+- 59 daemon tests with isolated stores, including active-session protection and resume barriers.
+- 10 protocol tests; schemas reviewed and the additive event snapshot updated.
+- 8 store tests and 71 frontend tests, including sparse quota merges and context shrinkage.
+- Rust formatting and affected-crate Clippy checks; desktop typecheck, lint, and production web build. The web build retains its existing large-chunk and mixed-import warnings.
+- Browser renderer against `/tmp/kybern-desktop-harness-health-qa`, using a fake
+  Codex process: long input, capped-editor end scrolling, context ring, keyboard
+  tooltip details, exact token counts, and both quota reset times.
+- Native macOS WindowServer/vibrancy appearance is not visually verified, since
+  the user's running packaged Kybern was deliberately kept open.
+
+All builds use the new worktree's own `target` and frontend output. No merge,
+installation, release, main-daemon restart, or mobile edits were performed.

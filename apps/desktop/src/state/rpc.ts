@@ -1,3 +1,4 @@
+import { writeProviderCache } from "./providerCache"
 // Owns the daemon connection: boots the client, subscribes to every thread's
 // events, folds them into the store, and exposes typed actions for the views.
 
@@ -252,6 +253,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         })
         if (generation === undefined || isCurrentHydration(generation)) {
           useStore.getState().set({ providers: result.providers })
+          if (!projectId) writeProviderCache(useStore.getState().environmentId, result.providers)
         }
         return result.providers
       } finally {

@@ -122,6 +122,9 @@ pub enum EventPayload {
     TurnFailed {
         error: String,
     },
+    ProviderUsageUpdated {
+        usage: ProviderUsage,
+    },
     /// Provider emitted an informational notice (compaction, status, warnings).
     ProviderNotice {
         level: NoticeLevel,

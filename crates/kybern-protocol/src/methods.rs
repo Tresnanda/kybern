@@ -217,6 +217,8 @@ pub struct ThreadsGetParams {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
+    #[serde(default)]
+    pub provider_usage: crate::ProviderUsage,
     pub thread: Thread,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_approvals: Vec<ApprovalRequest>,

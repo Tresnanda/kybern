@@ -10,9 +10,10 @@ pub mod claude;
 mod claude_config;
 pub mod codex;
 pub mod cursor;
-pub mod ndjson;
+mod ndjson;
 pub mod opencode;
 pub mod pi;
+pub mod process_tree;
 pub mod registry;
 pub mod update;
 
@@ -209,6 +210,7 @@ pub enum DriverEvent {
     TurnFailed {
         error: String,
     },
+    UsageUpdated(kybern_protocol::ProviderUsage),
     Notice {
         level: NoticeLevel,
         text: String,
@@ -283,5 +285,39 @@ pub fn summarize_tool_call(name: &str, input: &Value) -> String {
         "Read" | "read" => short("file_path").or_else(|| short("path")).map(|p| format!("read: {p}")).unwrap_or_else(|| name.to_string()),
         "WebFetch" | "webfetch" => short("url").map(|u| format!("fetch: {u}")).unwrap_or_else(|| name.to_string()),
         _ => name.to_string(),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod lifecycle_tests {
+    use super::*;
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+
+    #[tokio::test]
+    async fn every_driver_cleans_up_cancelled_startup_or_dropped_handle() {
+        let registry = registry::DriverRegistry::with_defaults();
+        for kind in ProviderKind::ALL {
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("harness-fixture");
+            std::fs::write(&binary, "#!/bin/sh\n(sleep 0.3; touch escaped) &\ncat >/dev/null\nwait\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let config = SessionConfig {
+                cwd: root.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: PermissionMode::Supervised,
+                resume_session_id: None,
+                fork: false,
+                rewind: None,
+                binary: Some(binary),
+                env: std::collections::HashMap::new(),
+            };
+            let result = tokio::time::timeout(Duration::from_millis(80), registry.get(kind).unwrap().spawn(config)).await;
+            // Claude can finish its non-blocking startup; the others wait for
+            // a protocol handshake. Both ownership paths must close descendants.
+            drop(result);
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert!(!root.path().join("escaped").exists(), "{kind} left a startup descendant running");
+        }
     }
 }

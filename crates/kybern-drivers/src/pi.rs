@@ -126,7 +126,7 @@ async fn model_command_output(bin: &std::path::Path, args: &[&str], context: &Pr
     for (key, value) in &context.env {
         command.env(key, value);
     }
-    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, command.output()).await {
+    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, crate::process_tree::output(&mut command)).await {
         Ok(Ok(output)) if output.status.success() => Some(output.stdout),
         _ => None,
     }
@@ -244,6 +244,7 @@ impl AgentDriver for PiDriver {
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), flavor = ?self.flavor, "spawning pi-family agent");
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
 
+        let mut lifetime = crate::ndjson::SessionLifetime::new(child.clone());
         let (tx, rx) = mpsc::channel(1024);
         let session = Arc::new(PiSession {
             flavor: self.flavor,
@@ -257,7 +258,7 @@ impl AgentDriver for PiDriver {
         let (ready_tx, ready_rx) = oneshot::channel();
         *session.ready.lock().await = Some(ready_tx);
         let reader = session.clone();
-        tokio::spawn(async move { reader.read_loop().await });
+        lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
 
         if self.flavor == Flavor::Omp {
             // Wait for `ready`, then negotiate chunked framing so big frames survive.
@@ -291,7 +292,7 @@ impl AgentDriver for PiDriver {
         session.state.lock().await.session_id = Some(session_id.clone());
         session.emit(DriverEvent::SessionBound { session_id, model }).await;
 
-        Ok(SpawnedSession { session: Box::new(Handle(session)), events: rx })
+        Ok(SpawnedSession { session: Box::new(Handle(session, lifetime)), events: rx })
     }
 }
 
@@ -332,7 +333,7 @@ struct PiSession {
     ready: Mutex<Option<oneshot::Sender<()>>>,
 }
 
-struct Handle(Arc<PiSession>);
+struct Handle(Arc<PiSession>, #[allow(dead_code)] crate::ndjson::SessionLifetime);
 
 impl PiSession {
     async fn emit(&self, ev: DriverEvent) {
@@ -575,6 +576,15 @@ impl PiSession {
             "compaction_start" | "auto_compaction_start" => {
                 self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "compacting context".into(), data: None }).await
             }
+            "compaction_end" | "auto_compaction_end" => {
+                let error = v.get("errorMessage").and_then(Value::as_str);
+                self.emit(DriverEvent::Notice {
+                    level: if error.is_some() { NoticeLevel::Warning } else { NoticeLevel::Info },
+                    text: error.map(|error| format!("Context compaction failed: {error}")).unwrap_or_else(|| "Context compacted".into()),
+                    data: None,
+                })
+                .await;
+            }
             "extension_error" => {
                 self.emit(DriverEvent::Notice {
                     level: NoticeLevel::Warning,
@@ -627,6 +637,21 @@ impl PiSession {
             }
         };
         self.emit(ev).await;
+        // Query after publishing completion so stats never delay the answer.
+        // Older Pi/OMP builds may omit contextUsage; cumulative totals are not
+        // a substitute for the current context occupancy.
+        if let Ok(Ok(stats)) = tokio::time::timeout(std::time::Duration::from_secs(2), self.call("get_session_stats", json!({}))).await
+            && let (Some(used_tokens), Some(window_tokens)) = (
+                stats.pointer("/contextUsage/tokens").and_then(Value::as_u64),
+                stats.pointer("/contextUsage/contextWindow").and_then(Value::as_u64),
+            )
+        {
+            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
+                limits: None,
+            }))
+            .await;
+        }
     }
 
     async fn handle_ui_request(self: &Arc<Self>, v: &Value) {
@@ -932,12 +957,7 @@ impl AgentSession for Handle {
     }
 
     async fn close(&self) -> Result<()> {
-        let _ = self.0.child.close_stdin().await;
-        let child = self.0.child.clone();
-        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
-            Ok(_) => {}
-            Err(_) => child.kill().await,
-        }
+        self.0.child.close().await;
         Ok(())
     }
 }
@@ -960,7 +980,7 @@ mod tests {
                 state: Mutex::new(State::default()),
                 ready: Mutex::new(None),
             });
-            let handle = Handle(session.clone());
+            let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
             for (method, response) in [
                 ("select", json!({"value":"Option B"})),
                 ("confirm", json!({"confirmed":false})),

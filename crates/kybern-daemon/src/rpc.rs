@@ -157,18 +157,20 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.touch_session(p.thread_id).await;
             let store = state.store.clone();
             let id = p.thread_id;
-            let (transcript, pending_approvals, runtime_tasks) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                let events = store.events_for_thread(id)?;
-                Ok((
-                    kybern_store::project_transcript(&events),
-                    store.approvals_pending(Some(id))?,
-                    kybern_store::project_runtime_tasks(&events),
-                ))
-            })
-            .await
-            .map_err(internal)?
-            .map_err(internal)?;
-            ok(ThreadsGetResult { thread, transcript, pending_approvals, runtime_tasks })
+            let (transcript, pending_approvals, runtime_tasks, provider_usage) =
+                tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                    let events = store.events_for_thread(id)?;
+                    Ok((
+                        kybern_store::project_transcript(&events),
+                        store.approvals_pending(Some(id))?,
+                        kybern_store::project_runtime_tasks(&events),
+                        kybern_store::project_provider_usage(&events),
+                    ))
+                })
+                .await
+                .map_err(internal)?
+                .map_err(internal)?;
+            ok(ThreadsGetResult { thread, transcript, pending_approvals, runtime_tasks, provider_usage })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;

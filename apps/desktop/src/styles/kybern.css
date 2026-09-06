@@ -284,3 +284,25 @@ html[data-thread-pointer-dragging="true"] * {
     -webkit-backdrop-filter: none;
   }
 }
+
+/* Opt-in window material. Native macOS vibrancy supplies the desktop blur;
+   floating surfaces also blur application content behind them. */
+@media not (prefers-reduced-transparency: reduce) {
+  @media not (prefers-contrast: more) {
+    html[data-full-translucency][data-window-material="translucent"] {
+      --app-full-translucency: 1;
+      --app-glass-surface: color-mix(in srgb, var(--app-opaque-content-surface) 72%, transparent);
+      --color-background-surface: var(--app-glass-surface) !important;
+      --app-settings-surface: var(--app-glass-surface);
+      --app-settings-backdrop-filter: blur(24px);
+    }
+    html[data-full-translucency][data-window-material="translucent"] :is(.chat-content-card, .app-settings-surface) {
+      background: var(--app-glass-surface);
+    }
+    html[data-full-translucency][data-window-material="translucent"] :is([data-slot="dialog-popup"], [data-slot="alert-dialog-popup"], [data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="tooltip-popup"], [data-slot="select-popup"]) {
+      background: color-mix(in srgb, var(--popover) 82%, transparent);
+      -webkit-backdrop-filter: blur(24px);
+      backdrop-filter: blur(24px);
+    }
+  }
+}

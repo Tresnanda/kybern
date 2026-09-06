@@ -3,6 +3,8 @@ import * as React from "react"
 export type Theme = "dark" | "light" | "system"
 
 export type ThemeProviderState = {
+  translucent: boolean
+  setTranslucent: (enabled: boolean) => void
   theme: Theme
   setTheme: (theme: Theme) => void
 }

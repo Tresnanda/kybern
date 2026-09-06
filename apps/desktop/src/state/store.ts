@@ -1,3 +1,4 @@
+import { readProviderCache } from "./providerCache"
 // Single app store. Views read from here; `rpc.ts` writes into it.
 
 import { create, type UseBoundStore, type StoreApi } from "zustand"
@@ -185,7 +186,7 @@ export function createEnvironmentStore(
     environmentId,
     connection: { state: "connecting" },
     info: null,
-    providers: [],
+    providers: readProviderCache(environmentId),
     providersLoading: true,
     settings: null,
     projects: {},

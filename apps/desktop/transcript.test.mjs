@@ -351,3 +351,26 @@ test("native response images remain in the settled turn without duplicate or chi
   assert.equal(groupTurns(state.blocks)[0].images[0].source, image.source)
   assert.equal(groupTurns(state.blocks)[0].work.length, 0)
 })
+
+
+test("provider usage keeps context separate from spending and merges sparse quota windows", () => {
+  let state = emptyThreadState()
+  const update = (seq, usage) => { state = applyEvent(state, { seq, thread_id: "thread", turn_id: null, at: AT, kind: "provider_usage_updated", usage }) }
+  update(1, { context: { used_tokens: 12000, window_tokens: 200000 } })
+  update(2, { limits: [{ name: "Weekly", used_percent: 40, resets_at: null, window_minutes: 10080 }] })
+  update(3, { limits: [{ name: "5-hour", used_percent: 25, resets_at: 1900000000, window_minutes: 300 }] })
+  update(4, { context: { used_tokens: 4000, window_tokens: 200000 } })
+  assert.equal(state.providerUsage.context.used_tokens, 4000)
+  assert.equal(state.providerUsage.limits.length, 2)
+  assert.equal(state.blocks.length, 0)
+  update(2, { context: { used_tokens: 500000, window_tokens: 200000 } })
+  assert.equal(state.providerUsage.context.used_tokens, 4000)
+})
+
+
+test("sparse quota updates retain a known window and reset time", () => {
+  let state = emptyThreadState()
+  state = applyEvent(state, { seq: 1, thread_id: "thread", at: AT, kind: "provider_usage_updated", usage: { limits: [{ name: "Primary", used_percent: 20, window_minutes: 300, resets_at: 1900000000 }] } })
+  state = applyEvent(state, { seq: 2, thread_id: "thread", at: AT, kind: "provider_usage_updated", usage: { limits: [{ name: "Primary", used_percent: 30, window_minutes: null, resets_at: null }] } })
+  assert.deepEqual(state.providerUsage.limits, [{ name: "Primary", used_percent: 30, window_minutes: 300, resets_at: 1900000000 }])
+})

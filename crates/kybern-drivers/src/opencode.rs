@@ -41,7 +41,7 @@ async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<P
     for (key, value) in &context.env {
         command.env(key, value);
     }
-    let output = match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, command.output()).await {
+    let output = match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, crate::process_tree::output(&mut command)).await {
         Ok(Ok(output)) if output.status.success() => output,
         _ => return Vec::new(),
     };
@@ -121,7 +121,7 @@ pub async fn discover_skills(cwd: &Path, binary: Option<&PathBuf>, env: &BTreeMa
     for (key, value) in env {
         command.env(key, value);
     }
-    let output = tokio::time::timeout(std::time::Duration::from_secs(10), command.output()).await.ok()?.ok()?;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), crate::process_tree::output(&mut command)).await.ok()?.ok()?;
     if !output.status.success() || output.stdout.len() > MAX_SKILL_DISCOVERY_BYTES {
         return None;
     }
@@ -187,7 +187,10 @@ impl AgentDriver for OpencodeDriver {
             cmd.env(k, v);
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), "spawning opencode serve");
+        #[cfg(unix)]
+        cmd.process_group(0);
         let mut child = cmd.spawn()?;
+        let tree = crate::process_tree::ProcessTree(child.id().expect("spawned opencode"));
         let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
         let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
         tokio::spawn(async move {
@@ -304,9 +307,9 @@ impl AgentDriver for OpencodeDriver {
         session.emit(DriverEvent::SessionBound { session_id, model: config.model.clone() }).await;
 
         let reader = session.clone();
-        tokio::spawn(async move { reader.event_loop().await });
+        let worker = crate::process_tree::SessionTask(tokio::spawn(async move { reader.event_loop().await }));
 
-        Ok(SpawnedSession { session: Box::new(Handle(session)), events: rx })
+        Ok(SpawnedSession { session: Box::new(Handle(session, std::sync::Mutex::new(Some(tree)), Some(worker))), events: rx })
     }
 }
 
@@ -488,7 +491,11 @@ struct OpencodeSession {
     state: Mutex<State>,
 }
 
-struct Handle(Arc<OpencodeSession>);
+struct Handle(
+    Arc<OpencodeSession>,
+    #[allow(dead_code)] std::sync::Mutex<Option<crate::process_tree::ProcessTree>>,
+    #[allow(dead_code)] Option<crate::process_tree::SessionTask>,
+);
 
 impl OpencodeSession {
     async fn emit(&self, ev: DriverEvent) {
@@ -1152,6 +1159,7 @@ impl AgentSession for Handle {
     }
 
     async fn close(&self) -> Result<()> {
+        self.1.lock().unwrap().take();
         let mut child = self.0.child.lock().await;
         let _ = child.kill().await;
         Ok(())
@@ -1235,7 +1243,7 @@ mod tests {
             session.handle_part(&part).await;
             assert!(rx.try_recv().is_err());
         }
-        let handle = Handle(session.clone());
+        let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
         for id in ["question-1", "question-2"] {
             session.handle_event(&json!({"type":"question.asked","properties":{"id":id,"sessionID":"root","questions":[{"question":"Which?","multiple":true}]}})).await;
             assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == "opencode_question"));

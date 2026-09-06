@@ -353,7 +353,8 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id), reason.notice_text()) else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at });
             }
-            EventPayload::ThreadCreated { .. }
+            EventPayload::ProviderUsageUpdated { .. }
+            | EventPayload::ThreadCreated { .. }
             | EventPayload::ThreadUpdated { .. }
             | EventPayload::MessageQueued { .. }
             | EventPayload::MessageRemoved { .. }
@@ -514,6 +515,31 @@ fn mark_turn_complete(out: &mut [TranscriptEntry], turn: TurnId) {
             _ => {}
         }
     }
+}
+
+/// Fold sparse updates without erasing independently reported account limits.
+pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
+    let mut result = ProviderUsage::default();
+    for event in events {
+        if let EventPayload::ProviderUsageUpdated { usage } = &event.payload {
+            if usage.context.is_some() {
+                result.context = usage.context.clone();
+            }
+            if let Some(limits) = &usage.limits {
+                let current = result.limits.get_or_insert_default();
+                for limit in limits {
+                    if let Some(old) = current.iter_mut().find(|old| old.name == limit.name) {
+                        old.used_percent = limit.used_percent;
+                        old.window_minutes = limit.window_minutes.or(old.window_minutes);
+                        old.resets_at = limit.resets_at.or(old.resets_at);
+                    } else {
+                        current.push(limit.clone());
+                    }
+                }
+            }
+        }
+    }
+    result
 }
 
 #[cfg(test)]

@@ -474,6 +474,7 @@ export type EventPayload =
       duration_ms: number;
       terminal_message_id?: MessageId | null;
     }
+  | { kind: "provider_usage_updated"; usage: ProviderUsage }
   | { kind: "turn_failed"; error: string }
   | {
       kind: "provider_notice";
@@ -587,6 +588,7 @@ export interface ThreadsGetParams {
 }
 
 export interface ThreadsGetResult {
+  provider_usage?: ProviderUsage;
   thread: Thread;
   transcript: TranscriptEntry[];
   pending_approvals: ApprovalRequest[];
@@ -1099,4 +1101,9 @@ export interface HarnessUpdate {
   message: string;
   version: string | null;
   checked_at: DateTime | null;
+}
+
+export interface ProviderUsage {
+  context?: { used_tokens: number; window_tokens: number };
+  limits?: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
 }

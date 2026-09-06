@@ -538,7 +538,7 @@ function DaemonUpdateRows({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; o
 }
 
 function Appearance() {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, translucent, setTranslucent } = useTheme()
   return (
     <Section title="Theme">
       <Row title="Appearance" description="Follows the system by default.">
@@ -572,6 +572,9 @@ function Appearance() {
             },
           ]}
         />
+      </Row>
+      <Row title="Translucent app" description="Extend frosted glass across the macOS app, including menus and dialogs. Respects reduced transparency.">
+        <SettingsPicker value={translucent ? "on" : "off"} onChange={(value) => setTranslucent(value === "on")} options={[{ value: "off", label: "Off" }, { value: "on", label: "On" }]} />
       </Row>
     </Section>
   )

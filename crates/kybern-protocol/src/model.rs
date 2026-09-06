@@ -1072,3 +1072,24 @@ pub enum DaemonUpdateStatus {
     Unsupported,
     Failed,
 }
+
+/// Authoritative context occupancy, distinct from cumulative billable tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<Vec<UsageLimit>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ContextUsage {
+    pub used_tokens: u64,
+    pub window_tokens: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UsageLimit {
+    pub name: String,
+    pub used_percent: f64,
+    pub window_minutes: Option<u64>,
+    pub resets_at: Option<i64>,
+}
