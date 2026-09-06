@@ -81,6 +81,15 @@ export function ThemeProvider({
   disableTransitionOnChange = true,
   ...props
 }: ThemeProviderProps) {
+  const [translucent, setTranslucentState] = React.useState(() => localStorage.getItem("kybern.translucent") === "true")
+  const setTranslucent = React.useCallback((enabled: boolean) => {
+    localStorage.setItem("kybern.translucent", String(enabled))
+    setTranslucentState(enabled)
+  }, [])
+  React.useLayoutEffect(() => {
+    document.documentElement.toggleAttribute("data-full-translucency", translucent)
+  }, [translucent])
+
   const [theme, setThemeState] = React.useState<Theme>(() => {
     const storedTheme = localStorage.getItem(storageKey)
     if (isTheme(storedTheme)) {
@@ -216,8 +225,10 @@ export function ThemeProvider({
     () => ({
       theme,
       setTheme,
+      translucent,
+      setTranslucent,
     }),
-    [theme, setTheme]
+    [theme, setTheme, translucent, setTranslucent]
   )
 
   return (

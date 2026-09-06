@@ -55,6 +55,7 @@ export function applyAppearance(mode: ThemeMode, opts: { suppressTransitions?: b
 
   const vars: Record<string, string> = {
     ...build.variables,
+    "--app-opaque-content-surface": build.variables["--color-background-surface"],
     ...getDensityCssVariables("comfortable"),
     ...TYPOGRAPHY_VARS(getAppTypographyScale()),
     ...getChatWidthCssVariables("standard"),

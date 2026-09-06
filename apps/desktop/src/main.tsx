@@ -11,6 +11,8 @@ import { TooltipProvider } from "@/components/kit/tooltip"
 import { isTauri, platform } from "@/lib/tauri"
 import { startAppUpdateChecks } from "@/lib/appUpdate"
 import { boot } from "@/state/rpc"
+import { installRuntimeErrorReporting } from "@/lib/runtimeErrors"
+import { showRuntimeError } from "@/components/kybern/runtimeErrorNotice"
 
 // Dev only: `VITE_KYBERN_THEME=light pnpm tauri dev` boots the window in a fixed
 // appearance so light and dark can be screenshotted without touching settings.
@@ -33,18 +35,11 @@ document.addEventListener("contextmenu", (e) => {
   if (t && !t.closest(".selectable, input, textarea")) e.preventDefault()
 })
 
+const stopErrorReporting = installRuntimeErrorReporting(window, showRuntimeError)
+if (import.meta.hot) import.meta.hot.dispose(stopErrorReporting)
+
 void boot()
 startAppUpdateChecks()
-
-// Uncaught errors outside React land on screen too; a blank webview is otherwise undebuggable.
-function reportFatal(message: string) {
-  const el = document.createElement("pre")
-  el.style.cssText = "position:fixed;inset:auto 8px 8px 8px;z-index:9999;max-height:40vh;overflow:auto;padding:8px 10px;border-radius:8px;background:#7f1d1d;color:#fff;font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;user-select:text"
-  el.textContent = message
-  document.body.appendChild(el)
-}
-window.addEventListener("error", (e) => reportFatal(`${e.message}\n${e.error?.stack ?? ""}`))
-window.addEventListener("unhandledrejection", (e) => reportFatal(`Unhandled rejection: ${e.reason?.stack ?? String(e.reason)}`))
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

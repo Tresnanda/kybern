@@ -54,6 +54,9 @@ fn main() {
     method::<ProvidersList>(&mut methods);
     method::<HarnessUpdatesList>(&mut methods);
     method::<HarnessUpdatesRun>(&mut methods);
+    method::<DaemonUpdateStatusMethod>(&mut methods);
+    method::<DaemonUpdateCheck>(&mut methods);
+    method::<DaemonUpdateRun>(&mut methods);
     method::<ProjectsList>(&mut methods);
     method::<ProjectsBrowse>(&mut methods);
     method::<ProjectsAdd>(&mut methods);
@@ -68,6 +71,9 @@ fn main() {
     method::<QueueAdd>(&mut methods);
     method::<QueueList>(&mut methods);
     method::<QueueRemove>(&mut methods);
+    method::<ThreadsRelease>(&mut methods);
+    method::<ThreadsCompact>(&mut methods);
+    method::<ThreadsAnswer>(&mut methods);
     method::<ThreadsInterrupt>(&mut methods);
     method::<TasksList>(&mut methods);
     method::<TaskStop>(&mut methods);
@@ -87,6 +93,8 @@ fn main() {
     method::<SettingsUpdate>(&mut methods);
     method::<UsageSummary>(&mut methods);
     method::<PairingCreate>(&mut methods);
+    method::<ExposureGet>(&mut methods);
+    method::<ExposureSet>(&mut methods);
     method::<TokensList>(&mut methods);
     method::<TokensRevoke>(&mut methods);
     method::<GitStatusMethod>(&mut methods);

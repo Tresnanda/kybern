@@ -23,6 +23,7 @@ serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 reqwest = { workspace = true, features = ["rustls"] }
+qrcode.workspace = true
 keyring = { version = "=3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 log = "0.4"
 tauri = { version = "2.11.5", features = ["macos-private-api"] }

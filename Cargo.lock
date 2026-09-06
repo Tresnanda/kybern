@@ -2666,8 +2666,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kybern"
+version = "0.1.6"
+dependencies = [
+ "anyhow",
+ "kybern-cli",
+ "kybern-daemon",
+]
+
+[[package]]
 name = "kybern-cli"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2688,13 +2697,14 @@ dependencies = [
 
 [[package]]
 name = "kybern-client"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "chrono",
  "directories",
  "futures",
  "kybern-protocol",
+ "qrcode",
  "serde",
  "serde_json",
  "tokio",
@@ -2705,7 +2715,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-daemon"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2737,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-desktop"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "block2",
@@ -2748,6 +2758,7 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "objc2-user-notifications",
+ "qrcode",
  "reqwest",
  "serde",
  "serde_json",
@@ -2767,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-drivers"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -2790,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-git"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "kybern-protocol",
@@ -2802,7 +2813,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-protocol"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "insta",
@@ -2814,7 +2825,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-store"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3875,6 +3886,12 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-xml"

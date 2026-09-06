@@ -72,6 +72,11 @@ expression: schema_for!(Settings)
       "type": "boolean",
       "default": false
     },
+    "auto_update_daemon": {
+      "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
+      "type": "boolean",
+      "default": false
+    },
     "background": {
       "description": "How the daemon trims CPU and memory while nothing needs it.",
       "$ref": "#/$defs/BackgroundSettings",
@@ -81,6 +86,13 @@ expression: schema_for!(Settings)
         "terminal_idle_minutes": 60,
         "daemon_idle_exit_minutes": 0,
         "save_power_on_battery": false
+      }
+    },
+    "access": {
+      "description": "Which networks other devices can reach this daemon on.",
+      "$ref": "#/$defs/AccessSettings",
+      "default": {
+        "tailscale": false
       }
     }
   },
@@ -183,6 +195,17 @@ expression: schema_for!(Settings)
         },
         "save_power_on_battery": {
           "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes` and hold\nautomatic harness updates until power returns.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "AccessSettings": {
+      "description": "Extra listeners the daemon opens besides its loopback port. Persisted so\na restart keeps the daemon reachable for paired phones.",
+      "type": "object",
+      "properties": {
+        "tailscale": {
+          "description": "Also listen on this machine's Tailscale address, so devices on the\nsame tailnet can pair and connect directly.",
           "type": "boolean",
           "default": false
         }

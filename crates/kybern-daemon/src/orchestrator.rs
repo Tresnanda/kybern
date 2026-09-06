@@ -29,6 +29,7 @@ pub struct Orchestrator {
 
 struct Inner {
     commands: std::sync::Mutex<()>,
+    question_answers: Mutex<()>,
     thread_updates: std::sync::Mutex<()>,
     store: Store,
     drivers: DriverRegistry,
@@ -36,6 +37,7 @@ struct Inner {
     paths: Paths,
     settings: SettingsStore,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
+    releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
     /// Threads whose next session must fork the provider conversation at this point.
     pending_rewinds: Mutex<HashMap<ThreadId, RewindPoint>>,
@@ -164,6 +166,7 @@ impl Orchestrator {
         Self {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
+                question_answers: Mutex::new(()),
                 thread_updates: std::sync::Mutex::new(()),
                 store,
                 drivers,
@@ -171,6 +174,7 @@ impl Orchestrator {
                 paths,
                 settings,
                 sessions: Mutex::new(HashMap::new()),
+                releasing: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
                 pending_rewinds: Mutex::new(HashMap::new()),
                 queue_wakeup: Notify::new(),
@@ -206,6 +210,35 @@ impl Orchestrator {
         }
         let Some(thread) = self.inner.store.thread_get(thread_id)? else { return Ok(true) };
         Ok(!matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+    }
+
+    /// Release only a parked session owned by this daemon. Never adopt or kill
+    /// an unidentified process merely because it holds a provider writer lock.
+    pub async fn release_session(&self, thread_id: ThreadId) -> Result<()> {
+        let (live, done) = {
+            let mut sessions = self.inner.sessions.lock().await;
+            let live = sessions.get(&thread_id).cloned().ok_or_else(|| anyhow!("Kybern has no live agent process for this thread. If another app owns the conversation, close that session there and retry."))?;
+            if !self.session_parked(thread_id, &live).await? {
+                return Err(anyhow!("This agent has active work or approvals. Wait for them to finish before reconnecting."));
+            }
+            let (done, waiting) = tokio::sync::watch::channel(());
+            self.inner.releasing.lock().await.insert(thread_id, waiting);
+            sessions.remove(&thread_id);
+            live.mark_released();
+            (live, done)
+        };
+        let this = self.clone();
+        // Disconnecting the requesting client must not cancel cleanup.
+        tokio::spawn(async move {
+            let result = live.session.close().await;
+            this.inner.releasing.lock().await.remove(&thread_id);
+            drop(done);
+            result?;
+            this.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual })?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        Ok(())
     }
 
     pub async fn session_activity(&self) -> Result<SessionActivity> {
@@ -280,20 +313,34 @@ impl Orchestrator {
                 if !self.session_parked(thread_id, &live).await? {
                     continue;
                 }
+                let (done, waiting) = tokio::sync::watch::channel(());
+                self.inner.releasing.lock().await.insert(thread_id, waiting);
                 sessions.remove(&thread_id);
                 live.mark_released();
-                claimed.push((thread_id, live, reason));
+                claimed.push((thread_id, live, reason, done));
             }
         }
-        let outcomes = futures::future::join_all(claimed.iter().map(|(_, live, _)| live.session.close())).await;
-        let mut released = Vec::with_capacity(claimed.len());
-        for ((thread_id, _, reason), outcome) in claimed.into_iter().zip(outcomes) {
-            if let Err(error) = outcome {
-                tracing::warn!(%thread_id, %error, "agent process did not close cleanly");
-            }
-            tracing::info!(%thread_id, ?reason, "released idle agent process");
-            self.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason })?;
-            released.push(SessionRelease { thread_id, reason });
+        // Once claimed, cleanup must finish even if the maintenance caller is
+        // cancelled. Keep each resume barrier until its own process is closed.
+        let closing = claimed
+            .into_iter()
+            .map(|(thread_id, live, reason, done)| {
+                let this = self.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = live.session.close().await {
+                        tracing::warn!(%thread_id, %error, "agent process did not close cleanly");
+                    }
+                    this.inner.releasing.lock().await.remove(&thread_id);
+                    drop(done);
+                    tracing::info!(%thread_id, ?reason, "released idle agent process");
+                    this.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason })?;
+                    Ok::<_, anyhow::Error>(SessionRelease { thread_id, reason })
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut released = Vec::with_capacity(closing.len());
+        for outcome in futures::future::join_all(closing).await {
+            released.push(outcome??);
         }
         Ok(released)
     }
@@ -583,6 +630,29 @@ impl Orchestrator {
             return Err(anyhow!("thread is archived"));
         }
 
+        if is_compact_message(&message) {
+            let events = self.inner.store.events_for_thread(thread_id)?;
+            let advertised = events
+                .iter()
+                .rev()
+                .find_map(|event| match &event.payload {
+                    EventPayload::ProviderCommandsUpdated { commands } => Some(commands.iter().any(|command| command.name == "compact")),
+                    _ => None,
+                })
+                .unwrap_or(false);
+            if !matches!(kind, ProviderKind::Codex | ProviderKind::Pi | ProviderKind::Omp | ProviderKind::Opencode) && !advertised {
+                return Err(anyhow!("This harness does not expose manual compaction. Automatic compaction remains available."));
+            }
+            if thread.provider_session_id.is_none() {
+                return Err(anyhow!("Send a message before compacting this conversation."));
+            }
+            if kybern_store::project_runtime_tasks(&self.inner.store.events_for_thread(thread_id)?)
+                .iter()
+                .any(|task| task.status.is_active())
+            {
+                return Err(anyhow!("Wait for agents and background tasks to finish before compacting."));
+            }
+        }
         let turn_id = Uuid::now_v7();
         if thread.title == DEFAULT_TITLE {
             thread.title = title_from_message(&message);
@@ -721,7 +791,12 @@ impl Orchestrator {
             elapsed_ms = startup_started.elapsed().as_millis() as u64,
         );
 
-        if let Err(e) = live.session.send_message(&message_id.to_string(), &message).await {
+        let delivery = if is_compact_message(&message) {
+            live.session.compact().await
+        } else {
+            live.session.send_message(&message_id.to_string(), &message).await
+        };
+        if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
             let mut t = thread;
             t.status = ThreadStatus::Failed;
@@ -831,6 +906,70 @@ impl Orchestrator {
 
     fn provider_name(&self, thread_id: ThreadId) -> Result<&'static str> {
         Ok(self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?.provider.kind.display_name())
+    }
+
+    /// Async questions are ordinary user input, not provider permission responses.
+    /// Serialize submissions so two clients cannot answer the same question twice.
+    pub async fn answer_questions(&self, params: methods::ThreadsAnswerParams) -> Result<()> {
+        let _answer = self.inner.question_answers.lock().await;
+        let events = self.inner.store.events_for_thread(params.thread_id)?;
+        if let Some(previous) = events.iter().find_map(|event| match &event.payload {
+            EventPayload::AsyncQuestionsAnswered { request_id, answers, .. } if request_id == &params.request_id => Some(answers),
+            _ => None,
+        }) {
+            return if previous == &params.answers {
+                Ok(())
+            } else {
+                Err(anyhow!("This question has already been answered. Send a new message to change your answer."))
+            };
+        }
+        let request = kybern_store::project_pending_questions(&events)
+            .into_iter()
+            .find(|r| r.id == params.request_id)
+            .ok_or_else(|| anyhow!("Question not found. Refresh the conversation and try again."))?;
+        if request.questions.len() != params.answers.len() || params.answers.iter().any(|a| a.trim().is_empty()) {
+            return Err(anyhow!("Answer each question before submitting."));
+        }
+        let message = UserMessage::text(
+            request
+                .questions
+                .iter()
+                .zip(&params.answers)
+                .map(|(question, answer)| format!("{}\nAnswer: {}", question.title, answer.trim()))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+        let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if thread.status == ThreadStatus::Archived {
+            return Err(anyhow!("Unarchive this conversation before answering."));
+        }
+        let message_id = Uuid::now_v7();
+        let turn_id = if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            let live = self
+                .inner
+                .sessions
+                .lock()
+                .await
+                .get(&params.thread_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("The agent is starting. Submit your answer again in a moment."))?;
+            let turn = live.turn.lock().await;
+            let active = turn
+                .as_ref()
+                .filter(|turn| !turn.completed)
+                .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
+            live.touch();
+            live.session.steer(&message_id.to_string(), &message).await?;
+            active.id
+        } else {
+            self.send_with_id(params.thread_id, message_id, message.clone(), false).await?.0
+        };
+        self.emit(
+            params.thread_id,
+            Some(turn_id),
+            EventPayload::AsyncQuestionsAnswered { request_id: params.request_id, answers: params.answers, message_id, message },
+        )?;
+        Ok(())
     }
 
     pub async fn respond_approval(&self, approval_id: ApprovalId, decision: ApprovalDecision) -> Result<()> {
@@ -1128,8 +1267,15 @@ impl Orchestrator {
     }
 
     async fn ensure_session(&self, thread: &Thread) -> Result<(Arc<LiveSession>, bool)> {
-        if let Some(live) = self.inner.sessions.lock().await.get(&thread.id).cloned() {
-            return Ok((live, true));
+        let waiting = {
+            let sessions = self.inner.sessions.lock().await;
+            if let Some(live) = sessions.get(&thread.id).cloned() {
+                return Ok((live, true));
+            }
+            self.inner.releasing.lock().await.get(&thread.id).cloned()
+        };
+        if let Some(mut waiting) = waiting {
+            let _ = waiting.changed().await;
         }
         let rewind = self.inner.pending_rewinds.lock().await.remove(&thread.id);
         self.spawn_session(thread, rewind).await.map(|live| (live, false))
@@ -1454,6 +1600,12 @@ impl Orchestrator {
                 let id = map_message_delta(&mut turn_guard, &origin, &message_id);
                 self.emit(thread_id, turn_id, EventPayload::AssistantThinkingDelta { message_id: id, origin, delta })?;
             }
+            DriverEvent::AsyncQuestions(request) => {
+                let events = self.inner.store.events_for_thread(thread_id)?;
+                if !events.iter().any(|event| matches!(&event.payload, EventPayload::AsyncQuestionsRequested { request: previous } if previous.id == request.id)) {
+                    self.emit(thread_id, turn_id, EventPayload::AsyncQuestionsRequested { request })?;
+                }
+            }
             DriverEvent::MessageCompleted { message_id, origin, text, thinking } => {
                 let id = map_message_completion(&mut turn_guard, &origin, &message_id);
                 if origin.is_root()
@@ -1720,6 +1872,12 @@ impl Orchestrator {
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
             }
+            DriverEvent::CommandsUpdated(commands) => {
+                self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
+            }
+            DriverEvent::UsageUpdated(usage) => {
+                self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
+            }
             DriverEvent::Notice { level, text, data } => {
                 self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data })?;
             }
@@ -1903,6 +2061,10 @@ pub fn title_from_message(message: &UserMessage) -> String {
     title
 }
 
+fn is_compact_message(message: &UserMessage) -> bool {
+    matches!(message.parts.as_slice(), [kybern_protocol::ContentPart::Text { text }] if text.trim() == "/compact")
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -1929,6 +2091,10 @@ mod tests {
     #[async_trait::async_trait]
     impl AgentSession for TestSession {
         async fn send_message(&self, _message_id: &str, _message: &UserMessage) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn steer(&self, _message_id: &str, _message: &UserMessage) -> kybern_drivers::Result<()> {
             Ok(())
         }
 
@@ -2357,6 +2523,171 @@ mod tests {
     }
 
     const MINUTE: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn async_answers_are_explicit_durable_and_do_not_replace_the_active_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Running);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let turn_id = Uuid::now_v7();
+        *live.turn.lock().await = Some(ActiveTurn {
+            id: turn_id,
+            started: Instant::now(),
+            startup_started: Instant::now(),
+            provider: ProviderKind::Codex,
+            session_reused: false,
+            first_event_observed: false,
+            messages: HashMap::new(),
+            active_messages: HashMap::new(),
+            terminal_message_id: None,
+            completed: false,
+            pending_completion: None,
+        });
+        fixture
+            .orchestrator
+            .emit(
+                thread.id,
+                Some(turn_id),
+                EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("original prompt") },
+            )
+            .unwrap();
+        let request = AsyncQuestionRequest {
+            id: "question".into(),
+            questions: vec![AsyncQuestion { title: "Window?".into(), options: vec!["Yes".into(), "No".into()] }],
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::AsyncQuestions(request.clone())).await.unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::AsyncQuestions(request)).await.unwrap();
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+        assert!(fixture.store.approvals_pending(Some(thread.id)).unwrap().is_empty());
+        let mut params = methods::ThreadsAnswerParams { thread_id: thread.id, request_id: "question".into(), answers: vec![] };
+        assert!(fixture.orchestrator.answer_questions(params.clone()).await.unwrap_err().to_string().contains("each question"));
+        assert_eq!(kybern_store::project_pending_questions(&fixture.store.events_for_thread(thread.id).unwrap()).len(), 1);
+        params.answers = vec!["No, keep this window".into()];
+        fixture.orchestrator.answer_questions(params.clone()).await.unwrap();
+        fixture.orchestrator.answer_questions(params.clone()).await.unwrap();
+        params.answers = vec!["Yes".into()];
+        assert!(fixture.orchestrator.answer_questions(params).await.unwrap_err().to_string().contains("already been answered"));
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert_eq!(events.iter().filter(|e| matches!(e.payload, EventPayload::AsyncQuestionsAnswered { .. })).count(), 1);
+        assert_eq!(events.iter().filter(|e| matches!(e.payload, EventPayload::TurnStarted { .. })).count(), 1);
+        assert!(kybern_store::project_pending_questions(&events).is_empty());
+        assert_eq!(live.turn.lock().await.as_ref().unwrap().id, turn_id);
+        assert_eq!(
+            kybern_store::project_transcript(&events).iter().filter(|entry| matches!(entry, TranscriptEntry::User { .. })).count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn async_answer_during_startup_stays_pending_and_does_not_start_another_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Running);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::AsyncQuestions(AsyncQuestionRequest {
+                    id: "question".into(),
+                    questions: vec![AsyncQuestion { title: "Continue?".into(), options: vec![] }],
+                }),
+            )
+            .await
+            .unwrap();
+        let result = fixture
+            .orchestrator
+            .answer_questions(methods::ThreadsAnswerParams {
+                thread_id: thread.id,
+                request_id: "question".into(),
+                answers: vec!["Yes".into()],
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("Submit your answer again"));
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert_eq!(kybern_store::project_pending_questions(&events).len(), 1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::AsyncQuestionsAnswered { .. } | EventPayload::TurnStarted { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn async_question_survives_completion_and_idle_answer_starts_one_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let request = AsyncQuestionRequest {
+            id: "question".into(),
+            questions: vec![AsyncQuestion { title: "Constraints?".into(), options: vec![] }],
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::AsyncQuestions(request)).await.unwrap();
+        let params =
+            methods::ThreadsAnswerParams { thread_id: thread.id, request_id: "question".into(), answers: vec!["Use scratch data".into()] };
+        fixture.orchestrator.answer_questions(params.clone()).await.unwrap();
+        fixture.orchestrator.answer_questions(params).await.unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(kybern_store::project_pending_questions(&events).is_empty());
+        assert_eq!(events.iter().filter(|e| matches!(e.payload, EventPayload::TurnStarted { .. })).count(), 1);
+        assert_eq!(
+            kybern_store::project_transcript(&events).iter().filter(|entry| matches!(entry, TranscriptEntry::User { .. })).count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_rejects_busy_unsupported_and_empty_conversations_without_writing_a_turn() {
+        let fixture = Fixture::new();
+        let mut thread = fixture.thread(ThreadStatus::Running);
+        assert!(fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("busy"));
+        thread.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&thread).unwrap();
+        assert!(
+            fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("does not expose")
+        );
+        thread.id = Uuid::now_v7();
+        thread.provider = ProviderInstance::default_for(ProviderKind::Codex);
+        thread.provider_session_id = None;
+        fixture.store.thread_upsert(&thread).unwrap();
+        assert!(
+            fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("Send a message")
+        );
+        assert!(fixture.store.events_for_thread(thread.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn manual_release_preserves_history_and_refuses_active_sessions() {
+        let fixture = Fixture::new();
+        let mut thread = fixture.thread(ThreadStatus::Running);
+        let (_, closes) = fixture.park(&thread, Instant::now()).await;
+        assert!(fixture.orchestrator.release_session(thread.id).await.is_err());
+        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        thread.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&thread).unwrap();
+        fixture.orchestrator.release_session(thread.id).await.unwrap();
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id, thread.provider_session_id);
+        assert!(!fixture.has_session(&thread).await);
+        assert!(fixture.orchestrator.release_session(thread.id).await.unwrap_err().to_string().contains("no live agent"));
+    }
+
+    #[tokio::test]
+    async fn resume_waits_for_the_previous_writer_to_close() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (done, waiting) = tokio::sync::watch::channel(());
+        fixture.orchestrator.inner.releasing.lock().await.insert(thread.id, waiting);
+        let orchestrator = fixture.orchestrator.clone();
+        let resume = tokio::spawn(async move { orchestrator.ensure_session(&thread).await });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!resume.is_finished(), "must not attempt a second writer during release");
+        drop(done);
+        let result = tokio::time::timeout(Duration::from_secs(1), resume).await.unwrap().unwrap();
+        // This fixture has no drivers: getting this error proves spawn only ran
+        // after the old writer's close barrier completed.
+        assert!(result.is_err());
+    }
 
     #[tokio::test]
     async fn idle_sessions_are_released_after_the_policy_window() {

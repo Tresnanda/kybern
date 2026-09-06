@@ -1,0 +1,3 @@
+# dist (cargo-dist) package config: this is the package that ships.
+[dist]
+dist = true

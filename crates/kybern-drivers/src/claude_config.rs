@@ -149,7 +149,7 @@ async fn account_default_model(context: &ProbeContext, binary: &Path) -> Option<
         command.current_dir(cwd);
     }
     command.envs(&context.env);
-    let output = tokio::time::timeout(Duration::from_secs(2), command.output()).await.ok()?.ok()?;
+    let output = tokio::time::timeout(Duration::from_secs(2), crate::process_tree::output(&mut command)).await.ok()?.ok()?;
     if !output.status.success() {
         return None;
     }

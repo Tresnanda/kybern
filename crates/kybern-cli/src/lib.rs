@@ -50,6 +50,15 @@ enum Cmd {
         #[arg(long)]
         run: Option<ProviderKind>,
     },
+    /// Show the daemon's own update state, check the release feed, or install the newest version when idle.
+    DaemonUpdate {
+        /// Ask the release feed for the newest version.
+        #[arg(long)]
+        check: bool,
+        /// Install the newest version once nothing is running, then restart the daemon.
+        #[arg(long)]
+        run: bool,
+    },
     /// Manage projects.
     Projects {
         #[command(subcommand)]
@@ -108,6 +117,17 @@ enum Cmd {
     },
     /// Interrupt the running turn.
     Interrupt { thread: String },
+    /// Compact context using the harness native operation.
+    Compact { thread: String },
+    /// Answer a non-blocking question; provide one answer per question in order.
+    Answer {
+        thread: String,
+        request_id: String,
+        #[arg(required = true)]
+        answers: Vec<String>,
+    },
+    /// Release an idle agent process; preserve its conversation for resume.
+    Release { thread: String },
     /// Inspect or control provider-owned agents and background processes.
     Tasks {
         thread: String,
@@ -154,6 +174,10 @@ enum Cmd {
         /// Address reachable from the receiving device (e.g. an HTTPS proxy or SSH tunnel).
         #[arg(long)]
         address: Option<String>,
+        /// Also listen on this machine's Tailscale address (remembered across restarts),
+        /// so devices on the tailnet can scan the invitation and connect directly.
+        #[arg(long)]
+        tailscale: bool,
     },
     /// List or revoke access tokens.
     Tokens {
@@ -337,8 +361,9 @@ fn parse_mode(s: &str) -> Result<PermissionMode, String> {
         .map_err(|_| format!("unknown mode {s}; use supervised|accept-edits|auto|full-access"))
 }
 
+/// Run the CLI with the process arguments. `kybern` is a thin wrapper around this.
 #[tokio::main]
-async fn main() -> Result<()> {
+pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let client = Client::connect(&ep).await?;
@@ -377,6 +402,16 @@ async fn main() -> Result<()> {
                 let result = client.call::<HarnessUpdatesList>(Empty {}).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
+        }
+        Cmd::DaemonUpdate { check, run } => {
+            let result = if run {
+                client.call::<DaemonUpdateRun>(Empty {}).await?
+            } else if check {
+                client.call::<DaemonUpdateCheck>(Empty {}).await?
+            } else {
+                client.call::<DaemonUpdateStatusMethod>(Empty {}).await?
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Projects { cmd } => match cmd {
             ProjectsCmd::List => {
@@ -470,6 +505,16 @@ async fn main() -> Result<()> {
             let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
             let sub = client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after }).await?;
             render::watch(&client, sub.subscription_id, json).await?;
+        }
+        Cmd::Release { thread } => {
+            client.call::<ThreadsRelease>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+        }
+        Cmd::Answer { thread, request_id, answers } => {
+            client.call::<ThreadsAnswer>(ThreadsAnswerParams { thread_id: thread.parse()?, request_id, answers }).await?;
+        }
+        Cmd::Compact { thread } => {
+            let result = client.call::<ThreadsCompact>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Interrupt { thread } => {
             client.call::<ThreadsInterrupt>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
@@ -604,10 +649,16 @@ async fn main() -> Result<()> {
             let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
         }
-        Cmd::Pair { label, address } => {
+        Cmd::Pair { label, address, tailscale } => {
             // Validate before minting a code, so a typo doesn't waste an invitation.
             let address = address.map(|value| kybern_client::address::normalize(&value)).transpose()?;
             let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
+            if tailscale {
+                let exposure = client.call::<ExposureSet>(ExposureSetParams { tailscale: true }).await?;
+                if !json {
+                    eprintln!("Listening on {}", exposure.listeners.join(", "));
+                }
+            }
             let mut pairing = client.call::<PairingCreate>(PairingCreateParams { label }).await?;
             if let Some(address) = address {
                 pairing.endpoints = vec![address];

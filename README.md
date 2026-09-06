@@ -17,6 +17,7 @@ keeps its own projects, threads, and running agents.
 | `crates/kybern-protocol` | Wire types. JSON-RPC 2.0 over WebSocket, scoped tokens, the event-sourced thread model. `kybern-schema` dumps JSON Schema for non-Rust clients. |
 | `crates/kybern-store` | SQLite persistence (WAL, event log, projections). |
 | `crates/kybern-drivers` | One native driver per agent: Claude Code, Codex, OpenCode, pi, Oh My Pi, Cursor. |
+| `crates/kybern` | The shipped package: builds the `kybernd` and `kybern` binaries from the two crates below. |
 | `crates/kybern-daemon` | `kybernd`. Owns provider processes, threads, approvals, terminals and project files; serves clients on a loopback port with bearer tokens. |
 | `crates/kybern-cli` | `kybern`. Command-line client and the integration harness for every driver. |
 | `crates/kybern-client` | Shared WebSocket client used by the CLI and the desktop shell. |
@@ -42,10 +43,39 @@ to it does not copy your laptop's projects or credentials.
 
 ### Desktop app
 
-Download the installer for your platform from
-[GitHub Releases](https://github.com/Tresnanda/kybern/releases/latest). Every
-package bundles `kybernd`; you do not need to install the daemon or CLI
-separately on a desktop.
+Every desktop package bundles `kybernd`; you do not need to install the daemon
+or CLI separately on a desktop.
+
+**macOS**, two ways. The quickest is one command, which installs the app into
+Applications and opens it with no prompt:
+
+```sh
+curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-mac-install.sh | sh
+```
+
+Or download the DMG from the
+[release page](https://github.com/Tresnanda/kybern/releases/latest) and drag
+kybern into Applications. Kybern is not notarized by Apple, so the first launch
+of a browser download is blocked with "Apple could not verify kybern is free of
+malware". Allow it once:
+
+1. Click **Done** on that dialog (not Move to Trash).
+2. Open **System Settings → Privacy & Security** and scroll to the **Security**
+   section. Click **Open Anyway** next to "kybern was blocked to protect your
+   Mac".
+
+   ![Open Anyway in Privacy & Security](assets/readme/gatekeeper-open-anyway.png)
+
+3. Confirm with **Open Anyway** on the next dialog and enter your password or
+   Touch ID.
+
+   ![Confirm opening kybern](assets/readme/gatekeeper-confirm.png)
+
+That is a one-time step. Updates installed by the app itself are never blocked,
+and neither is the command above, because only browser downloads are marked for
+this check.
+
+**Linux and Windows**: download from the release page.
 
 | Platform | Asset |
 | --- | --- |
@@ -58,15 +88,6 @@ The app checks the release feed after launch and every few hours, and offers
 to install a newer version; **Settings → About** has a manual check. Installing
 an update restarts the app and its local daemon, so agents running on that
 machine restart with it. Remote environments are unaffected.
-
-The macOS bundle is signed ad hoc and is not notarized. Follow macOS's
-**Privacy & Security → Open Anyway** flow if it blocks a downloaded app. For an
-ad-hoc bundle reported as damaged, you can remove its quarantine attribute after
-verifying where it came from:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/kybern.app
-```
 
 To build from source instead, install stable Rust, Node 22+, pnpm 11, and the
 [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), then:
@@ -97,22 +118,39 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/Tresnanda/kybern/releases/latest/download/kybern-remote-install.sh | sh -s -- --service
 ```
 
-Other options: `--daemon-only` skips the CLI, `--version 0.2.0` pins a release,
-`--port` and `--bind` set the service's listener (default `127.0.0.1:4173`).
-The release page also has the individual `kybern-daemon-installer.sh`,
-`kybern-cli-installer.sh` and PowerShell installers, plus archives for macOS
-(Apple silicon/Intel), Linux (x86_64/arm64 musl) and Windows (x86_64). Upgrade
-in place later with `kybern-daemon-update` and `kybern-cli-update`.
+Other options: `--version 0.2.0` pins a release, `--port` and `--bind` set the
+service's listener (default `127.0.0.1:4173`).
 
-From a checkout, `cargo install --locked --path crates/kybern-daemon` (and
-`crates/kybern-cli`) builds the same binaries with stable Rust and your
-platform's native build tools.
+A remote daemon updates itself: **Settings → Agents → Updates** on the desktop
+shows its version, checks the release feed, and installs the newest version
+once nothing is running, restarting it under its service manager. Turn on
+**Update the daemon automatically** there for a daily check. The same is
+available headless as `kybern daemon-update --check` and `--run`. The release page also has
+`kybern-installer.sh`, its PowerShell twin, and one `kybern-<target>` archive
+per platform holding both binaries: macOS (Apple silicon/Intel), Linux
+(x86_64/arm64 musl) and Windows (x86_64). Run the installer again to upgrade.
+
+From a checkout, `cargo install --locked --path crates/kybern` builds the same
+binaries with stable Rust and your platform's native build tools.
 
 #### Connect over Tailscale
 
 With Tailscale installed and connected on the VPS and your desktop or phone,
-configure [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
-on the VPS to forward HTTPS to Kybern:
+the quickest route is to let the daemon listen on its Tailscale address:
+
+```sh
+kybern pair --tailscale
+```
+
+This opens a listener on the VPS's Tailscale IP next to the loopback one,
+remembers the choice in `settings.json` (`access.tailscale`), and prints a QR
+code the Kybern mobile app can scan. The desktop app offers the same switch,
+**Reachable over Tailscale**, in **Pair a device**. Traffic stays inside the
+tailnet's WireGuard tunnel; nothing is exposed on the public interface.
+
+For a browser-friendly HTTPS address instead, configure
+[Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
+on the VPS to forward to Kybern:
 
 ```sh
 tailscale serve --bg http://127.0.0.1:4173
@@ -122,6 +160,7 @@ kybernd --port 4173 --pair
 `kybernd --pair` starts the daemon and prints:
 
 - A six-digit pairing code, valid once for ten minutes.
+- A QR code of the invitation when a reachable address was detected.
 - Detected addresses, including a matching Tailscale HTTPS proxy when configured.
 - A complete invitation for each address, containing the code and environment identity.
 
@@ -145,7 +184,8 @@ It prefers a matching HTTPS Serve proxy, and lists direct Tailscale, private,
 and public interface addresses only when the daemon listens on them. It never
 opens a firewall, enables Serve, or guesses that a public NAT address accepts
 inbound connections. With the default loopback listener and no proxy, it prints
-local-only addresses and tells you to configure a proxy or SSH tunnel.
+local-only addresses and tells you to run `kybern pair --tailscale` or
+configure a proxy or SSH tunnel.
 
 #### Connect through an SSH tunnel or another HTTPS proxy
 
@@ -180,7 +220,7 @@ Needs stable Rust 1.88 or newer (`rust-toolchain.toml` picks it up), Node 22
 and pnpm 11 (`corepack enable`).
 
 ```sh
-cargo build --release -p kybern-daemon -p kybern-cli   # target/release/{kybernd,kybern}
+cargo build --release -p kybern   # target/release/{kybernd,kybern}
 
 cd apps/desktop
 pnpm install --frozen-lockfile

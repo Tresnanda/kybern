@@ -3,6 +3,7 @@
 // close actions, and one xterm + pty per tab that stays alive across tab
 // switches. Terminals render edge to edge on the surface colour.
 
+import { observeResizeFrame } from "@/lib/resizeObserver"
 import "@xterm/xterm/css/xterm.css"
 
 import { FitAddon } from "@xterm/addon-fit"
@@ -69,8 +70,9 @@ function surfaceColor(): string {
 }
 
 function xtermTheme(dark: boolean) {
-  const bg = surfaceColor()
-  return { ...(dark ? DARK : LIGHT), background: bg, cursorAccent: bg }
+  const glass = getComputedStyle(document.documentElement).getPropertyValue("--app-full-translucency").trim() === "1"
+  const bg = glass ? "#00000000" : surfaceColor()
+  return { ...(dark ? DARK : LIGHT), background: bg, cursorAccent: glass ? (dark ? "#181818" : "#ffffff") : bg }
 }
 
 function useIsDark(): boolean {
@@ -242,7 +244,16 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
   }, [active])
 
   useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = xtermTheme(dark)
+    const update = () => { if (termRef.current) termRef.current.options.theme = xtermTheme(dark) }
+    update()
+    const observer = new MutationObserver(update)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-full-translucency", "data-window-material", "style"] })
+    const preferences = [matchMedia("(prefers-reduced-transparency: reduce)"), matchMedia("(prefers-contrast: more)")]
+    for (const preference of preferences) preference.addEventListener("change", update)
+    return () => {
+      observer.disconnect()
+      for (const preference of preferences) preference.removeEventListener("change", update)
+    }
   }, [dark])
 
   // Coming back on screen: fit to the real box, repaint, tell the pty, focus.
@@ -272,6 +283,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       cursorBlink: true,
       cursorStyle: "bar",
       allowProposedApi: true,
+      allowTransparency: true,
       customGlyphs: true,
       theme: xtermTheme(dark),
       scrollback: 5000,
@@ -368,16 +380,18 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     const inputSub = term.onData((data) => {
       if (idRef.current) client.call("terminals.input", { terminal_id: idRef.current, data: bytesToB64(data) }).catch(() => {})
     })
-    const ro = new ResizeObserver(() => {
+    const stopResize = observeResizeFrame(el, () => {
       if (el.clientWidth === 0 || el.clientHeight === 0) return
+      const { cols, rows } = term
       fit.fit()
-      if (idRef.current) client.call("terminals.resize", { terminal_id: idRef.current, cols: term.cols, rows: term.rows }).catch(() => {})
+      if (idRef.current && (term.cols !== cols || term.rows !== rows)) {
+        client.call("terminals.resize", { terminal_id: idRef.current, cols: term.cols, rows: term.rows }).catch(() => {})
+      }
     })
-    ro.observe(el)
 
     return () => {
       disposed = true
-      ro.disconnect()
+      stopResize()
       inputSub.dispose()
       titleSub.dispose()
       offOut()

@@ -302,13 +302,15 @@ impl AgentDriver for CodexDriver {
         let last = dir.join("last.txt");
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(90),
-            Command::new(&bin)
-                .current_dir(cwd)
-                .args(["exec", "-s", "read-only", "--skip-git-repo-check", "--output-last-message"])
-                .arg(&last)
-                .arg(prompt)
-                .stdin(std::process::Stdio::null())
-                .output(),
+            crate::process_tree::output(
+                Command::new(&bin)
+                    .current_dir(cwd)
+                    .args(["exec", "-s", "read-only", "--skip-git-repo-check", "--output-last-message"])
+                    .arg(&last)
+                    .arg(prompt)
+                    .kill_on_drop(true)
+                    .stdin(std::process::Stdio::null()),
+            ),
         )
         .await
         .map_err(|_| DriverError::Protocol("codex one-shot timed out".into()))??;
@@ -330,6 +332,7 @@ impl AgentDriver for CodexDriver {
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), "spawning codex app-server");
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
 
+        let mut lifetime = crate::ndjson::SessionLifetime::new(child.clone());
         let (tx, rx) = mpsc::channel(1024);
         let session = Arc::new(CodexSession {
             child,
@@ -337,7 +340,10 @@ impl AgentDriver for CodexDriver {
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
                 thread_id: None,
                 turn_id: None,
                 mode: config.permission_mode,
@@ -355,7 +361,7 @@ impl AgentDriver for CodexDriver {
             closed: AtomicBool::new(false),
         });
         let reader = session.clone();
-        tokio::spawn(async move { reader.read_loop().await });
+        lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
 
         session
             .call(
@@ -394,18 +400,19 @@ impl AgentDriver for CodexDriver {
             .ok_or_else(|| DriverError::Protocol(format!("{method}: no thread id in response")))?
             .to_string();
         let model = resp.get("model").and_then(|m| m.as_str()).map(str::to_string);
-        {
-            let mut st = session.state.lock().await;
-            st.thread_id = Some(thread_id.clone());
-            if model.is_some() {
-                st.model = model.clone();
+        session.bind_thread(thread_id, model).await;
+        let usage_session = session.clone();
+        lifetime.track(tokio::spawn(async move {
+            if let Ok(value) = usage_session.call("account/rateLimits/read", json!({})).await
+                && let Some(limits) = parse_rate_limits(&value["rateLimits"])
+            {
+                usage_session.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: None, limits: Some(limits) })).await;
             }
-        }
-        session.emit(DriverEvent::SessionBound { session_id: thread_id, model }).await;
+        }));
         let monitor = session.clone();
-        tokio::spawn(async move { monitor.poll_background_terminals().await });
+        lifetime.track(tokio::spawn(async move { monitor.poll_background_terminals().await }));
 
-        Ok(SpawnedSession { session: Box::new(Handle(session)), events: rx })
+        Ok(SpawnedSession { session: Box::new(Handle(session, lifetime)), events: rx })
     }
 }
 
@@ -429,6 +436,8 @@ fn sandbox_policy_for(mode: PermissionMode, cwd: &std::path::Path) -> Value {
 }
 
 struct State {
+    manual_compaction: bool,
+    deferred_notifications: Vec<(String, Value)>,
     thread_id: Option<String>,
     turn_id: Option<String>,
     mode: PermissionMode,
@@ -449,6 +458,7 @@ struct State {
 }
 
 struct CodexSession {
+    notification_gate: Mutex<()>,
     child: Arc<NdjsonChild>,
     events: mpsc::Sender<DriverEvent>,
     next_id: AtomicI64,
@@ -509,7 +519,7 @@ fn should_register_subagent(
         && parent_id.is_some_and(|parent| Some(parent) == root_thread_id || known_subagents.contains_key(parent))
 }
 
-struct Handle(Arc<CodexSession>);
+struct Handle(Arc<CodexSession>, #[allow(dead_code)] crate::ndjson::SessionLifetime);
 
 impl CodexSession {
     async fn emit(&self, ev: DriverEvent) {
@@ -523,7 +533,14 @@ impl CodexSession {
         self.child.write(&json!({ "id": id, "method": method, "params": params })).await?;
         match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
             Ok(Ok(Ok(v))) => Ok(v),
-            Ok(Ok(Err(e))) => Err(DriverError::Protocol(format!("{method}: {e}"))),
+            Ok(Ok(Err(e))) => {
+                let recovery = if method == "thread/resume" && e.contains("already has an active writer") {
+                    " Another Codex session owns this conversation. Let that session finish and close it, then retry. Kybern preserved the conversation and did not stop the other session."
+                } else {
+                    ""
+                };
+                Err(DriverError::Protocol(format!("{method}: {e}{recovery}")))
+            }
             Ok(Err(_)) => Err(DriverError::ProcessExited("codex exited while waiting for a response".into())),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
@@ -788,9 +805,12 @@ impl CodexSession {
         }
     }
 
-    async fn ensure_subagent(&self, thread_id: &str) {
+    async fn ensure_subagent(&self, thread_id: &str) -> bool {
         let is_new = {
             let mut state = self.state.lock().await;
+            if state.thread_id.as_deref().is_none_or(|root| root == thread_id) {
+                return false;
+            }
             if let std::collections::hash_map::Entry::Vacant(entry) = state.subagents.entry(thread_id.to_string()) {
                 entry.insert(None);
                 true
@@ -819,10 +839,13 @@ impl CodexSession {
             }))
             .await;
         }
+        true
     }
 
     async fn handle_subagent_notification(&self, thread_id: &str, method: &str, p: &Value) {
-        self.ensure_subagent(thread_id).await;
+        if !self.ensure_subagent(thread_id).await {
+            return;
+        }
         match method {
             "turn/started" => {
                 let turn_id = p.pointer("/turn/id").and_then(Value::as_str).map(str::to_string);
@@ -955,7 +978,37 @@ impl CodexSession {
         }
     }
 
+    // Serialize binding with notifications so early root events are replayed in
+    // wire order only after the start/resume/fork response identifies the root.
+    async fn bind_thread(&self, thread_id: String, model: Option<String>) {
+        let _gate = self.notification_gate.lock().await;
+        let deferred = {
+            let mut state = self.state.lock().await;
+            state.thread_id = Some(thread_id.clone());
+            if model.is_some() {
+                state.model = model.clone();
+            }
+            std::mem::take(&mut state.deferred_notifications)
+        };
+        self.emit(DriverEvent::SessionBound { session_id: thread_id, model }).await;
+        for (method, params) in deferred {
+            self.handle_bound_notification(&method, &params).await;
+        }
+    }
+
     async fn handle_notification(&self, method: &str, p: &Value) {
+        let _gate = self.notification_gate.lock().await;
+        {
+            let mut state = self.state.lock().await;
+            if state.thread_id.is_none() {
+                state.deferred_notifications.push((method.to_string(), p.clone()));
+                return;
+            }
+        }
+        self.handle_bound_notification(method, p).await;
+    }
+
+    async fn handle_bound_notification(&self, method: &str, p: &Value) {
         if method == "thread/started" {
             self.handle_thread_started(&p["thread"]).await;
             return;
@@ -974,6 +1027,11 @@ impl CodexSession {
             }
         }
         match method {
+            "account/rateLimits/updated" => {
+                if let Some(limits) = parse_rate_limits(&p["rateLimits"]) {
+                    self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: None, limits: Some(limits) })).await;
+                }
+            }
             "turn/started" => {
                 if let Some(id) = p.pointer("/turn/id").and_then(|i| i.as_str()) {
                     self.state.lock().await.turn_id = Some(id.to_string());
@@ -1013,6 +1071,17 @@ impl CodexSession {
                 .await;
             }
             "thread/tokenUsage/updated" => {
+                if let (Some(used_tokens), Some(window_tokens)) = (
+                    p.pointer("/tokenUsage/last/totalTokens").and_then(Value::as_u64),
+                    p.pointer("/tokenUsage/modelContextWindow").and_then(Value::as_u64),
+                ) {
+                    self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                        context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
+                        limits: None,
+                    }))
+                    .await;
+                }
+
                 let total = p.pointer("/tokenUsage/total").map(parse_usage).unwrap_or_default();
                 let mut st = self.state.lock().await;
                 let per_turn = match &st.last_total_tokens {
@@ -1022,6 +1091,7 @@ impl CodexSession {
                         cache_read_tokens: total.cache_read_tokens.saturating_sub(prev.cache_read_tokens),
                         cache_write_tokens: total.cache_write_tokens.saturating_sub(prev.cache_write_tokens),
                     },
+                    None if st.manual_compaction => Usage::default(),
                     None => total.clone(),
                 };
                 st.last_total_tokens = Some(total);
@@ -1038,6 +1108,7 @@ impl CodexSession {
                 {
                     let mut st = self.state.lock().await;
                     st.turn_id = None;
+                    st.manual_compaction = false;
                     st.message_ids.clear();
                     st.file_changes.clear();
                 }
@@ -1102,6 +1173,15 @@ impl CodexSession {
         match ty {
             "agentMessage" => {
                 if completed {
+                    if item.get("delivery").and_then(Value::as_str) == Some("async")
+                        && let Some(questions) = item
+                            .get("questions")
+                            .and_then(|v| serde_json::from_value::<Vec<kybern_protocol::AsyncQuestion>>(v.clone()).ok())
+                        && !id.is_empty()
+                        && !questions.is_empty()
+                    {
+                        self.emit(DriverEvent::AsyncQuestions(kybern_protocol::AsyncQuestionRequest { id: id.clone(), questions })).await;
+                    }
                     let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
                     self.emit(DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
@@ -1243,7 +1323,9 @@ impl CodexSession {
                 }
                 if let Some(states) = item.get("agentsStates").and_then(Value::as_object) {
                     for (thread_id, state) in states {
-                        self.ensure_subagent(thread_id).await;
+                        if !self.ensure_subagent(thread_id).await {
+                            continue;
+                        }
                         let status = codex_agent_status(state.get("status").and_then(Value::as_str).unwrap_or("running"));
                         let update = DriverRuntimeTaskUpdate {
                             id: thread_id.clone(),
@@ -1266,7 +1348,9 @@ impl CodexSession {
             }
             "subAgentActivity" => {
                 let Some(thread_id) = item.get("agentThreadId").and_then(Value::as_str) else { return };
-                self.ensure_subagent(thread_id).await;
+                if !self.ensure_subagent(thread_id).await {
+                    return;
+                }
                 let status = match item.get("kind").and_then(Value::as_str).unwrap_or("started") {
                     "interrupted" => RuntimeTaskStatus::Interrupted,
                     "completed" => RuntimeTaskStatus::Completed,
@@ -1289,8 +1373,13 @@ impl CodexSession {
                 })
                 .await;
             }
-            "contextCompaction" if completed => {
-                self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "context compacted".into(), data: None }).await;
+            "contextCompaction" => {
+                self.emit(DriverEvent::Notice {
+                    level: NoticeLevel::Info,
+                    text: if completed { "Context compacted" } else { "Compacting context…" }.into(),
+                    data: None,
+                })
+                .await;
             }
             _ => {}
         }
@@ -1425,6 +1514,17 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
 
 #[async_trait]
 impl AgentSession for Handle {
+    async fn compact(&self) -> Result<()> {
+        let thread_id = self.0.state.lock().await.thread_id.clone().ok_or_else(|| DriverError::Protocol("no Codex thread".into()))?;
+        self.0.state.lock().await.manual_compaction = true;
+        *self.0.turn_usage.lock().await = None;
+        let result = self.0.call("thread/compact/start", json!({ "threadId": thread_id })).await;
+        if result.is_err() {
+            self.0.state.lock().await.manual_compaction = false;
+        }
+        result.map(|_| ())
+    }
+
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
         let (thread_id, mode, model, effort, cwd) = {
@@ -1456,6 +1556,26 @@ impl AgentSession for Handle {
             s.state.lock().await.turn_id = Some(id.to_string());
         }
         Ok(())
+    }
+
+    async fn steer(&self, message_id: &str, message: &UserMessage) -> Result<()> {
+        let (thread_id, turn_id) = {
+            let state = self.0.state.lock().await;
+            (state.thread_id.clone(), state.turn_id.clone())
+        };
+        let (Some(thread_id), Some(turn_id)) = (thread_id, turn_id) else {
+            return Err(DriverError::Protocol("The turn has ended. Submit your answer again to continue the conversation.".into()));
+        };
+        self.0
+            .call(
+                "turn/steer",
+                json!({
+                    "threadId": thread_id, "expectedTurnId": turn_id,
+                    "clientUserMessageId": message_id, "input": input_items(message),
+                }),
+            )
+            .await
+            .map(|_| ())
     }
 
     async fn interrupt(&self) -> Result<()> {
@@ -1550,14 +1670,34 @@ impl AgentSession for Handle {
 
     async fn close(&self) -> Result<()> {
         self.0.closed.store(true, Ordering::Relaxed);
-        let _ = self.0.child.close_stdin().await;
-        let child = self.0.child.clone();
-        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
-            Ok(_) => {}
-            Err(_) => child.kill().await,
-        }
+        self.0.child.close().await;
         Ok(())
     }
+}
+
+fn parse_rate_limits(value: &Value) -> Option<Vec<kybern_protocol::UsageLimit>> {
+    if !value.is_object() {
+        return None;
+    }
+    let limits = [("primary", "Primary"), ("secondary", "Secondary")]
+        .into_iter()
+        .filter_map(|(key, label)| {
+            let window = &value[key];
+            let used_percent = window.get("usedPercent")?.as_f64()?;
+            if !used_percent.is_finite() {
+                return None;
+            }
+            let window_minutes = window.get("windowDurationMins").and_then(Value::as_u64);
+            let name = label.to_string();
+            Some(kybern_protocol::UsageLimit {
+                name,
+                used_percent,
+                window_minutes,
+                resets_at: window.get("resetsAt").and_then(Value::as_i64),
+            })
+        })
+        .collect::<Vec<_>>();
+    if limits.is_empty() { None } else { Some(limits) }
 }
 
 #[cfg(test)]
@@ -1575,7 +1715,10 @@ mod tests {
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
             state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
                 thread_id: Some("test".into()),
                 turn_id: None,
                 mode: PermissionMode::Supervised,
@@ -1599,7 +1742,7 @@ mod tests {
             panic!("missing question");
         };
         assert_eq!(tool_name, "request_user_input");
-        let handle = Handle(session.clone());
+        let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
         let answer = json!({"answers":{"choice":{"answers":["Custom answer"]}}});
         handle.respond_permission(&request_id, &ApprovalDecision::Submit { response: answer.clone() }).await.unwrap();
         let wire = tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
@@ -1732,5 +1875,315 @@ mod tests {
 
         assert_eq!(child_notification_route("serverRequest/resolved"), ChildNotificationRoute::Root);
         assert_eq!(child_notification_route("future/method"), ChildNotificationRoute::Root);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod startup_cleanup_tests {
+    use super::*;
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+
+    #[tokio::test]
+    async fn failed_resume_cleans_up_and_preserves_history() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex-fixture");
+        std::fs::write(root.path().join("history"), "existing conversation").unwrap();
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+read line
+printf '{"id":1,"result":{}}\n'
+read line
+read line
+(sleep 0.3; touch escaped) &
+printf '{"id":2,"error":{"message":"thread fixture already has an active writer"}}\n'
+wait
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let result = CodexDriver
+            .spawn(SessionConfig {
+                cwd: root.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: PermissionMode::Supervised,
+                resume_session_id: Some("fixture".into()),
+                fork: false,
+                rewind: None,
+                binary: Some(binary),
+                env: HashMap::new(),
+            })
+            .await;
+        let error = match result {
+            Ok(_) => panic!("resume should fail"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("did not stop the other session"), "{error}");
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        assert!(!root.path().join("escaped").exists());
+        assert_eq!(std::fs::read_to_string(root.path().join("history")).unwrap(), "existing conversation");
+    }
+
+    #[tokio::test]
+    async fn parent_context_and_account_limits_ignore_child_token_usage() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: Some("test".into()),
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+        let tokens = json!({"threadId":"test","tokenUsage":{"last":{"totalTokens":1234},"modelContextWindow":200000}});
+        session.handle_notification("thread/tokenUsage/updated", &tokens).await;
+        let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("missing parent usage") };
+        assert_eq!(usage.context.unwrap().used_tokens, 1234);
+        session
+            .handle_notification(
+                "thread/tokenUsage/updated",
+                &json!({"threadId":"child","tokenUsage":{"last":{"totalTokens":999999},"modelContextWindow":1000000}}),
+            )
+            .await;
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(event, DriverEvent::UsageUpdated(_)));
+        }
+        session
+            .handle_notification(
+                "account/rateLimits/updated",
+                &json!({"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300}}}),
+            )
+            .await;
+        let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("missing account usage") };
+        assert_eq!(usage.limits.unwrap()[0].used_percent, 42.0);
+        child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn early_resume_notifications_never_register_the_root_as_a_subagent() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(64);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: None,
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+
+        // Codex may notify before returning thread/resume (also start/fork).
+        session.handle_notification("turn/started", &json!({"threadId":"root", "turn":{"id":"root-turn"}})).await;
+        session.handle_notification("item/agentMessage/delta", &json!({"threadId":"root", "itemId":"message", "delta":"root prose"})).await;
+        session.handle_notification("turn/started", &json!({"threadId":"child", "turn":{"id":"child-turn"}})).await;
+        assert!(rx.try_recv().is_err());
+        assert!(session.state.lock().await.subagents.is_empty());
+        session.bind_thread("root".into(), None).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::SessionBound { session_id, .. }) if session_id == "root"));
+        assert_eq!(session.state.lock().await.turn_id.as_deref(), Some("root-turn"));
+        assert!(session.state.lock().await.subagents.contains_key("child"));
+        assert!(!session.ensure_subagent("root").await);
+        session.handle_notification("item/started", &json!({"threadId":"root", "item":{"type":"collabAgentToolCall", "id":"collab", "receiverThreadIds":["root"], "agentsStates":{"root":{"status":"running"}}}})).await;
+        session
+            .handle_notification(
+                "item/started",
+                &json!({"threadId":"root", "item":{"type":"subAgentActivity", "id":"activity", "agentThreadId":"root"}}),
+            )
+            .await;
+        let mut child_started = false;
+        let mut root_prose = String::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                DriverEvent::TextDelta { origin: EventOrigin::Root, delta, .. } => root_prose.push_str(&delta),
+                DriverEvent::RuntimeTaskStarted(task) => {
+                    assert_ne!(task.id, "root");
+                    child_started |= task.id == "child";
+                }
+                DriverEvent::RuntimeTaskUpdated(task) | DriverEvent::RuntimeTaskCompleted(task) => assert_ne!(task.id, "root"),
+                _ => {}
+            }
+        }
+        assert!(child_started, "real child activity must still be delivered");
+        assert_eq!(root_prose, "root prose", "early root prose must survive binding");
+        assert!(!session.state.lock().await.subagents.contains_key("root"));
+        child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_uses_native_rpc_and_waits_for_turn_completion() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: Some("test".into()),
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+
+        let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        let task = tokio::spawn(async move {
+            let result = handle.compact().await;
+            (handle, result)
+        });
+        let request = tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+        assert_eq!(request["method"], "thread/compact/start");
+        assert_eq!(request["params"], json!({"threadId":"test"}));
+        session.pending.lock().await.remove(&request["id"].as_i64().unwrap()).unwrap().send(Ok(json!({}))).unwrap();
+        let (handle, result) = task.await.unwrap();
+        result.unwrap();
+        assert!(rx.try_recv().is_err(), "request acceptance is not completion");
+        session.handle_notification("turn/started", &json!({"threadId":"test", "turn":{"id":"compact-turn"}})).await;
+        session
+            .handle_notification("turn/completed", &json!({"threadId":"test", "turn":{"id":"compact-turn", "status":"completed"}}))
+            .await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { .. })));
+        let task = tokio::spawn(async move {
+            let result = handle.compact().await;
+            (handle, result)
+        });
+        let request = tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+        session
+            .pending
+            .lock()
+            .await
+            .remove(&request["id"].as_i64().unwrap())
+            .unwrap()
+            .send(Err("unsupported installed version".into()))
+            .unwrap();
+        let (handle, result) = task.await.unwrap();
+        assert!(result.is_err());
+        assert!(!session.state.lock().await.manual_compaction);
+        handle.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn async_questions_keep_native_fields_and_answers_steer_the_current_turn() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: Some("test".into()),
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        });
+        session.state.lock().await.turn_id = Some("active-turn".into());
+        let item = json!({"type":"agentMessage", "id":"call-question", "text":"Choose a window", "delivery":"async",
+            "questions":[{"title":"Allow a QA window?", "options":["Allow", "Keep current window"]}, {"title":"Any constraints?", "options":null}]});
+        session.handle_item(&item, false).await;
+        assert!(rx.try_recv().is_err());
+        session.handle_item(&item, true).await;
+        let Some(DriverEvent::AsyncQuestions(request)) = rx.recv().await else { panic!("missing structured question") };
+        assert_eq!(request.id, "call-question");
+        assert_eq!(request.questions[0].options, ["Allow", "Keep current window"]);
+        assert!(request.questions[1].options.is_empty());
+        assert!(matches!(rx.recv().await, Some(DriverEvent::MessageCompleted { .. })));
+        assert!(session.pending_approvals.lock().await.is_empty());
+        let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        let task = tokio::spawn(async move {
+            let result = handle.steer("answer-id", &UserMessage::text("Keep current window")).await;
+            (handle, result)
+        });
+        let request = tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+        assert_eq!(request["method"], "turn/steer");
+        assert_eq!(request["params"]["expectedTurnId"], "active-turn");
+        assert_eq!(request["params"]["clientUserMessageId"], "answer-id");
+        assert_eq!(request["params"]["input"][0]["text"], "Keep current window");
+        session.pending.lock().await.remove(&request["id"].as_i64().unwrap()).unwrap().send(Ok(json!({}))).unwrap();
+        let (handle, result) = task.await.unwrap();
+        result.unwrap();
+        assert!(rx.try_recv().is_err(), "steering must not complete or interrupt the turn");
+        session.state.lock().await.turn_id = None;
+        assert!(handle.steer("late", &UserMessage::text("late answer")).await.unwrap_err().to_string().contains("turn has ended"));
+        handle.close().await.unwrap();
+    }
+
+    #[test]
+    fn limits_preserve_reported_windows_and_reset_times() {
+        let limits = parse_rate_limits(&json!({"primary":{"usedPercent":23.5,"windowDurationMins":300,"resetsAt":1900000000},"secondary":{"usedPercent":40,"windowDurationMins":10080}})).unwrap();
+        assert_eq!(limits[0].name, "Primary");
+        assert_eq!(limits[0].window_minutes, Some(300));
+        assert_eq!(limits[0].resets_at, Some(1900000000));
+        assert_eq!(limits[1].name, "Secondary");
+        assert_eq!(limits[1].window_minutes, Some(10080));
+        assert!(limits[1].resets_at.is_none());
+        assert!(parse_rate_limits(&json!({"primary":null})).is_none());
     }
 }

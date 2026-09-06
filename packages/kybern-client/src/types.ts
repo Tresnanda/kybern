@@ -417,9 +417,11 @@ export interface Diff {
 export type NoticeLevel = "info" | "warning" | "error";
 
 /** Why the daemon closed an agent process; the next message resumes the conversation. */
-export type SessionReleaseReason = "idle" | "capacity" | "update" | "power";
+export type SessionReleaseReason = "manual" | "idle" | "capacity" | "update" | "power";
 
 export type EventPayload =
+  | { kind: "async_questions_requested"; request: AsyncQuestionRequest }
+  | { kind: "async_questions_answered"; request_id: string; answers: string[]; message_id: MessageId; message: UserMessage }
   | { kind: "thread_created"; thread: Thread }
   | { kind: "thread_updated"; thread: Thread }
   | { kind: "thread_archived" }
@@ -474,6 +476,8 @@ export type EventPayload =
       duration_ms: number;
       terminal_message_id?: MessageId | null;
     }
+  | { kind: "provider_commands_updated"; commands: ProviderCommand[] }
+  | { kind: "provider_usage_updated"; usage: ProviderUsage }
   | { kind: "turn_failed"; error: string }
   | {
       kind: "provider_notice";
@@ -586,7 +590,12 @@ export interface ThreadsGetParams {
   thread_id: ThreadId;
 }
 
+export interface AsyncQuestionRequest { id: string; questions: { title: string; options: string[] }[] }
+export interface ThreadsAnswerParams { thread_id: ThreadId; request_id: string; answers: string[] }
 export interface ThreadsGetResult {
+  pending_questions?: AsyncQuestionRequest[];
+  provider_commands?: ProviderCommand[];
+  provider_usage?: ProviderUsage;
   thread: Thread;
   transcript: TranscriptEntry[];
   pending_approvals: ApprovalRequest[];
@@ -783,6 +792,11 @@ export interface BackgroundSettings {
   save_power_on_battery: boolean;
 }
 
+/** Extra listeners besides loopback, so paired phones can reach the daemon after a restart. */
+export interface AccessSettings {
+  tailscale: boolean;
+}
+
 export interface Settings {
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
@@ -792,7 +806,9 @@ export interface Settings {
   providers: Partial<Record<ProviderKind, ProviderSettings>>;
   notifications: boolean;
   auto_update_harnesses: boolean;
+  auto_update_daemon: boolean;
   background: BackgroundSettings;
+  access: AccessSettings;
 }
 
 export interface SettingsUpdateParams {
@@ -977,6 +993,16 @@ export interface PairingCreateResult {
   expires_at: DateTime;
   endpoints: string[];
 }
+/** Which networks the daemon listens on besides loopback. */
+export interface Exposure {
+  /** This machine's Tailscale IPv4 address when Tailscale runs and the daemon could bind it. */
+  tailscale_ip?: string | null;
+  tailscale: boolean;
+  listeners: string[];
+}
+export interface ExposureSetParams {
+  tailscale: boolean;
+}
 export interface TokenInfo {
   id: string;
   label: string;
@@ -1011,6 +1037,9 @@ export interface Methods {
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];
+  "daemon_update.status": [Empty, DaemonUpdate];
+  "daemon_update.check": [Empty, DaemonUpdate];
+  "daemon_update.run": [Empty, DaemonUpdate];
   "files.search": [FilesSearchParams, FilesSearchResult];
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
@@ -1019,6 +1048,8 @@ export interface Methods {
   "projects.list": [Empty, ProjectsListResult];
   "projects.browse": [{ path?: string }, ProjectsBrowseResult];
   "access.pairing.create": [{ label?: string }, PairingCreateResult];
+  "access.exposure.get": [Empty, Exposure];
+  "access.exposure.set": [ExposureSetParams, Exposure];
   "access.tokens.list": [Empty, { tokens: TokenInfo[] }];
   "access.tokens.revoke": [{ token_id: string }, Empty];
   "projects.add": [ProjectsAddParams, Project];
@@ -1030,6 +1061,9 @@ export interface Methods {
   "threads.update": [ThreadsUpdateParams, Thread];
   "threads.archive": [ThreadsArchiveParams, Empty];
   "threads.send": [ThreadsSendParams, ThreadsSendResult];
+  "threads.release": [ThreadsInterruptParams, Empty];
+  "threads.answer": [ThreadsAnswerParams, Empty];
+  "threads.compact": [ThreadsInterruptParams, ThreadsSendResult];
   "threads.interrupt": [ThreadsInterruptParams, Empty];
   "tasks.list": [TasksListParams, TasksListResult];
   "tasks.stop": [TaskControlParams, RuntimeTask];
@@ -1064,10 +1098,24 @@ export type MethodName = keyof Methods;
 export type ParamsOf<M extends MethodName> = Methods[M][0];
 export type ResultOf<M extends MethodName> = Methods[M][1];
 
+export interface DaemonUpdate {
+  status: "not_checked" | "checking" | "current" | "available" | "waiting" | "updating" | "restarting" | "unsupported" | "failed";
+  message: string;
+  current_version: string;
+  latest_version: string | null;
+  checked_at: DateTime | null;
+}
 export interface HarnessUpdate {
   kind: ProviderKind;
   status: "not_checked" | "waiting" | "updating" | "updated" | "current" | "unsupported" | "failed";
   message: string;
   version: string | null;
   checked_at: DateTime | null;
+}
+
+export interface ProviderCommand { name: string; description: string }
+
+export interface ProviderUsage {
+  context?: { used_tokens: number; window_tokens: number };
+  limits?: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
 }

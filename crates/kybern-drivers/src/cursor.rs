@@ -60,7 +60,7 @@ async fn cursor_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Pro
     for (key, value) in &context.env {
         command.env(key, value);
     }
-    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, command.output()).await {
+    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, crate::process_tree::output(&mut command)).await {
         Ok(Ok(output)) if output.status.success() => parse_cursor_models(&output.stdout),
         _ => Vec::new(),
     }
@@ -184,20 +184,22 @@ impl AgentDriver for CursorDriver {
             pending: Mutex::new(std::collections::HashMap::new()),
             mode: config.permission_mode,
         });
+        let (finished, closed) = tokio::sync::watch::channel(());
         let worker_shared = shared.clone();
         let cfg = config.clone();
-        tokio::spawn(async move {
+        let worker = crate::process_tree::SessionTask(tokio::spawn(async move {
+            let _finished = finished;
             let outcome = run_connection(bin, cfg, worker_shared, cmd_rx, bound_tx).await;
             let error = outcome.err().map(|e| e.to_string());
             let _ = events_tx.send(DriverEvent::Exited { code: None, error }).await;
-        });
+        }));
 
         match bound_rx.await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(DriverError::ProcessExited("cursor agent exited during startup".into())),
         }
-        Ok(SpawnedSession { session: Box::new(Handle { commands: cmd_tx, shared }), events: events_rx })
+        Ok(SpawnedSession { session: Box::new(Handle { commands: cmd_tx, shared, _worker: worker, closed }), events: events_rx })
     }
 }
 
@@ -217,6 +219,8 @@ enum SessionCommand {
 }
 
 struct Handle {
+    closed: tokio::sync::watch::Receiver<()>,
+    _worker: crate::process_tree::SessionTask,
     commands: mpsc::Sender<SessionCommand>,
     shared: Arc<Shared>,
 }
@@ -247,7 +251,10 @@ async fn run_connection(
     for (k, v) in &config.env {
         cmd.env(k, v);
     }
+    #[cfg(unix)]
+    cmd.process_group(0);
     let mut child = cmd.spawn()?;
+    let _tree = crate::process_tree::ProcessTree(child.id().expect("spawned cursor"));
     let stdin = child.stdin.take().ok_or_else(|| DriverError::Protocol("no stdin".into()))?;
     let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
     if let Some(stderr) = child.stderr.take() {
@@ -345,8 +352,12 @@ async fn run_connection(
                     SessionUpdate::Plan(p) => {
                         let _ = ev.send(DriverEvent::Notice { level: NoticeLevel::Info, text: format!("plan updated ({} entries)", p.entries.len()), data: serde_json::to_value(&p).ok() }).await;
                     }
+                    SessionUpdate::AvailableCommandsUpdate(update) => {
+                        let commands = update.available_commands.into_iter().map(|c| kybern_protocol::ProviderCommand { name: c.name, description: c.description }).collect();
+                        let _ = ev.send(DriverEvent::CommandsUpdated(commands)).await;
+                    }
                     SessionUpdate::UsageUpdate(u) => {
-                        let _ = ev.send(DriverEvent::Notice { level: NoticeLevel::Info, text: format!("context {}/{}", u.used, u.size), data: serde_json::to_value(&u).ok() }).await;
+                        let _ = ev.send(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: Some(kybern_protocol::ContextUsage { used_tokens: u.used, window_tokens: u.size }), limits: None })).await;
                     }
                     _ => {}
                 }
@@ -519,6 +530,10 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
 
 #[async_trait]
 impl AgentSession for Handle {
+    async fn compact(&self) -> Result<()> {
+        self.send_message(&uuid::Uuid::now_v7().to_string(), &UserMessage::text("/compact")).await
+    }
+
     async fn send_message(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
         self.commands
             .send(SessionCommand::Prompt { blocks: blocks(message) })
@@ -569,7 +584,15 @@ impl AgentSession for Handle {
     }
 
     async fn close(&self) -> Result<()> {
-        let _ = self.commands.send(SessionCommand::Close).await;
+        let mut closed = self.closed.clone();
+        let graceful = async {
+            let _ = self.commands.send(SessionCommand::Close).await;
+            let _ = closed.changed().await;
+        };
+        if tokio::time::timeout(std::time::Duration::from_secs(5), graceful).await.is_err() {
+            self._worker.0.abort();
+            let _ = closed.changed().await;
+        }
         Ok(())
     }
 }

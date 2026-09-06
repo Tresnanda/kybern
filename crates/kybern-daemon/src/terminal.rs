@@ -271,9 +271,17 @@ impl Terminal {
     /// Whether the shell itself owns the terminal's foreground, meaning it is
     /// sitting at a prompt. `None` when the platform cannot tell.
     pub fn foreground_is_shell(&self) -> Option<bool> {
-        let shell = self.child.lock().unwrap().process_id()?;
-        let leader = self.master.lock().unwrap().process_group_leader()?;
-        Some(u32::try_from(leader).ok() == Some(shell))
+        #[cfg(unix)]
+        {
+            let shell = self.child.lock().unwrap().process_id()?;
+            let leader = self.master.lock().unwrap().process_group_leader()?;
+            Some(u32::try_from(leader).ok() == Some(shell))
+        }
+        // portable-pty has no process-group query on Windows.
+        #[cfg(not(unix))]
+        {
+            None
+        }
     }
 }
 

@@ -1,11 +1,14 @@
 # Builds the desktop app for every platform and attaches the installers, the
 # signed updater artifacts and latest.json to the GitHub Release.
 #
-# dist (cargo-dist) calls this as a post-announce job from release.yml (see
-# `post-announce-jobs` in dist-workspace.toml), so it runs after the release for
-# the tag exists and the kybernd/kybern archives and installers are on it.
-# `workflow_dispatch` runs the same build as a dry run: nothing is uploaded to a
-# release, the bundles are only kept as workflow artifacts.
+# Runs on the same tag push as release.yml (dist), in parallel with the daemon
+# builds rather than after them. Upload steps wait for dist to create the
+# GitHub Release, which happens near the end of its run, so the two pipelines
+# overlap almost completely. The release is turned into a draft the moment it
+# appears and published again only after latest.json is attached, so "latest"
+# never points at a release the desktop updater cannot read. `workflow_dispatch` runs the same build as a dry
+# run: nothing is uploaded to a release, the bundles are only kept as workflow
+# artifacts.
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (required, the updater key generated with
 # `pnpm tauri signer generate`) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty
@@ -14,11 +17,9 @@
 name: Desktop
 
 on:
-  workflow_call:
-    inputs:
-      plan:
-        required: true
-        type: string
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
   workflow_dispatch:
 
 permissions:
@@ -45,7 +46,6 @@ jobs:
             os: windows-2022
     runs-on: ${{ matrix.os }}
     env:
-      PLAN: ${{ inputs.plan }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -81,8 +81,7 @@ jobs:
         shell: bash
         run: |
           tag=""
-          if [ -n "${PLAN:-}" ]; then tag="$(printf '%s' "$PLAN" | jq -r '.announcement_tag // empty')"; fi
-          if [ -z "$tag" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release tag: ${tag:-<none, dry run>}"
       - name: Install desktop dependencies
@@ -106,6 +105,21 @@ jobs:
       - name: Stage release assets
         shell: bash
         run: node scripts/desktop-artifacts.mjs --target "${{ matrix.target }}" --tag "${{ steps.release.outputs.tag }}"
+      - name: Wait for dist to create the release
+        if: steps.release.outputs.tag != ''
+        shell: bash
+        run: |
+          for _ in $(seq 1 80); do
+            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
+              # Hide it from "latest" until latest.json and the desktop assets are
+              # attached, so installed apps never see a half-published release.
+              gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 20 minutes" >&2
+          exit 1
       - name: Upload to the GitHub Release
         if: steps.release.outputs.tag != ''
         shell: bash
@@ -124,7 +138,6 @@ jobs:
     if: ${{ always() && needs.bundle.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     env:
-      PLAN: ${{ inputs.plan }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -141,20 +154,38 @@ jobs:
         shell: bash
         run: |
           tag=""
-          if [ -n "${PLAN:-}" ]; then tag="$(printf '%s' "$PLAN" | jq -r '.announcement_tag // empty')"; fi
-          if [ -z "$tag" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Write latest.json and the remote installer
         run: |
           node scripts/updater-manifest.mjs --tag "${{ steps.release.outputs.tag }}"
           cp scripts/install-remote.sh dist/kybern-remote-install.sh
+          cp scripts/install-mac.sh dist/kybern-mac-install.sh
           cat dist/latest.json
-      - name: Upload to the GitHub Release
+      - name: Wait for dist to create the release
         if: steps.release.outputs.tag != ''
-        run: gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh --clobber
+        shell: bash
+        run: |
+          for _ in $(seq 1 80); do
+            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
+              # Hide it from "latest" until latest.json and the desktop assets are
+              # attached, so installed apps never see a half-published release.
+              gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 20 minutes" >&2
+          exit 1
+      - name: Upload to the GitHub Release and publish it
+        if: steps.release.outputs.tag != ''
+        run: |
+          gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh dist/kybern-mac-install.sh --clobber
+          gh release edit "${{ steps.release.outputs.tag }}" --draft=false --latest
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-manifest
           path: |
             dist/latest.json
             dist/kybern-remote-install.sh
+            dist/kybern-mac-install.sh

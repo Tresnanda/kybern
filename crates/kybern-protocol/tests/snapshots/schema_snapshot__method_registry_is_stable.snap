@@ -8,6 +8,9 @@ expression: names
 - providers.list
 - harness_updates.list
 - harness_updates.run
+- daemon_update.status
+- daemon_update.check
+- daemon_update.run
 - projects.list
 - projects.browse
 - projects.add
@@ -22,6 +25,9 @@ expression: names
 - queue.add
 - queue.list
 - queue.remove
+- threads.release
+- threads.compact
+- threads.answer
 - threads.interrupt
 - tasks.list
 - tasks.stop
@@ -41,6 +47,8 @@ expression: names
 - settings.update
 - usage.summary
 - access.pairing.create
+- access.exposure.get
+- access.exposure.set
 - access.tokens.list
 - access.tokens.revoke
 - git.status

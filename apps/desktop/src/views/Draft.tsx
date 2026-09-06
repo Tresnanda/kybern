@@ -133,7 +133,7 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
             onModelChange={(model, effort) => provider && setModelStored((m) => ({ ...m, [provider.kind]: { model, effort } }))}
             projectId={projectId}
             commands={commands}
-            disabled={!provider}
+            sendDisabled={!provider}
             disabledReason={providersLoading ? "Checking installed coding agents…" : "Install a coding agent first"}
             above={
               <LandingTray>

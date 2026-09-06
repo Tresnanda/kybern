@@ -126,7 +126,7 @@ async fn model_command_output(bin: &std::path::Path, args: &[&str], context: &Pr
     for (key, value) in &context.env {
         command.env(key, value);
     }
-    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, command.output()).await {
+    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, crate::process_tree::output(&mut command)).await {
         Ok(Ok(output)) if output.status.success() => Some(output.stdout),
         _ => None,
     }
@@ -244,6 +244,7 @@ impl AgentDriver for PiDriver {
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), flavor = ?self.flavor, "spawning pi-family agent");
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
 
+        let mut lifetime = crate::ndjson::SessionLifetime::new(child.clone());
         let (tx, rx) = mpsc::channel(1024);
         let session = Arc::new(PiSession {
             flavor: self.flavor,
@@ -257,7 +258,7 @@ impl AgentDriver for PiDriver {
         let (ready_tx, ready_rx) = oneshot::channel();
         *session.ready.lock().await = Some(ready_tx);
         let reader = session.clone();
-        tokio::spawn(async move { reader.read_loop().await });
+        lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
 
         if self.flavor == Flavor::Omp {
             // Wait for `ready`, then negotiate chunked framing so big frames survive.
@@ -288,10 +289,17 @@ impl AgentDriver for PiDriver {
             let provider = state.pointer("/model/provider").and_then(|p| p.as_str()).unwrap_or("");
             if provider.is_empty() { id.to_string() } else { format!("{provider}/{id}") }
         });
+        session.state.lock().await.context_window = state.pointer("/model/contextWindow").and_then(Value::as_u64);
         session.state.lock().await.session_id = Some(session_id.clone());
         session.emit(DriverEvent::SessionBound { session_id, model }).await;
 
-        Ok(SpawnedSession { session: Box::new(Handle(session)), events: rx })
+        let catalog = session.clone();
+        lifetime.track(tokio::spawn(async move {
+            if let Ok(value) = catalog.call("get_commands", json!({})).await {
+                catalog.emit(DriverEvent::CommandsUpdated(crate::provider_commands(&value["commands"]))).await;
+            }
+        }));
+        Ok(SpawnedSession { session: Box::new(Handle(session, lifetime)), events: rx })
     }
 }
 
@@ -305,6 +313,7 @@ fn approval_tier(mode: PermissionMode) -> &'static str {
 
 #[derive(Default)]
 struct State {
+    context_window: Option<u64>,
     session_id: Option<String>,
     /// Sequence number for synthetic assistant message ids.
     message_seq: u64,
@@ -332,7 +341,7 @@ struct PiSession {
     ready: Mutex<Option<oneshot::Sender<()>>>,
 }
 
-struct Handle(Arc<PiSession>);
+struct Handle(Arc<PiSession>, #[allow(dead_code)] crate::ndjson::SessionLifetime);
 
 impl PiSession {
     async fn emit(&self, ev: DriverEvent) {
@@ -346,13 +355,16 @@ impl PiSession {
         params["id"] = Value::String(id.clone());
         params["type"] = Value::String(ty.into());
         self.child.write(&params).await?;
-        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(if ty == "compact" { 600 } else { 60 }), rx).await {
             Ok(Ok(Ok(v))) => Ok(v),
             Ok(Ok(Err(e))) => Err(DriverError::Protocol(format!("{ty}: {e}"))),
             Ok(Err(_)) => Err(DriverError::ProcessExited("agent exited while waiting for a response".into())),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                Err(DriverError::Protocol(format!("{ty}: timed out")))
+                if ty == "compact" {
+                    self.child.kill().await;
+                }
+                Err(DriverError::Protocol(format!("{ty}: timed out; send again to resume the saved conversation")))
             }
         }
     }
@@ -466,6 +478,21 @@ impl PiSession {
                 }
             }
             "message_end" => {
+                let message = &v["message"];
+                if message["role"].as_str() == Some("assistant") {
+                    let window = self.state.lock().await.context_window;
+                    if let (Some(window_tokens), Some(usage)) = (window, message.get("usage")) {
+                        let used_tokens = ["input", "output", "cacheRead", "cacheWrite"]
+                            .iter()
+                            .filter_map(|key| usage.get(key).and_then(Value::as_u64))
+                            .sum();
+                        self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                            context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
+                            limits: None,
+                        }))
+                        .await;
+                    }
+                }
                 let msg = &v["message"];
                 if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
                     return;
@@ -575,6 +602,15 @@ impl PiSession {
             "compaction_start" | "auto_compaction_start" => {
                 self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "compacting context".into(), data: None }).await
             }
+            "compaction_end" | "auto_compaction_end" => {
+                let error = v.get("errorMessage").and_then(Value::as_str);
+                self.emit(DriverEvent::Notice {
+                    level: if error.is_some() { NoticeLevel::Warning } else { NoticeLevel::Info },
+                    text: error.map(|error| format!("Context compaction failed: {error}")).unwrap_or_else(|| "Context compacted".into()),
+                    data: None,
+                })
+                .await;
+            }
             "extension_error" => {
                 self.emit(DriverEvent::Notice {
                     level: NoticeLevel::Warning,
@@ -627,6 +663,21 @@ impl PiSession {
             }
         };
         self.emit(ev).await;
+        // Query after publishing completion so stats never delay the answer.
+        // Older Pi/OMP builds may omit contextUsage; cumulative totals are not
+        // a substitute for the current context occupancy.
+        if let Ok(Ok(stats)) = tokio::time::timeout(std::time::Duration::from_secs(2), self.call("get_session_stats", json!({}))).await
+            && let (Some(used_tokens), Some(window_tokens)) = (
+                stats.pointer("/contextUsage/tokens").and_then(Value::as_u64),
+                stats.pointer("/contextUsage/contextWindow").and_then(Value::as_u64),
+            )
+        {
+            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
+                limits: None,
+            }))
+            .await;
+        }
     }
 
     async fn handle_ui_request(self: &Arc<Self>, v: &Value) {
@@ -864,6 +915,31 @@ fn prompt_text(message: &UserMessage) -> String {
 
 #[async_trait]
 impl AgentSession for Handle {
+    async fn compact(&self) -> Result<()> {
+        let started = std::time::Instant::now();
+        self.0.state.lock().await.aborted = false;
+        self.0.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "Compacting context…".into(), data: None }).await;
+        self.0.call("compact", json!({})).await?;
+        let interrupted = self.0.state.lock().await.aborted;
+        self.0
+            .emit(DriverEvent::Notice {
+                level: NoticeLevel::Info,
+                text: if interrupted { "Compaction interrupted" } else { "Context compacted" }.into(),
+                data: None,
+            })
+            .await;
+        self.0
+            .emit(DriverEvent::TurnCompleted {
+                stop_reason: if interrupted { StopReason::Interrupted } else { StopReason::Completed },
+                usage: Usage::default(),
+                cost_usd: None,
+                duration_ms: started.elapsed().as_millis() as u64,
+                anchors: crate::TurnAnchors::default(),
+            })
+            .await;
+        Ok(())
+    }
+
     async fn send_message(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
         {
@@ -880,10 +956,21 @@ impl AgentSession for Handle {
         if !imgs.is_empty() {
             params["images"] = Value::Array(imgs);
         }
-        s.call("prompt", params).await.map(|_| ())
+        let slash_command = prompt_text(message).trim_start().starts_with('/');
+        s.call("prompt", params).await?;
+        // Native extension commands can finish without starting an agent turn.
+        // Ask the protocol for idle state instead of leaving Kybern running forever.
+        if slash_command {
+            let state = s.call("get_state", json!({})).await?;
+            if state["isStreaming"] == false && state["isCompacting"] == false && s.state.lock().await.active {
+                s.finish_turn().await;
+            }
+        }
+        Ok(())
     }
 
     async fn interrupt(&self) -> Result<()> {
+        self.0.state.lock().await.aborted = true;
         self.0.call("abort", json!({})).await.map(|_| ())
     }
 
@@ -895,7 +982,10 @@ impl AgentSession for Handle {
         let Some((provider, model_id)) = model.split_once('/') else {
             return Err(DriverError::Unsupported(format!("models are named provider/model, got {model}")));
         };
-        self.0.call("set_model", json!({ "provider": provider, "modelId": model_id })).await.map(|_| ())
+        self.0.call("set_model", json!({ "provider": provider, "modelId": model_id })).await?;
+        let state = self.0.call("get_state", json!({})).await?;
+        self.0.state.lock().await.context_window = state.pointer("/model/contextWindow").and_then(Value::as_u64);
+        Ok(())
     }
 
     async fn set_effort(&self, effort: &str) -> Result<()> {
@@ -932,18 +1022,55 @@ impl AgentSession for Handle {
     }
 
     async fn close(&self) -> Result<()> {
-        let _ = self.0.child.close_stdin().await;
-        let child = self.0.child.clone();
-        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
-            Ok(_) => {}
-            Err(_) => child.kill().await,
-        }
+        self.0.child.close().await;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn manual_compaction_waits_for_native_response_for_both_flavors() {
+        use super::*;
+        for flavor in [Flavor::Pi, Flavor::Omp] {
+            let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+            let (events, mut rx) = mpsc::channel(8);
+            let session = Arc::new(PiSession {
+                flavor,
+                child: child.clone(),
+                events,
+                pending: Mutex::new(HashMap::new()),
+                pending_approvals: Mutex::new(HashMap::new()),
+                state: Mutex::new(State::default()),
+                ready: Mutex::new(None),
+            });
+            let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+            let task = tokio::spawn(async move {
+                let result = handle.compact().await;
+                (handle, result)
+            });
+            let request =
+                tokio::time::timeout(Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+            assert_eq!(request["type"], "compact");
+            assert!(!task.is_finished());
+            assert!(matches!(rx.recv().await, Some(DriverEvent::Notice { .. })));
+            assert!(rx.try_recv().is_err());
+            session
+                .pending
+                .lock()
+                .await
+                .remove(request["id"].as_str().unwrap())
+                .unwrap()
+                .send(Ok(json!({"summary":"kept context"})))
+                .unwrap();
+            let (handle, result) = task.await.unwrap();
+            result.unwrap();
+            assert!(matches!(rx.recv().await, Some(DriverEvent::Notice { .. })));
+            assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
+            handle.close().await.unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn extension_dialogs_round_trip_for_pi_and_omp() {
@@ -960,7 +1087,7 @@ mod tests {
                 state: Mutex::new(State::default()),
                 ready: Mutex::new(None),
             });
-            let handle = Handle(session.clone());
+            let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
             for (method, response) in [
                 ("select", json!({"value":"Option B"})),
                 ("confirm", json!({"confirmed":false})),

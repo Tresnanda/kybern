@@ -58,7 +58,7 @@ pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, Stri
     }
     let mut help = Command::new(binary);
     help.arg("--help").envs(env).current_dir(cwd).stdin(Stdio::null()).kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(10), help.output()).await??;
+    let output = tokio::time::timeout(Duration::from_secs(10), crate::process_tree::output(&mut help)).await??;
     // Some CLIs (including OpenCode) write successful help to stderr.
     let text = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     let command = if kind == ProviderKind::Opencode { "upgrade" } else { "update" };
@@ -98,28 +98,7 @@ async fn tail(mut stream: impl tokio::io::AsyncRead + Unpin) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-// Kill the updater's process tree on timeout/cancellation, not just its launcher.
-struct ProcessTree(u32);
-impl Drop for ProcessTree {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            let _ = std::process::Command::new("/bin/kill")
-                .args(["-KILL", "--", &format!("-{}", self.0)])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &self.0.to_string(), "/T", "/F"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-    }
-}
+use crate::process_tree::ProcessTree;
 
 pub async fn run(plan: &UpdateCommand, env: &BTreeMap<String, String>, cwd: &Path) -> Result<()> {
     run_with_timeout(plan, env, cwd, Duration::from_secs(300)).await

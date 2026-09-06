@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use kybern_client::{Client, Endpoint};
-use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, Empty, PairingCreate, PairingCreateParams};
+use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, DaemonShutdown, Empty, PairingCreate, PairingCreateParams};
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
@@ -180,8 +180,24 @@ fn explain_ssh_failure(target: &str, code: Option<i32>, stderr: &str) -> String 
     match code {
         Some(255) if detail.is_empty() => format!("SSH to {target} failed"),
         Some(255) => format!("SSH to {target} failed: {detail}"),
-        _ if detail.is_empty() => format!("The command on {target} failed"),
+        Some(code) if detail.is_empty() => format!("The command on {target} exited with status {code} and no output"),
+        None if detail.is_empty() => format!("The command on {target} was killed by a signal"),
         _ => format!("{target}: {detail}"),
+    }
+}
+
+/// `(major, minor, patch)` of a release version, ignoring any suffix.
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.trim().trim_start_matches('v').split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
+/// Whether the daemon on the machine is older than this app.
+fn outdated(remote: Option<&str>) -> bool {
+    match (remote.and_then(parse_version), parse_version(env!("CARGO_PKG_VERSION"))) {
+        (Some(remote), Some(app)) => remote < app,
+        _ => false,
     }
 }
 
@@ -325,9 +341,14 @@ async fn port_accepts(port: u16) -> bool {
 
 /// `ssh -N -L` for one tunnel. Resolves once the local port accepts
 /// connections (ssh only listens after it has authenticated).
+///
+/// Multiplexing is off for this process on purpose: through a `ControlMaster`
+/// socket from the user's ssh config, `ssh -N -L` hands the forward to the
+/// master and exits 0 within a second, so the child's lifetime would no longer
+/// track the forward and the keeper would report the tunnel as failed.
 async fn spawn_tunnel(config: &SshConfig, local_port: u16) -> Result<Child> {
     let mut child = ssh(config)
-        .args(["-N", "-o", "ExitOnForwardFailure=yes", "-L"])
+        .args(["-o", "ControlMaster=no", "-o", "ControlPath=none", "-N", "-o", "ExitOnForwardFailure=yes", "-L"])
         .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{}", config.remote_port))
         .arg(&config.target)
         .stdin(Stdio::null())
@@ -459,7 +480,9 @@ async fn bootstrap<R: tauri::Runtime>(
     report(app, "connect", "done", Some(format!("{} {}", machine.os, machine.arch)));
 
     report(app, "install", "running", None);
-    if machine.kybernd.is_none() {
+    let previous = machine.version.clone();
+    let upgrade = machine.kybernd.is_some() && outdated(previous.as_deref());
+    if machine.kybernd.is_none() || upgrade {
         if !machine.curl {
             bail!("curl is not installed on {}; install it and try again", config.target);
         }
@@ -468,7 +491,35 @@ async fn bootstrap<R: tauri::Runtime>(
         if machine.kybernd.is_none() {
             bail!("The installer finished but kybernd is not on PATH for non-interactive shells on {}", config.target);
         }
-        report(app, "install", "done", Some(format!("Installed kybernd {}", machine.version.as_deref().unwrap_or("")).trim().to_string()));
+        if upgrade {
+            // The old binary is still the one running; stop it so the start
+            // step below brings up the one just installed.
+            config.remote_port = machine.port.unwrap_or(DEFAULT_REMOTE_PORT);
+            if let (Some(token), Some(_)) = (&machine.token, machine.port)
+                && let Ok(port) = ensure_tunnel(id, config).await
+                && let Ok(client) = Client::connect(&endpoint(port, token)).await
+            {
+                let _ = client.call::<DaemonShutdown>(Empty {}).await;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+                while daemon_info(port, token).await.is_ok() && tokio::time::Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+            stop_tunnel(id).await;
+            report(
+                app,
+                "install",
+                "done",
+                Some(format!("Updated kybernd {} to {}", previous.as_deref().unwrap_or("?"), machine.version.as_deref().unwrap_or(""))),
+            );
+        } else {
+            report(
+                app,
+                "install",
+                "done",
+                Some(format!("Installed kybernd {}", machine.version.as_deref().unwrap_or("")).trim().to_string()),
+            );
+        }
     } else {
         report(
             app,
@@ -671,10 +722,21 @@ mod tests {
     }
 
     #[test]
+    fn detects_an_older_daemon() {
+        assert!(outdated(Some("0.1.1")));
+        assert!(!outdated(Some(env!("CARGO_PKG_VERSION"))));
+        assert!(!outdated(Some("99.0.0")));
+        assert!(!outdated(None));
+        assert!(!outdated(Some("unknown")));
+    }
+
+    #[test]
     fn explains_common_ssh_failures() {
         let denied = explain_ssh_failure("u@h", Some(255), "u@h: Permission denied (publickey).");
         assert!(denied.contains("ssh-copy-id u@h"));
         assert!(explain_ssh_failure("u@h", Some(255), "ssh: Could not resolve hostname h").contains("resolve h"));
         assert_eq!(explain_ssh_failure("u@h", Some(1), "sh: line 3: boom"), "u@h: sh: line 3: boom");
+        assert_eq!(explain_ssh_failure("u@h", Some(0), ""), "The command on u@h exited with status 0 and no output");
+        assert_eq!(explain_ssh_failure("u@h", None, ""), "The command on u@h was killed by a signal");
     }
 }

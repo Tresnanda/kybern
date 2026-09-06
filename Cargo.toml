@@ -8,11 +8,12 @@ members = [
   "crates/kybern-daemon",
   "crates/kybern-client",
   "crates/kybern-cli",
+  "crates/kybern",
   "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.6"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Tresnanda/kybern"
@@ -24,6 +25,8 @@ kybern-store = { path = "crates/kybern-store" }
 kybern-drivers = { path = "crates/kybern-drivers" }
 kybern-git = { path = "crates/kybern-git" }
 kybern-client = { path = "crates/kybern-client" }
+kybern-daemon = { path = "crates/kybern-daemon" }
+kybern-cli = { path = "crates/kybern-cli" }
 
 agent-client-protocol = "=2.0.0"
 anyhow = "1.0.104"
@@ -46,6 +49,7 @@ thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-tungstenite = { version = "=0.30.0", features = ["rustls-tls-webpki-roots"] }
 url = "=2.5.8"
+qrcode = { version = "=0.14.1", default-features = false, features = ["svg"] }
 tokio-util = { version = "0.7.19", features = ["codec", "compat"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }

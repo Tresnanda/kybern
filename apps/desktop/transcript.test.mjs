@@ -15,7 +15,7 @@ registerHooks({
   },
 })
 
-const { applyEvent, buildWorkHierarchy, emptyThreadState, groupTurns, shouldRevealLiveText } = await import(
+const { seedFromGet, applyEvent, buildWorkHierarchy, emptyThreadState, groupTurns, shouldRevealLiveText } = await import(
   "./src/state/transcript.ts"
 )
 
@@ -350,4 +350,57 @@ test("native response images remain in the settled turn without duplicate or chi
   assert.equal(groupTurns(state.blocks)[0].images.length, 1)
   assert.equal(groupTurns(state.blocks)[0].images[0].source, image.source)
   assert.equal(groupTurns(state.blocks)[0].work.length, 0)
+})
+
+
+test("provider usage keeps context separate from spending and merges sparse quota windows", () => {
+  let state = emptyThreadState()
+  const update = (seq, usage) => { state = applyEvent(state, { seq, thread_id: "thread", turn_id: null, at: AT, kind: "provider_usage_updated", usage }) }
+  update(1, { context: { used_tokens: 12000, window_tokens: 200000 } })
+  update(2, { limits: [{ name: "Weekly", used_percent: 40, resets_at: null, window_minutes: 10080 }] })
+  update(3, { limits: [{ name: "5-hour", used_percent: 25, resets_at: 1900000000, window_minutes: 300 }] })
+  update(4, { context: { used_tokens: 4000, window_tokens: 200000 } })
+  assert.equal(state.providerUsage.context.used_tokens, 4000)
+  assert.equal(state.providerUsage.limits.length, 2)
+  assert.equal(state.blocks.length, 0)
+  update(2, { context: { used_tokens: 500000, window_tokens: 200000 } })
+  assert.equal(state.providerUsage.context.used_tokens, 4000)
+})
+
+
+test("sparse quota updates retain a known window and reset time", () => {
+  let state = emptyThreadState()
+  state = applyEvent(state, { seq: 1, thread_id: "thread", at: AT, kind: "provider_usage_updated", usage: { limits: [{ name: "Primary", used_percent: 20, window_minutes: 300, resets_at: 1900000000 }] } })
+  state = applyEvent(state, { seq: 2, thread_id: "thread", at: AT, kind: "provider_usage_updated", usage: { limits: [{ name: "Primary", used_percent: 30, window_minutes: null, resets_at: null }] } })
+  assert.deepEqual(state.providerUsage.limits, [{ name: "Primary", used_percent: 30, window_minutes: 300, resets_at: 1900000000 }])
+})
+
+
+test("native command catalogs survive unrelated events and reload", () => {
+  const thread = { id: "thread-1", last_seq: 0 }
+  let state = seedFromGet({ thread, transcript: [], pending_approvals: [], provider_commands: [{ name: "review", description: "Review changes" }] })
+  assert.equal(state.providerCommands[0].name, "review")
+  state = applyEvent(state, { kind: "provider_commands_updated", commands: [{ name: "check", description: "Check" }], seq: 1, thread_id: thread.id })
+  state = applyEvent(state, { kind: "provider_notice", level: "info", text: "ready", seq: 2, thread_id: thread.id })
+  assert.equal(state.providerCommands[0].name, "check")
+})
+
+
+test("async questions stay answerable through completion and reload without blocking approvals", () => {
+  const request = { id: "question", questions: [{ title: "Window?", options: ["Allow", "Keep current"] }, { title: "Constraints?", options: [] }] }
+  const state = fold([start, { kind: "async_questions_requested", request }, done, { kind: "provider_session_released", reason: "idle" }])
+  assert.deepEqual(state.pendingQuestions, [request])
+  assert.deepEqual(state.pendingApprovals, [])
+  const loaded = seedFromGet({ thread: { last_seq: 4 }, transcript: [], pending_approvals: [], pending_questions: state.pendingQuestions })
+  assert.deepEqual(loaded.pendingQuestions, [request])
+  const answered = applyEvent(state, { seq: 5, turn_id: T, at: AT, kind: "async_questions_answered", request_id: request.id, answers: ["Keep current", "Use scratch data"], message_id: "answer", message: { parts: [{ type: "text", text: "Keep current. Use scratch data." }] } })
+  assert.deepEqual(answered.pendingQuestions, [])
+  const [group] = groupTurns(answered.blocks)
+  assert.equal(group.user.id, "u1", "an answer must not replace the original prompt")
+  assert.equal(group.work.filter(block => block.kind === "user").length, 1)
+})
+
+test("an idle async answer has one user bubble when its turn and receipt arrive", () => {
+  const state = fold([start, { kind: "async_questions_answered", request_id: "q", answers: ["hi"], message_id: start.message_id, message: start.message }])
+  assert.equal(state.blocks.filter(block => block.kind === "user").length, 1)
 })

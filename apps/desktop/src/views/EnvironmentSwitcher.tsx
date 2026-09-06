@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/kit/button"
 import { Input } from "@/components/kit/input"
+import { Switch } from "@/components/kit/switch"
 import {
   Dialog,
   DialogDescription,
@@ -32,13 +33,16 @@ import {
   Trash2,
 } from "@/lib/kit/icons"
 import { Spinner } from "@/components/kybern/bits"
+import { useSlidingPill } from "@/lib/kit/slidingPill"
+import { SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
+import { cn } from "@/lib/utils"
 import {
   listSshHosts,
   type BootstrapProgress,
   type BootstrapStep,
   type EnvironmentProfile,
 } from "@/lib/environments"
-import { isTauri } from "@/lib/tauri"
+import { isTauri, pairingQr } from "@/lib/tauri"
 import {
   parsePairingInvitation,
   pairingInvitation,
@@ -54,7 +58,7 @@ import {
 } from "@/state/environments"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import type { PairingCreateResult, TokenInfo } from "@/protocol"
+import type { Exposure, PairingCreateResult, TokenInfo } from "@/protocol"
 import {
   ENVIRONMENT_DIALOG,
   ENVIRONMENT_HINT,
@@ -213,12 +217,15 @@ function EnvironmentForm({
     sshAvailable && (!profile || profile.ssh) ? "ssh" : "address"
   )
   const [busy, setBusy] = useState(false)
+  const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(mode)
   const chooser = !profile && sshAvailable && (
     <div
+      ref={tabsRef}
       role="tablist"
       aria-label="How to reach the machine"
-      className="flex gap-1 rounded-lg bg-secondary/60 p-1"
+      className="t-tabs flex gap-1 rounded-lg bg-[var(--color-background-button-secondary)] p-1"
     >
+      <div aria-hidden className="t-tabs-pill z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />
       {(
         [
           ["ssh", "Over SSH"],
@@ -230,9 +237,13 @@ function EnvironmentForm({
           type="button"
           role="tab"
           aria-selected={mode === id}
+          data-tab-active={mode === id}
           disabled={busy}
           onClick={() => setMode(id)}
-          className={`flex-1 rounded-md px-3 py-1.5 text-[length:var(--app-font-size-ui-sm,13px)] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60 ${mode === id ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
+          className={cn(
+            "relative z-[1] flex-1 rounded-md px-3 py-1.5 text-[length:var(--app-font-size-ui-sm,13px)] outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60",
+            mode === id ? "text-[var(--sidebar-accent-foreground)]" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, "hover:text-foreground")
+          )}
         >
           {label}
         </button>
@@ -271,6 +282,7 @@ function SshEnvironmentForm({
   busy: boolean
   setBusy: (busy: boolean) => void
 }) {
+  const formId = useId()
   const [name, setName] = useState(profile?.name ?? "")
   const [target, setTarget] = useState(
     profile?.ssh
@@ -330,18 +342,18 @@ function SshEnvironmentForm({
   }
   const host = target.trim().replace(/^ssh:\/\//, "").replace(/^[^@]*@/, "")
   return (
-    <form onSubmit={submit} className="flex min-h-0 flex-col">
+    <>
       <DialogHeader>
         <DialogTitle>
           {profile ? "Edit environment" : "Add environment"}
         </DialogTitle>
         <DialogDescription>
-          Kybern signs in with your SSH keys, installs and starts the daemon on
-          that machine, and pairs this device through a tunnel it keeps open.
+          Switch between machines. Each keeps its own projects and threads.
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="flex flex-col gap-4 pt-3">
         {chooser}
+        <form id={formId} onSubmit={submit} className="flex flex-col gap-4">
         <label className={FIELD}>
           <span className={dialogFieldLabelClassName}>Name</span>
           <Input
@@ -376,10 +388,9 @@ function SshEnvironmentForm({
           </datalist>
         </label>
         <p className={ENVIRONMENT_HINT}>
-          Anything that works with <code className="font-mono">ssh</code>{" "}
-          works here, including aliases from ~/.ssh/config and a custom port
-          as host:port. Key or agent sign-in is required; passwords are never
-          asked for.
+          Kybern signs in with your SSH keys, never a password, installs and
+          starts the daemon there, and pairs this device through a tunnel it
+          keeps open. Aliases from ~/.ssh/config and host:port work too.
         </p>
         <details className={ENVIRONMENT_HINT}>
           <summary className="w-fit cursor-pointer rounded-md py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring">
@@ -463,10 +474,12 @@ function SshEnvironmentForm({
             )}
           </p>
         )}
+        </form>
       </DialogPanel>
       <DialogFooter>
         <Button
           type="submit"
+          form={formId}
           disabled={busy || !name.trim() || !target.trim()}
         >
           {busy && <Spinner size={13} />}
@@ -477,7 +490,7 @@ function SshEnvironmentForm({
               : "Set up and connect"}
         </Button>
       </DialogFooter>
-    </form>
+    </>
   )
 }
 
@@ -494,6 +507,7 @@ function AddressEnvironmentForm({
   busy: boolean
   setBusy: (busy: boolean) => void
 }) {
+  const formId = useId()
   const [name, setName] = useState(profile?.name ?? "")
   const [address, setAddress] = useState(profile?.url ?? "")
   const [code, setCode] = useState("")
@@ -545,17 +559,20 @@ function AddressEnvironmentForm({
       onDone()
     } catch (e) {
       const detail = errorText(e)
+      const unreachable = /error sending request|connection refused|timed out/i.test(detail)
       setError(
-        /error sending request|connection refused|timed out/i.test(detail)
-          ? "Unable to reach this machine. Check its address and network connection, then try again."
-          : detail
+        unreachable && isLoopbackAddress(address)
+          ? "This invitation points at the other machine's own loopback address, which only works on that machine. For a daemon that listens on 127.0.0.1, add it over SSH instead, or bind it to an address this device can reach."
+          : unreachable
+            ? "Unable to reach this machine. Check its address and network connection, then try again."
+            : detail
       )
     } finally {
       setBusy(false)
     }
   }
   return (
-    <form onSubmit={submit} className="flex min-h-0 flex-col">
+    <>
       <DialogHeader>
         <DialogTitle>
           {profile ? "Edit environment" : "Add environment"}
@@ -566,6 +583,7 @@ function AddressEnvironmentForm({
       </DialogHeader>
       <DialogPanel className="flex flex-col gap-4 pt-3">
         {chooser}
+        <form id={formId} onSubmit={submit} className="flex flex-col gap-4">
         <label className={FIELD}>
           <span className={dialogFieldLabelClassName}>Name</span>
           <Input
@@ -661,10 +679,12 @@ function AddressEnvironmentForm({
             {error}
           </p>
         )}
+        </form>
       </DialogPanel>
       <DialogFooter>
         <Button
           type="submit"
+          form={formId}
           disabled={
             busy ||
             !name.trim() ||
@@ -676,7 +696,7 @@ function AddressEnvironmentForm({
           {busy ? "Connecting" : "Save and connect"}
         </Button>
       </DialogFooter>
-    </form>
+    </>
   )
 }
 
@@ -765,15 +785,54 @@ function ManageEnvironments({
   )
 }
 
+/**
+ * The address another device should use: the daemon's Tailscale listener
+ * first, then any other network address it reports, then the address this
+ * desktop itself connected with when that is not a loopback tunnel.
+ */
+function suggestedAddress(
+  endpoints: string[],
+  exposure: Exposure | null,
+  profileUrl: string | null | undefined
+) {
+  const remote = endpoints.filter((url) => !isLoopbackAddress(url))
+  const tailscale = exposure?.tailscale_ip
+    ? remote.find((url) => url.includes(exposure.tailscale_ip!))
+    : undefined
+  if (tailscale) return tailscale
+  if (remote[0]) return remote[0]
+  if (profileUrl && !isLoopbackAddress(profileUrl)) return profileUrl
+  return ""
+}
+
 function DeviceAccess() {
   const [invitation, setInvitation] = useState<PairingCreateResult | null>(null)
   const [address, setAddress] = useState("")
   const [devices, setDevices] = useState<TokenInfo[]>([])
+  const [exposure, setExposure] = useState<Exposure | null>(null)
+  const [exposureBusy, setExposureBusy] = useState(false)
+  const [qr, setQr] = useState<{ link: string; svg: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const info = useStore((s) => s.info)
   const profile = activeEnvironment()
+  useEffect(() => {
+    let active = true
+    const client = rpc()
+    if (client.status === "open")
+      void client
+        .call("access.exposure.get", {})
+        .then((next) => {
+          if (active) setExposure(next)
+        })
+        .catch(() => {
+          // Older daemons have no exposure control; the row stays hidden.
+        })
+    return () => {
+      active = false
+    }
+  }, [])
   useEffect(() => {
     let active = true
     let loading = false
@@ -808,20 +867,52 @@ function DeviceAccess() {
     try {
       const next = await rpc().call("access.pairing.create", {})
       setInvitation(next)
-      setAddress(
-        profile?.url ??
-          next.endpoints.find(
-            (url) => !url.includes("127.0.0.1") && !url.includes("[::1]")
-          ) ??
-          ""
-      )
+      setAddress(suggestedAddress(next.endpoints, exposure, profile?.url))
     } catch (e) {
       setError(errorText(e))
     } finally {
       setBusy(false)
     }
   }
+  const setTailscale = async (enabled: boolean) => {
+    setExposureBusy(true)
+    setError(null)
+    try {
+      const next = await rpc().call("access.exposure.set", { tailscale: enabled })
+      setExposure(next)
+      if (invitation) {
+        // The listener set changed, so the reachable endpoints did too.
+        const fresh = await rpc().call("access.pairing.create", {})
+        setInvitation(fresh)
+        setAddress(suggestedAddress(fresh.endpoints, next, profile?.url))
+      }
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setExposureBusy(false)
+    }
+  }
   const expired = !!invitation && Date.parse(invitation.expires_at) <= now
+  const link =
+    invitation && address && info
+      ? pairingInvitation(address, invitation.code, info.environment_id)
+      : null
+  const scannable = !!link && !expired && !isLoopbackAddress(address)
+  useEffect(() => {
+    if (!scannable || !link) return
+    let active = true
+    pairingQr(link)
+      .then((svg) => {
+        if (active && svg) setQr({ link, svg })
+      })
+      .catch(() => {
+        // No QR outside the shell; the copyable invitation still works.
+      })
+    return () => {
+      active = false
+    }
+  }, [link, scannable])
+  const qrSvg = qr && scannable && qr.link === link ? qr.svg : null
   return (
     <>
       <DialogHeader>
@@ -831,8 +922,43 @@ function DeviceAccess() {
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="flex flex-col gap-4 pt-3">
+        {exposure && (
+          <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/40 px-4 py-3">
+            <div className="min-w-0 space-y-0.5">
+              <div className="text-[length:var(--app-font-size-ui,14px)] font-medium">
+                Reachable over Tailscale
+              </div>
+              <p className={ENVIRONMENT_HINT}>
+                {exposure.tailscale_ip
+                  ? exposure.tailscale
+                    ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.`
+                    : "Lets phones and other devices on your tailnet pair without a tunnel."
+                  : "Tailscale is not running on this machine."}
+              </p>
+            </div>
+            <Switch
+              aria-label="Reachable over Tailscale"
+              checked={exposure.tailscale}
+              disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)}
+              onCheckedChange={(checked) => void setTailscale(checked)}
+            />
+          </div>
+        )}
         {invitation && (
           <>
+            {qrSvg && (
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  aria-label="Pairing QR code"
+                  role="img"
+                  className="w-44 rounded-xl bg-white p-3 text-black shadow-sm [&>svg]:block [&>svg]:size-full"
+                  dangerouslySetInnerHTML={{ __html: qrSvg }}
+                />
+                <p className={`text-center ${ENVIRONMENT_HINT}`}>
+                  Scan with the Kybern mobile app, or copy the invitation below.
+                </p>
+              </div>
+            )}
             <div className="rounded-xl bg-muted/40 px-4 py-4 text-center">
               <div
                 dir="ltr"
@@ -867,6 +993,14 @@ function DeviceAccess() {
               <p className={ENVIRONMENT_HINT}>
                 Enter an address the other device can reach, such as your
                 Tailscale HTTPS address or SSH tunnel address.
+              </p>
+            )}
+            {address && isLoopbackAddress(address) && (
+              <p className={ENVIRONMENT_HINT}>
+                This address only works on the machine itself.
+                {exposure?.tailscale_ip && !exposure.tailscale
+                  ? " Turn on Reachable over Tailscale to get one other devices can use."
+                  : " Enter an address the other device can reach."}
               </p>
             )}
             <Button
@@ -952,4 +1086,14 @@ function DeviceAccess() {
       </DialogPanel>
     </>
   )
+}
+
+/** True when the address names this device's own loopback interface. */
+function isLoopbackAddress(address: string) {
+  try {
+    const host = new URL(address.trim()).hostname.replace(/^\[|\]$/g, "")
+    return host === "localhost" || host === "::1" || /^127\./.test(host)
+  } catch {
+    return false
+  }
 }

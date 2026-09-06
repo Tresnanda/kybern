@@ -1,15 +1,13 @@
 #!/bin/sh
-# Install Kybern on a headless machine: the daemon (kybernd) and, unless
-# --daemon-only, the kybern CLI for pairing and administration over SSH.
-# No desktop, Node or pnpm is involved. Binaries land in ~/.cargo/bin together
-# with kybern-daemon-update / kybern-cli-update for in-place upgrades.
+# Install Kybern on a headless machine: the daemon (kybernd) and the kybern CLI
+# for pairing and administration over SSH. No desktop, Node or pnpm is
+# involved. Binaries land in ~/.cargo/bin; rerun this to upgrade in place.
 #
 #   curl --proto '=https' --tlsv1.2 -LsSf \
 #     https://github.com/Tresnanda/kybern/releases/latest/download/kybern-remote-install.sh | sh
 #
 #   ... | sh -s -- --service              also install and start a systemd user service (Linux)
 #   ... | sh -s -- --version 0.2.0        pin a release instead of latest
-#   ... | sh -s -- --daemon-only          skip the kybern CLI
 #   ... | sh -s -- --port 4173 --bind 127.0.0.1   listener used by the service (defaults shown)
 #
 # The service keeps the daemon on loopback; expose it with Tailscale Serve, an
@@ -20,14 +18,12 @@ set -eu
 REPO="${KYBERN_REPO:-Tresnanda/kybern}"
 VERSION="${KYBERN_VERSION:-latest}"
 SERVICE=0
-DAEMON_ONLY=0
 PORT=4173
 BIND=127.0.0.1
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --service) SERVICE=1 ;;
-    --daemon-only) DAEMON_ONLY=1 ;;
     --version) VERSION="$2"; shift ;;
     --version=*) VERSION="${1#--version=}" ;;
     --port) PORT="$2"; shift ;;
@@ -42,7 +38,7 @@ done
 
 case "$(uname -s)" in
   Linux|Darwin) ;;
-  *) echo "this installer supports Linux and macOS; on Windows run kybernd-installer.ps1 from the release page" >&2; exit 1 ;;
+  *) echo "this installer supports Linux and macOS; on Windows run kybern-installer.ps1 from the release page" >&2; exit 1 ;;
 esac
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 
@@ -52,13 +48,8 @@ else
   BASE="https://github.com/$REPO/releases/download/v${VERSION#v}"
 fi
 
-install_app() {
-  echo "==> installing $1 ($VERSION)"
-  curl --proto '=https' --tlsv1.2 -LsSf "$BASE/$1-installer.sh" | sh
-}
-
-install_app kybern-daemon
-[ "$DAEMON_ONLY" = "1" ] || install_app kybern-cli
+echo "==> installing kybernd and kybern ($VERSION)"
+curl --proto '=https' --tlsv1.2 -LsSf "$BASE/kybern-installer.sh" | sh
 
 BIN="$HOME/.cargo/bin"
 if ! command -v kybernd >/dev/null 2>&1; then
@@ -89,7 +80,10 @@ TimeoutStopSec=30
 WantedBy=default.target
 UNIT
   systemctl --user daemon-reload
-  systemctl --user enable --now kybernd
+  systemctl --user enable kybernd >/dev/null 2>&1
+  # Restart rather than start, so a service already running an older binary
+  # picks up the one just installed.
+  systemctl --user restart kybernd
   echo "==> kybernd is running as a user service on $BIND:$PORT"
   if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
     echo "==> keep it running after logout and reboot:  sudo loginctl enable-linger $USER"

@@ -10,9 +10,10 @@ pub mod claude;
 mod claude_config;
 pub mod codex;
 pub mod cursor;
-pub mod ndjson;
+mod ndjson;
 pub mod opencode;
 pub mod pi;
+pub mod process_tree;
 pub mod registry;
 pub mod update;
 
@@ -166,6 +167,7 @@ pub enum DriverEvent {
         delta: String,
     },
     /// Full text of an assistant message once the provider finalizes it.
+    AsyncQuestions(kybern_protocol::AsyncQuestionRequest),
     MessageCompleted {
         message_id: String,
         origin: EventOrigin,
@@ -209,6 +211,8 @@ pub enum DriverEvent {
     TurnFailed {
         error: String,
     },
+    CommandsUpdated(Vec<kybern_protocol::ProviderCommand>),
+    UsageUpdated(kybern_protocol::ProviderUsage),
     Notice {
         level: NoticeLevel,
         text: String,
@@ -226,6 +230,14 @@ pub trait AgentSession: Send + Sync {
     /// Queue a user turn. `message_id` is kybern's id for the message; drivers that
     /// accept a client-chosen id use it so rewinds can reference the turn.
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()>;
+    /// Deliver explicit user input to the current turn without interrupting it.
+    async fn steer(&self, _message_id: &str, _message: &UserMessage) -> Result<()> {
+        Err(DriverError::Unsupported("This harness does not support answering during a turn. Try again when it finishes.".into()))
+    }
+    /// Initiate native compaction; report completion through the usual turn events.
+    async fn compact(&self) -> Result<()> {
+        Err(DriverError::Unsupported("This harness does not expose manual compaction. Automatic compaction remains available.".into()))
+    }
     async fn interrupt(&self) -> Result<()>;
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()>;
     async fn set_model(&self, model: &str) -> Result<()>;
@@ -284,4 +296,57 @@ pub fn summarize_tool_call(name: &str, input: &Value) -> String {
         "WebFetch" | "webfetch" => short("url").map(|u| format!("fetch: {u}")).unwrap_or_else(|| name.to_string()),
         _ => name.to_string(),
     }
+}
+
+#[cfg(all(test, unix))]
+mod lifecycle_tests {
+    use super::*;
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+
+    #[tokio::test]
+    async fn every_driver_cleans_up_cancelled_startup_or_dropped_handle() {
+        let registry = registry::DriverRegistry::with_defaults();
+        for kind in ProviderKind::ALL {
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("harness-fixture");
+            std::fs::write(&binary, "#!/bin/sh\n(sleep 0.3; touch escaped) &\ncat >/dev/null\nwait\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let config = SessionConfig {
+                cwd: root.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: PermissionMode::Supervised,
+                resume_session_id: None,
+                fork: false,
+                rewind: None,
+                binary: Some(binary),
+                env: std::collections::HashMap::new(),
+            };
+            let result = tokio::time::timeout(Duration::from_millis(80), registry.get(kind).unwrap().spawn(config)).await;
+            // Claude can finish its non-blocking startup; the others wait for
+            // a protocol handshake. Both ownership paths must close descendants.
+            drop(result);
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert!(!root.path().join("escaped").exists(), "{kind} left a startup descendant running");
+        }
+    }
+}
+
+/// Preserve only usable advertised command names; never manufacture terminal commands.
+pub(crate) fn provider_commands(value: &Value) -> Vec<kybern_protocol::ProviderCommand> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|command| {
+            let name = command.as_str().or_else(|| command.get("name").and_then(Value::as_str))?.trim_start_matches('/');
+            if name.is_empty() || name.chars().any(char::is_whitespace) {
+                return None;
+            }
+            Some(kybern_protocol::ProviderCommand {
+                name: name.to_string(),
+                description: command.get("description").and_then(Value::as_str).unwrap_or("Run harness command").to_string(),
+            })
+        })
+        .collect()
 }

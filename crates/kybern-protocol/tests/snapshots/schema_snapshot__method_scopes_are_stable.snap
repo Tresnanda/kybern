@@ -14,6 +14,12 @@ expression: scopes
   - "orchestration:read"
 - - harness_updates.run
   - "orchestration:operate"
+- - daemon_update.status
+  - "orchestration:read"
+- - daemon_update.check
+  - "orchestration:operate"
+- - daemon_update.run
+  - "orchestration:operate"
 - - projects.list
   - "orchestration:read"
 - - projects.browse
@@ -41,6 +47,12 @@ expression: scopes
 - - queue.list
   - "orchestration:read"
 - - queue.remove
+  - "orchestration:operate"
+- - threads.release
+  - "orchestration:operate"
+- - threads.compact
+  - "orchestration:operate"
+- - threads.answer
   - "orchestration:operate"
 - - threads.interrupt
   - "orchestration:operate"
@@ -79,6 +91,10 @@ expression: scopes
 - - usage.summary
   - "orchestration:read"
 - - access.pairing.create
+  - "access:write"
+- - access.exposure.get
+  - "access:read"
+- - access.exposure.set
   - "access:write"
 - - access.tokens.list
   - "access:read"

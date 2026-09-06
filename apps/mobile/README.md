@@ -34,7 +34,7 @@ native modules that are not in Expo Go, so build a development client.
 ```sh
 # 1. On the machine with your projects, start the daemon reachable from the LAN
 #    or Tailscale (it binds to loopback by default).
-cargo run -p kybern-daemon -- --bind <private-interface-ip> --port 4173
+cargo run -p kybern --bin kybernd -- --bind <private-interface-ip> --port 4173
 kybern pair                       # one-use code, expires in ten minutes
 
 # 2. Build and run the app

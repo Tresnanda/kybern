@@ -69,7 +69,7 @@ function stageDaemon(tauriCommand, tauriArgs, childEnv) {
       ? tauriArgs.includes("--release")
       : !tauriArgs.includes("--debug")
   const profile = release ? "release" : "debug"
-  const cargoArgs = ["build", "--package", "kybern-daemon"]
+  const cargoArgs = ["build", "--package", "kybern", "--bin", "kybernd"]
   if (release) {
     cargoArgs.push("--release")
   }

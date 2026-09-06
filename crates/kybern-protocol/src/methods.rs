@@ -109,6 +109,12 @@ pub struct HarnessUpdateParams {
 }
 method!(HarnessUpdatesRun, "harness_updates.run", Some(Scope::OrchestrationOperate), HarnessUpdateParams, HarnessUpdate);
 
+// `check` asks the release feed without installing; `run` installs the newest
+// version once nothing is running, then restarts the daemon.
+method!(DaemonUpdateStatusMethod, "daemon_update.status", Some(Scope::OrchestrationRead), Empty, DaemonUpdate);
+method!(DaemonUpdateCheck, "daemon_update.check", Some(Scope::OrchestrationOperate), Empty, DaemonUpdate);
+method!(DaemonUpdateRun, "daemon_update.run", Some(Scope::OrchestrationOperate), Empty, DaemonUpdate);
+
 // ---- projects ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -211,6 +217,12 @@ pub struct ThreadsGetParams {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
+    #[serde(default)]
+    pub pending_questions: Vec<AsyncQuestionRequest>,
+    #[serde(default)]
+    pub provider_commands: Vec<crate::ProviderCommand>,
+    #[serde(default)]
+    pub provider_usage: crate::ProviderUsage,
     pub thread: Thread,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_approvals: Vec<ApprovalRequest>,
@@ -258,6 +270,15 @@ method!(ThreadsSend, "threads.send", Some(Scope::OrchestrationOperate), ThreadsS
 pub struct ThreadsInterruptParams {
     pub thread_id: ThreadId,
 }
+method!(ThreadsRelease, "threads.release", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Empty);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsAnswerParams {
+    pub thread_id: ThreadId,
+    pub request_id: String,
+    pub answers: Vec<String>,
+}
+method!(ThreadsAnswer, "threads.answer", Some(Scope::OrchestrationOperate), ThreadsAnswerParams, Empty);
+method!(ThreadsCompact, "threads.compact", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, ThreadsSendResult);
 method!(ThreadsInterrupt, "threads.interrupt", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Empty);
 
 // ---- daemon-owned follow-ups ----
@@ -521,6 +542,27 @@ pub struct PairingCreateResult {
     pub endpoints: Vec<String>,
 }
 method!(PairingCreate, "access.pairing.create", Some(Scope::AccessWrite), PairingCreateParams, PairingCreateResult);
+
+/// Which networks the daemon listens on besides loopback.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Exposure {
+    /// This machine's Tailscale IPv4 address when Tailscale is running and
+    /// the daemon could bind it; `None` when Tailscale is absent or userspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale_ip: Option<String>,
+    /// Whether the daemon currently listens on the Tailscale address.
+    pub tailscale: bool,
+    /// Every address the daemon listens on, loopback included.
+    pub listeners: Vec<String>,
+}
+method!(ExposureGet, "access.exposure.get", Some(Scope::AccessRead), Empty, Exposure);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ExposureSetParams {
+    /// Listen on the Tailscale address as well. Persisted in settings.
+    pub tailscale: bool,
+}
+method!(ExposureSet, "access.exposure.set", Some(Scope::AccessWrite), ExposureSetParams, Exposure);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TokenInfo {
@@ -864,6 +906,9 @@ registry!(
     ProvidersList,
     HarnessUpdatesList,
     HarnessUpdatesRun,
+    DaemonUpdateStatusMethod,
+    DaemonUpdateCheck,
+    DaemonUpdateRun,
     ProjectsList,
     ProjectsBrowse,
     ProjectsAdd,
@@ -878,6 +923,9 @@ registry!(
     QueueAdd,
     QueueList,
     QueueRemove,
+    ThreadsRelease,
+    ThreadsCompact,
+    ThreadsAnswer,
     ThreadsInterrupt,
     TasksList,
     TaskStop,
@@ -897,6 +945,8 @@ registry!(
     SettingsUpdate,
     UsageSummary,
     PairingCreate,
+    ExposureGet,
+    ExposureSet,
     TokensList,
     TokensRevoke,
     GitStatusMethod,

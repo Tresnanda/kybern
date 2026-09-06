@@ -98,6 +98,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             tokio::spawn(crate::harness_updates::tick(state.clone()));
             ok(record)
         }
+        DaemonUpdateStatusMethod::NAME => ok(state.daemon_updates.get()),
+        DaemonUpdateCheck::NAME => ok(crate::self_update::check(state).await),
+        DaemonUpdateRun::NAME => {
+            let record = state.daemon_updates.request(&state.store);
+            tokio::spawn(crate::self_update::tick(state.clone()));
+            ok(record)
+        }
         ProjectsList::NAME => ok(ProjectsListResult { projects: state.store.projects_list().map_err(internal)? }),
         ProjectsBrowse::NAME => {
             let p: ProjectsBrowseParams = parse_or_default(params)?;
@@ -150,18 +157,37 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.touch_session(p.thread_id).await;
             let store = state.store.clone();
             let id = p.thread_id;
-            let (transcript, pending_approvals, runtime_tasks) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                let events = store.events_for_thread(id)?;
-                Ok((
-                    kybern_store::project_transcript(&events),
-                    store.approvals_pending(Some(id))?,
-                    kybern_store::project_runtime_tasks(&events),
-                ))
+            let (transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands, pending_questions) =
+                tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                    let events = store.events_for_thread(id)?;
+                    Ok((
+                        kybern_store::project_transcript(&events),
+                        store.approvals_pending(Some(id))?,
+                        kybern_store::project_runtime_tasks(&events),
+                        kybern_store::project_provider_usage(&events),
+                        events
+                            .iter()
+                            .rev()
+                            .find_map(|event| match &event.payload {
+                                EventPayload::ProviderCommandsUpdated { commands } => Some(commands.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or_default(),
+                        kybern_store::project_pending_questions(&events),
+                    ))
+                })
+                .await
+                .map_err(internal)?
+                .map_err(internal)?;
+            ok(ThreadsGetResult {
+                thread,
+                transcript,
+                pending_approvals,
+                runtime_tasks,
+                provider_usage,
+                provider_commands,
+                pending_questions,
             })
-            .await
-            .map_err(internal)?
-            .map_err(internal)?;
-            ok(ThreadsGetResult { thread, transcript, pending_approvals, runtime_tasks })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
@@ -197,6 +223,20 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: QueueRemoveParams = parse(params)?;
             state.orchestrator.remove_queued(p.thread_id, p.id).map_err(bad)?;
             ok(Empty {})
+        }
+        ThreadsRelease::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            state.orchestrator.release_session(p.thread_id).await.map_err(bad)?;
+            ok(Empty {})
+        }
+        ThreadsAnswer::NAME => {
+            state.orchestrator.answer_questions(parse(params)?).await.map_err(bad)?;
+            ok(Empty {})
+        }
+        ThreadsCompact::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            let (turn_id, message_id) = state.orchestrator.send(p.thread_id, UserMessage::text("/compact")).await.map_err(bad)?;
+            ok(ThreadsSendResult { turn_id, message_id })
         }
         ThreadsInterrupt::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
@@ -326,6 +366,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let endpoints = crate::access::endpoints(state).await;
             let (code, expires_at) = state.pairing.create(p.label);
             ok(PairingCreateResult { code, expires_at, endpoints })
+        }
+        ExposureGet::NAME => ok(crate::access::exposure(state).await),
+        ExposureSet::NAME => {
+            let p: ExposureSetParams = parse(params)?;
+            ok(crate::access::set_exposure(state, p.tailscale).await.map_err(|e| internal(format!("{e:#}")))?)
         }
         TokensList::NAME => ok(TokensListResult { tokens: state.store.tokens_list().map_err(internal)? }),
         TokensRevoke::NAME => {

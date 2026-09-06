@@ -1,3 +1,5 @@
+import { ProviderUsageIndicator } from "@/components/kybern/ProviderUsageIndicator"
+import type { ProviderUsage } from "@/protocol"
 // Composer: frosted 1.2rem squircle
 // surface, 12px system-ui editor, footer with the + menu, permission-mode
 // picker (Full access in orange), model/effort picker and the ink send circle.
@@ -65,15 +67,20 @@ export interface SlashCommand {
   name: string
   hint: string
   icon?: React.ReactNode
+  invocation?: string
+  insert?: boolean
   run: () => void
 }
 
 export interface ComposerProps {
   /** Unique within the selected environment: a thread or project draft. */
+  providerUsage?: ProviderUsage
+  showProviderUsage?: boolean
   draftKey?: string
   placeholder?: string
   running?: boolean
   disabled?: boolean
+  sendDisabled?: boolean
   disabledReason?: string
   onSend: (message: UserMessage) => Promise<void> | void
   onStop?: () => void
@@ -123,7 +130,7 @@ function prettyModel(id: string): string {
 // The textarea and its highlight layer share these metrics exactly so the
 // painted tokens sit under the same glyphs the user is editing.
 const EDITOR_METRICS_CLASS =
-  "block max-h-[200px] w-full font-system-ui text-[length:var(--app-font-size-chat,12px)] leading-relaxed break-words whitespace-pre-wrap min-h-[var(--app-density-composer-editor-min-height,2lh)]"
+  "block box-border m-0 border-0 p-0 max-h-[200px] w-full font-normal tracking-normal [font-kerning:none] [font-variant-ligatures:none] [tab-size:8] font-system-ui text-[length:var(--app-font-size-chat,12px)] leading-relaxed break-words whitespace-pre-wrap min-h-[var(--app-density-composer-editor-min-height,2lh)]"
 
 const EDITOR_CLASS = cn(
   EDITOR_METRICS_CLASS,
@@ -136,6 +143,21 @@ const EDITOR_BACKDROP_CLASS = cn(
   EDITOR_METRICS_CLASS,
   "chat-composer-backdrop pointer-events-none absolute inset-0 z-0 overflow-hidden text-foreground select-none",
 )
+
+function syncEditorBackdrop(editor: HTMLTextAreaElement, layer: HTMLDivElement | null) {
+  if (!layer) return
+  layer.style.width = `${editor.clientWidth}px`
+  layer.scrollTop = editor.scrollTop
+}
+
+function growEditor(editor: HTMLTextAreaElement, layer: HTMLDivElement | null) {
+  const scrollTop = editor.scrollTop
+  editor.style.height = "0px"
+  editor.style.height = `${Math.min(200, editor.scrollHeight)}px`
+  editor.scrollTop = scrollTop
+  syncEditorBackdrop(editor, layer)
+  requestAnimationFrame(() => syncEditorBackdrop(editor, layer))
+}
 
 const DEFAULT_PLACEHOLDER = "Ask anything, @ files, $ skills, or / commands"
 
@@ -283,11 +305,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     [],
   )
 
-  const grow = (el: HTMLTextAreaElement) => {
-    el.style.height = "0px"
-    el.style.height = `${Math.min(200, el.scrollHeight)}px`
-  }
-
   const setTextAndCaret = useCallback((next: string, pos?: number) => {
     setText(next)
     requestAnimationFrame(() => {
@@ -297,7 +314,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       const p = pos ?? next.length
       el.setSelectionRange(p, p)
       setCaret(p)
-      grow(el)
+      growEditor(el, backdrop.current)
     })
   }, [])
 
@@ -416,6 +433,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }
   const pickCommand = (cmd: SlashCommand) => {
     if (!slash) return
+    if (cmd.insert) {
+      const invocation = `/${cmd.invocation ?? cmd.name} `
+      setTextAndCaret(`${text.slice(0, slash.start)}${invocation}${text.slice(caret)}`, slash.start + invocation.length)
+      return
+    }
     setTextAndCaret(`${text.slice(0, slash.start)}${text.slice(caret)}`, slash.start)
     if (cmd.name === "attach") fileInput.current?.click()
     else cmd.run()
@@ -448,10 +470,25 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   // ---- sending ----
 
-  const canSend = !disabled && !sending && uploading === 0 && (text.trim().length > 0 || attachments.length > 0)
+  const canSend = !disabled && !props.sendDisabled && !sending && uploading === 0 && (text.trim().length > 0 || attachments.length > 0)
 
   // Tokens the highlight layer paints: the same ones buildParts will send.
   const backdrop = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const editor = ta.current
+    const layer = backdrop.current
+    if (!editor) return
+    growEditor(editor, layer)
+    let width = editor.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (editor.clientWidth === width) return
+      width = editor.clientWidth
+      growEditor(editor, layer)
+    })
+    observer.observe(editor)
+    return () => observer.disconnect()
+  }, [hideInput])
+
   const segments = useMemo(
     () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills]),
     [text, skills, tokenSources],
@@ -751,17 +788,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               aria-placeholder={placeholder}
               disabled={disabled}
               spellCheck
+              autoCorrect="off"
+              autoCapitalize="off"
               onChange={(e) => {
                 setText(e.target.value)
                 syncCaret(e.target)
-                grow(e.target)
+                growEditor(e.target, backdrop.current)
                 setMenuSel({ sig: "", index: 0 })
                 setMenuDismissed(null)
               }}
               onKeyUp={(e) => syncCaret(e.currentTarget)}
               onClick={(e) => syncCaret(e.currentTarget)}
               onScroll={(e) => {
-                if (backdrop.current) backdrop.current.scrollTop = e.currentTarget.scrollTop
+                syncEditorBackdrop(e.currentTarget, backdrop.current)
               }}
               onKeyDown={onKeyDown}
               onPaste={(e) => {
@@ -871,6 +910,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 data-chat-composer-actions="right"
                 className={cn("flex items-center gap-1", surfaceMode === "split" ? "min-w-0 flex-1 justify-end" : "shrink-0")}
               >
+                {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} />}
                 {provider && (
                   <Menu onOpenChange={(open) => open && canReloadModels && void reloadModels()}>
                     <Tooltip>

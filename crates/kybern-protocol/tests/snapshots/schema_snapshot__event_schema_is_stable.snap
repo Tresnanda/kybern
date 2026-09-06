@@ -401,6 +401,54 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "request": {
+          "$ref": "#/$defs/AsyncQuestionRequest"
+        },
+        "kind": {
+          "type": "string",
+          "const": "async_questions_requested"
+        }
+      },
+      "required": [
+        "kind",
+        "request"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "async_questions_answered"
+        }
+      },
+      "required": [
+        "kind",
+        "request_id",
+        "answers",
+        "message_id",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "approval": {
           "$ref": "#/$defs/ApprovalRequest"
         },
@@ -506,6 +554,41 @@ expression: schema_for!(ThreadEvent)
       "required": [
         "kind",
         "error"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderCommand"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "provider_commands_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "commands"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "usage": {
+          "$ref": "#/$defs/ProviderUsage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "provider_usage_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "usage"
       ]
     },
     {
@@ -915,6 +998,11 @@ expression: schema_for!(ThreadEvent)
       "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
       "oneOf": [
         {
+          "description": "The user released a parked process to reconnect on the next message.",
+          "type": "string",
+          "const": "manual"
+        },
+        {
           "description": "The thread was idle for longer than `background.session_idle_minutes`.",
           "type": "string",
           "const": "idle"
@@ -1248,6 +1336,43 @@ expression: schema_for!(ThreadEvent)
         }
       }
     },
+    "AsyncQuestionRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AsyncQuestion"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "questions"
+      ]
+    },
+    "AsyncQuestion": {
+      "description": "A provider question that does not pause the running turn.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "title"
+      ]
+    },
     "ApprovalRequest": {
       "description": "A pending or resolved request for the user to approve a tool call.",
       "type": "object",
@@ -1371,6 +1496,97 @@ expression: schema_for!(ThreadEvent)
         "interrupted",
         "max_turns",
         "error"
+      ]
+    },
+    "ProviderCommand": {
+      "description": "A command advertised by a live harness's native protocol.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "ProviderUsage": {
+      "description": "Authoritative context occupancy, distinct from cumulative billable tokens.",
+      "type": "object",
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/UsageLimit"
+          }
+        }
+      }
+    },
+    "ContextUsage": {
+      "type": "object",
+      "properties": {
+        "used_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "window_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "used_tokens",
+        "window_tokens"
+      ]
+    },
+    "UsageLimit": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "used_percent": {
+          "type": "number",
+          "format": "double"
+        },
+        "window_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "resets_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "used_percent"
       ]
     },
     "NoticeLevel": {

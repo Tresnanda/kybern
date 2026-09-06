@@ -115,6 +115,13 @@ pub struct ProviderModel {
     pub is_default: bool,
 }
 
+/// A command advertised by a live harness's native protocol.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderCommand {
+    pub name: String,
+    pub description: String,
+}
+
 /// Availability and selectable capabilities of a provider binary on the daemon host.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderStatus {
@@ -839,8 +846,23 @@ pub struct Settings {
     pub notifications: bool,
     /// Check installed harnesses daily and update them when idle. Opt-in per environment.
     pub auto_update_harnesses: bool,
+    /// Check the release feed daily and replace this daemon when idle. Opt-in
+    /// per environment; ignored for a daemon the desktop app manages.
+    pub auto_update_daemon: bool,
     /// How the daemon trims CPU and memory while nothing needs it.
     pub background: BackgroundSettings,
+    /// Which networks other devices can reach this daemon on.
+    pub access: AccessSettings,
+}
+
+/// Extra listeners the daemon opens besides its loopback port. Persisted so
+/// a restart keeps the daemon reachable for paired phones.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AccessSettings {
+    /// Also listen on this machine's Tailscale address, so devices on the
+    /// same tailnet can pair and connect directly.
+    pub tailscale: bool,
 }
 
 impl Default for Settings {
@@ -854,7 +876,9 @@ impl Default for Settings {
             providers: Default::default(),
             notifications: true,
             auto_update_harnesses: false,
+            auto_update_daemon: false,
             background: BackgroundSettings::default(),
+            access: AccessSettings::default(),
         }
     }
 }
@@ -929,6 +953,8 @@ impl BackgroundSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionReleaseReason {
+    /// The user released a parked process to reconnect on the next message.
+    Manual,
     /// The thread was idle for longer than `background.session_idle_minutes`.
     Idle,
     /// More idle processes were alive than `background.max_idle_sessions`.
@@ -945,6 +971,7 @@ impl SessionReleaseReason {
     /// Mirrored in `apps/desktop/src/state/transcript.ts` for live events.
     pub fn notice_text(self) -> Option<&'static str> {
         match self {
+            Self::Manual => Some("Agent released. Your next message resumes the saved conversation."),
             Self::Capacity => Some("Agent process closed to stay under the warm limit. Your next message resumes it."),
             Self::Power => Some("Agent process closed to save battery. Your next message resumes it."),
             Self::Idle | Self::Update => None,
@@ -1026,4 +1053,71 @@ pub enum HarnessUpdateStatus {
     Current,
     Unsupported,
     Failed,
+}
+
+/// The daemon's own update state. The daemon replaces its binary from the
+/// GitHub release feed and restarts under its service manager; persisted so
+/// clients see the same record after a reconnect or the restart itself.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DaemonUpdate {
+    pub status: DaemonUpdateStatus,
+    pub message: String,
+    /// Version of the running daemon.
+    pub current_version: String,
+    /// Newest published version, once a check has succeeded.
+    pub latest_version: Option<String>,
+    pub checked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonUpdateStatus {
+    NotChecked,
+    Checking,
+    Current,
+    Available,
+    Waiting,
+    Updating,
+    Restarting,
+    Unsupported,
+    Failed,
+}
+
+/// Authoritative context occupancy, distinct from cumulative billable tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<Vec<UsageLimit>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ContextUsage {
+    pub used_tokens: u64,
+    pub window_tokens: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UsageLimit {
+    pub name: String,
+    pub used_percent: f64,
+    pub window_minutes: Option<u64>,
+    pub resets_at: Option<i64>,
+}
+
+/// A provider question that does not pause the running turn.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AsyncQuestion {
+    pub title: String,
+    #[serde(default, deserialize_with = "deserialize_null_options")]
+    pub options: Vec<String>,
+}
+
+fn deserialize_null_options<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AsyncQuestionRequest {
+    pub id: String,
+    pub questions: Vec<AsyncQuestion>,
 }

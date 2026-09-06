@@ -13,9 +13,10 @@ before touching UI.
 | `crates/kybern-store` | SQLite. Migrations are the array in `schema.rs`; append a new entry, never edit an old one. `projection.rs` folds events into transcripts. |
 | `crates/kybern-git` | Snapshots, diffs, worktrees via the `git` CLI. |
 | `crates/kybern-drivers` | One module per agent: `claude`, `codex`, `opencode`, `pi` (also omp), `cursor`. All implement `AgentDriver` + `AgentSession` from `lib.rs`. |
-| `crates/kybern-daemon` | `main.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`. |
+| `crates/kybern` | The shipped package: `kybernd` and `kybern` binaries as thin wrappers over the two library crates below. |
+| `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`. |
 | `crates/kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell. |
-| `crates/kybern-cli` | `kybern` binary. Also the integration harness. |
+| `crates/kybern-cli` | The `kybern` CLI (`lib.rs`). Also the integration harness. |
 | `apps/desktop` | Desktop app. `src-tauri` is the Tauri 2 shell (crate `kybern-desktop`: resolves or spawns `kybernd`, exposes `endpoint`/`data_dir_path`). `src/` is the React app (see below). |
 | `apps/mobile` | Expo SDK 57 client (pnpm 11, exact pins). Native tabs, Liquid Glass surfaces, a dev client (not Expo Go). `plugins/withSceneLifecycle.js` adopts the UIScene life cycle the iOS 27 SDK requires; drop it once Expo ships `ExpoAppSceneDelegate`. See `apps/mobile/README.md`. |
 
@@ -37,7 +38,7 @@ The old GPUI client is on the `gpui` branch. Do not port its views back.
 ## Build and run
 
 ```sh
-cargo build -p kybern-daemon -p kybern-cli               # seconds
+cargo build -p kybern                                    # seconds; kybernd + kybern
 ./target/debug/kybernd --data-dir /tmp/kyb --port 4199   # scratch daemon
 ./target/debug/kybern --data-dir /tmp/kyb providers
 

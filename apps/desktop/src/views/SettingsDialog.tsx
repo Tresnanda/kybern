@@ -31,9 +31,10 @@ import {
 import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
-import type { BackgroundSettings, DaemonActivity, PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
+import type { BackgroundSettings, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, rpc } from "@/state/rpc"
+import { activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 
 type Tab = "general" | "agents" | "appearance" | "usage" | "about"
@@ -447,6 +448,7 @@ function AgentSettings() {
         <Switch aria-label="Update harnesses automatically" checked={settings?.auto_update_harnesses ?? false} onCheckedChange={(checked) => void update({ auto_update_harnesses: checked })} />
       </Row>
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
+      <DaemonUpdateRows autoUpdate={settings?.auto_update_daemon ?? false} onAutoUpdate={(checked) => void update({ auto_update_daemon: checked })} />
     </Section>
     <Section title="Installed agents">
       {providers.map((provider) => {
@@ -468,8 +470,75 @@ function AgentSettings() {
   </>
 }
 
+const DAEMON_UPDATE_LABEL: Record<DaemonUpdate["status"], string> = {
+  not_checked: "Check for updates",
+  checking: "Checking…",
+  current: "Check for updates",
+  available: "Update now",
+  waiting: "Waiting for idle…",
+  updating: "Installing…",
+  restarting: "Restarting…",
+  unsupported: "Check for updates",
+  failed: "Check for updates",
+}
+
+/** The daemon's own updater: the automatic switch plus its live state. Hidden
+ * for the local environment, whose daemon ships inside the app. */
+function DaemonUpdateRows({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpdate: (checked: boolean) => void }) {
+  const info = useStore((s) => s.info)
+  const connection = useStore((s) => s.connection)
+  const local = activeEnvironment()?.local ?? true
+  const [record, setRecord] = useState<DaemonUpdate | null>(null)
+  const [pending, setPending] = useState(false)
+  useEffect(() => {
+    if (local) return
+    const client = rpc()
+    let canceled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const next = await client.call("daemon_update.status", {})
+        if (!canceled) setRecord(next)
+      } catch { /* offline while the daemon restarts; the next poll catches up */ }
+      finally { if (!canceled) timer = setTimeout(() => void poll(), 3000) }
+    }
+    void poll()
+    return () => { canceled = true; clearTimeout(timer) }
+  }, [local, connection.state])
+  if (local) {
+    return <Row title="kybernd" description="Bundled with the app and updated with it.">
+      <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{info?.version ?? "…"}</span>
+    </Row>
+  }
+  const status = record?.status ?? "not_checked"
+  const busy = pending || status === "checking" || status === "waiting" || status === "updating" || status === "restarting"
+  const act = async () => {
+    setPending(true)
+    try {
+      const next = await rpc().call(status === "available" ? "daemon_update.run" : "daemon_update.check", {})
+      setRecord(next)
+    } catch (error) { toast.error("Unable to update the daemon", { description: errorText(error) }) }
+    finally { setPending(false) }
+  }
+  const detail = record && status !== "not_checked" ? record.message : null
+  return <>
+    <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running.">
+      <Switch aria-label="Update the daemon automatically" checked={autoUpdate} onCheckedChange={onAutoUpdate} />
+    </Row>
+    <Row title="kybernd" description={<span className="block truncate">{info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"}</span>}>
+      <div className="flex min-w-0 flex-col items-end gap-2">
+        <div className="flex items-center gap-3">
+          <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{record?.current_version ?? info?.version ?? "…"}</span>
+          {status !== "unsupported" && <Button size="sm" variant="chrome-outline" disabled={busy} onClick={() => void act()}>{status === "available" && record?.latest_version ? `Update to ${record.latest_version}` : DAEMON_UPDATE_LABEL[status]}</Button>}
+        </div>
+        {detail && <p role="status" className={cn("max-w-80 text-right text-xs leading-relaxed break-words", status === "failed" ? "text-destructive" : "text-muted-foreground")}>{detail}{record?.checked_at && status !== "restarting" && <span className="mt-1 block">Last checked {new Date(record.checked_at).toLocaleString()}</span>}</p>}
+      </div>
+    </Row>
+  </>
+}
+
 function Appearance() {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, translucent, setTranslucent } = useTheme()
   return (
     <Section title="Theme">
       <Row title="Appearance" description="Follows the system by default.">
@@ -503,6 +572,9 @@ function Appearance() {
             },
           ]}
         />
+      </Row>
+      <Row title="Translucent app" description="Extend frosted glass across the macOS app, including menus and dialogs. Respects reduced transparency.">
+        <SettingsPicker value={translucent ? "on" : "off"} onChange={(value) => setTranslucent(value === "on")} options={[{ value: "off", label: "Off" }, { value: "on", label: "On" }]} />
       </Row>
     </Section>
   )

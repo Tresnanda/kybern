@@ -74,6 +74,20 @@ rm -f "$DMG"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/kybern.app"
 ln -s /Applications "$STAGE/Applications"
+cat > "$STAGE/If macOS blocks kybern.txt" <<'NOTE'
+kybern is not notarized by Apple, so macOS may block the first launch with
+"Apple could not verify kybern is free of malware".
+
+To allow it once:
+  1. Click Done (not Move to Trash).
+  2. Open System Settings > Privacy & Security, scroll to Security,
+     and click "Open Anyway" next to "kybern was blocked to protect your Mac".
+  3. Confirm with Open Anyway and your password or Touch ID.
+
+Updates installed by the app itself are never blocked. To skip the dialog
+entirely, install from the terminal instead:
+  curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-mac-install.sh | sh
+NOTE
 hdiutil create -volname "kybern" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 echo "done: $DMG"

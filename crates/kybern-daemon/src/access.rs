@@ -98,18 +98,43 @@ impl Tickets {
     }
 }
 
+/// Every address the daemon listens on: the primary listener plus any opened
+/// at runtime through `access.exposure.set`.
+pub async fn listeners(state: &crate::state::AppState) -> Vec<std::net::SocketAddr> {
+    let primary = *state.listen_addr.read().unwrap();
+    let mut listeners: Vec<_> = primary.into_iter().collect();
+    listeners.extend(state.exposure.extra_addrs().await);
+    listeners
+}
+
 /// Explicit advertised URLs take precedence; otherwise discover the current
-/// interfaces and Tailscale proxy for this daemon's actual listener.
+/// interfaces and Tailscale proxy for this daemon's actual listeners.
 pub async fn endpoints(state: &crate::state::AppState) -> Vec<String> {
     let configured = state.advertised_urls.read().unwrap().clone();
     if !configured.is_empty() {
         return configured;
     }
-    let bound = *state.listen_addr.read().unwrap();
-    match bound {
-        Some(bound) => crate::discovery::endpoints(bound).await,
-        None => vec![],
+    crate::discovery::endpoints(&listeners(state).await).await
+}
+
+pub async fn exposure(state: &crate::state::AppState) -> kybern_protocol::methods::Exposure {
+    let primary = *state.listen_addr.read().unwrap();
+    match primary {
+        Some(primary) => state.exposure.status(primary).await,
+        None => kybern_protocol::methods::Exposure { tailscale_ip: None, tailscale: false, listeners: vec![] },
     }
+}
+
+/// Open or close the Tailscale listener and remember the choice in settings.
+pub async fn set_exposure(state: &crate::state::AppState, tailscale: bool) -> Result<kybern_protocol::methods::Exposure> {
+    let primary = (*state.listen_addr.read().unwrap()).ok_or_else(|| anyhow!("The daemon is still starting"))?;
+    state.exposure.set_tailscale(primary, tailscale).await?;
+    let mut settings = state.settings.get();
+    if settings.access.tailscale != tailscale {
+        settings.access.tailscale = tailscale;
+        state.settings.set(settings)?;
+    }
+    Ok(state.exposure.status(primary).await)
 }
 
 #[cfg(test)]
