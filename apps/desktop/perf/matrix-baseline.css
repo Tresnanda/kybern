@@ -1,0 +1,37 @@
+/* Frozen pre-optimization dot styles, for the standalone A/B fixture only. */
+:root {
+  --matrix-cycle: 1200ms;
+  --matrix-dot: 2px;
+  --matrix-gap: 2px;
+  --matrix-base: color-mix(in srgb, currentColor 22%, transparent);
+  --matrix-active: currentColor;
+  --matrix-ease: ease-in-out;
+}
+.t-matrix {
+  display: grid;
+  grid-template-columns: repeat(4, var(--matrix-dot));
+  grid-auto-rows: var(--matrix-dot);
+  gap: var(--matrix-gap);
+  flex-shrink: 0;
+}
+.t-matrix i {
+  display: block;
+  border-radius: 0.5px;
+  background: var(--matrix-base);
+  animation: t-matrix-pulse var(--matrix-cycle) var(--matrix-ease) infinite;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+.t-matrix i.is-gap {
+  visibility: hidden;
+  animation: none;
+}
+@keyframes t-matrix-pulse {
+  0%,
+  45%,
+  100% {
+    background-color: var(--matrix-base);
+  }
+  15% {
+    background-color: var(--matrix-active);
+  }
+}

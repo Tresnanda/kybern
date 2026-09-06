@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Kybern animation benchmark</title>
+    <link
+      id="motion-css"
+      rel="stylesheet"
+      href="/perf/matrix-baseline.css?direct"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --foreground: #e7e5e4;
+        --muted-foreground: #a8a29e;
+      }
+      body {
+        margin: 0;
+        background: #242321;
+        color: #e7e5e4;
+        font:
+          13px -apple-system,
+          sans-serif;
+      }
+      header {
+        padding: 24px;
+      }
+      button {
+        padding: 8px 16px;
+        margin-right: 8px;
+      }
+      #scene {
+        display: flex;
+        height: 650px;
+        background: linear-gradient(125deg, #312e2b, #1b2027);
+      }
+      aside {
+        width: 256px;
+        background: #282726bb;
+        backdrop-filter: blur(18px);
+        padding: 24px 12px;
+      }
+      main {
+        flex: 1;
+        padding: 40px;
+        background: #242321;
+        border-radius: 16px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        height: 32px;
+      }
+      .t-matrix {
+        color: #a8a29e;
+      }
+      #status {
+        white-space: pre-wrap;
+      }
+      .sample {
+        display: inline-flex;
+        margin: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Kybern animation benchmark</h1>
+      <button id="baseline">Baseline</button
+      ><button id="candidate">Optimized</button
+      ><button id="compare">Check appearance</button>
+      <p id="status">
+        Baseline — three running loaders, same components and CSS as Kybern.
+      </p>
+    </header>
+    <div id="root"></div>
+    <script type="module" src="/perf/matrix.tsx"></script>
+  </body>
+</html>

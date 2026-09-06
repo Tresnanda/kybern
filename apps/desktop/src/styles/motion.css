@@ -46,7 +46,7 @@
   --matrix-cycle: 1200ms;
   --matrix-dot: 2px;
   --matrix-gap: 2px;
-  --matrix-base: color-mix(in srgb, currentColor 22%, transparent);
+  --matrix-rest-opacity: 0.22;
   --matrix-active: currentColor;
   --matrix-ease: ease-in-out;
 
@@ -107,8 +107,9 @@
 }
 
 /* ─── Matrix dot loader ─────────────────────────────────────────────────────
-   Sixteen dots in a 4×4 grid, each pulsing on a shared colour cycle. The
-   variant only changes the delay table (set in JS as --d per dot). */
+   Sixteen dots in a 4×4 grid. Fading a fixed currentColor from 22% to 100%
+   preserves the original colour pulse, but lets WebKit composite it without
+   repainting the dots every frame. The delay tables and easing stay the same. */
 .t-matrix {
   display: grid;
   grid-template-columns: repeat(4, var(--matrix-dot));
@@ -119,7 +120,8 @@
 .t-matrix i {
   display: block;
   border-radius: 0.5px;
-  background: var(--matrix-base);
+  background: var(--matrix-active);
+  opacity: var(--matrix-rest-opacity);
   animation: t-matrix-pulse var(--matrix-cycle) var(--matrix-ease) infinite;
   animation-delay: calc(var(--d, 0) * 1ms);
 }
@@ -127,14 +129,18 @@
   visibility: hidden;
   animation: none;
 }
+.t-matrix[data-loop-paused] i,
+.t-pane[data-active="false"] .t-matrix i {
+  animation-play-state: paused;
+}
 @keyframes t-matrix-pulse {
   0%,
   45%,
   100% {
-    background-color: var(--matrix-base);
+    opacity: var(--matrix-rest-opacity);
   }
   15% {
-    background-color: var(--matrix-active);
+    opacity: 1;
   }
 }
 

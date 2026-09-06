@@ -3,8 +3,9 @@
 // Everything here is transform/opacity/filter only and honours
 // prefers-reduced-motion through the stylesheet.
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 
+import { observeLoopVisibility } from "@/lib/loopVisibility"
 import { cn } from "@/lib/utils"
 
 /* ─── Matrix dot loader ─────────────────────────────────────────────────── */
@@ -61,11 +62,15 @@ export function MatrixLoader({
   className?: string
   label?: string
 }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (ref.current) return observeLoopVisibility(ref.current)
+  }, [])
   const isRounded = rounded ?? (variant === "orbit" || variant === "pulse")
   const delays = useMemo(() => matrixDelays(variant, cycle), [variant, cycle])
   const style = { "--matrix-cycle": `${cycle}ms`, "--matrix-dot": `${dot}px`, "--matrix-gap": `${gap}px` } as CSSProperties
   return (
-    <span className={cn("t-matrix", className)} style={style} role={label ? "status" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
+    <span ref={ref} className={cn("t-matrix", className)} style={style} role={label ? "status" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
       {delays.map((d, i) => (
         <i key={i} className={isRounded && ROUNDED_GAPS.includes(i) ? "is-gap" : undefined} style={{ "--d": d } as CSSProperties} />
       ))}
