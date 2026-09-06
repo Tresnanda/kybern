@@ -43,7 +43,7 @@ install-updater = false
 source-tarball = false
 # Cache cargo builds between releases in dist's build jobs (steps injected
 # into build-local-artifacts).
-github-build-setup = "dist-build-setup.yml"
+github-build-setup = "../dist-build-setup.yml"
 
 # Pin the actions dist uses to commits rather than floating tags.
 [dist.github-action-commits]
