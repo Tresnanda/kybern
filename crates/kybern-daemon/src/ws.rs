@@ -106,9 +106,6 @@ impl ConnectionCtx {
                 .await;
             return;
         }
-        if let Some(thread_id) = params.thread_id {
-            state.orchestrator.touch_session(thread_id).await;
-        }
         let subscription_id = self.subscribe(params.thread_id, head_seq).await;
         let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq }).unwrap();
         if self.out.send(ServerFrame::Response(RpcResponse::ok(request_id, result))).await.is_err() {
