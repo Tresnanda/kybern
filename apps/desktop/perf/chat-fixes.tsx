@@ -128,6 +128,12 @@ async function run() {
     check(windowAction && rows[1].parentElement === windowAction.parentElement, "New window action is not in its environment row")
     check(!document.querySelector('[data-slot="menu-sub-trigger"]'), "Separate new window submenu remains")
     check(!rows[1].contains(windowAction), "New window action is nested inside the switch action")
+    const actionBounds = windowAction.getBoundingClientRect()
+    const rowBounds = rows[1].getBoundingClientRect()
+    check(actionBounds.left >= rowBounds.right, "New window and switch hit areas overlap")
+    check(Math.abs(actionBounds.top + actionBounds.height / 2 - rowBounds.top - rowBounds.height / 2) < 1, "New window action is not vertically centered")
+    const localAction = document.querySelector<HTMLElement>('[aria-label="Open This Mac in a new window"]')!
+    check(Math.abs(localAction.getBoundingClientRect().left - actionBounds.left) < 1, "New window actions do not share an alignment edge")
     windowAction.focus()
     check(document.activeElement === windowAction, "New window action cannot receive keyboard focus")
     windowAction.click(); await sleep(250)

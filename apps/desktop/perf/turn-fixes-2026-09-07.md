@@ -22,6 +22,8 @@ with synthetic events and the production CSP.
 - The environment menu uses aligned icons and two-line environment rows,
   selected radio semantics, and a new-window icon beside each environment.
   The icon opens that environment without switching the current window. Names wrap.
+  Each row has a continuous hover surface, a fixed trailing action column,
+  inset icon targets, and consistent spacing between environments.
 
 ## Verification
 
@@ -33,7 +35,8 @@ with synthetic events and the production CSP.
   rendered newline geometry, image placement before/after completion, generated
   deliverables, and opening a screenshot within a grouped tool result.
 - Environment checks cover icon/text alignment, selected state, keyboard focus on each
-  new-window action, target selection without switching the current window, long names, 150% zoom, and RTL.
+  new-window action, aligned/non-overlapping action targets,
+  target selection without switching the current window, long names, 150% zoom, and RTL.
 - Workflow YAML/actionlint and shell syntax checks passed.
 - Apple Silicon successfully cross-compiled the Intel release daemon and Tauri
   shell and packaged an ad-hoc-signed Intel DMG. Both executables passed lipo

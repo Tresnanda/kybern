@@ -138,16 +138,16 @@ export function EnvironmentSwitcher() {
           <ComposerPickerMenuPopup
             align="start"
             side="bottom"
-            className="w-72 min-w-0"
+            className="w-80 min-w-0"
           >
             <MenuGroup>
               <MenuGroupLabel>Environments</MenuGroupLabel>
-              <MenuRadioGroup value={selectedId ?? ""} onValueChange={(id) => {
+              <MenuRadioGroup className="space-y-1" value={selectedId ?? ""} onValueChange={(id) => {
                 if (id !== selectedId) void switchEnvironment(id)
               }}>
                 {profiles.map((item) => (
-                  <div key={item.id} className="flex items-center" role="presentation">
-                    <MenuRadioItem className="flex-1" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
+                  <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-lg pe-1 has-[[data-highlighted]]:bg-[var(--color-background-button-secondary-hover)]" role="presentation">
+                    <MenuRadioItem className="min-h-12 data-highlighted:bg-transparent" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
                       if (item.id === selectedId && connection.state === "failed") void switchEnvironment(item.id)
                     }}>
                       {item.local ? <DeviceLaptopIcon className="-mx-0.5 size-4 shrink-0 opacity-80" /> : <GlobeIcon className="-mx-0.5 size-4 shrink-0 opacity-80" />}
@@ -161,7 +161,7 @@ export function EnvironmentSwitcher() {
                     {isTauri() && <MenuItem
                       aria-label={`Open ${item.name} in a new window`}
                       title={`Open ${item.name} in a new window`}
-                      className="size-8 min-h-8 shrink-0 justify-center p-0"
+                      className="size-8 min-h-8 shrink-0 justify-center p-0 text-muted-foreground data-highlighted:bg-[var(--color-background-button-secondary)]"
                       onClick={() => {
                         void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
                       }}
