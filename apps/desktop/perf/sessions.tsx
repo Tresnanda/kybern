@@ -9,6 +9,13 @@ import "../src/index.css"
 const root = createRoot(document.getElementById("root")!)
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+async function until(predicate: () => boolean, message: string) {
+  const deadline = performance.now() + 5_000
+  while (!predicate()) {
+    if (performance.now() > deadline) throw new Error(`${message} (${document.querySelectorAll('[role="option"]').length} options; ${document.body.textContent?.slice(-300)})`)
+    await sleep(25)
+  }
+}
 const kinds: ProviderKind[] = ["claude-code", "codex", "opencode", "pi", "omp", "cursor"]
 const sessions: SavedSession[] = Array.from({ length: 145 }, (_, i) => ({
   provider: kinds[i % 6]!, id: `native-${i}`, title: i === 0 ? "Fix the streaming transcript and preserve the final answer across background wake-ups" : `Review saved conversation ${i}`,
@@ -33,32 +40,31 @@ async function run() {
     flushSync(() => root.render(<ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
       <Dialog open><DialogPopup instant bottomStickOnMobile={false} className="max-h-[min(42rem,calc(100dvh-2rem))] max-w-2xl overflow-hidden"><SessionPicker key={theme} project={{ id: "project", name: "Kybern" }} available={kinds} projects={[{ name: "Kybern", path: "/Users/example/projects/kybern" }]} fetchPage={fetchPage} onResume={async () => { calls++; await sleep(30); throw new Error("This session is open elsewhere. Close it there and retry.") }} /></DialogPopup></Dialog>
     </ThemeProviderContext>))
-    await sleep(350)
-    check(document.querySelectorAll('[role="option"]').length === 100, "Session options must be bounded to 100")
-    button("Next sessions")!.click(); await sleep(80)
+    await until(() => document.querySelectorAll('[role="option"]').length === 100, "Session options must be bounded to 100")
+    button("Next sessions")!.click(); await until(() => document.querySelectorAll('[role="option"]').length === 45, "Next page did not settle")
     check(document.querySelectorAll('[role="option"]').length === 45, "Next page is incomplete")
-    button("Previous sessions")!.click(); await sleep(80)
+    button("Previous sessions")!.click(); await until(() => document.querySelectorAll('[role="option"]').length === 100, "Previous page did not settle")
     const resume = button("Open thread") ?? button("Resume session")!
     const input = document.querySelector<HTMLInputElement>('input[role="combobox"]')!
     input.focus()
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }))
-    await sleep(50)
+    await until(() => !!input.getAttribute("aria-activedescendant"), "Keyboard highlight did not settle")
     check(input.getAttribute("aria-activedescendant"), "Keyboard navigation did not select an option")
     const keyboardBefore = calls
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
-    await sleep(100)
+    await until(() => calls === keyboardBefore + 1 && !resume.disabled, "Keyboard resume did not settle")
     check(calls === keyboardBefore + 1, "Enter did not resume the highlighted session")
     const before = calls
-    resume.click(); resume.click(); await sleep(100)
+    resume.click(); resume.click(); await until(() => calls > before && !resume.disabled, "Resume did not settle")
     check(calls === before + 1, "Double click imported twice")
     check(document.querySelector('[role="alert"]')?.textContent?.includes("Close it there"), "Resume failure is missing")
-    search("no such conversation"); await sleep(300)
+    search("no such conversation"); await until(() => !!document.body.textContent?.includes("No sessions match"), "Search did not settle")
     check(document.body.textContent?.includes("No sessions match"), "Empty search state missing")
-    search("old"); await sleep(200); search("conversation 14"); await sleep(400)
+    search("old"); await sleep(200); search("conversation 14"); await until(() => document.querySelectorAll('[role="option"]').length === 6, "Latest search did not settle"); await sleep(350)
     check(document.querySelectorAll('[role="option"]').length === 6, "Stale search replaced current results")
-    search("failure"); await sleep(300)
+    search("failure"); await until(() => !!document.body.textContent?.includes("6 agents couldn’t be loaded"), "Provider errors did not settle")
     check(document.body.textContent?.includes("6 agents couldn’t be loaded"), "Provider errors missing")
-    search(""); await sleep(350)
+    search(""); await until(() => document.querySelectorAll('[role="option"]').length === 100, "Cleared search did not settle")
     const dialog = document.querySelector('[role="dialog"]')!.getBoundingClientRect()
     check(dialog.left >= 0 && dialog.right <= innerWidth && dialog.top >= 0 && dialog.bottom <= innerHeight, "Dialog overflows viewport")
   }
