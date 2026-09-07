@@ -22,6 +22,7 @@ const sessions: SavedSession[] = Array.from({ length: 145 }, (_, i) => ({
   cwd: "/Users/example/projects/kybern", updated_at: new Date(Date.now() - i * 60_000).toISOString(), model: null, thread_id: i === 0 ? "existing" : null,
 }))
 let calls = 0
+let settledCalls = 0
 async function fetchPage(provider: ProviderKind, _project: string | null, query: string) {
   await sleep(query === "old" ? 300 : 10)
   if (query === "failure") throw new Error("Reconnect the harness and retry.")
@@ -38,7 +39,7 @@ async function run() {
   for (const theme of ["light", "dark"] as const) {
     document.documentElement.classList.toggle("dark", theme === "dark")
     flushSync(() => root.render(<ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
-      <Dialog open><DialogPopup instant bottomStickOnMobile={false} className="max-h-[min(42rem,calc(100dvh-2rem))] max-w-2xl overflow-hidden"><SessionPicker key={theme} project={{ id: "project", name: "Kybern" }} available={kinds} projects={[{ name: "Kybern", path: "/Users/example/projects/kybern" }]} fetchPage={fetchPage} onResume={async () => { calls++; await sleep(30); throw new Error("This session is open elsewhere. Close it there and retry.") }} /></DialogPopup></Dialog>
+      <Dialog open><DialogPopup instant bottomStickOnMobile={false} className="max-h-[min(42rem,calc(100dvh-2rem))] max-w-2xl overflow-hidden"><SessionPicker key={theme} project={{ id: "project", name: "Kybern" }} available={kinds} projects={[{ name: "Kybern", path: "/Users/example/projects/kybern" }]} fetchPage={fetchPage} onResume={async () => { calls++; await sleep(30); settledCalls++; throw new Error("This session is open elsewhere. Close it there and retry.") }} /></DialogPopup></Dialog>
     </ThemeProviderContext>))
     await until(() => document.querySelectorAll('[role="option"]').length === 100, "Session options must be bounded to 100")
     button("Next sessions")!.click(); await until(() => document.querySelectorAll('[role="option"]').length === 45, "Next page did not settle")
@@ -52,10 +53,10 @@ async function run() {
     check(input.getAttribute("aria-activedescendant"), "Keyboard navigation did not select an option")
     const keyboardBefore = calls
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
-    await until(() => calls === keyboardBefore + 1 && !resume.disabled, "Keyboard resume did not settle")
+    await until(() => calls === keyboardBefore + 1 && settledCalls === calls && !resume.disabled, "Keyboard resume did not settle")
     check(calls === keyboardBefore + 1, "Enter did not resume the highlighted session")
     const before = calls
-    resume.click(); resume.click(); await until(() => calls > before && !resume.disabled, "Resume did not settle")
+    resume.click(); resume.click(); await until(() => calls > before && settledCalls === calls && !resume.disabled, "Resume did not settle")
     check(calls === before + 1, "Double click imported twice")
     check(document.querySelector('[role="alert"]')?.textContent?.includes("Close it there"), "Resume failure is missing")
     search("no such conversation"); await until(() => !!document.body.textContent?.includes("No sessions match"), "Search did not settle")
