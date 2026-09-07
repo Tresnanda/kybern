@@ -59,7 +59,7 @@ async function run() {
     const text = paragraph.firstChild!
     const first = document.createRange(); first.setStart(text, 0); first.setEnd(text, 5)
     const second = document.createRange(); second.setStart(text, 11); second.setEnd(text, 17)
-    check(second.getBoundingClientRect().top > first.getBoundingClientRect().top, "Sent message collapsed the composer newline")
+    check(second.getBoundingClientRect().top > first.getBoundingClientRect().top, `Sent message collapsed the composer newline: ${JSON.stringify({ variant, text: text.textContent, html: paragraph.innerHTML, whiteSpace: getComputedStyle(paragraph).whiteSpace, paragraph: paragraph.getBoundingClientRect().toJSON(), first: first.getBoundingClientRect().toJSON(), second: second.getBoundingClientRect().toJSON() })}`)
     await openPreview(user.querySelector<HTMLButtonElement>('[aria-label="Preview Attached image 1"]')!, source)
     check(document.querySelector('[data-timeline-row-kind="work"] .response-image-preview'), "Native image left its chronological work position")
     const generatedCanvas = document.createElement("canvas")
