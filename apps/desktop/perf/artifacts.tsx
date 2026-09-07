@@ -9,12 +9,22 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const view = createRoot(document.getElementById("root")!)
 function render(text: string) { flushSync(() => view.render(<ImageThreadContext value="thread-1"><Markdown text={text} /></ImageThreadContext>)) }
 function check(condition: unknown, message: string) { if (!condition) throw new Error(message) }
+async function waitFor(condition: () => unknown, message: string) {
+  const deadline = performance.now() + 5000
+  while (!condition()) {
+    check(performance.now() < deadline, message)
+    await sleep(20)
+  }
+}
+async function waitForImage() {
+  await waitFor(() => document.querySelector('[role="dialog"] img'), `Image preview did not load: ${document.body.innerText}`)
+}
 async function run() {
   render("[Dark preview](/workspace/artifacts/question.png)")
   await sleep(100)
   check(fetched.length === 0, "Image links eagerly load before opening")
   document.querySelector<HTMLAnchorElement>("a")!.click()
-  await sleep(100)
+  await waitForImage()
   check(external.length === 0, `Local preview went to openUrl: ${external[0]}`)
   check(!!document.querySelector('[role="dialog"] img'), `Local image link did not open a preview: ${document.body.innerText}; fetched=${fetched.join(",")}; images=${document.querySelectorAll("img").length}`)
   check(fetched.includes("/workspace/artifacts/question.png"), "Preview bypassed the thread image endpoint")
@@ -25,27 +35,27 @@ async function run() {
     render(`[Preview](${source})`)
     await sleep(60)
     document.querySelector<HTMLAnchorElement>("a")!.click()
-    await sleep(100)
+    await waitForImage()
     check(!!document.querySelector('[role="dialog"] img'), `No preview for ${source}`)
   }
   check(fetched.includes("/workspace/artifacts/first pass.png"), "File URL was not decoded")
   render("[Preview](/tmp/outside.png)")
   await sleep(60)
   document.querySelector<HTMLAnchorElement>("a")!.click()
-  await sleep(100)
+  await waitFor(() => document.body.innerText.includes("copy it into that folder"), "Blocked image guidance did not load")
   check(document.body.innerText.includes("copy it into that folder"), "Blocked image has no recovery guidance")
   check(!Array.from(document.querySelectorAll("button")).some((button) => button.textContent === "Retry"), "Blocked path offers a useless retry")
   render("[Preview](artifacts/retry.png)")
   await sleep(60)
   document.querySelector<HTMLAnchorElement>("a")!.click()
-  await sleep(100)
+  await waitFor(() => Array.from(document.querySelectorAll("button")).some((button) => button.textContent === "Retry"), "Transient error did not appear")
   const retry = Array.from(document.querySelectorAll("button")).find((button) => button.textContent === "Retry")
   check(retry, "Transient error cannot be retried")
   retry!.click()
-  await sleep(100)
+  await waitForImage()
   check(!!document.querySelector('[role="dialog"] img'), "Retry closed the preview or failed to reload")
   render("![Agent image](/tmp/inline.png)")
-  await sleep(100)
+  await waitFor(() => document.body.innerText.includes("copy it into that folder"), "Blocked image guidance did not load")
   check(document.body.innerText.includes("copy it into that folder"), "Inline image has no recovery guidance")
   check(!Array.from(document.querySelectorAll("button")).some((button) => button.textContent === "Retry"), "Blocked inline image offers a useless retry")
   const root = document.getElementById("root")!
@@ -66,7 +76,7 @@ async function run() {
   check(requests.filter((request) => request.path.includes("sized-")).every((request) => request.preview), "Inline images fetch full originals")
   check(previews.every((image) => image.naturalWidth <= 560 && image.naturalHeight <= 352), "Preview decode exceeds pixel budget")
   previews[0]!.closest("button")!.click()
-  await sleep(350)
+  await waitForImage()
   const original = document.querySelector<HTMLImageElement>('[role="dialog"] img')!
   await original.decode()
   check(original.naturalHeight === 1800 && original.src !== previews[0]!.src, "Viewer does not fetch the full image")
