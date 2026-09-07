@@ -38,6 +38,13 @@ function render(mode: "async" | "blocking", questions = request, width = 720, in
 function check(condition: unknown, message: string) { if (!condition) throw new Error(message) }
 function field() { return document.querySelector<HTMLTextAreaElement>("textarea")! }
 function submit() { return document.querySelector<HTMLButtonElement>('button[type="submit"]')! }
+async function waitForSend() {
+  const deadline = performance.now() + 5000
+  while (document.querySelector('form[aria-busy="true"]')) {
+    check(performance.now() < deadline, "Question send did not settle")
+    await sleep(20)
+  }
+}
 function type(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
   const prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
   Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(el, value)
@@ -65,11 +72,11 @@ async function run() {
   transport.fail = true
   click(submit())
   check(submit().disabled && field().matches(":disabled"), "Sending does not disable edits")
-  await sleep(100)
+  await waitForSend()
   check(!!document.querySelector('[role="alert"]') && field().value === answer && !submit().disabled, "Failed send lost the draft or prevented retry")
   transport.fail = false
   click(submit())
-  await sleep(100)
+  await waitForSend()
   check(JSON.stringify(sent.at(-1)).includes(JSON.stringify(answer).slice(1, -1)), "Submitted multiline content changed")
   for (const variant of ["dark", "light"] as const) {
     theme(variant)
@@ -97,14 +104,14 @@ async function run() {
   type(field(), "Investigate everything\nStart with scrolling")
   check(!document.querySelector<HTMLInputElement>('input[type="radio"]')!.checked, "Blocking custom answer leaves an option selected")
   click(submit())
-  await sleep(100)
+  await waitForSend()
   check(JSON.stringify(sent.at(-1)).includes("Investigate everything"), "Blocking answer payload is missing")
   render("blocking", request, 360, { ...approval, input: { questions: [{ id: "scope", question: "What should be checked?", multiple: true, options: ["Scrolling", "Streaming"] }] } })
   for (const option of document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) click(option)
   type(field(), "Menus too")
   check(document.querySelectorAll('input[type="checkbox"]:checked').length === 2, "Extra answer cleared multiple choices")
   click(submit())
-  await sleep(100)
+  await waitForSend()
   check(JSON.stringify(sent.at(-1)).includes('["Scrolling","Streaming","Menus too"]'), "Multiple choices and extra answer changed")
   render("blocking", request, 320, { ...approval, input: { questions: [{ id: "secret", question: "Enter the secret", isSecret: true }] } })
   check(!!document.querySelector('input[type="password"]') && !document.querySelector("textarea"), "Secret answer was exposed")

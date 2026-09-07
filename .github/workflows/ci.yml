@@ -77,45 +77,46 @@ jobs:
         working-directory: apps/desktop
         run: pnpm lint
       - name: build
+        id: frontend-build
         working-directory: apps/desktop
         run: pnpm build
       - name: Native WebKit window materials
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node --experimental-strip-types scripts/check-window-material.mjs
       - name: Native WebKit rendering
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs
       - name: Native WebKit context menus
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs materials
       - name: Native WebKit large transcript scaling
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs scaling
       - name: Native WebKit virtual transcript interactions
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs interaction
       - name: Native WebKit question forms
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs questions
       - name: Native WebKit artifact previews
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs artifacts
       - name: Native WebKit background continuation
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs continuation
       - name: Native WebKit session picker
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs sessions
       - name: Native WebKit chat and environment controls
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs chat-fixes
