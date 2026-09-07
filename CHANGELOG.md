@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.5
+
+- Keep Claude background agents and processes in the same running turn across follow-up work, and prevent premature or duplicate completion notifications.
+- Keep agent images in chronological work order until the turn completes. Show generated images with the final response and inspection screenshots inside their tool results.
+- Open image previews from composer attachments and sent messages, with focus restored after closing.
+- Preserve Shift+Enter newlines in sent messages.
+- Refine the environment picker with aligned rows, clearer status, and a new-window action beside each environment that leaves the current window unchanged.
+- Reuse release build caches from main, cross-compile Intel Mac builds on faster ARM runners, and avoid duplicate artifact uploads.
+
 ## 0.2.4
 
 - Resume conversations started in Claude Code, Codex, OpenCode, pi, OMP, or Cursor CLI. Open **Resume session** beside **New thread**, from a project's menu, or with `/resume` and `/sessions`.
