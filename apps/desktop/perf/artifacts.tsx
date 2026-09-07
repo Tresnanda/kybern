@@ -61,9 +61,9 @@ async function run() {
   const root = document.getElementById("root")!
   root.style.width = "320px"
   render("![Dark question](artifacts/sized-dark-portrait.png)\n\n![Light question](artifacts/sized-light-landscape.png)")
-  await sleep(50)
+  await waitFor(() => root.querySelectorAll(".response-image-preview").length === 2, "Inline preview placeholders did not mount")
   const before = root.getBoundingClientRect().height
-  await sleep(500)
+  await waitFor(() => root.querySelectorAll(".response-image-preview img").length === 2, "Missing inline previews")
   const previews = Array.from(root.querySelectorAll<HTMLImageElement>(".response-image-preview img"))
   check(previews.length === 2, "Missing inline previews")
   await Promise.all(previews.map((image) => image.decode()))
@@ -85,22 +85,23 @@ async function run() {
   await sleep(100)
   check(!fetched.includes("artifacts/sized-offscreen.png"), "Offscreen image fetched eagerly")
   root.style.marginTop = "0"
-  await sleep(350)
+  await waitFor(() => fetched.includes("artifacts/sized-offscreen.png"), "Image did not load on approach")
   check(fetched.includes("artifacts/sized-offscreen.png"), "Image did not load on approach")
   flushSync(() => view.render(<ImageThreadContext value="thread-1"><div className="flex flex-wrap gap-2">{["portrait", "landscape"].map((shape) => <ResponseImage key={shape} compact source={`artifacts/sized-gallery-${shape}.png`} />)}</div></ImageThreadContext>))
-  await sleep(50)
+  await waitFor(() => root.querySelectorAll(".response-image-preview").length === 2, "Gallery placeholders did not mount")
   const galleryHeight = root.getBoundingClientRect().height
-  await sleep(500)
+  await waitFor(() => root.querySelectorAll(".response-image-preview img").length === 2, "Gallery previews did not load")
+  await Promise.all(Array.from(root.querySelectorAll<HTMLImageElement>("img"), (image) => image.decode()))
   check(Math.abs(root.getBoundingClientRect().height - galleryHeight) < 1, "Compact gallery shifts on image load")
   check(root.scrollWidth <= 321, "Compact gallery overflows narrow layout")
   root.style.height = "500px"
   root.style.overflowY = "auto"
   render(Array.from({ length: 40 }, (_, index) => `![Image ${index}](artifacts/sized-many-${index}.png)`).join("\n\n"))
-  await sleep(500)
+  await waitFor(() => fetched.some((path) => path.includes("sized-many-")), "Long response did not load its visible previews")
   const many = fetched.filter((path) => path.includes("sized-many-"))
   check(many.length > 0 && many.length <= 8, `Long image response fetched ${many.length} previews immediately`)
   root.scrollTop = root.scrollHeight
-  await sleep(500)
+  await waitFor(() => fetched.includes("artifacts/sized-many-39.png"), "Last image in a long response is unreachable")
   check(fetched.includes("artifacts/sized-many-39.png"), "Last image in a long response is unreachable")
   root.scrollTop = 0
   root.style.height = ""
@@ -123,7 +124,8 @@ async function run() {
   check(external.length === 1 && external[0] === "https://example.com/docs", "External link routing changed")
   root.style.cssText = "width:640px;max-width:100%;padding:24px"
   render("| Agent | Where Kybern gets skills |\n| --- | --- |\n| Codex | Asks Codex for its effective catalog, preserving precedence and plugin namespaces. |\n| Claude | Scans project and home directories. |\n\n![Dark question](artifacts/sized-dark-portrait.png)\n\n![Light question](artifacts/sized-light-landscape.png)")
-  await sleep(1500)
+  await waitFor(() => root.querySelectorAll("img").length === 2, "Final previews did not mount")
+  await Promise.all(Array.from(root.querySelectorAll<HTMLImageElement>("img"), (image) => image.decode()))
   check(Array.from(root.querySelectorAll<HTMLImageElement>("img")).every((image) => image.complete && image.naturalWidth > 0), "Final preview did not load")
 }
 const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }
