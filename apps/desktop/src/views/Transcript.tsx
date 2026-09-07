@@ -64,7 +64,7 @@ import {
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
-import { errorText, loadFileDiff, revertTo } from "@/state/rpc"
+import { errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
@@ -518,6 +518,10 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
+  const canLoadDiff = useStore((s) => s.connection.state === "open")
+  useEffect(() => {
+    if (canLoadDiff && group.end && !diff) void loadDiff(threadId, group.turnId)
+  }, [canLoadDiff, group.end, group.turnId, threadId, diff])
   const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
   const launchedTasks = useMemo(
     () => runtimeTasks.filter((task) => task.origin_turn_id === group.turnId),

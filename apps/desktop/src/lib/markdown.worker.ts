@@ -1,3 +1,4 @@
+import { retainedSize } from "./retainedSize"
 import { createMarkdownParser, type ParsedMarkdown } from "./markdownParser"
 import type { MarkdownJob, MarkdownReply } from "./markdownQueue"
 const sessions = new Map<number, { parser: ReturnType<typeof createMarkdownParser>; parsed?: ParsedMarkdown; revision: number; bytes: number }>()
@@ -14,7 +15,7 @@ self.onmessage = (event: MessageEvent<MarkdownJob | { release: number }>) => {
   }
   session.parsed = parsed
   session.revision = ++revision
-  session.bytes = job.source.length * 2 + parsed.blocks.reduce((sum, block) => sum + block.signature.length * 2, 0)
+  session.bytes = retainedSize(parsed) * 2
   sessions.set(job.consumer, session)
   let bytes = [...sessions.values()].reduce((sum, entry) => sum + entry.bytes, 0)
   for (const [id, entry] of sessions) {

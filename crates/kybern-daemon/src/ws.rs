@@ -51,6 +51,50 @@ pub async fn upgrade(
     ws.on_upgrade(move |socket| run(state, socket, principal))
 }
 
+/// Serialized output owns permits until the socket write completes. One
+/// oversized response may use the whole budget, so history is never truncated.
+const OUTBOX_BYTES: usize = 8 * 1024 * 1024;
+struct QueuedFrame {
+    text: String,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+#[derive(Clone)]
+struct Outbox {
+    sender: mpsc::Sender<QueuedFrame>,
+    budget: Arc<tokio::sync::Semaphore>,
+    closed: tokio_util::sync::CancellationToken,
+}
+
+impl Outbox {
+    async fn send(&self, frame: ServerFrame) -> Result<(), ()> {
+        struct Count(usize);
+        impl std::io::Write for Count {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 = self.0.saturating_add(bytes.len());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut size = Count(0);
+        serde_json::to_writer(&mut size, &frame).map_err(|_| ())?;
+        let send = async {
+            let permit = self.budget.clone().acquire_many_owned(size.0.clamp(1, OUTBOX_BYTES) as u32).await.map_err(|_| ())?;
+            let text = serde_json::to_string(&frame).map_err(|_| ())?;
+            self.sender.send(QueuedFrame { text, _permit: permit }).await.map_err(|_| ())
+        };
+        tokio::select! {
+            _ = self.closed.cancelled() => Err(()),
+            result = tokio::time::timeout(std::time::Duration::from_secs(30), send) => match result {
+                Ok(result) => result,
+                Err(_) => { self.closed.cancel(); Err(()) }
+            }
+        }
+    }
+}
+
 struct Subscription {
     thread_id: Option<ThreadId>,
     /// Live events at or below this seq were covered by replay and are skipped.
@@ -65,7 +109,7 @@ pub struct ConnectionCtx {
     delivery: Mutex<()>,
     subs: Mutex<HashMap<SubscriptionId, Subscription>>,
     terminal_subs: Mutex<HashMap<TerminalId, tokio::task::JoinHandle<()>>>,
-    out: mpsc::Sender<ServerFrame>,
+    out: Outbox,
 }
 
 impl ConnectionCtx {
@@ -218,7 +262,7 @@ impl ConnectionCtx {
         let mut cursor = after;
         while cursor < head {
             let store = state.store.clone();
-            let batch = tokio::task::spawn_blocking(move || store.events_after(thread_id, cursor, 500)).await??;
+            let batch = tokio::task::spawn_blocking(move || store.events_after_bounded(thread_id, cursor, 500, 2 * 1024 * 1024)).await??;
             if batch.is_empty() {
                 break;
             }
@@ -272,14 +316,16 @@ impl Drop for ConnectionSlot {
 async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let _slot = ConnectionSlot::claim(&state);
     let (mut sink, mut stream) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::channel::<ServerFrame>(1024);
+    let (out_tx, mut out_rx) = mpsc::channel::<QueuedFrame>(64);
+    let closed = tokio_util::sync::CancellationToken::new();
+    let requests = Arc::new(tokio::sync::Semaphore::new(16));
     let ctx = Arc::new(ConnectionCtx {
         id: Uuid::now_v7(),
         principal,
         delivery: Mutex::new(()),
         subs: Mutex::new(HashMap::new()),
         terminal_subs: Mutex::new(HashMap::new()),
-        out: out_tx,
+        out: Outbox { sender: out_tx, budget: Arc::new(tokio::sync::Semaphore::new(OUTBOX_BYTES)), closed: closed.clone() },
     });
     let mut live = state.events.subscribe();
     let mut revoked = state.revoked_tokens.subscribe();
@@ -288,22 +334,21 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     }
     tracing::info!(conn = %ctx.id, label = %ctx.principal.label, "client connected");
 
+    let writer_closed = closed.clone();
     let writer = tokio::spawn(async move {
         while let Some(frame) = out_rx.recv().await {
-            let text = match serde_json::to_string(&frame) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            if sink.send(Message::Text(text.into())).await.is_err() {
+            if sink.send(Message::Text(frame.text.into())).await.is_err() {
                 break;
             }
         }
+        writer_closed.cancel();
         let _ = sink.close().await;
     });
 
     loop {
         tokio::select! {
             _ = state.shutdown.cancelled() => break,
+            _ = closed.cancelled() => break,
             notice = revoked.recv() => {
                 if matches!(notice, Ok(id) if id == ctx.principal.token_id)
                     || !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false)
@@ -314,8 +359,17 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     Some(Ok(Message::Text(text))) => {
                         let state = state.clone();
                         let ctx = ctx.clone();
-                        // Requests run concurrently so a slow provider call never blocks event delivery.
-                        tokio::spawn(async move { handle_text(&state, &ctx, text.as_str()).await });
+                        // Bound producers as well as queued bytes. Do not make a
+                        // saturated RPC lane block event/approval delivery.
+                        if let Ok(permit) = requests.clone().try_acquire_owned() {
+                            tokio::spawn(async move {
+                                let _permit = permit;
+                                handle_text(&state, &ctx, text.as_str()).await;
+                            });
+                        } else if let Ok(ClientFrame::Request(request)) = serde_json::from_str(text.as_str()) {
+                            let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(request.id,
+                                RpcError::internal("Too many concurrent requests; retry after pending requests finish")))).await;
+                        }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {}
@@ -337,6 +391,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     for (_, h) in ctx.terminal_subs.lock().await.drain() {
         h.abort();
     }
+    closed.cancel();
     drop(ctx);
     writer.abort();
     tracing::info!("client disconnected");
@@ -376,4 +431,41 @@ async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
         Err(e) => RpcResponse::err(req.id, e),
     };
     let _ = ctx.out.send(ServerFrame::Response(resp)).await;
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    #[tokio::test]
+    async fn oversized_frame_holds_budget_until_writer_releases_it_and_cancel_wakes_waiters() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let out = Outbox {
+            sender,
+            budget: Arc::new(tokio::sync::Semaphore::new(OUTBOX_BYTES)),
+            closed: tokio_util::sync::CancellationToken::new(),
+        };
+        let frame = || ServerFrame::Notification(RpcNotification::new("test", serde_json::json!({"data": "x".repeat(OUTBOX_BYTES + 1)})));
+        out.send(frame()).await.unwrap();
+        assert_eq!(out.budget.available_permits(), 0);
+        let received = receiver.recv().await.unwrap();
+        assert!(received.text.len() > OUTBOX_BYTES);
+        assert_eq!(out.budget.available_permits(), 0);
+        let waiting = {
+            let out = out.clone();
+            tokio::spawn(async move { out.send(ServerFrame::Notification(RpcNotification::new("next", Value::Null))).await })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        drop(received);
+        waiting.await.unwrap().unwrap();
+        drop(receiver.recv().await.unwrap());
+        assert_eq!(out.budget.available_permits(), OUTBOX_BYTES);
+        out.send(frame()).await.unwrap();
+        let waiting = {
+            let out = out.clone();
+            tokio::spawn(async move { out.send(ServerFrame::Notification(RpcNotification::new("next", Value::Null))).await })
+        };
+        out.closed.cancel();
+        assert!(waiting.await.unwrap().is_err());
+    }
 }

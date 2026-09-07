@@ -1,5 +1,9 @@
 # RAM audit and Synara 0.8.2 review
 
+The larger follow-ups below are now implemented and measured in the
+[before/after report](memory-before-after-2026-09-07.md). This document preserves
+the initial audit and its original measurements.
+
 Reviewed Kybern v0.2.2 (`487d7c9`) on an Apple M1 MacBookPro17,1, 16 GiB RAM,
 macOS 27.0 (26A5416b). Work is isolated on `codex/desktop-rendering-windows-memory`.
 The installed app, daemon, credentials and production database were not changed,

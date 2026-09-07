@@ -45,6 +45,7 @@ export function createMarkdownQueue(send: (job: MarkdownJob) => void) {
       active = null
       pump()
     },
+    idle: () => active === null && jobs.size === 0,
     dispose,
   }
 }

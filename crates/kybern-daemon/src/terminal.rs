@@ -6,12 +6,12 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::bounded_broadcast as broadcast;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use kybern_protocol::methods::TerminalInfo;
 use kybern_protocol::*;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 /// Bytes of scrollback kept per terminal for late subscribers.
@@ -23,6 +23,16 @@ pub const EXITED_RETENTION: Duration = Duration::from_secs(600);
 pub enum TerminalEvent {
     Output(Vec<u8>),
     Exited(Option<i32>),
+}
+
+impl broadcast::RetainedSize for Arc<TerminalEvent> {
+    fn retained_size(&self) -> usize {
+        std::mem::size_of::<TerminalEvent>()
+            + match self.as_ref() {
+                TerminalEvent::Output(bytes) => bytes.capacity(),
+                TerminalEvent::Exited(_) => 0,
+            }
+    }
 }
 
 pub struct Terminal {
@@ -92,7 +102,7 @@ impl TerminalManager {
 
         let mut reader = pair.master.try_clone_reader().context("clone pty reader")?;
         let writer = pair.master.take_writer().context("pty writer")?;
-        let (events, _) = broadcast::channel(4096);
+        let (events, _) = broadcast::channel(4096, 2 * 1024 * 1024);
 
         let terminal = Arc::new(Terminal {
             command,
@@ -299,6 +309,29 @@ fn default_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn byte_lag_resubscription_recovers_bounded_scrollback() {
+        let manager = TerminalManager::default();
+        let terminal = manager
+            .create(
+                None,
+                None,
+                std::env::temp_dir().display().to_string(),
+                80,
+                24,
+                Some(vec!["/bin/sh".into(), "-c".into(), "head -c 4194304 /dev/zero; printf terminal-end".into()]),
+            )
+            .unwrap();
+        let (mut slow, _) = terminal.subscribe_output(false);
+        assert!(wait_until(|| !terminal.info().alive));
+        assert!(matches!(slow.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))));
+        let (_, bytes) = terminal.subscribe_output(true);
+        assert!(bytes.len() <= 512 * 1024);
+        assert!(bytes.ends_with(b"terminal-end"));
+        manager.close(terminal.info().id).unwrap();
+    }
 
     fn wait_until(check: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);

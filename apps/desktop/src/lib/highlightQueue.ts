@@ -54,6 +54,7 @@ export function createHighlightQueue(send: (job: HighlightJob) => void) {
       active = null
       pump()
     },
+    idle: () => active === null && jobs.size === 0,
     dispose,
   }
 }

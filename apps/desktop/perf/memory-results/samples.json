@@ -1,0 +1,512 @@
+{
+  "after-daemon-1": [
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         3456K"
+    },
+    {
+      "sample": "slow-subscriber",
+      "footprint": "Physical footprint:         10.3M"
+    },
+    {
+      "retainedEvents": 126,
+      "recoveredEvents": 2048
+    },
+    {
+      "sample": "recovered",
+      "footprint": "Physical footprint:         11.6M"
+    }
+  ],
+  "after-daemon-2": [
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         3488K"
+    },
+    {
+      "sample": "slow-subscriber",
+      "footprint": "Physical footprint:         10.3M"
+    },
+    {
+      "retainedEvents": 126,
+      "recoveredEvents": 2048
+    },
+    {
+      "sample": "recovered",
+      "footprint": "Physical footprint:         11.5M"
+    }
+  ],
+  "after-daemon-3": [
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         3472K"
+    },
+    {
+      "sample": "slow-subscriber",
+      "footprint": "Physical footprint:         10.4M"
+    },
+    {
+      "retainedEvents": 126,
+      "recoveredEvents": 2048
+    },
+    {
+      "sample": "recovered",
+      "footprint": "Physical footprint:         11.6M"
+    }
+  ],
+  "after-renderer-1": [
+    {
+      "stage": "startup",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "footprint": "Physical footprint:         37.1M",
+      "sample": "startup",
+      "pid": 42809
+    },
+    {
+      "stage": "background",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "footprint": "Physical footprint:         62.8M",
+      "sample": "background",
+      "pid": 42809
+    },
+    {
+      "stage": "histories",
+      "memory": true,
+      "retainedCharacters": 8388608
+    },
+    {
+      "footprint": "Physical footprint:         84.8M",
+      "sample": "histories",
+      "pid": 42809
+    },
+    {
+      "stage": "environment-released",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "footprint": "Physical footprint:         52.3M",
+      "sample": "environment-released",
+      "pid": 42809
+    },
+    {
+      "stage": "workers-warm",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "footprint": "Physical footprint:         77.9M",
+      "sample": "workers-warm",
+      "pid": 42809
+    },
+    {
+      "stage": "workers-idle",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "footprint": "Physical footprint:         47.6M",
+      "sample": "workers-idle",
+      "pid": 42809
+    },
+    {
+      "pass": true,
+      "fixture": "memory",
+      "markdownPrefix": 0
+    }
+  ],
+  "after-renderer-2": [
+    {
+      "stage": "startup",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 49316,
+      "footprint": "Physical footprint:         37.1M",
+      "sample": "startup"
+    },
+    {
+      "stage": "background",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 49316,
+      "footprint": "Physical footprint:         62.9M",
+      "sample": "background"
+    },
+    {
+      "stage": "histories",
+      "memory": true,
+      "retainedCharacters": 8388608
+    },
+    {
+      "pid": 49316,
+      "footprint": "Physical footprint:         83.6M",
+      "sample": "histories"
+    },
+    {
+      "stage": "environment-released",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 49316,
+      "footprint": "Physical footprint:         43.0M",
+      "sample": "environment-released"
+    },
+    {
+      "stage": "workers-warm",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 49316,
+      "footprint": "Physical footprint:         102.3M",
+      "sample": "workers-warm"
+    },
+    {
+      "stage": "workers-idle",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 49316,
+      "footprint": "Physical footprint:         55.2M",
+      "sample": "workers-idle"
+    },
+    {
+      "pass": true,
+      "fixture": "memory",
+      "markdownPrefix": 0
+    }
+  ],
+  "after-renderer-3": [
+    {
+      "stage": "startup",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 51239,
+      "footprint": "Physical footprint:         37.3M",
+      "sample": "startup"
+    },
+    {
+      "stage": "background",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 51239,
+      "footprint": "Physical footprint:         58.2M",
+      "sample": "background"
+    },
+    {
+      "stage": "histories",
+      "memory": true,
+      "retainedCharacters": 8388608
+    },
+    {
+      "pid": 51239,
+      "footprint": "Physical footprint:         95.2M",
+      "sample": "histories"
+    },
+    {
+      "stage": "environment-released",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 51239,
+      "footprint": "Physical footprint:         44.4M",
+      "sample": "environment-released"
+    },
+    {
+      "stage": "workers-warm",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 51239,
+      "footprint": "Physical footprint:         94.4M",
+      "sample": "workers-warm"
+    },
+    {
+      "stage": "workers-idle",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 51239,
+      "footprint": "Physical footprint:         44.5M",
+      "sample": "workers-idle"
+    },
+    {
+      "pass": true,
+      "fixture": "memory",
+      "markdownPrefix": 0
+    }
+  ],
+  "before-daemon-1": [
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         7648K"
+    },
+    {
+      "sample": "slow-subscriber",
+      "footprint": "Physical footprint:         74.6M"
+    },
+    {
+      "retainedEvents": 2048,
+      "recoveredEvents": 2048
+    },
+    {
+      "sample": "recovered",
+      "footprint": "Physical footprint:         74.8M"
+    }
+  ],
+  "before-daemon-2": [
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         7648K"
+    },
+    {
+      "sample": "slow-subscriber",
+      "footprint": "Physical footprint:         74.4M"
+    },
+    {
+      "retainedEvents": 2048,
+      "recoveredEvents": 2048
+    },
+    {
+      "sample": "recovered",
+      "footprint": "Physical footprint:         74.6M"
+    }
+  ],
+  "before-daemon-3": [
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         7632K"
+    },
+    {
+      "sample": "slow-subscriber",
+      "footprint": "Physical footprint:         74.5M"
+    },
+    {
+      "retainedEvents": 2048,
+      "recoveredEvents": 2048
+    },
+    {
+      "sample": "recovered",
+      "footprint": "Physical footprint:         74.7M"
+    }
+  ],
+  "before-renderer-1": [
+    {
+      "stage": "startup",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "pid": 42100,
+      "footprint": "Physical footprint:         36.7M",
+      "sample": "startup"
+    },
+    {
+      "stage": "background",
+      "memory": true,
+      "retainedCharacters": 25165824
+    },
+    {
+      "pid": 42100,
+      "footprint": "Physical footprint:         64.9M",
+      "sample": "background"
+    },
+    {
+      "stage": "histories",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "pid": 42100,
+      "footprint": "Physical footprint:         119.3M",
+      "sample": "histories"
+    },
+    {
+      "stage": "environment-released",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "pid": 42100,
+      "footprint": "Physical footprint:         87.5M",
+      "sample": "environment-released"
+    },
+    {
+      "stage": "workers-warm",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "pid": 42100,
+      "footprint": "Physical footprint:         156.2M",
+      "sample": "workers-warm"
+    },
+    {
+      "stage": "workers-idle",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "pid": 42100,
+      "footprint": "Physical footprint:         150.7M",
+      "sample": "workers-idle"
+    },
+    {
+      "pass": true,
+      "fixture": "memory",
+      "markdownPrefix": 0
+    }
+  ],
+  "before-renderer-2": [
+    {
+      "stage": "startup",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         36.7M",
+      "pid": 43459
+    },
+    {
+      "stage": "background",
+      "memory": true,
+      "retainedCharacters": 25165824
+    },
+    {
+      "sample": "background",
+      "footprint": "Physical footprint:         77.1M",
+      "pid": 43459
+    },
+    {
+      "stage": "histories",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "histories",
+      "footprint": "Physical footprint:         119.0M",
+      "pid": 43459
+    },
+    {
+      "stage": "environment-released",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "environment-released",
+      "footprint": "Physical footprint:         86.2M",
+      "pid": 43459
+    },
+    {
+      "stage": "workers-warm",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "workers-warm",
+      "footprint": "Physical footprint:         152.4M",
+      "pid": 43459
+    },
+    {
+      "stage": "workers-idle",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "workers-idle",
+      "footprint": "Physical footprint:         133.9M",
+      "pid": 43459
+    },
+    {
+      "pass": true,
+      "fixture": "memory",
+      "markdownPrefix": 0
+    }
+  ],
+  "before-renderer-3": [
+    {
+      "stage": "startup",
+      "memory": true,
+      "retainedCharacters": 0
+    },
+    {
+      "sample": "startup",
+      "footprint": "Physical footprint:         37.0M",
+      "pid": 50796
+    },
+    {
+      "stage": "background",
+      "memory": true,
+      "retainedCharacters": 25165824
+    },
+    {
+      "sample": "background",
+      "footprint": "Physical footprint:         77.3M",
+      "pid": 50796
+    },
+    {
+      "stage": "histories",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "histories",
+      "footprint": "Physical footprint:         119.2M",
+      "pid": 50796
+    },
+    {
+      "stage": "environment-released",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "environment-released",
+      "footprint": "Physical footprint:         86.5M",
+      "pid": 50796
+    },
+    {
+      "stage": "workers-warm",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "workers-warm",
+      "footprint": "Physical footprint:         152.6M",
+      "pid": 50796
+    },
+    {
+      "stage": "workers-idle",
+      "memory": true,
+      "retainedCharacters": 58720256
+    },
+    {
+      "sample": "workers-idle",
+      "footprint": "Physical footprint:         132.7M",
+      "pid": 50796
+    },
+    {
+      "pass": true,
+      "fixture": "memory",
+      "markdownPrefix": 0
+    }
+  ]
+}

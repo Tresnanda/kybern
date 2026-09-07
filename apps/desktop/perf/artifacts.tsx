@@ -3,7 +3,7 @@ import { flushSync } from "react-dom"
 import { ResponseImage } from "../src/components/kybern/ResponseImage"
 import { Markdown } from "../src/components/kybern/Markdown"
 import { ImageThreadContext } from "../src/lib/imageThread"
-import { external, fetched } from "./artifacts-transport"
+import { external, fetched, requests } from "./artifacts-transport"
 import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const view = createRoot(document.getElementById("root")!)
@@ -63,9 +63,13 @@ async function run() {
     check(rect.width <= 280 && rect.height <= 176, "Image preview exceeds compact bounds")
     check(getComputedStyle(image).objectFit === "scale-down", "Preview crops or stretches images")
   }
+  check(requests.filter((request) => request.path.includes("sized-")).every((request) => request.preview), "Inline images fetch full originals")
+  check(previews.every((image) => image.naturalWidth <= 560 && image.naturalHeight <= 352), "Preview decode exceeds pixel budget")
   previews[0]!.closest("button")!.click()
-  await sleep(100)
-  check(document.querySelector<HTMLImageElement>('[role="dialog"] img')?.src === previews[0]!.src, "Viewer does not use the full image")
+  await sleep(350)
+  const original = document.querySelector<HTMLImageElement>('[role="dialog"] img')!
+  await original.decode()
+  check(original.naturalHeight === 1800 && original.src !== previews[0]!.src, "Viewer does not fetch the full image")
   render("![Offscreen](artifacts/sized-offscreen.png)")
   root.style.marginTop = "3000px"
   await sleep(100)

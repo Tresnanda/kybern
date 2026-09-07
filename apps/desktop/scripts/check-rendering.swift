@@ -47,7 +47,21 @@ final class Bench: NSObject, WKScriptMessageHandler {
   print(message.body)
   let json = (message.body as? String)?.data(using: .utf8)
   let result = json.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-  if result?["stage"] != nil { fflush(stdout); return }
+  if result?["stage"] != nil {
+   if result?["memory"] as? Bool == true, web.responds(to: NSSelectorFromString("_webProcessIdentifier")), let pid = web.value(forKey: "_webProcessIdentifier") as? Int {
+    let process = Process(); let pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
+    process.arguments = ["-summary", String(pid)]; process.standardOutput = pipe; process.standardError = pipe
+    try! process.run()
+    let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    let footprint = output.components(separatedBy: "\n").filter { $0.hasPrefix("Physical footprint:") }.first ?? "unavailable"
+    let record: [String: Any] = ["sample": result!["stage"]!, "footprint": footprint, "pid": pid]
+    print(String(decoding: try! JSONSerialization.data(withJSONObject: record), as: UTF8.self))
+    web.evaluateJavaScript("window.__memoryContinue()")
+   }
+   fflush(stdout); return
+  }
   if ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" {
    print("Preview window id: \(window.windowNumber), pid: \(ProcessInfo.processInfo.processIdentifier)")
    fflush(stdout)
@@ -66,5 +80,5 @@ final class Bench: NSObject, WKScriptMessageHandler {
 }
 let bench = Bench()
 bench.run()
-DispatchQueue.main.asyncAfter(deadline: .now() + (ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" ? 180 : 30)) { print("Rendering check timed out"); exit(2) }
+DispatchQueue.main.asyncAfter(deadline: .now() + (ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" ? 180 : 120)) { print("Rendering check timed out"); exit(2) }
 app.run()

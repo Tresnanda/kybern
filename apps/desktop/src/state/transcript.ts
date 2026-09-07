@@ -107,6 +107,28 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
   }
 }
 
+/** Preserve controls and sequence metadata, but make missing history explicit. */
+export function compactThreadState(state: ThreadState): ThreadState {
+  if (!state.loaded && state.blocks.length === 0 && state.checkpoints.length === 0) return state
+  return { ...state, blocks: [], checkpoints: [], loaded: false }
+}
+
+/** Background streaming never concatenates text, copies tool output or builds
+ * historical rows. Opening the thread hydrates the authoritative transcript. */
+export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): ThreadState {
+  if (event.seq <= state.lastSeq) return state
+  const compact = compactThreadState(state)
+  switch (event.kind) {
+    case "thread_created": case "thread_updated": case "thread_archived":
+    case "approval_requested": case "user_input_requested": case "approval_resolved":
+    case "async_questions_requested": case "async_questions_answered":
+    case "provider_commands_updated": case "provider_usage_updated":
+      return compactThreadState(applyEvent(compact, event))
+    default:
+      return { ...compact, lastSeq: event.seq }
+  }
+}
+
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
     case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null

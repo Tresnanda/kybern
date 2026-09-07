@@ -1,0 +1,124 @@
+{
+  "rendering": [
+    {
+      "railEditPass": true,
+      "railNavigationPass": true,
+      "followPass": true,
+      "readingPositionPass": true,
+      "historyElements": 120,
+      "railButtons": 54,
+      "historyCachePass": true,
+      "historyReadsDuringUpdates": 0,
+      "codeIdentityPass": true,
+      "unchangedHighlightPass": true,
+      "wrapStatePass": true,
+      "finalTextPass": true,
+      "retainedCodeBlocks": 30,
+      "explanationCommitP95": 1,
+      "streamFrames": 134,
+      "streamFrameP95": 17,
+      "streamFramesOver25ms": 1,
+      "streamRenders": 138,
+      "codeMutations": 5,
+      "highlightBudgetPass": true,
+      "revealBudgetPass": true,
+      "pass": true
+    }
+  ],
+  "scaling": [
+    {
+      "stage": "mounted",
+      "at": 82
+    },
+    {
+      "stage": "history ready",
+      "at": 383
+    },
+    {
+      "stage": "scroll 0",
+      "at": 384
+    },
+    {
+      "stage": "scroll 15",
+      "at": 655
+    },
+    {
+      "stage": "scroll 30",
+      "at": 860
+    },
+    {
+      "stage": "scroll 45",
+      "at": 1074
+    },
+    {
+      "stage": "scroll 60",
+      "at": 1308
+    },
+    {
+      "stage": "scroll 75",
+      "at": 1524
+    },
+    {
+      "stage": "expand work",
+      "at": 1891
+    },
+    {
+      "stage": "before stream",
+      "at": 2513
+    },
+    {
+      "stage": "starting stream",
+      "at": 2716
+    },
+    {
+      "historyTurns": 401,
+      "mountMs": 47,
+      "historyMessages": 8,
+      "historyNodes": 453,
+      "messageRects": 88,
+      "scrollFrameP95": 23,
+      "scrollFramesOver25ms": 4,
+      "expandMs": 21,
+      "grouped": true,
+      "workRows": 25,
+      "expandedNodes": 746,
+      "streamChars": 46364,
+      "streamFrames": 139,
+      "streamFrameP95": 18,
+      "streamFramesOver25ms": 0,
+      "inputTicks": 27,
+      "inputEvents": 27,
+      "inputFrameP95": 16,
+      "finalCommitMs": 1,
+      "finalPass": true,
+      "responsivenessPass": true,
+      "pass": true
+    }
+  ],
+  "interaction": [
+    {
+      "firstNavigation": true,
+      "middleNavigation": true,
+      "lastNavigation": true,
+      "wrapState": true,
+      "selection": true,
+      "selectionRelease": true,
+      "focus": true,
+      "readingPosition": true,
+      "prepend": true,
+      "mountedTools": 25,
+      "toolState": true,
+      "groupState": true,
+      "resize": true,
+      "threadSwitch": true,
+      "follow": true,
+      "agentActivity": true,
+      "pass": true
+    }
+  ],
+  "artifacts": [
+    {
+      "pass": true
+    }
+  ]
+}

@@ -16,12 +16,14 @@ import type {
   Thread,
   ThreadActivitySummary,
   ThreadId,
+  ThreadEvent,
   ProjectId,
   TurnId,
   UserMessage,
 } from "@/protocol"
 
-import { emptyThreadState, type ThreadState } from "./transcript"
+import { applyEvent, applyBackgroundEvent, compactThreadState, emptyThreadState, type ThreadState } from "./transcript"
+import { createRetentionPolicy } from "./retention"
 import { advanceSequence } from "./bootstrap"
 import {
   persistWorkspace,
@@ -145,6 +147,8 @@ export interface AppState {
 
 export interface AppActions {
   set: (patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => void
+  receiveEvent: (event: ThreadEvent) => void
+  releaseCachedData: () => void
   transcript: (id: ThreadId) => ThreadState
   updateTranscript: (id: ThreadId, f: (t: ThreadState) => ThreadState) => void
   selectThread: (id: ThreadId) => void
@@ -218,6 +222,15 @@ export function createEnvironmentStore(
 
     set: (patch) => set(typeof patch === "function" ? patch : () => patch),
     transcript: (id) => get().transcripts[id] ?? emptyThreadState(),
+    receiveEvent: (event) => {
+      const current = get()
+      current.updateTranscript(event.thread_id, (state) =>
+        isThreadVisible(current, event.thread_id) ? applyEvent(state, event) : applyBackgroundEvent(state, event))
+    },
+    releaseCachedData: () => set((state) => ({
+      transcripts: Object.fromEntries(Object.entries(state.transcripts).map(([id, transcript]) => [id, compactThreadState(transcript)])),
+      diffs: {}, runtimeTasks: {}, gitStatuses: {},
+    })),
     updateTranscript: (id, f) =>
       set((s) => {
         const stored = s.transcripts[id]
@@ -535,6 +548,13 @@ export function createEnvironmentStore(
       persistWorkspace(environmentId, next)
     }
   })
+  const retain = createRetentionPolicy()
+  let pruning = false
+  store.subscribe((next, previous) => {
+    if (pruning || (next.transcripts === previous.transcripts && next.diffs === previous.diffs && next.selected === previous.selected && next.splitView === previous.splitView)) return
+    const patch = retain(next, previous)
+    if (patch) { pruning = true; store.setState(patch); pruning = false }
+  })
   return store
 }
 
@@ -549,6 +569,7 @@ export function activateEnvironmentStore(
     store = createEnvironmentStore(environmentId)
     environmentStores.set(environmentId, store)
   }
+  if (useStore !== store) useStore.getState().releaseCachedData()
   useStore = store
   return store
 }

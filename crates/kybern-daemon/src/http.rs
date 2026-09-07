@@ -205,6 +205,8 @@ mod tests {
 #[derive(Deserialize)]
 struct ImageQuery {
     path: String,
+    #[serde(default)]
+    preview: bool,
 }
 
 async fn get_thread_image(
@@ -232,6 +234,11 @@ async fn get_thread_image(
         if !tokio::fs::metadata(&path).await.is_ok_and(|meta| meta.is_file()) {
             return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
         }
+        // Acquire before reading compressed data, and keep ownership inside
+        // spawn_blocking so a cancelled HTTP request cannot oversubscribe decodes.
+        static DECODES: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+            std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)));
+        let permit = if query.preview { Some(DECODES.clone().acquire_owned().await.unwrap()) } else { None };
         let Ok(file) = tokio::fs::File::open(&path).await else {
             return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
         };
@@ -245,6 +252,22 @@ async fn get_thread_image(
         }
         let Some(mime) = image_mime(&bytes) else {
             return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "use a PNG, JPEG, GIF, WebP, or AVIF image").into_response();
+        };
+        let (mime, bytes) = if let Some(permit) = permit {
+            match tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                crate::thumbnail::make(&bytes)
+            })
+            .await
+            {
+                Ok(Ok(preview)) => ("image/png", preview),
+                _ => {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "Preview unavailable for this image. Open the original image.")
+                        .into_response();
+                }
+            }
+        } else {
+            (mime, bytes)
         };
         ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, no-store"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], bytes)
             .into_response()

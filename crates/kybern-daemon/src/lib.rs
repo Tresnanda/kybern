@@ -1,5 +1,6 @@
 mod access;
 mod auth;
+mod bounded_broadcast;
 mod config;
 mod discovery;
 mod exposure;
@@ -18,6 +19,7 @@ mod settings;
 mod skills;
 mod state;
 mod terminal;
+mod thumbnail;
 mod ws;
 
 use std::fs::OpenOptions;

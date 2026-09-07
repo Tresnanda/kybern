@@ -419,6 +419,18 @@ impl Store {
 
     /// Events with `seq > after`, optionally filtered by thread, ascending, at most `limit`.
     pub fn events_after(&self, thread_id: Option<ThreadId>, after: EventSeq, limit: u32) -> Result<Vec<ThreadEvent>> {
+        self.events_after_bounded(thread_id, after, limit, usize::MAX)
+    }
+
+    /// Replay batches have a byte budget as well as a count. Always return the
+    /// first event even if oversized, so the cursor can make progress.
+    pub fn events_after_bounded(
+        &self,
+        thread_id: Option<ThreadId>,
+        after: EventSeq,
+        limit: u32,
+        max_bytes: usize,
+    ) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
             let sql = match thread_id {
                 Some(_) => {
@@ -427,11 +439,18 @@ impl Store {
                 None => "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?3",
             };
             let mut st = c.prepare(sql)?;
-            let rows = match thread_id {
-                Some(t) => st.query_map(params![after, t.to_string(), limit], row_to_event)?.collect::<Result<Vec<_>, _>>()?,
-                None => st.query_map(params![after, "", limit], row_to_event)?.collect::<Result<Vec<_>, _>>()?,
-            };
-            Ok(rows)
+            let mut rows = st.query(params![after, thread_id.map(|id| id.to_string()).unwrap_or_default(), limit])?;
+            let mut events = Vec::new();
+            let mut bytes = 0usize;
+            while let Some(row) = rows.next()? {
+                let size = row.get_ref(4)?.as_str()?.len();
+                if !events.is_empty() && bytes.saturating_add(size) > max_bytes {
+                    break;
+                }
+                bytes = bytes.saturating_add(size);
+                events.push(row_to_event(row)?);
+            }
+            Ok(events)
         })
     }
 

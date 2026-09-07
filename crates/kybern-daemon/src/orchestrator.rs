@@ -16,7 +16,7 @@ use kybern_drivers::{
 use kybern_git::{Repo, checkpoint_ref};
 use kybern_protocol::*;
 use kybern_store::{Store, TurnUsageRow};
-use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::config::Paths;
@@ -52,7 +52,7 @@ struct Inner {
     thread_updates: std::sync::Mutex<()>,
     store: Store,
     drivers: DriverRegistry,
-    events: broadcast::Sender<ThreadEvent>,
+    events: crate::bounded_broadcast::Sender<ThreadEvent>,
     paths: Paths,
     settings: SettingsStore,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
@@ -198,7 +198,7 @@ impl Orchestrator {
     pub fn new(
         store: Store,
         drivers: DriverRegistry,
-        events: broadcast::Sender<ThreadEvent>,
+        events: crate::bounded_broadcast::Sender<ThreadEvent>,
         paths: Paths,
         settings: SettingsStore,
     ) -> Self {
@@ -2127,7 +2127,7 @@ mod tests {
     use kybern_protocol::*;
     use kybern_store::Store;
     use serde_json::json;
-    use tokio::sync::{Mutex, broadcast};
+    use tokio::sync::Mutex;
     use uuid::Uuid;
 
     #[derive(Default)]
@@ -2268,7 +2268,7 @@ mod tests {
             last_seq: 0,
         };
         store.thread_upsert(&thread).unwrap();
-        let (events_tx, _) = broadcast::channel(32);
+        let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
         let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
         let turn_id = Uuid::now_v7();
         orchestrator
@@ -2499,7 +2499,7 @@ mod tests {
                 updated_at: now,
             };
             store.project_insert(&project).unwrap();
-            let (events_tx, _) = broadcast::channel(64);
+            let (events_tx, _) = crate::bounded_broadcast::channel(64, 8 * 1024 * 1024);
             let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
             Self { root, store, orchestrator, project }
         }

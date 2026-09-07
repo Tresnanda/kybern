@@ -6,7 +6,7 @@ import { toast } from "sonner"
 import { reloadOnHotUpdate } from "@/lib/hot"
 
 import { isWindowFocused, notify, type EndpointInfo } from "@/lib/tauri"
-import { diffSummaryRequest, mapWithConcurrency } from "@/lib/workload"
+import { diffSummaryRequest } from "@/lib/workload"
 import {
   codes,
   KybernClient,
@@ -29,12 +29,14 @@ import {
   type UserMessage,
 } from "@/protocol"
 
-import { applyEvent, seedFromGet } from "./transcript"
+import { applyEvent, compactThreadState, seedFromGet } from "./transcript"
+import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
 import {
   diffKey,
   isThreadVisible,
+  isRuntimeTaskActive,
   mergeRuntimeTasks,
   summarizeRuntimeTasks,
   type EnvironmentStore,
@@ -49,6 +51,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const gitStatusLoads = new Map<ThreadId, Promise<GitStatus | null>>()
   const threadLoads = new Map<ThreadId, Promise<void>>()
   const providerLoads = new Map<string, Promise<ProviderStatus[]>>()
+  const snapshots = new Map<ThreadId, ReturnType<typeof createSnapshotReplay>>()
+  let disposed = false
   let hydrationGeneration = 0
   const uploads = new AbortController()
 
@@ -176,7 +180,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   }
 
   function isCurrentHydration(generation: number): boolean {
-    return generation === hydrationGeneration && client?.status === "open"
+    return !disposed && generation === hydrationGeneration && client?.status === "open"
   }
 
   function loadThread(id: ThreadId): Promise<void> {
@@ -185,13 +189,24 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
     const request = (async () => {
       try {
-        const res = await rpc().call("threads.get", { thread_id: id })
+        const generation = hydrationGeneration
+        let res: Awaited<ReturnType<typeof getSnapshot>> | undefined
+        async function getSnapshot() { return rpc().call("threads.get", { thread_id: id }) }
+        let events: ThreadEvent[] | null = null
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const buffer = createSnapshotReplay()
+          snapshots.set(id, buffer)
+          res = await getSnapshot()
+          if (!isCurrentHydration(generation)) return
+          events = buffer.after(res.thread.last_seq)
+          if (events) break
+        }
+        if (!res || !events) throw new Error("Thread is updating too quickly to load. Open it again to retry.")
+        snapshots.delete(id)
         const store = useStore.getState()
         store.set((state) => {
-          const tasks = mergeRuntimeTasks(
-            state.runtimeTasks[id] ?? [],
-            res.runtime_tasks ?? []
-          )
+          const allTasks = mergeRuntimeTasks(state.runtimeTasks[id] ?? [], res.runtime_tasks ?? [])
+          const tasks = isThreadVisible(state, id) ? allTasks : allTasks.filter(isRuntimeTaskActive)
           return {
             runtimeTasks: { ...state.runtimeTasks, [id]: tasks },
             threadActivity: {
@@ -200,9 +215,16 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
             },
           }
         })
-        store.updateTranscript(id, (prev) => seedFromGet(res, prev))
-        void loadCheckpoints(id)
+        const snapshot = res
+        const replay = events
+        store.updateTranscript(id, (prev) => {
+          let next = seedFromGet(snapshot, prev)
+          for (const event of replay) next = applyEvent(next, event)
+          return isThreadVisible(useStore.getState(), id) ? next : compactThreadState(next)
+        })
+        if (isThreadVisible(store, id)) void loadCheckpoints(id)
       } catch (error) {
+        if (disposed) return
         const store = useStore.getState()
         if (error instanceof RpcCallError && error.code === codes.NOT_FOUND) {
           store.set((state) => {
@@ -223,7 +245,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
     threadLoads.set(id, request)
     void request.finally(() => {
-      if (threadLoads.get(id) === request) threadLoads.delete(id)
+      if (threadLoads.get(id) === request) { threadLoads.delete(id); snapshots.delete(id) }
     })
     return request
   }
@@ -242,7 +264,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const pending = providerLoads.get(key)
     if (pending) return pending
 
-    if (generation === undefined || isCurrentHydration(generation)) {
+    if (isCurrentHydration(requestGeneration)) {
       useStore.getState().set({ providersLoading: true })
     }
     const request = (async () => {
@@ -251,14 +273,14 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           ...(projectId ? { project_id: projectId } : {}),
           ...(forceRefresh ? { force_refresh: true } : {}),
         })
-        if (generation === undefined || isCurrentHydration(generation)) {
+        if (isCurrentHydration(requestGeneration)) {
           useStore.getState().set({ providers: result.providers })
           if (!projectId) writeProviderCache(useStore.getState().environmentId, result.providers)
         }
         return result.providers
       } finally {
         providerLoads.delete(key)
-        if (generation === undefined || isCurrentHydration(generation)) {
+        if (isCurrentHydration(requestGeneration)) {
           useStore.getState().set({ providersLoading: false })
         }
       }
@@ -269,24 +291,20 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
   async function loadCheckpoints(id: ThreadId) {
     try {
+      const generation = hydrationGeneration
       const r = await rpc().call("threads.checkpoints", { thread_id: id })
+      if (!isCurrentHydration(generation) || !isThreadVisible(useStore.getState(), id)) return
       useStore
         .getState()
         .updateTranscript(id, (t) => ({ ...t, checkpoints: r.checkpoints }))
-      const have = useStore.getState().diffs
-      const missing = r.checkpoints.filter(
-        (checkpoint) =>
-          checkpoint.after && !have[diffKey(id, checkpoint.turn_id)]
-      )
-      void mapWithConcurrency(missing, 2, (checkpoint) =>
-        loadDiff(id, checkpoint.turn_id)
-      )
     } catch {
       // non-git projects have none
     }
   }
 
   function onEvent(ev: ThreadEvent) {
+    if (disposed) return
+    snapshots.get(ev.thread_id)?.add(ev)
     const s = useStore.getState()
     if (ev.kind === "approval_resolved") toast.dismiss(`agent-input:${ev.approval_id}`)
     if (
@@ -306,19 +324,20 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     ) {
       storeRuntimeTask(ev.task)
     }
-    s.updateTranscript(ev.thread_id, (t) => applyEvent(t, ev))
+    s.receiveEvent(ev)
 
     if (ev.kind === "turn_completed" || ev.kind === "turn_failed") {
-      void loadDiff(ev.thread_id, ev.turn_id ?? undefined)
-      void loadDiff(ev.thread_id)
       const current = useStore.getState()
       const visible = isThreadVisible(current, ev.thread_id)
+      if (visible) void loadDiff(ev.thread_id, ev.turn_id ?? undefined)
       if (
         visible &&
         (current.envOpen ||
           (current.rightOpen && current.rightTab === "changes"))
-      )
+      ) {
+        void loadDiff(ev.thread_id)
         void loadGitStatus(ev.thread_id)
+      }
       void announce(ev)
     }
     if (ev.kind === "approval_requested" || ev.kind === "user_input_requested") void announce(ev)
@@ -360,10 +379,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
     const request = (async () => {
       try {
+        const generation = hydrationGeneration
         const d = await rpc().call(
           "threads.diff",
           diffSummaryRequest(threadId, turnId)
         )
+        if (!isCurrentHydration(generation)) return
         useStore
           .getState()
           .set((s) => ({
@@ -409,7 +430,9 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
     const request = (async () => {
       try {
+        const generation = hydrationGeneration
         const status = await rpc().call("git.status", { thread_id: threadId })
+        if (!isCurrentHydration(generation)) return null
         useStore
           .getState()
           .set((state) => ({
@@ -533,7 +556,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const s = useStore.getState()
     const thread = s.threads[threadId]
     if (!thread) throw new Error("Thread not found")
-    const t = s.transcripts[threadId]
+    const cached = s.transcripts[threadId]
+    const t = cached?.loaded ? cached : seedFromGet(await rpc().call("threads.get", { thread_id: threadId }))
     const lines: string[] = []
     for (const b of t?.blocks ?? []) {
       if (b.kind === "user") {
@@ -607,7 +631,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   function storeRuntimeTask(task: RuntimeTask) {
     useStore.getState().set((state) => {
       const current = state.runtimeTasks[task.thread_id] ?? []
-      const tasks = mergeRuntimeTasks(current, [task])
+      const visible = isThreadVisible(state, task.thread_id)
+      const summary = visible ? task : { ...task, detail: task.detail?.slice(0, 512), title: task.title.slice(0, 256) }
+      const all = mergeRuntimeTasks(current, [summary])
+      const tasks = visible ? all : all.filter(isRuntimeTaskActive)
       return {
         runtimeTasks: { ...state.runtimeTasks, [task.thread_id]: tasks },
         threadActivity: {
@@ -711,13 +738,16 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     }
   }
 
-  async function fetchThreadImage(threadId: string, path: string, signal: AbortSignal): Promise<Blob> {
-    const response = await fetch(`${httpBase}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` }, signal })
+  async function fetchThreadImage(threadId: string, path: string, signal: AbortSignal, preview = false): Promise<Blob> {
+    const response = await fetch(`${httpBase}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(path)}${preview ? "&preview=true" : ""}`, { headers: { authorization: `Bearer ${token}` }, signal })
     if (!response.ok) throw new Error((await response.text()).trim() || "Unable to load image. Try again.")
     return response.blob()
   }
 
   function disconnect() {
+    disposed = true
+    snapshots.clear()
+    useStore.getState().releaseCachedData()
     hydrationGeneration++
     uploads.abort()
     client?.close("Environment disconnected")

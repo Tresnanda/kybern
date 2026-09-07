@@ -26,7 +26,7 @@ pub struct Inner {
     pub paths: Paths,
     pub store: Store,
     pub drivers: DriverRegistry,
-    pub events: broadcast::Sender<ThreadEvent>,
+    pub events: crate::bounded_broadcast::Sender<ThreadEvent>,
     pub orchestrator: Orchestrator,
     pub terminals: TerminalManager,
     pub settings: SettingsStore,
@@ -86,7 +86,7 @@ impl AppState {
                 id
             }
         };
-        let (events, _) = broadcast::channel(8192);
+        let (events, _) = crate::bounded_broadcast::channel(8192, 8 * 1024 * 1024);
         let drivers = DriverRegistry::with_defaults();
         let settings = SettingsStore::load(&paths.settings)?;
         let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;

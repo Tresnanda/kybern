@@ -350,3 +350,144 @@ async fn custom_harnesses_are_not_mutated_and_update_results_survive_reconnect()
     assert_eq!(record.status, HarnessUpdateStatus::Unsupported);
     assert!(record.message.contains("Custom executable"));
 }
+
+#[tokio::test]
+async fn byte_lag_can_replay_every_durable_event_including_oversized_payload() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let mut slow = host.state.events.subscribe();
+    let event = host
+        .state
+        .store
+        .event_append(
+            thread.id,
+            None,
+            EventPayload::AssistantTextDelta { message_id: Uuid::now_v7(), origin: Default::default(), delta: "x".repeat(9 * 1024 * 1024) },
+        )
+        .unwrap();
+    host.state.events.send(event.clone()).unwrap();
+    assert!(matches!(slow.recv().await, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))));
+    let replay = host.state.store.events_after_bounded(Some(thread.id), 0, 500, 1024).unwrap();
+    assert_eq!(replay.len(), 1);
+    assert_eq!(replay[0].seq, event.seq);
+    assert_eq!(serde_json::to_value(&replay[0]).unwrap(), serde_json::to_value(&event).unwrap());
+    for n in 0..5 {
+        host.state
+            .store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::AssistantTextDelta {
+                    message_id: Uuid::now_v7(),
+                    origin: Default::default(),
+                    delta: format!("{n}{}", "y".repeat(900)),
+                },
+            )
+            .unwrap();
+    }
+    let mut cursor = event.seq;
+    let mut recovered = 0;
+    loop {
+        let batch = host.state.store.events_after_bounded(Some(thread.id), cursor, 500, 1200).unwrap();
+        if batch.is_empty() {
+            break;
+        }
+        assert_eq!(batch.len(), 1);
+        cursor = batch[0].seq;
+        recovered += 1;
+    }
+    assert_eq!(recovered, 5);
+}
+
+// Shared unchanged with the before worktree. vmmap samples THIS test process only.
+#[tokio::test]
+#[ignore = "manual native memory comparison"]
+async fn memory_broadcast_fixture() {
+    fn sample(stage: &str) {
+        let result = std::process::Command::new("/usr/bin/vmmap").args(["-summary", &std::process::id().to_string()]).output().unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        let footprint = output.lines().find(|line| line.starts_with("Physical footprint:")).unwrap_or("unavailable");
+        println!("{}", serde_json::json!({"sample": stage, "footprint": footprint}));
+    }
+    let host = Host::start().await;
+    let thread = host.thread();
+    let mut slow = host.state.events.subscribe();
+    sample("startup");
+    for n in 0..2048 {
+        let event = host
+            .state
+            .store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::AssistantTextDelta {
+                    message_id: Uuid::now_v7(),
+                    origin: Default::default(),
+                    delta: format!("{n:08}{}", "x".repeat(32760)),
+                },
+            )
+            .unwrap();
+        host.state.events.send(event).unwrap();
+    }
+    sample("slow-subscriber");
+    let mut retained = 0;
+    loop {
+        match slow.try_recv() {
+            Ok(_) => retained += 1,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    let mut cursor = 0;
+    let mut recovered = 0;
+    loop {
+        let batch = host.state.store.events_after(Some(thread.id), cursor, 32).unwrap();
+        if batch.is_empty() {
+            break;
+        }
+        for event in batch {
+            assert!(event.seq > cursor);
+            cursor = event.seq;
+            recovered += 1;
+        }
+    }
+    assert_eq!(recovered, 2048);
+    println!("{}", serde_json::json!({"retainedEvents": retained, "recoveredEvents": recovered}));
+    sample("recovered");
+}
+
+#[tokio::test]
+async fn previews_share_auth_and_path_checks_and_originals_remain_exact() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let http = reqwest::Client::new();
+    let url = format!("{}/threads/{}/image", host.url, thread.id);
+    for format in [image::ImageFormat::Png, image::ImageFormat::Jpeg, image::ImageFormat::Gif, image::ImageFormat::WebP] {
+        let image = image::DynamicImage::new_rgb8(1800, 600);
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, format).unwrap();
+        let name = format!("preview.{}", format.extensions_str()[0]);
+        std::fs::write(host.root.join(&name), bytes.get_ref()).unwrap();
+        let query = [("path", name.as_str()), ("preview", "true")];
+        assert_eq!(http.get(&url).query(&query).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+        let response = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&query).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "image/png");
+        let preview = image::load_from_memory(&response.bytes().await.unwrap()).unwrap();
+        assert_eq!(preview.width(), 560);
+        assert!(preview.height() <= 352);
+        let original = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", name)]).send().await.unwrap();
+        assert_eq!(original.bytes().await.unwrap().as_ref(), bytes.get_ref());
+    }
+    let other = Host::start().await;
+    let outside = other.root.join("outside.png");
+    std::fs::write(&outside, b"image").unwrap();
+    let forbidden = http
+        .get(&url)
+        .bearer_auth(&host.state.bootstrap_token)
+        .query(&[("path", outside.to_str().unwrap()), ("preview", "true")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+}
