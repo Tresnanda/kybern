@@ -13,7 +13,7 @@ import {
   DialogTitle,
   dialogFieldLabelClassName,
 } from "@/components/kit/dialog"
-import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import {
   Menu,
   MenuGroup,
@@ -22,8 +22,6 @@ import {
   MenuSeparator,
   MenuRadioGroup,
   MenuRadioItem,
-  MenuSub,
-  MenuSubTrigger,
   MenuTrigger,
 } from "@/components/kit/menu"
 import {
@@ -148,37 +146,32 @@ export function EnvironmentSwitcher() {
                 if (id !== selectedId) void switchEnvironment(id)
               }}>
                 {profiles.map((item) => (
-                  <MenuRadioItem key={item.id} value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
-                    if (item.id === selectedId && connection.state === "failed") void switchEnvironment(item.id)
-                  }}>
-                    {item.local ? <DeviceLaptopIcon className="-mx-0.5 size-4 shrink-0 opacity-80" /> : <GlobeIcon className="-mx-0.5 size-4 shrink-0 opacity-80" />}
-                    <span className="min-w-0 flex-1 text-start">
-                      <bdi className="block break-words whitespace-normal leading-snug">{item.name}</bdi>
-                      <span className="mt-0.5 block break-words whitespace-normal font-normal text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground">
-                        {item.id === selectedId ? statusLabel : item.local ? "On this Mac" : item.ssh ? "SSH connection" : "Remote environment"}
+                  <div key={item.id} className="flex items-center" role="presentation">
+                    <MenuRadioItem className="flex-1" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
+                      if (item.id === selectedId && connection.state === "failed") void switchEnvironment(item.id)
+                    }}>
+                      {item.local ? <DeviceLaptopIcon className="-mx-0.5 size-4 shrink-0 opacity-80" /> : <GlobeIcon className="-mx-0.5 size-4 shrink-0 opacity-80" />}
+                      <span className="min-w-0 flex-1 text-start">
+                        <bdi className="block break-words whitespace-normal leading-snug">{item.name}</bdi>
+                        <span className="mt-0.5 block break-words whitespace-normal font-normal text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground">
+                          {item.id === selectedId ? statusLabel : item.local ? "On this Mac" : item.ssh ? "SSH connection" : "Remote environment"}
+                        </span>
                       </span>
-                    </span>
-                  </MenuRadioItem>
+                    </MenuRadioItem>
+                    {isTauri() && <MenuItem
+                      aria-label={`Open ${item.name} in a new window`}
+                      title={`Open ${item.name} in a new window`}
+                      className="size-8 min-h-8 shrink-0 justify-center p-0"
+                      onClick={() => {
+                        void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
+                      }}
+                    ><WindowIcon className="size-4" /></MenuItem>}
+                  </div>
                 ))}
               </MenuRadioGroup>
             </MenuGroup>
             <MenuSeparator />
             <MenuGroup>
-              {isTauri() && (
-                <MenuSub>
-                  <MenuSubTrigger><WindowIcon className="size-4" /><span className="flex-1">Open in new window</span></MenuSubTrigger>
-                  <ComposerPickerMenuSubPopup className="w-64 min-w-0">
-                    {profiles.map((item) => (
-                      <MenuItem key={item.id} onClick={() => {
-                        void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
-                      }}>
-                        {item.local ? <DeviceLaptopIcon className="size-4" /> : <GlobeIcon className="size-4" />}
-                        <bdi className="min-w-0 break-words whitespace-normal">{item.name}</bdi>
-                      </MenuItem>
-                    ))}
-                  </ComposerPickerMenuSubPopup>
-                </MenuSub>
-              )}
               <MenuItem
                 onClick={() => {
                   setEditing(null)

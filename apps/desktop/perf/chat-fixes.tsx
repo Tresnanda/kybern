@@ -124,21 +124,15 @@ async function run() {
     const bounds = rows.map((row) => row.getBoundingClientRect())
     check(Math.abs(bounds[0].height - bounds[1].height) < 1, "Environment rows have uneven heights")
     for (const row of rows) check(row.scrollWidth <= row.clientWidth + 1, "Environment row clips its content")
-    check(document.querySelectorAll('[role="menuitem"]').length === 4, "Environment actions unexpectedly duplicate machine rows")
-    const submenuTrigger = document.querySelector<HTMLElement>('[data-slot="menu-sub-trigger"]')!
-    submenuTrigger.click()
-    await sleep(250)
-    const submenu = document.querySelector<HTMLElement>('[data-slot="menu-sub-content"]')!
-    check(submenu?.querySelectorAll('[role="menuitem"]').length === 2, "Open in new window does not list both environments")
-    submenu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
-    await sleep(250)
-    check(!document.querySelector('[data-slot="menu-sub-content"]'), "Submenu did not close with Escape")
-    // Exercise the action through the real native bridge wrapper, using the
-    // fixture's in-memory invoke implementation instead of opening an app.
-    submenuTrigger.click(); await sleep(200)
-    const targets = document.querySelectorAll<HTMLButtonElement>('[data-slot="menu-sub-content"] [role="menuitem"]')
-    targets[1]!.click(); await sleep(250)
+    const windowAction = document.querySelector<HTMLElement>('[aria-label="Open Os-kdi in a new window"]')!
+    check(windowAction && rows[1].parentElement === windowAction.parentElement, "New window action is not in its environment row")
+    check(!document.querySelector('[data-slot="menu-sub-trigger"]'), "Separate new window submenu remains")
+    check(!rows[1].contains(windowAction), "New window action is nested inside the switch action")
+    windowAction.focus()
+    check(document.activeElement === windowAction, "New window action cannot receive keyboard focus")
+    windowAction.click(); await sleep(250)
     check(openedWindows.at(-1) === "remote", "New window action targeted the wrong environment")
+    check(useEnvironments.getState().selectedId === "local", "New window action switched the current window")
     document.querySelector<HTMLButtonElement>('[aria-label="Switch environment"]')!.click()
     await sleep(250)
     const saved = useEnvironments.getState().profiles

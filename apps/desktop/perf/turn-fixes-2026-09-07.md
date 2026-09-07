@@ -20,7 +20,8 @@ with synthetic events and the production CSP.
   Closing returns focus to the thumbnail; removing an attachment still works.
 - Sent message paragraphs retain soft newlines.
 - The environment menu uses aligned icons and two-line environment rows,
-  selected radio semantics, and an Open in new window submenu. Names wrap.
+  selected radio semantics, and a new-window icon beside each environment.
+  The icon opens that environment without switching the current window. Names wrap.
 
 ## Verification
 
@@ -31,8 +32,8 @@ with synthetic events and the production CSP.
   The new fixture covers light/dark previews, focus return, attachment removal,
   rendered newline geometry, image placement before/after completion, generated
   deliverables, and opening a screenshot within a grouped tool result.
-- Environment checks cover icon/text alignment, selected state, submenu Escape
-  behavior and target selection, long names, 150% zoom, and RTL.
+- Environment checks cover icon/text alignment, selected state, keyboard focus on each
+  new-window action, target selection without switching the current window, long names, 150% zoom, and RTL.
 - Workflow YAML/actionlint and shell syntax checks passed.
 - Apple Silicon successfully cross-compiled the Intel release daemon and Tauri
   shell and packaged an ad-hoc-signed Intel DMG. Both executables passed lipo
