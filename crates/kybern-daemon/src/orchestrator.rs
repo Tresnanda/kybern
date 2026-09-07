@@ -75,6 +75,10 @@ struct LiveSession {
     released: AtomicBool,
     /// The turn currently executing, if any.
     turn: Mutex<Option<ActiveTurn>>,
+    /// A settled Claude turn can receive native background-task continuations.
+    /// Keep only the latest turn; a new user request replaces this context.
+    continuation: Mutex<Option<ActiveTurn>>,
+    turn_ready: Notify,
     /// Most recent parent turn. Provider task notifications can arrive after
     /// the parent reports completion.
     last_turn_id: Mutex<Option<TurnId>>,
@@ -132,6 +136,7 @@ struct ActiveTurn {
     pending_completion: Option<PendingTurnCompletion>,
 }
 
+#[derive(Clone)]
 struct PendingTurnCompletion {
     stop_reason: StopReason,
     usage: Usage,
@@ -792,6 +797,7 @@ impl Orchestrator {
         live.touch();
         if self.inner.store.thread_get(thread.id)?.is_some_and(|current| current.status == ThreadStatus::Archived) {
             live.mark_released();
+            live.turn_ready.notify_one();
             let _ = live.session.close().await;
             self.inner.sessions.lock().await.remove(&thread.id);
             return Err(anyhow!("thread was archived during session startup"));
@@ -807,6 +813,7 @@ impl Orchestrator {
         );
         {
             let mut turn = live.turn.lock().await;
+            live.continuation.lock().await.take();
             *turn = Some(ActiveTurn {
                 id: turn_id,
                 started: std::time::Instant::now(),
@@ -821,6 +828,7 @@ impl Orchestrator {
                 pending_completion: None,
             });
         }
+        live.turn_ready.notify_one();
         *live.last_turn_id.lock().await = Some(turn_id);
         let checkpoint_started = std::time::Instant::now();
         self.checkpoint(&thread, turn_id, "before").await;
@@ -1349,6 +1357,8 @@ impl Orchestrator {
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
             turn: Mutex::new(None),
+            continuation: Mutex::new(None),
+            turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(None),
             tasks: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
@@ -1590,7 +1600,50 @@ impl Orchestrator {
 
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
         live.touch();
-        let mut turn_guard = live.turn.lock().await;
+        let starts_response = match &ev {
+            DriverEvent::ResponseStarted => true,
+            DriverEvent::TextDelta { origin, .. }
+            | DriverEvent::ThinkingDelta { origin, .. }
+            | DriverEvent::MessageCompleted { origin, .. }
+            | DriverEvent::ImageReceived { origin, .. } => origin.is_root(),
+            DriverEvent::ToolStarted(call) => call.parent_id.is_none(),
+            _ => false,
+        };
+        let mut turn_guard = loop {
+            let mut guard = live.turn.lock().await;
+            let mut waiting_for_start = false;
+            if starts_response && guard.is_none() && !live.is_released() {
+                let mut continuation = live.continuation.lock().await;
+                // Serialize the decision to resume with send_with_id's decision
+                // to accept user input. No await while holding the command lock.
+                let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+                if let Some(mut thread) = self.inner.store.thread_get(thread_id)? {
+                    waiting_for_start = thread.status == ThreadStatus::Running;
+                    if thread.provider.kind == ProviderKind::ClaudeCode
+                        && thread.status == ThreadStatus::Idle
+                        && let Some(mut turn) = continuation.take()
+                    {
+                        turn.completed = false;
+                        turn.messages.clear();
+                        turn.active_messages.clear();
+                        turn.terminal_message_id = None;
+                        self.emit(thread_id, Some(turn.id), EventPayload::TurnResumed)?;
+                        thread.status = ThreadStatus::Running;
+                        self.update_thread(thread)?;
+                        *guard = Some(turn);
+                    }
+                }
+            }
+            // A user request is persisted before async startup installs its
+            // ActiveTurn. Buffer provider output during that gap, rather than
+            // reopening the old turn or emitting unscoped transcript events.
+            if waiting_for_start {
+                drop(guard);
+                live.turn_ready.notified().await;
+                continue;
+            }
+            break guard;
+        };
         let turn_id = turn_guard.as_ref().map(|t| t.id);
         let response_event = matches!(
             &ev,
@@ -1619,6 +1672,12 @@ impl Orchestrator {
             );
         }
         match ev {
+            DriverEvent::ResponseStarted => {}
+            DriverEvent::ResponseBoundary => {
+                if let Some(turn) = turn_guard.as_mut() {
+                    turn.active_messages.remove(&EventOrigin::Root);
+                }
+            }
             DriverEvent::SessionBound { session_id, model } => {
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
                 let changed = t.provider_session_id.as_deref() != Some(&session_id) || (model.is_some() && t.model != model);
@@ -1856,6 +1915,9 @@ impl Orchestrator {
                     // task wait, and the continuation. Present the wall time.
                     completion.duration_ms = completion.duration_ms.max(turn.started.elapsed().as_millis() as u64);
                 }
+                // Retain cumulative accounting when this settled turn is
+                // reopened by a process/monitor notification later.
+                turn.pending_completion = Some(completion.clone());
                 let PendingTurnCompletion { stop_reason, usage, cost_usd, duration_ms, anchors } = completion;
                 if (anchors.turn_id.is_some() || anchors.previous_end.is_some())
                     && let Ok(Some(mut c)) = self.inner.store.checkpoint_get(turn.id)
@@ -1867,7 +1929,12 @@ impl Orchestrator {
                 turn.completed = true;
                 let terminal_message_id = turn.terminal_message_id;
                 let turn_id = turn.id;
-                *turn_guard = None;
+                turn.messages.clear();
+                turn.active_messages.clear();
+                let settled = turn_guard.take();
+                if settled.as_ref().is_some_and(|turn| turn.provider == ProviderKind::ClaudeCode) && stop_reason == StopReason::Completed {
+                    *live.continuation.lock().await = settled;
+                }
                 drop(turn_guard);
                 self.resolve_finished_requests(thread_id, turn_id, live).await?;
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
@@ -2235,6 +2302,20 @@ mod tests {
 
     #[tokio::test]
     async fn claude_result_waits_for_background_agents_and_scopes_the_continuation() {
+        assert_claude_background_continuation(RuntimeTaskKind::Agent).await;
+    }
+
+    #[tokio::test]
+    async fn claude_background_process_resumes_the_settled_parent_turn() {
+        assert_claude_background_continuation(RuntimeTaskKind::Process).await;
+    }
+
+    #[tokio::test]
+    async fn claude_monitor_resumes_without_holding_the_foreground_open() {
+        assert_claude_background_continuation(RuntimeTaskKind::Monitor).await;
+    }
+
+    async fn assert_claude_background_continuation(kind: RuntimeTaskKind) {
         let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
         let paths = Paths::resolve(Some(root.clone())).unwrap();
         let settings = SettingsStore::load(&paths.settings).unwrap();
@@ -2280,7 +2361,7 @@ mod tests {
             origin_turn_id: turn_id,
             started_seq: 2,
             updated_seq: 2,
-            kind: RuntimeTaskKind::Agent,
+            kind,
             status: RuntimeTaskStatus::Running,
             title: "Explore".into(),
             detail: None,
@@ -2316,6 +2397,8 @@ mod tests {
                 completed: false,
                 pending_completion: None,
             })),
+            continuation: Mutex::new(None),
+            turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(Some(turn_id)),
             tasks: Mutex::new(HashMap::from([(task.id.clone(), task)])),
             deferred_checkpoints: Mutex::new(HashSet::new()),
@@ -2357,10 +2440,19 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(live.turn.lock().await.as_ref().is_some_and(|turn| turn.pending_completion.is_some()));
-        assert!(
-            !store.events_for_thread(thread.id).unwrap().iter().any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
-        );
+        if kind == RuntimeTaskKind::Agent {
+            assert!(live.turn.lock().await.as_ref().is_some_and(|turn| turn.pending_completion.is_some()));
+            assert!(
+                !store
+                    .events_for_thread(thread.id)
+                    .unwrap()
+                    .iter()
+                    .any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
+            );
+        } else {
+            assert!(live.turn.lock().await.is_none(), "processes and monitors may outlive the foreground request");
+            assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+        }
 
         orchestrator
             .handle_driver_event(
@@ -2370,6 +2462,22 @@ mod tests {
             )
             .await
             .unwrap();
+        orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+        assert!(!orchestrator.session_parked(thread.id, &live).await.unwrap());
+        let resumed =
+            store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnResumed)).count();
+        assert_eq!(resumed, usize::from(kind != RuntimeTaskKind::Agent));
+        assert!(
+            orchestrator.send(thread.id, UserMessage::text("continue?")).await.is_err(),
+            "manual input must not replace a running continuation"
+        );
+        let queued =
+            methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("after the continuation") };
+        orchestrator.enqueue(queued.clone()).unwrap();
+        assert!(orchestrator.drain_queues().await.unwrap());
+        assert_eq!(store.queue_list(None).unwrap().len(), 1);
+        orchestrator.remove_queued(thread.id, queued.id).unwrap();
         orchestrator
             .handle_driver_event(
                 thread.id,
@@ -2442,12 +2550,17 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(completed.len(), 1);
+        assert_eq!(completed.len(), if kind == RuntimeTaskKind::Agent { 1 } else { 2 });
+        let completed = &completed[completed.len() - 1..];
         assert_eq!(completed[0].0.input_tokens, 4);
         assert_eq!(completed[0].0.output_tokens, 6);
         assert!((completed[0].1.unwrap_or_default() - 0.3).abs() < f64::EPSILON);
         assert_eq!(*completed[0].2, Some(message_ids[2]));
         assert!(live.turn.lock().await.is_none());
+        let projected = kybern_store::project_transcript(&events);
+        assert_eq!(projected.iter().filter(|entry| matches!(entry, TranscriptEntry::TurnSummary { .. })).count(), 1);
+        assert_eq!(projected.iter().filter(|entry| matches!(entry, TranscriptEntry::User { .. })).count(), 1);
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
 
         orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         let follow_up = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("next") };
@@ -2545,6 +2658,8 @@ mod tests {
                 last_activity: std::sync::Mutex::new(SessionActivityTime { monotonic: last_activity, wall: SystemTime::now() }),
                 released: AtomicBool::new(false),
                 turn: Mutex::new(None),
+                continuation: Mutex::new(None),
+                turn_ready: tokio::sync::Notify::new(),
                 last_turn_id: Mutex::new(None),
                 tasks: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
@@ -2575,6 +2690,91 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
         }
+    }
+
+    fn completed_response(stop_reason: StopReason) -> DriverEvent {
+        DriverEvent::TurnCompleted {
+            stop_reason,
+            usage: Usage::default(),
+            cost_usd: Some(0.0),
+            duration_ms: 1,
+            anchors: TurnAnchors::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn user_startup_wins_over_a_late_continuation_without_orphaning_output() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let (first, _) = fixture.orchestrator.send(thread.id, UserMessage::text("first")).await.unwrap();
+        live.turn_ready.notified().await;
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        assert_eq!(live.continuation.lock().await.as_ref().unwrap().id, first);
+
+        // Hold only session lookup: accepting user input is synchronous, but
+        // start_turn cannot yet install the newly reserved turn.
+        let sessions = fixture.orchestrator.inner.sessions.lock().await;
+        let (second, _) = fixture.orchestrator.send(thread.id, UserMessage::text("second")).await.unwrap();
+        let orchestrator = fixture.orchestrator.clone();
+        let response_live = live.clone();
+        let response = tokio::spawn(async move {
+            orchestrator
+                .handle_driver_event(
+                    thread.id,
+                    &response_live,
+                    DriverEvent::TextDelta {
+                        message_id: "late-response".into(),
+                        origin: EventOrigin::Root,
+                        delta: "Reading results".into(),
+                    },
+                )
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!response.is_finished());
+        drop(sessions);
+        tokio::time::timeout(Duration::from_secs(2), response).await.unwrap().unwrap().unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(!events.iter().any(|event| matches!(event.payload, EventPayload::TurnResumed)));
+        assert!(
+            events.iter().any(|event| event.turn_id == Some(second) && matches!(event.payload, EventPayload::AssistantTextDelta { .. }))
+        );
+        assert_eq!(live.turn.lock().await.as_ref().unwrap().id, second);
+
+        // A native automatic result before the queued user is consumed only
+        // closes the root message boundary; it does not finish the user turn.
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseBoundary).await.unwrap();
+        assert_eq!(live.turn.lock().await.as_ref().unwrap().id, second);
+        assert!(live.turn.lock().await.as_ref().unwrap().active_messages.is_empty());
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        assert_eq!(live.continuation.lock().await.as_ref().unwrap().id, second);
+        fixture.orchestrator.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn repeated_continuations_settle_and_interrupt_without_phantom_restarts() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let (turn_id, _) = fixture.orchestrator.send(thread.id, UserMessage::text("monitor")).await.unwrap();
+        live.turn_ready.notified().await;
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        for _ in 0..2 {
+            fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
+            assert_eq!(live.turn.lock().await.as_ref().unwrap().id, turn_id);
+            fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        }
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Interrupted)).await.unwrap();
+        assert!(live.turn.lock().await.is_none());
+        assert!(live.continuation.lock().await.is_none());
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
+        assert!(live.turn.lock().await.is_none());
+        let entries = kybern_store::project_transcript(&fixture.store.events_for_thread(thread.id).unwrap());
+        assert_eq!(entries.iter().filter(|entry| matches!(entry, TranscriptEntry::TurnSummary { .. })).count(), 1);
+        assert!(entries.iter().any(|entry| matches!(entry, TranscriptEntry::TurnSummary { stop_reason: StopReason::Interrupted, .. })));
+        fixture.orchestrator.shutdown().await;
     }
 
     fn policy(session_idle_minutes: u32, max_idle_sessions: u32) -> BackgroundSettings {

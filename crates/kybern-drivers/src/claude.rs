@@ -359,6 +359,11 @@ struct TurnState {
     last_assistant_uuid: Option<String>,
     /// Our uuid for the current turn's user message.
     current_user_uuid: Option<String>,
+    /// An automatic notification can finish before a newly sent user message
+    /// is consumed. Carry its accounting until that explicit request finishes.
+    queued_usage: Usage,
+    queued_cost: f64,
+    queued_duration_ms: u64,
 }
 
 struct ClaudeSession {
@@ -581,6 +586,10 @@ impl ClaudeSession {
                 }
             }
             "status" => {
+                if v.get("status").and_then(|s| s.as_str()) == Some("requesting") && v.get("parent_tool_use_id").is_none_or(Value::is_null)
+                {
+                    self.emit(DriverEvent::ResponseStarted).await;
+                }
                 if v.get("status").and_then(|s| s.as_str()) == Some("compacting") {
                     self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "compacting context".into(), data: None }).await;
                 }
@@ -662,6 +671,7 @@ impl ClaudeSession {
         let ev = &v["event"];
         match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
             "message_start" => {
+                self.emit(DriverEvent::ResponseStarted).await;
                 if let Some(id) = ev.pointer("/message/id").and_then(|i| i.as_str()) {
                     self.state.lock().await.current_message = Some(id.to_string());
                 }
@@ -787,8 +797,8 @@ impl ClaudeSession {
         }
 
         let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
-        let usage = v.get("usage").map(parse_usage).unwrap_or_default();
-        let duration_ms = v.get("duration_ms").and_then(|d| d.as_u64()).unwrap_or(0);
+        let mut usage = v.get("usage").map(parse_usage).unwrap_or_default();
+        let mut duration_ms = v.get("duration_ms").and_then(|d| d.as_u64()).unwrap_or(0);
         let total_cost = v.get("total_cost_usd").and_then(|c| c.as_f64()).unwrap_or(0.0);
         let (cost_usd, anchors) = {
             let mut st = self.state.lock().await;
@@ -797,8 +807,22 @@ impl ClaudeSession {
             st.text.clear();
             st.thinking.clear();
             st.current_message = None;
+            if subtype == "success"
+                && v.pointer("/origin/kind").and_then(Value::as_str) == Some("task-notification")
+                && st.current_user_uuid.is_some()
+            {
+                st.queued_usage.add(&usage);
+                st.queued_cost += delta;
+                st.queued_duration_ms = st.queued_duration_ms.saturating_add(duration_ms);
+                drop(st);
+                self.emit(DriverEvent::ResponseBoundary).await;
+                return;
+            }
+            usage.add(&std::mem::take(&mut st.queued_usage));
+            duration_ms = duration_ms.saturating_add(std::mem::take(&mut st.queued_duration_ms));
+            let cost = delta + std::mem::take(&mut st.queued_cost);
             let anchors = crate::TurnAnchors { turn_id: st.current_user_uuid.take(), previous_end: st.last_assistant_uuid.take() };
-            (Some(delta), anchors)
+            (Some(cost), anchors)
         };
         let terminal = v.get("terminal_reason").and_then(|t| t.as_str()).unwrap_or("");
         let errors = v
@@ -1141,6 +1165,73 @@ impl AgentSession for SessionHandle {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn notification_result_does_not_finish_a_queued_user_request() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(32);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            session_id: Mutex::new("test".into()),
+        });
+        let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        handle.send_message("first-user", &UserMessage::text("Run a background command")).await.unwrap();
+        session
+            .handle_frame(json!({"type":"result", "subtype":"success", "total_cost_usd":0.1,
+            "duration_ms":10, "usage":{"input_tokens":1}}))
+            .await;
+        assert!(
+            matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { anchors, .. }) if anchors.turn_id.as_deref() == Some("first-user"))
+        );
+
+        handle.send_message("second-user", &UserMessage::text("Another request")).await.unwrap();
+        // Captured Claude notification sequence: request starts, then the result
+        // is explicitly attributed to task-notification rather than user input.
+        session.handle_frame(json!({"type":"system", "subtype":"status", "status":"requesting"})).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::ResponseStarted)));
+        session
+            .handle_frame(json!({"type":"result", "subtype":"success", "origin":{"kind":"task-notification"},
+            "total_cost_usd":0.2, "duration_ms":20, "usage":{"input_tokens":2}}))
+            .await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::ResponseBoundary)));
+        assert!(rx.try_recv().is_err(), "the queued user request must remain active");
+        session
+            .handle_frame(json!({"type":"result", "subtype":"success", "total_cost_usd":0.3,
+            "duration_ms":30, "usage":{"input_tokens":3}}))
+            .await;
+        let Some(DriverEvent::TurnCompleted { anchors, usage, cost_usd, duration_ms, .. }) = rx.recv().await else {
+            panic!("missing final result")
+        };
+        assert_eq!(anchors.turn_id.as_deref(), Some("second-user"));
+        assert_eq!(usage.input_tokens, 5);
+        assert!((cost_usd.unwrap() - 0.2).abs() < 1e-10);
+        assert_eq!(duration_ms, 50);
+
+        handle.send_message("interrupted-user", &UserMessage::text("queued during background work")).await.unwrap();
+        session
+            .handle_frame(json!({"type":"result", "subtype":"error_during_execution", "terminal_reason":"aborted",
+            "origin":{"kind":"task-notification"}, "total_cost_usd":0.3}))
+            .await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. })));
+
+        // A child's stream must never reopen a completed parent response.
+        session
+            .handle_frame(json!({"type":"stream_event", "parent_tool_use_id":"child",
+            "event":{"type":"message_start", "message":{"id":"child-message"}}}))
+            .await;
+        assert!(rx.try_recv().is_err());
+        session
+            .handle_frame(json!({"type":"stream_event", "parent_tool_use_id":null,
+            "event":{"type":"message_start", "message":{"id":"root-message"}}}))
+            .await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::ResponseStarted)));
+        child.kill().await;
+    }
 
     #[tokio::test]
     async fn questions_and_elicitation_keep_native_response_shapes() {

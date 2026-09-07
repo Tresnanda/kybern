@@ -40,6 +40,9 @@ pub enum EventPayload {
         message_id: MessageId,
         message: UserMessage,
     },
+    /// Native provider output resumed a settled turn without a new user message.
+    /// Its next completion replaces the summary with cumulative accounting.
+    TurnResumed,
     /// Provider assigned or confirmed its own session id.
     ProviderSessionBound {
         session_id: String,

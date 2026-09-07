@@ -279,6 +279,19 @@
           ]
         },
         {
+          "description": "Native provider output resumed a settled turn without a new user message.\nIts next completion replaces the summary with cumulative accounting.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "turn_resumed"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
           "description": "Provider assigned or confirmed its own session id.",
           "type": "object",
           "properties": {
@@ -1723,6 +1736,19 @@
                 "kind",
                 "message_id",
                 "message"
+              ]
+            },
+            {
+              "description": "Native provider output resumed a settled turn without a new user message.\nIts next completion replaces the summary with cumulative accounting.",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "turn_resumed"
+                }
+              },
+              "required": [
+                "kind"
               ]
             },
             {
@@ -12714,6 +12740,19 @@
                   "kind",
                   "message_id",
                   "message"
+                ]
+              },
+              {
+                "description": "Native provider output resumed a settled turn without a new user message.\nIts next completion replaces the summary with cumulative accounting.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "turn_resumed"
+                  }
+                },
+                "required": [
+                  "kind"
                 ]
               },
               {

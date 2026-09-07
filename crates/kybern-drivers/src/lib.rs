@@ -146,6 +146,12 @@ impl DriverRuntimeTaskUpdate {
 /// Normalized stream of what a provider is doing. Ordered per session.
 #[derive(Debug, Clone)]
 pub enum DriverEvent {
+    /// Root provider inference began, possibly after a background notification
+    /// with no new user message. Repeated signals within a turn are harmless.
+    ResponseStarted,
+    /// A provider response ended while explicit input remains queued. Keep the
+    /// turn active, but start a new logical root message for the next response.
+    ResponseBoundary,
     /// Provider reported its session id and effective model.
     SessionBound {
         session_id: String,

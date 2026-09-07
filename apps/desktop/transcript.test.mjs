@@ -432,3 +432,71 @@ test("turn grouping updates late events, follows ordering, and drops rewound tur
   assert.deepEqual(group([]), [])
   assert.deepEqual(group([a, b]), groupTurns([a, b]))
 })
+
+// Regression probe: daemon has already settled a background-process turn.
+test("background process follow-up tools and final answer stay with the parent turn", () => {
+  const state = fold([
+    start,
+    { kind: "assistant_message_completed", message_id: "waiting", text: "Waiting for the task.", thinking: null, origin: ROOT },
+    { ...done, terminal_message_id: "waiting" },
+    { kind: "tool_call_started", turn_id: null, call: readTool("follow-up-read"), origin: ROOT },
+    { kind: "tool_call_completed", turn_id: null, tool_call_id: "follow-up-read", output: null, is_error: false },
+    { kind: "assistant_message_completed", turn_id: null, message_id: "follow-up-answer", text: "Final result.", thinking: null, origin: ROOT },
+  ])
+  const groups = groupTurns(state.blocks)
+  assert.equal(groups.length, 1, "continuation must not create an anonymous Worked group")
+  assert.equal(groups[0].answer?.text, "Final result.")
+})
+
+test("background process final answer replaces the provisional waiting answer", () => {
+  const state = fold([
+    start,
+    { kind: "assistant_message_completed", message_id: "waiting", text: "Waiting for the task.", thinking: null, origin: ROOT },
+    { ...done, terminal_message_id: "waiting" },
+    { kind: "assistant_message_completed", turn_id: null, message_id: "follow-up-answer", text: "Final result.", thinking: null, origin: ROOT },
+  ])
+  assert.equal(groupTurns(state.blocks)[0].answer?.text, "Final result.")
+})
+
+
+test("native resumption removes the provisional answer until the scoped continuation settles", () => {
+  const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/claude-process-resumed.json", import.meta.url), "utf8"))
+  let state = emptyThreadState()
+  for (const event of events) {
+    state = applyEvent(state, event)
+    if (event.kind === "turn_resumed") {
+      const [group] = groupTurns(state.blocks)
+      assert.equal(group.running, true)
+      assert.equal(group.answer, null)
+      assert.equal(group.end, null)
+    }
+  }
+  const [group, ...extra] = groupTurns(state.blocks)
+  assert.equal(extra.length, 0)
+  assert.equal(group.running, false)
+  assert.equal(group.answer.text, "All four replay arms completed. **The results are ready.**")
+  assert.equal(group.end.usage.input_tokens, 3)
+  assert.equal(state.blocks.filter((block) => block.kind === "turn_end").length, 1)
+  assert.equal(group.work.filter((block) => block.kind === "tool").length, 1)
+  assert.equal(state.blocks.filter((block) => block.kind === "user").length, 1)
+  const resumed = applyEvent(state, { ...events[5], seq: 13 })
+  const failed = applyEvent(resumed, { ...events[5], seq: 14, kind: "turn_failed", error: "Provider disconnected" })
+  assert.equal(groupTurns(failed.blocks)[0].end.error, "Provider disconnected")
+  assert.equal(failed.blocks.filter((block) => block.kind === "turn_end").length, 1)
+})
+
+
+test("mobile live projection removes a provisional summary when Claude resumes", async () => {
+  const mobile = await import("../mobile/src/state/transcript.ts")
+  const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/claude-process-resumed.json", import.meta.url), "utf8"))
+  let state = mobile.emptyThreadState
+  for (const event of events) {
+    state = mobile.applyEvent(state, event)
+    if (event.kind === "turn_resumed") assert.equal(state.entries.some((entry) => entry.role === "turn_summary"), false)
+  }
+  const summaries = state.entries.filter((entry) => entry.role === "turn_summary")
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].terminal_message_id, events.at(-1).terminal_message_id)
+  assert.equal(state.entries.filter((entry) => entry.role === "user").length, 1)
+  assert.equal(state.entries.filter((entry) => entry.role === "tool_call").length, 1)
+})

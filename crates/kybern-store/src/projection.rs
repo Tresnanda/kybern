@@ -145,6 +145,21 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
 
     for ev in events {
         let turn_id = ev.turn_id;
+        if turn_id.is_none()
+            && matches!(&ev.payload,
+            EventPayload::AssistantTextDelta { origin, .. }
+            | EventPayload::AssistantThinkingDelta { origin, .. }
+            | EventPayload::AssistantMessageCompleted { origin, .. }
+            | EventPayload::ToolCallStarted { origin, .. } if origin.is_root())
+        {
+            for entry in &mut out {
+                if let TranscriptEntry::TurnSummary { turn_id, terminal_message_id, .. } = entry
+                    && Some(*turn_id) == last_turn_id
+                {
+                    *terminal_message_id = None;
+                }
+            }
+        }
         match &ev.payload {
             EventPayload::TurnStarted { message_id, message } | EventPayload::AsyncQuestionsAnswered { message_id, message, .. } => {
                 if out.iter().any(|entry| matches!(entry, TranscriptEntry::User { id, .. } if id == message_id)) { continue; }
@@ -153,6 +168,12 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 unscoped_assistant_message = None;
                 turn_started_at.entry(turn_id).or_insert(ev.at);
                 out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
+            }
+            EventPayload::TurnResumed => {
+                let Some(turn_id) = turn_id else { continue };
+                last_turn_id = Some(turn_id);
+                unscoped_assistant_message = None;
+                out.retain(|entry| !matches!(entry, TranscriptEntry::TurnSummary { turn_id: id, .. } if *id == turn_id));
             }
             EventPayload::ImageReceived { id, origin, source } => {
                 if let Some(turn_id) = turn_id.filter(|_| origin.is_root())
@@ -277,7 +298,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 }
             }
             EventPayload::ToolCallStarted { call, origin } => {
-                let Some(turn_id) = turn_id else { continue };
+                let Some(turn_id) = turn_id.or(last_turn_id) else { continue };
                 out.push(TranscriptEntry::ToolCall {
                     turn_id,
                     seq: ev.seq,
@@ -818,6 +839,45 @@ mod tests {
         assert_eq!(assistant[0].2, "Holding for the last agent.");
         assert_eq!(assistant[1].1, turn_id);
         assert_eq!(assistant[1].2, final_text);
+    }
+
+    #[test]
+    fn resumed_process_has_one_summary_and_preserves_tools_on_reload() {
+        let events: Vec<ThreadEvent> =
+            serde_json::from_str(include_str!("../../../fixtures/transcript/claude-process-resumed.json")).unwrap();
+        let live = project_transcript(&events[..6]);
+        assert!(!live.iter().any(|entry| matches!(entry, TranscriptEntry::TurnSummary { .. })));
+        let rows = project_transcript(&events);
+        assert_eq!(rows.iter().filter(|entry| matches!(entry, TranscriptEntry::User { .. })).count(), 1);
+        assert_eq!(rows.iter().filter(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })).count(), 1);
+        let summaries = rows
+            .iter()
+            .filter_map(|entry| match entry {
+                TranscriptEntry::TurnSummary { usage, terminal_message_id, .. } => Some((usage, terminal_message_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].0.input_tokens, 3);
+        assert_eq!(*summaries[0].1, Some(Uuid::parse_str("00000000-0000-0000-0000-000000000015").unwrap()));
+
+        // Older daemon shape: no resume/final completion event, and orphaned
+        // follow-up tools/text. Reload must retain those tools and stop pinning
+        // the obsolete foreground answer.
+        let historical = events[..11]
+            .iter()
+            .filter(|event| !matches!(event.payload, EventPayload::TurnResumed))
+            .cloned()
+            .map(|mut event| {
+                if event.seq > 6 {
+                    event.turn_id = None;
+                }
+                event
+            })
+            .collect::<Vec<_>>();
+        let rows = project_transcript(&historical);
+        assert_eq!(rows.iter().filter(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })).count(), 1);
+        assert!(rows.iter().any(|entry| matches!(entry, TranscriptEntry::TurnSummary { terminal_message_id: None, .. })));
     }
 
     #[test]

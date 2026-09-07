@@ -51,7 +51,14 @@ export function seedFromGet(res: ThreadsGetResult): ThreadState {
 export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
   if (ev.seq <= state.lastSeq) return state;
   const next: ThreadState = { ...state, lastSeq: ev.seq };
-  const turnId = ev.turn_id ?? (isAssistantEvent(ev) ? latestTurnId(next.entries) : "");
+  const turnId = ev.turn_id ?? (isAssistantEvent(ev) || ev.kind === "tool_call_started" ? latestTurnId(next.entries) : "");
+
+  if (ev.turn_id == null && (isAssistantEvent(ev) || ev.kind === "tool_call_started") &&
+    (!("origin" in ev) || !ev.origin || ev.origin.kind === "root")) {
+    next.entries = next.entries.map((entry) => entry.role === "turn_summary" && entry.turn_id === turnId
+      ? { ...entry, terminal_message_id: null }
+      : entry);
+  }
 
   switch (ev.kind) {
     case "thread_created":
@@ -61,6 +68,10 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
 
     case "thread_archived":
       if (next.thread) next.thread = { ...next.thread, status: "archived" };
+      break;
+
+    case "turn_resumed":
+      next.entries = next.entries.filter((entry) => entry.role !== "turn_summary" || entry.turn_id !== turnId);
       break;
 
     case "turn_started":

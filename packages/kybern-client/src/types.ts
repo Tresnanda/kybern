@@ -428,6 +428,7 @@ export type EventPayload =
   | { kind: "message_queued"; message: QueuedMessage }
   | { kind: "message_removed"; message_id: MessageId }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
+  | { kind: "turn_resumed" }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
   | { kind: "provider_session_released"; reason: SessionReleaseReason }
   | { kind: "image_received"; id: string; origin: EventOrigin; source: string }

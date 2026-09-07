@@ -193,7 +193,16 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
   // task notification. Older daemons persisted that continuation without a
   // turn id. Recover it onto the most recent turn instead of creating a second
   // anonymous "Worked" group.
-  const turnId = ev.turn_id ?? (isAssistantEvent(ev) ? latestTurnId(blocks) : "")
+  const turnId = ev.turn_id ?? (isAssistantEvent(ev) || ev.kind === "tool_call_started" ? latestTurnId(blocks) : "")
+  // Older daemons settled the foreground result and emitted later root
+  // output without a turn id. Its terminal id is provisional, not the final
+  // answer. Restrict this repair to those unscoped historical events.
+  if (ev.turn_id == null && (isAssistantEvent(ev) || ev.kind === "tool_call_started") &&
+    (!("origin" in ev) || !ev.origin || ev.origin.kind === "root")) {
+    blocks = blocks.map((block) => block.kind === "turn_end" && block.turnId === turnId && block.terminalMessageId !== null
+      ? { ...block, terminalMessageId: null }
+      : block)
+  }
   let pendingQuestions = state.pendingQuestions ?? []
   let pending = state.pendingApprovals
   let checkpoints = state.checkpoints
@@ -213,6 +222,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "async_questions_answered":
       pendingQuestions = pendingQuestions.filter((request) => request.id !== ev.request_id)
       if (!blocks.some((block) => block.kind === "user" && block.id === ev.message_id)) blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
+      break
+    case "turn_resumed":
+      blocks = blocks.filter((block) => block.kind !== "turn_end" || block.turnId !== turnId)
       break
     case "turn_started":
       blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]

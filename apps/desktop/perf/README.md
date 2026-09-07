@@ -64,6 +64,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Virtualization, navigation, row state, scroll anchoring | `node scripts/check-rendering.mjs interaction` |
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
+| Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |
 
 For indicator changes, also run the matrix appearance/visibility comparison
 below. The native runner builds fixtures separately at `tauri://localhost`
