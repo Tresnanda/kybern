@@ -45,6 +45,23 @@ enum Cmd {
         #[arg(long)]
         refresh: bool,
     },
+    /// List saved conversations from an agent harness.
+    Sessions {
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long)]
+        provider: ProviderKind,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Continue a saved harness session in Kybern, importing its history.
+    Resume {
+        #[arg(long)]
+        provider: ProviderKind,
+        session_id: String,
+    },
     /// Show harness update results, or request an update when idle.
     HarnessUpdates {
         #[arg(long)]
@@ -393,6 +410,31 @@ pub async fn run() -> Result<()> {
             };
             let r = client.call::<ProvidersList>(ProvidersListParams { project_id, force_refresh: refresh }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::providers(&r.providers) }
+        }
+        Cmd::Sessions { provider, project, cursor, query } => {
+            let project_id = match project {
+                Some(project) => Some(resolve_project(&client, &project, false).await?),
+                None => None,
+            };
+            let result = client.call::<SessionsList>(SessionsListParams { provider, project_id, cursor, query }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for session in result.sessions {
+                    println!("{}  {}  {}", session.id, session.title, session.cwd);
+                }
+                if let Some(cursor) = result.next_cursor {
+                    println!("More sessions: --cursor {cursor}");
+                }
+            }
+        }
+        Cmd::Resume { provider, session_id } => {
+            let thread = client.call::<SessionsResume>(SessionsResumeParams { provider, session_id }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&thread)?);
+            } else {
+                println!("{}", thread.id);
+            }
         }
         Cmd::HarnessUpdates { run } => {
             if let Some(kind) = run {

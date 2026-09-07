@@ -30,6 +30,11 @@ pub enum EventPayload {
         thread: Thread,
     },
     ThreadArchived,
+    /// A saved native conversation was adopted without replaying its tools.
+    SessionImported {
+        provider: ProviderKind,
+        session_id: String,
+    },
     MessageQueued {
         message: crate::methods::QueuedMessage,
     },

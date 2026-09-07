@@ -279,6 +279,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       ];
       break;
 
+    case "session_imported":
+      next.entries = [...next.entries, { role: "notice", turn_id: turnId, seq: ev.seq, level: "info", text: "Session resumed. Earlier messages are shown above.", at: ev.at }];
+      break;
     case "provider_notice":
       next.notices = [...next.notices, { id: String(ev.seq), level: ev.level, text: ev.text, at: ev.at }].slice(-20);
       next.entries = [...next.entries, { role: "notice", turn_id: turnId, seq: ev.seq, level: ev.level, text: ev.text, at: ev.at }];

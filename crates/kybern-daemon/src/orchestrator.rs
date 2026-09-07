@@ -521,11 +521,79 @@ impl Orchestrator {
             created_at: now,
             updated_at: now,
         };
-        self.inner.store.project_insert(&project)?;
+        if let Err(error) = self.inner.store.project_insert(&project) {
+            // Concurrent imports may discover the same folder before either
+            // inserts it. Reuse the winner of the unique-path constraint.
+            if let Some(existing) = self.inner.store.project_by_path(&project.path)? {
+                return Ok(existing);
+            }
+            return Err(error);
+        }
         Ok(project)
     }
 
     // ---- threads ----
+
+    pub async fn resume_external_session(&self, params: methods::SessionsResumeParams) -> Result<Thread> {
+        let existing = self.inner.store.threads_list(None, true)?.into_iter().find(|thread| {
+            thread.provider.kind == params.provider && thread.provider_session_id.as_deref() == Some(params.session_id.as_str())
+        });
+        if let Some(mut thread) = existing {
+            if thread.status == ThreadStatus::Archived {
+                thread.status = ThreadStatus::Idle;
+                self.inner.store.thread_upsert(&thread)?;
+                thread = self.update_thread(thread)?;
+            }
+            return Ok(thread);
+        }
+        let _gate = self.inner.harness_gates.get(&params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?.read().await;
+        let driver = self.inner.drivers.get(params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?;
+        let settings = self.inner.settings.get();
+        let provider = settings.providers.get(&params.provider).cloned().unwrap_or_default();
+        let context = kybern_drivers::ProbeContext { binary: provider.binary.map(PathBuf::from), cwd: None, env: provider.env };
+        let history = driver.read_session(&context, &params.session_id).await?;
+        let session = history.session;
+        if session.provider != params.provider || session.id != params.session_id {
+            return Err(anyhow!("The harness returned a different session. Refresh the session list and try again."));
+        }
+        let cwd = PathBuf::from(&session.cwd);
+        if !cwd.is_absolute() || !cwd.is_dir() {
+            return Err(anyhow!(
+                "The session folder is unavailable: {}. Restore it or move the session in its harness, then try again.",
+                session.cwd
+            ));
+        }
+        let project = self.add_project(session.cwd.clone(), None)?;
+        let now = Utc::now();
+        let thread = Thread {
+            id: Uuid::now_v7(),
+            project_id: project.id,
+            title: if session.title.trim().is_empty() { DEFAULT_TITLE.into() } else { session.title },
+            model: session.model,
+            effort: None,
+            provider: ProviderInstance { kind: session.provider, instance: "default".into() },
+            permission_mode: settings.default_permission_mode,
+            status: ThreadStatus::Idle,
+            worktree: None,
+            cwd: session.cwd,
+            provider_session_id: Some(session.id),
+            pinned: false,
+            created_at: history.events.first().map_or(now, |event| event.at),
+            updated_at: now,
+            last_seq: 0,
+        };
+        let store = self.inner.store.clone();
+        let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
+        for event in events {
+            let _ = self.inner.events.send(event);
+        }
+        if thread.status == ThreadStatus::Archived {
+            thread.status = ThreadStatus::Idle;
+            self.inner.store.thread_upsert(&thread)?;
+            thread = self.update_thread(thread)?;
+        }
+        Ok(thread)
+    }
 
     pub async fn create_thread(&self, params: methods::ThreadsCreateParams) -> Result<Thread> {
         let project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("project not found"))?;

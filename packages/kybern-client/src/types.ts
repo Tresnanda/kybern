@@ -477,6 +477,7 @@ export type EventPayload =
       duration_ms: number;
       terminal_message_id?: MessageId | null;
     }
+  | { kind: "session_imported"; provider: ProviderKind; session_id: string }
   | { kind: "provider_commands_updated"; commands: ProviderCommand[] }
   | { kind: "provider_usage_updated"; usage: ProviderUsage }
   | { kind: "turn_failed"; error: string }
@@ -488,6 +489,20 @@ export type EventPayload =
     }
   | { kind: "checkpoint_updated"; checkpoint: Checkpoint }
   | { kind: "workspace_reverted"; to_turn_id: TurnId; commit: string };
+
+export interface SavedSession {
+  provider: ProviderKind;
+  id: string;
+  title: string;
+  cwd: string;
+  updated_at: string;
+  model?: string | null;
+  thread_id?: ThreadId | null;
+}
+export interface SessionsListResult {
+  sessions: SavedSession[];
+  next_cursor: string | null;
+}
 
 export type EventKind = EventPayload["kind"];
 
@@ -1035,6 +1050,8 @@ export interface Methods {
   ];
   "daemon.info": [Empty, DaemonInfo];
   "daemon.activity": [Empty, DaemonActivity];
+  "sessions.list": [{ provider: ProviderKind; query?: string; project_id?: ProjectId | null; cursor?: string | null }, SessionsListResult];
+  "sessions.resume": [{ provider: ProviderKind; session_id: string }, Thread];
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];

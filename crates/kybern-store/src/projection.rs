@@ -169,6 +169,9 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 turn_started_at.entry(turn_id).or_insert(ev.at);
                 out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
             }
+            EventPayload::SessionImported { .. } => {
+                out.push(TranscriptEntry::Notice { turn_id: last_turn_id.unwrap_or_default(), seq: ev.seq, at: ev.at, level: NoticeLevel::Info, text: "Session resumed. Earlier messages are shown above.".into() });
+            }
             EventPayload::TurnResumed => {
                 let Some(turn_id) = turn_id else { continue };
                 last_turn_id = Some(turn_id);

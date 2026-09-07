@@ -322,6 +322,19 @@ impl AgentDriver for CodexDriver {
         Ok(text.trim().to_string())
     }
 
+    async fn list_sessions(
+        &self,
+        context: &crate::ProbeContext,
+        cursor: Option<&str>,
+        query: &str,
+    ) -> Result<kybern_protocol::methods::SessionsListResult> {
+        crate::sessions::list(self.kind(), context, cursor, query).await
+    }
+
+    async fn read_session(&self, context: &crate::ProbeContext, id: &str) -> Result<crate::sessions::SessionHistory> {
+        crate::sessions::read(self.kind(), context, id).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::Codex, config.binary.as_ref())?;
         let mut cmd = Command::new(&bin);

@@ -174,6 +174,19 @@ impl AgentDriver for OpencodeDriver {
         self.probe_inner(context).await
     }
 
+    async fn list_sessions(
+        &self,
+        context: &ProbeContext,
+        cursor: Option<&str>,
+        query: &str,
+    ) -> Result<kybern_protocol::methods::SessionsListResult> {
+        crate::sessions::list(self.kind(), context, cursor, query).await
+    }
+
+    async fn read_session(&self, context: &ProbeContext, id: &str) -> Result<crate::sessions::SessionHistory> {
+        crate::sessions::read(self.kind(), context, id).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::Opencode, config.binary.as_ref())?;
         let mut cmd = Command::new(&bin);

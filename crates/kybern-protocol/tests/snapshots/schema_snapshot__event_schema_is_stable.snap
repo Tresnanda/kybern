@@ -79,6 +79,27 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "A saved native conversation was adopted without replaying its tools.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "session_imported"
+        }
+      },
+      "required": [
+        "kind",
+        "provider",
+        "session_id"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "message": {

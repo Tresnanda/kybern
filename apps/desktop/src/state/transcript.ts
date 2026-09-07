@@ -381,6 +381,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
     case "provider_usage_updated":
       return { ...state, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
+    case "session_imported":
+      blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: "info", text: "Session resumed. Earlier messages are shown above." }]
+      break
     case "provider_notice":
       blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: ev.level, text: ev.text }]
       break

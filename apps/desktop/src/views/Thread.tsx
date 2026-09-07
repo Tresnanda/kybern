@@ -161,11 +161,13 @@ export function ThreadView({
   )
   const commands = useMemo<SlashCommand[]>(
     () => [
+      { name: "resume", hint: "Continue a saved session", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: thread?.project_id ?? null }) },
+      { name: "sessions", hint: "Browse saved sessions", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: thread?.project_id ?? null }) },
       ...(canCompact ? [{ name: "compact", hint: "Compact context and keep conversation history", icon: <WorkflowIcon className="size-4" />, run: () => {
         void rpc().call("threads.compact", { thread_id: threadId }).catch((error) => toast.error("Unable to compact context", { description: errorText(error) }))
       } }] : []),
       ...nativeCommands.filter((command) => command.name !== "compact").map((command) => ({
-        name: ["new", "stop", "activity", "attach", "changes", "terminal", "files", "environment", "pr", "archive", "settings", "usage"].includes(command.name) ? `harness:${command.name}` : command.name,
+        name: ["resume", "sessions", "new", "stop", "activity", "attach", "changes", "terminal", "files", "environment", "pr", "archive", "settings", "usage"].includes(command.name) ? `harness:${command.name}` : command.name,
         invocation: command.name,
         hint: `${PROVIDER_LABEL[thread?.provider.kind ?? "codex"]} · ${command.description}`,
         insert: true, run: () => {},

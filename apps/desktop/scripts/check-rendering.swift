@@ -35,7 +35,7 @@ final class Bench: NSObject, WKScriptMessageHandler {
   config.websiteDataStore = .nonPersistent()
   config.userContentController.add(self, name: "bench")
   config.setURLSchemeHandler(Assets(), forURLScheme: "tauri")
-  web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 720), configuration: config)
+  web = WKWebView(frame: NSRect(x: 0, y: 0, width: Double(ProcessInfo.processInfo.environment["KYBERN_PERF_WIDTH"] ?? "1100") ?? 1100, height: Double(ProcessInfo.processInfo.environment["KYBERN_PERF_HEIGHT"] ?? "720") ?? 720), configuration: config)
   window = NSWindow(contentRect: web.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
   window.title = "Kybern rendering checks"
   window.contentView = web

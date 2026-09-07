@@ -75,10 +75,13 @@ const dialogPanelFieldClassName =
 function DialogPopup({
   className,
   children,
+  instant = false,
   showCloseButton: showCloseButtonProp,
   bottomStickOnMobile: bottomStickOnMobileProp,
   ...props
 }: DialogPrimitive.Popup.Props & {
+  /** Keyboard-driven pickers open without transitional motion. */
+  instant?: boolean;
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
 }) {
@@ -86,13 +89,14 @@ function DialogPopup({
   const bottomStickOnMobile = bottomStickOnMobileProp ?? true;
   return (
     <DialogPortal>
-      <DialogBackdrop />
+      <DialogBackdrop className={instant ? "transition-none" : undefined} />
       <DialogViewport
         className={cn(bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12")}
       >
         <DialogPrimitive.Popup
           className={cn(
             dialogPopupClassName,
+            instant && "transition-none",
             bottomStickOnMobile &&
               "max-sm:max-w-none max-sm:rounded-none max-sm:border-x-0 max-sm:border-t max-sm:border-b-0 max-sm:opacity-[calc(1-min(var(--nested-dialogs),1))] max-sm:data-ending-style:translate-y-4 max-sm:data-starting-style:translate-y-4",
             className,

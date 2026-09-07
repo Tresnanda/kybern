@@ -119,6 +119,8 @@ export interface AppState {
   activeTerminalTab: Record<ThreadId, string | null>
   /** Turn ids the user expanded in the transcript. */
   expandedWork: Record<TurnId, boolean>
+  sessionsOpen: boolean
+  sessionsProjectId: ProjectId | null
   paletteOpen: boolean
   settingsOpen: boolean
   settingsTab: "general" | "agents" | "appearance" | "usage" | "about"
@@ -210,6 +212,8 @@ export function createEnvironmentStore(
     terminalTabs: {},
     activeTerminalTab: {},
     expandedWork: {},
+    sessionsOpen: false,
+    sessionsProjectId: null,
     paletteOpen: false,
     settingsOpen: false,
     settingsTab: "general",

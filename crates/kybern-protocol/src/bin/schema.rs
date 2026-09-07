@@ -51,6 +51,8 @@ fn main() {
     method::<DaemonInfoMethod>(&mut methods);
     method::<DaemonShutdown>(&mut methods);
     method::<DaemonActivityMethod>(&mut methods);
+    method::<SessionsList>(&mut methods);
+    method::<SessionsResume>(&mut methods);
     method::<ProvidersList>(&mut methods);
     method::<HarnessUpdatesList>(&mut methods);
     method::<HarnessUpdatesRun>(&mut methods);

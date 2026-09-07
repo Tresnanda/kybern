@@ -24,6 +24,7 @@ import { useStore } from "@/state/store"
 import { Draft } from "@/views/Draft"
 import { HandoffDialog } from "@/views/Handoff"
 import { CloseGuard } from "@/views/CloseGuard"
+import { SessionsDialog } from "@/views/SessionsDialog"
 import { Palette } from "@/views/Palette"
 import { PullRequests } from "@/views/PullRequests"
 import { RightPanel } from "@/views/RightPanel"
@@ -156,6 +157,9 @@ function Workspace() {
 
       <ErrorBoundary label="the palette">
         <Palette />
+      </ErrorBoundary>
+      <ErrorBoundary label="saved sessions">
+        <SessionsDialog />
       </ErrorBoundary>
       <ErrorBoundary label="settings">
         <SettingsDialog />

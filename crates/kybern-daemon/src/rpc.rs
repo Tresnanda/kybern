@@ -39,6 +39,32 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             });
             ok(Empty {})
         }
+        SessionsList::NAME => {
+            let p: SessionsListParams = parse(params)?;
+            let cwd = match p.project_id {
+                Some(id) => Some(std::path::PathBuf::from(
+                    state.store.project_get(id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?.path,
+                )),
+                None => None,
+            };
+            let settings = state.settings.get().providers.get(&p.provider).cloned().unwrap_or_default();
+            let context = kybern_drivers::ProbeContext { binary: settings.binary.map(std::path::PathBuf::from), cwd, env: settings.env };
+            let driver = state.drivers.get(p.provider).ok_or_else(|| RpcError::not_found("harness"))?;
+            let mut result =
+                driver.list_sessions(&context, p.cursor.as_deref(), p.query.as_deref().unwrap_or("")).await.map_err(|e| bad(e.into()))?;
+            let threads = state.store.threads_list(None, true).map_err(internal)?;
+            for session in &mut result.sessions {
+                session.thread_id = threads
+                    .iter()
+                    .find(|thread| thread.provider.kind == session.provider && thread.provider_session_id.as_deref() == Some(&session.id))
+                    .map(|thread| thread.id);
+            }
+            ok(result)
+        }
+        SessionsResume::NAME => {
+            let p: SessionsResumeParams = parse(params)?;
+            ok(state.orchestrator.resume_external_session(p).await.map_err(bad)?)
+        }
         ProvidersList::NAME => {
             let p: ProvidersListParams = parse_or_default(params)?;
             let cwd = p

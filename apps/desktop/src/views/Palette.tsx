@@ -11,7 +11,7 @@ import { Command, CommandCollection, CommandDialog, CommandDialogPopup, CommandE
 import { Kbd, KbdGroup } from "@/components/kit/kbd"
 import { AutocompleteItem } from "@/components/kit/autocomplete"
 import { mod, relativeTime } from "@/lib/format"
-import { FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
+import { ClockIcon, FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { newThread } from "@/state/nav"
 import { loadThread } from "@/state/rpc"
@@ -46,6 +46,11 @@ export function Palette() {
 
   const groups = useMemo(() => {
     const actions: Item[] = [
+      {
+        id: "resume", label: "Resume session", keywords: "resume sessions import saved external conversation", group: "Suggested",
+        icon: <ClockIcon className="size-[15px]" />,
+        run: () => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null }),
+      },
       {
         id: "new",
         label: "New thread",

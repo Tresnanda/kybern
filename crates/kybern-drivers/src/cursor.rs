@@ -173,6 +173,19 @@ impl AgentDriver for CursorDriver {
         self.probe_inner(context).await
     }
 
+    async fn list_sessions(
+        &self,
+        context: &ProbeContext,
+        cursor: Option<&str>,
+        query: &str,
+    ) -> Result<kybern_protocol::methods::SessionsListResult> {
+        crate::sessions::list(self.kind(), context, cursor, query).await
+    }
+
+    async fn read_session(&self, context: &ProbeContext, id: &str) -> Result<crate::sessions::SessionHistory> {
+        crate::sessions::read(self.kind(), context, id).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::Cursor, config.binary.as_ref())?;
         let (events_tx, events_rx) = mpsc::channel(1024);
@@ -439,7 +452,7 @@ async fn run_connection(
                     loading.store(false, std::sync::atomic::Ordering::Relaxed);
                     match r {
                         Ok(_) => agent_client_protocol::schema::v1::SessionId::from(id.clone()),
-                        Err(_) => cx.send_request(NewSessionRequest::new(cwd.clone())).block_task().await?.session_id,
+                        Err(error) => return Err(error),
                     }
                 }
                 None => cx.send_request(NewSessionRequest::new(cwd.clone())).block_task().await?.session_id,

@@ -79,6 +79,47 @@ pub struct DaemonActivity {
 }
 method!(DaemonActivityMethod, "daemon.activity", Some(Scope::OrchestrationRead), Empty, DaemonActivity);
 
+// ---- saved provider sessions ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SavedSession {
+    pub provider: ProviderKind,
+    /// Native harness session identifier, not a Kybern thread id.
+    pub id: String,
+    pub title: String,
+    pub cwd: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsListParams {
+    pub provider: ProviderKind,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsListResult {
+    pub sessions: Vec<SavedSession>,
+    pub next_cursor: Option<String>,
+}
+method!(SessionsList, "sessions.list", Some(Scope::OrchestrationRead), SessionsListParams, SessionsListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsResumeParams {
+    pub provider: ProviderKind,
+    pub session_id: String,
+}
+method!(SessionsResume, "sessions.resume", Some(Scope::OrchestrationOperate), SessionsResumeParams, Thread);
+
 // ---- providers ----
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -903,6 +944,8 @@ registry!(
     DaemonInfoMethod,
     DaemonShutdown,
     DaemonActivityMethod,
+    SessionsList,
+    SessionsResume,
     ProvidersList,
     HarnessUpdatesList,
     HarnessUpdatesRun,

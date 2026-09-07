@@ -15,6 +15,7 @@ pub mod opencode;
 pub mod pi;
 pub mod process_tree;
 pub mod registry;
+pub mod sessions;
 pub mod update;
 
 use std::collections::{BTreeMap, HashMap};
@@ -276,6 +277,19 @@ pub trait AgentDriver: Send + Sync {
     /// inherit. Drivers whose catalog is machine-global can use `probe`.
     async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
         self.probe(context.binary.as_ref()).await
+    }
+    /// Discover saved conversations without starting a model turn.
+    async fn list_sessions(
+        &self,
+        _context: &ProbeContext,
+        _cursor: Option<&str>,
+        _query: &str,
+    ) -> Result<kybern_protocol::methods::SessionsListResult> {
+        Err(DriverError::Unsupported("saved sessions are unavailable for this harness".into()))
+    }
+    /// Read the native conversation before importing it into Kybern.
+    async fn read_session(&self, _context: &ProbeContext, _id: &str) -> Result<sessions::SessionHistory> {
+        Err(DriverError::Unsupported("session history is unavailable for this harness".into()))
     }
     /// Whether `spawn` with `fork: true` can drop turns from the conversation.
     fn supports_fork(&self) -> bool {

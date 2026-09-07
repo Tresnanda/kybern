@@ -83,6 +83,19 @@ impl AgentDriver for ClaudeDriver {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
+    async fn list_sessions(
+        &self,
+        context: &ProbeContext,
+        cursor: Option<&str>,
+        query: &str,
+    ) -> Result<kybern_protocol::methods::SessionsListResult> {
+        crate::sessions::list(self.kind(), context, cursor, query).await
+    }
+
+    async fn read_session(&self, context: &ProbeContext, id: &str) -> Result<crate::sessions::SessionHistory> {
+        crate::sessions::read(self.kind(), context, id).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::ClaudeCode, config.binary.as_ref())?;
         let session_id = match (&config.resume_session_id, config.fork) {

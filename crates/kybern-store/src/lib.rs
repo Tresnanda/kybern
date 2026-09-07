@@ -273,37 +273,64 @@ impl Store {
     // ---- threads ----
 
     pub fn thread_upsert(&self, t: &Thread) -> Result<()> {
+        self.with(|c| write_thread(c, t))
+    }
+
+    /// Adopt a native conversation and its history in one transaction. Concurrent
+    /// imports return the existing thread, including archived threads.
+    pub fn thread_import(&self, mut thread: Thread, history: Vec<ThreadEvent>) -> Result<(Thread, Vec<ThreadEvent>)> {
         self.with(|c| {
-            c.execute(
-                "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
-                    status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-                 ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
-                    status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
-                    cwd = excluded.cwd, provider_session_id = excluded.provider_session_id, pinned = excluded.pinned,
-                    updated_at = excluded.updated_at, last_seq = excluded.last_seq",
-                params![
-                    t.id.to_string(),
-                    t.project_id.to_string(),
-                    t.title,
-                    t.provider.kind.as_str(),
-                    t.provider.instance,
-                    t.model,
-                    t.effort,
-                    serde_json::to_value(t.permission_mode)?.as_str().unwrap().to_string(),
-                    serde_json::to_value(t.status)?.as_str().unwrap().to_string(),
-                    t.worktree.as_ref().map(|w| w.path.clone()),
-                    t.worktree.as_ref().map(|w| w.branch.clone()),
-                    t.cwd,
-                    t.provider_session_id,
-                    t.pinned,
-                    t.created_at.to_rfc3339(),
-                    t.updated_at.to_rfc3339(),
-                    t.last_seq,
-                ],
-            )?;
-            Ok(())
+            let tx = c.unchecked_transaction()?;
+            if let Some(existing) = tx
+                .query_row(
+                    &format!("{THREAD_SELECT} WHERE provider_kind = ?1 AND provider_session_id = ?2 AND provider_instance = ?3 LIMIT 1"),
+                    params![thread.provider.kind.as_str(), thread.provider_session_id, thread.provider.instance],
+                    row_to_thread,
+                )
+                .optional()?
+            {
+                return Ok((existing, Vec::new()));
+            }
+            write_thread(&tx, &thread)?;
+            let mut events = Vec::with_capacity(history.len() + 2);
+            events.push(ThreadEvent {
+                seq: 0,
+                thread_id: thread.id,
+                turn_id: None,
+                at: thread.created_at,
+                payload: EventPayload::ThreadCreated { thread: thread.clone() },
+            });
+            events.extend(history);
+            events.push(ThreadEvent {
+                seq: 0,
+                thread_id: thread.id,
+                turn_id: events.last().and_then(|event| event.turn_id),
+                at: thread.updated_at,
+                payload: EventPayload::SessionImported {
+                    provider: thread.provider.kind,
+                    session_id: thread.provider_session_id.clone().unwrap_or_default(),
+                },
+            });
+            for event in &mut events {
+                event.thread_id = thread.id;
+                let payload = serde_json::to_value(&event.payload)?;
+                let kind = payload["kind"].as_str().unwrap_or("unknown");
+                tx.execute(
+                    "INSERT INTO events(thread_id, turn_id, at, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        thread.id.to_string(),
+                        event.turn_id.map(|id| id.to_string()),
+                        event.at.to_rfc3339(),
+                        kind,
+                        serde_json::to_string(&payload)?
+                    ],
+                )?;
+                event.seq = tx.last_insert_rowid();
+            }
+            thread.last_seq = events.last().map_or(0, |event| event.seq);
+            write_thread(&tx, &thread)?;
+            tx.commit()?;
+            Ok((thread, events))
         })
     }
 
@@ -739,6 +766,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_import_is_atomic_and_deduplicates_archived_threads() {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let project = Project {
+            id: Uuid::now_v7(),
+            name: "Import".into(),
+            path: "/tmp/import".into(),
+            is_git: false,
+            worktrees_default: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let thread = Thread {
+            id: Uuid::now_v7(),
+            project_id: project.id,
+            title: "Native history".into(),
+            provider: ProviderInstance::default_for(ProviderKind::Codex),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            status: ThreadStatus::Idle,
+            worktree: None,
+            cwd: project.path.clone(),
+            provider_session_id: Some("native-session".into()),
+            pinned: false,
+            created_at: now,
+            updated_at: now,
+            last_seq: 0,
+        };
+        let history = vec![ThreadEvent {
+            seq: 999,
+            thread_id: Uuid::now_v7(),
+            turn_id: Some(Uuid::now_v7()),
+            at: now,
+            payload: EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("Original prompt") },
+        }];
+        store.with(|c| { c.execute_batch("CREATE TRIGGER reject_import BEFORE INSERT ON events WHEN NEW.kind = 'session_imported' BEGIN SELECT RAISE(ABORT, 'test failure'); END;")?; Ok(()) }).unwrap();
+        assert!(store.thread_import(thread.clone(), history.clone()).is_err());
+        assert!(store.thread_get(thread.id).unwrap().is_none());
+        assert!(store.events_for_thread(thread.id).unwrap().is_empty());
+        store
+            .with(|c| {
+                c.execute_batch("DROP TRIGGER reject_import")?;
+                Ok(())
+            })
+            .unwrap();
+        let (mut imported, events) = store.thread_import(thread.clone(), history.clone()).unwrap();
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().all(|event| event.thread_id == thread.id));
+        assert_eq!(imported.last_seq, events.last().unwrap().seq);
+        assert_eq!(store.events_for_thread(thread.id).unwrap().len(), 3);
+        imported.status = ThreadStatus::Archived;
+        store.thread_upsert(&imported).unwrap();
+        let mut retry = thread;
+        retry.id = Uuid::now_v7();
+        let (duplicate, events) = store.thread_import(retry.clone(), history).unwrap();
+        assert_eq!(duplicate.id, imported.id);
+        assert_eq!(duplicate.status, ThreadStatus::Archived);
+        assert!(events.is_empty());
+        assert!(store.thread_get(retry.id).unwrap().is_none());
+        assert_eq!(store.events_for_thread(imported.id).unwrap().len(), 3);
+    }
+
+    #[test]
     fn roundtrip_project_thread_events() {
         let s = Store::open_in_memory().unwrap();
         let now = Utc::now();
@@ -812,4 +904,37 @@ mod tests {
         assert!(s.runtime_tasks_for_thread(t.id).unwrap().is_empty(), "the targeted SQL query must include root bindings");
         assert_eq!(s.events_for_thread(t.id).unwrap().len(), 4, "projection repair must not delete history");
     }
+}
+
+fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
+    c.execute(
+        "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
+                    status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                 ON CONFLICT(id) DO UPDATE SET
+                    title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
+                    status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
+                    cwd = excluded.cwd, provider_session_id = excluded.provider_session_id, pinned = excluded.pinned,
+                    updated_at = excluded.updated_at, last_seq = excluded.last_seq",
+        params![
+            t.id.to_string(),
+            t.project_id.to_string(),
+            t.title,
+            t.provider.kind.as_str(),
+            t.provider.instance,
+            t.model,
+            t.effort,
+            serde_json::to_value(t.permission_mode)?.as_str().unwrap().to_string(),
+            serde_json::to_value(t.status)?.as_str().unwrap().to_string(),
+            t.worktree.as_ref().map(|w| w.path.clone()),
+            t.worktree.as_ref().map(|w| w.branch.clone()),
+            t.cwd,
+            t.provider_session_id,
+            t.pinned,
+            t.created_at.to_rfc3339(),
+            t.updated_at.to_rfc3339(),
+            t.last_seq,
+        ],
+    )?;
+    Ok(())
 }

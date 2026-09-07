@@ -290,6 +290,32 @@ cargo build
 
 Approvals show up inline in `new` and `send`; answer with `y`, `a` (always) or `n`.
 
+### Resume a conversation started elsewhere
+
+Use `/resume` or `/sessions` in the desktop composer, or **Resume session** in
+the command palette. Search by title, folder, or native session ID; filter by
+harness and project. Choosing a conversation imports its available message and
+tool history and continues the same native session on your next message.
+Choosing it again opens its existing Kybern thread, including archived threads.
+
+```sh
+kybern sessions --provider claude-code
+kybern sessions --provider codex --query "session picker"
+kybern resume --provider codex <native-session-id>
+kybern send <returned-thread-id> "Continue from where we left off"
+```
+
+All six harnesses are supported: Claude Code, Codex, OpenCode, pi, OMP, and
+Cursor CLI. Discovery uses the selected environment's installed harness and
+configured profile. Cursor uses CLI sessions exposed through ACP; editor-only
+or cloud conversations are not included. The original working folder must
+still exist. Kybern uses it directly and does not create or switch a worktree.
+
+Importing history does not execute old tools, recreate checkpoints, or charge
+historical usage to Kybern. History imports are limited to 64 MB. If a harness
+refuses continuation because another process owns the session, close that
+process and retry. Saved sessions remain native to their original harness.
+
 ### Background behaviour
 
 The daemon outlives the app, so it trims what it keeps alive once work
