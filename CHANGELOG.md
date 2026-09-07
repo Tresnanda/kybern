@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.3
+
+- Reduce retained conversation memory with bounded inactive caches, compact background updates, and cache release when switching environments. Preserve drafts, pending controls, split panes, and live updates during history reloads.
+- Bound event, terminal, and WebSocket buffers by bytes, with durable event replay and terminal scrollback recovery for slow clients.
+- Release idle Markdown and highlighting workers and cap provider discovery cache entries.
+- Show compact, deferred image thumbnails and load full-resolution originals only when opened.
+- Fix table wrapping and horizontal overflow in narrow conversations.
+- Add Open in new window to environment menus with independent environment selection per window.
+- Add native memory comparisons and regression coverage for rendering, image previews, cache eviction, and recovery.
+
 ## 0.2.2
 
 - Count time asleep toward idle agent expiry, so overdue processes close on the first cleanup sweep after waking.
