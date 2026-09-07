@@ -14,6 +14,13 @@ import "../src/index.css"
 const view = createRoot(document.getElementById("root")!)
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+async function waitFor(condition: () => unknown, message: string) {
+  const deadline = performance.now() + 5000
+  while (!condition()) {
+    check(performance.now() < deadline, message)
+    await sleep(20)
+  }
+}
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 const source = `data:image/png;base64,${png}`
 function theme(variant: "light" | "dark") {
@@ -24,7 +31,7 @@ function theme(variant: "light" | "dark") {
 }
 async function openPreview(button: HTMLButtonElement, expected: string) {
   button.click()
-  await sleep(250)
+  await waitFor(() => document.querySelector<HTMLImageElement>('[role="dialog"] img')?.src === expected, "Preview lost the original image")
   const dialog = document.querySelector('[role="dialog"]')
   const image = dialog?.querySelector("img")
   check(image?.src === expected, "Preview lost the original image")
@@ -33,7 +40,7 @@ async function openPreview(button: HTMLButtonElement, expected: string) {
   const close = dialog!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
   check(close, "Preview has no close button")
   close.click()
-  await sleep(250)
+  await waitFor(() => !document.querySelector('[role="dialog"]') && document.activeElement === button, "Preview did not close and restore focus")
   check(!document.querySelector('[role="dialog"]'), "Preview did not close")
   check(document.activeElement === button, "Preview did not restore focus")
 }
@@ -59,7 +66,11 @@ async function run() {
     const text = paragraph.firstChild!
     const first = document.createRange(); first.setStart(text, 0); first.setEnd(text, 5)
     const second = document.createRange(); second.setStart(text, 11); second.setEnd(text, 17)
-    check(second.getBoundingClientRect().top > first.getBoundingClientRect().top, `Sent message collapsed the composer newline: ${JSON.stringify({ variant, text: text.textContent, html: paragraph.innerHTML, whiteSpace: getComputedStyle(paragraph).whiteSpace, paragraph: paragraph.getBoundingClientRect().toJSON(), first: first.getBoundingClientRect().toJSON(), second: second.getBoundingClientRect().toJSON() })}`)
+    // Older WebKit includes a zero-width rectangle on the preceding line
+    // when a range starts immediately after a preserved newline.
+    const firstLine = [...first.getClientRects()].filter((rect) => rect.width > 0).at(-1)
+    const secondLine = [...second.getClientRects()].filter((rect) => rect.width > 0).at(-1)
+    check(firstLine && secondLine && secondLine.top > firstLine.top, `Sent message collapsed the composer newline: ${JSON.stringify({ variant, text: text.textContent, whiteSpace: getComputedStyle(paragraph).whiteSpace, first: firstLine?.toJSON(), second: secondLine?.toJSON() })}`)
     await openPreview(user.querySelector<HTMLButtonElement>('[aria-label="Preview Attached image 1"]')!, source)
     check(document.querySelector('[data-timeline-row-kind="work"] .response-image-preview'), "Native image left its chronological work position")
     const generatedCanvas = document.createElement("canvas")
