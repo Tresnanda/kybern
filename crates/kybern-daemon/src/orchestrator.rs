@@ -130,7 +130,7 @@ struct ActiveTurn {
     terminal_message_id: Option<MessageId>,
     completed: bool,
     /// Claude Code may emit a successful foreground `result` while native
-    /// background agents are still active, then resume the root assistant from
+    /// background tasks are still active, then resume the root assistant from
     /// an internal task notification. Hold that provisional result so the
     /// continuation remains part of this turn and retains stable message ids.
     pending_completion: Option<PendingTurnCompletion>,
@@ -1937,16 +1937,16 @@ impl Orchestrator {
             }
             DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
-                let has_active_agents = if turn.provider == ProviderKind::ClaudeCode && stop_reason == StopReason::Completed {
+                let has_pending_tasks = if turn.provider == ProviderKind::ClaudeCode && stop_reason == StopReason::Completed {
                     live.tasks
                         .lock()
                         .await
                         .values()
-                        .any(|task| task.origin_turn_id == turn.id && task.kind == RuntimeTaskKind::Agent && task.status.is_active())
+                        .any(|task| task.origin_turn_id == turn.id && task.kind != RuntimeTaskKind::Monitor && task.status.is_active())
                 } else {
                     false
                 };
-                if has_active_agents {
+                if has_pending_tasks {
                     // The foreground result closes the current assistant
                     // ordinal even though it does not yet settle the parent
                     // turn. Claude's task-triggered continuation is a new
@@ -1960,7 +1960,7 @@ impl Orchestrator {
                     tracing::debug!(
                         thread_id = %thread_id,
                         turn_id = %turn.id,
-                        "holding Claude's provisional result while background agents finish"
+                        "holding Claude's provisional result while background tasks finish"
                     );
                     return Ok(());
                 }
@@ -2258,7 +2258,7 @@ mod tests {
     use crate::config::Paths;
     use crate::settings::SettingsStore;
     use kybern_drivers::registry::DriverRegistry;
-    use kybern_drivers::{AgentSession, DriverEvent, DriverRuntimeTaskUpdate, TurnAnchors};
+    use kybern_drivers::{AgentSession, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, TurnAnchors};
     use kybern_protocol::*;
     use kybern_store::Store;
     use serde_json::json;
@@ -2374,7 +2374,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_background_process_resumes_the_settled_parent_turn() {
+    async fn claude_result_waits_for_background_processes_and_scopes_the_continuation() {
         assert_claude_background_continuation(RuntimeTaskKind::Process).await;
     }
 
@@ -2508,7 +2508,7 @@ mod tests {
             )
             .await
             .unwrap();
-        if kind == RuntimeTaskKind::Agent {
+        if kind != RuntimeTaskKind::Monitor {
             assert!(live.turn.lock().await.as_ref().is_some_and(|turn| turn.pending_completion.is_some()));
             assert!(
                 !store
@@ -2518,7 +2518,7 @@ mod tests {
                     .any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
             );
         } else {
-            assert!(live.turn.lock().await.is_none(), "processes and monitors may outlive the foreground request");
+            assert!(live.turn.lock().await.is_none(), "monitors may outlive the foreground request");
             assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
         }
 
@@ -2530,12 +2530,71 @@ mod tests {
             )
             .await
             .unwrap();
+        if kind != RuntimeTaskKind::Monitor {
+            // A notification can start another wave of work. Each provisional
+            // result must keep the same parent busy without emitting an alert.
+            for wave in 2..=3 {
+                orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
+                let task = DriverRuntimeTask {
+                    id: format!("task-{wave}"),
+                    kind,
+                    status: RuntimeTaskStatus::Running,
+                    title: "Follow-up work".into(),
+                    detail: None,
+                    provider_type: None,
+                    parent_id: None,
+                    tool_call_id: None,
+                    provider_thread_id: None,
+                    model: None,
+                    effort: None,
+                    backgrounded: true,
+                    last_tool_name: None,
+                    usage: None,
+                    stats: RuntimeTaskStats::default(),
+                    capabilities: RuntimeTaskCapabilities::default(),
+                };
+                orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+                orchestrator
+                    .handle_driver_event(
+                        thread.id,
+                        &live,
+                        DriverEvent::TurnCompleted {
+                            stop_reason: StopReason::Completed,
+                            usage: Usage::default(),
+                            cost_usd: None,
+                            duration_ms: 1,
+                            anchors: TurnAnchors::default(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                orchestrator
+                    .handle_driver_event(
+                        thread.id,
+                        &live,
+                        DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status(
+                            format!("task-{wave}"),
+                            RuntimeTaskStatus::Completed,
+                        )),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+                assert!(
+                    !store
+                        .events_for_thread(thread.id)
+                        .unwrap()
+                        .iter()
+                        .any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
+                );
+            }
+        }
         orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
         assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Running);
         assert!(!orchestrator.session_parked(thread.id, &live).await.unwrap());
         let resumed =
             store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnResumed)).count();
-        assert_eq!(resumed, usize::from(kind != RuntimeTaskKind::Agent));
+        assert_eq!(resumed, usize::from(kind == RuntimeTaskKind::Monitor));
         assert!(
             orchestrator.send(thread.id, UserMessage::text("continue?")).await.is_err(),
             "manual input must not replace a running continuation"
@@ -2618,7 +2677,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(completed.len(), if kind == RuntimeTaskKind::Agent { 1 } else { 2 });
+        assert_eq!(completed.len(), if kind != RuntimeTaskKind::Monitor { 1 } else { 2 });
         let completed = &completed[completed.len() - 1..];
         assert_eq!(completed[0].0.input_tokens, 4);
         assert_eq!(completed[0].0.output_tokens, 6);

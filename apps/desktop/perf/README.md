@@ -24,6 +24,10 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [turn lifecycle and release verification](turn-fixes-2026-09-07.md) for
+background-task completion, image previews, environment menu checks, and the
+release build changes.
+
 These are recorded results from different workloads, not numbers to combine
 into one overall percentage:
 
@@ -63,6 +67,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Large histories, worker scheduling, expanded work | `node scripts/check-rendering.mjs scaling` |
 | Virtualization, navigation, row state, scroll anchoring | `node scripts/check-rendering.mjs interaction` |
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
+| Attached-image controls, user line breaks, environment menu | `node scripts/check-rendering.mjs chat-fixes` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
 | Saved-session picker, search, pagination, keyboard navigation | `node scripts/check-rendering.mjs sessions` |
 | Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |

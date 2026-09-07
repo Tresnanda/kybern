@@ -84,11 +84,11 @@ const DELEGATE_TOOLS = new Set([
   "listagents",
 ])
 const PLAN_TOOLS = new Set(["todowrite", "todo", "plan", "updateplan"])
+const IMAGE_GENERATION_TOOLS = new Set(["imagegeneration", "generateimage", "imagegen"])
 const IMAGE_TOOLS = new Set([
   "imageview",
   "viewimage",
-  "imagegeneration",
-  "generateimage",
+  ...IMAGE_GENERATION_TOOLS,
 ])
 const READ_COMMANDS = new Set([
   "cat",
@@ -285,6 +285,11 @@ function leafToolName(name: string): string {
 
 function matchesTool(set: ReadonlySet<string>, tool: string, leaf: string): boolean {
   return set.has(tool) || set.has(leaf)
+}
+
+/** Generated images are deliverables; image viewers and screenshots are work. */
+export function isImageGenerationTool(call: ToolCall): boolean {
+  return matchesTool(IMAGE_GENERATION_TOOLS, normalized(call.name), leafToolName(call.name))
 }
 
 /** True only for a call that creates agent work, not follow-up or wait calls. */

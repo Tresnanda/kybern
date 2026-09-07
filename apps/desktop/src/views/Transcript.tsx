@@ -31,7 +31,7 @@ import {
   getChatTranscriptTextStyle,
 } from "@/components/kit/chat/chatTypography"
 import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
-import { isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
+import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
@@ -514,7 +514,14 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
 }
 
 const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
-  const images = [...group.images.map((image) => ({ source: image.source, label: "Agent image" })), ...group.work.flatMap((block) => block.kind === "tool" && block.origin.kind === "root" && !toolSurface(block.call, block.output) ? responseImages(block.output) : [])].filter((image, index, all) => all.findIndex((other) => other.source === image.source) === index)
+  const deliveredImages = useMemo(() => {
+    if (group.running) return []
+    const images = [
+      ...group.images.map((image) => ({ source: image.source, label: "Agent image" })),
+      ...group.work.flatMap((block) => block.kind === "tool" && block.origin.kind === "root" && isImageGenerationTool(block.call) ? responseImages(block.output) : []),
+    ]
+    return [...new Map(images.map((image) => [image.source, image])).values()]
+  }, [group])
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
@@ -573,7 +580,6 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
         </div>
       )}
 
-      {images.length > 0 && <div className={ROW}>{images.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
 
       {settled && (
         <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
@@ -625,6 +631,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           )}
 
           <div className="group min-w-0 py-0.5">
+            {deliveredImages.length > 0 && <div data-response-images>{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
             {group.answer && (
               <div data-slot="message-content">
                 <Markdown text={group.answer.text} style={TEXT} />
@@ -764,12 +771,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
             <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-2 self-end">
               {files.map((p, i) =>
                 p.type === "image" ? (
-                  <img
-                    key={i}
-                    src={`data:${p.media_type};base64,${p.data}`}
-                    alt=""
-                    className="size-15 rounded-xl object-cover outline -outline-offset-1 outline-black/10 dark:outline-white/10"
-                  />
+                  <ResponseImage key={i} source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail />
                 ) : (
                   <span
                     key={i}
@@ -1050,6 +1052,8 @@ function WorkRow({
       return <UserBubble message={block.message} at={block.at} />
     case "tool":
       return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
+    case "image":
+      return <ResponseImage source={block.source} />
     case "assistant":
       return <AssistantWorkRow block={block} tone={tone} live={live} />
     case "runtime_task":
@@ -1105,7 +1109,7 @@ function ToolRow({
   const activity = toolLine(block.call, block.complete && !active)
   const visual = toolVisualKind(block.call, activity)
   const surface = toolSurface(block.call, block.output)
-  const screenshots = surface?.screenshots ?? []
+  const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
   const out = surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream)
   const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
   const childBlocks = childrenByParent.get(block.call.id) ?? []

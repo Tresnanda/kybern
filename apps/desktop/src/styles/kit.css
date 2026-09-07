@@ -3020,3 +3020,14 @@ diffs-container {
   -webkit-background-clip: text;
   animation: ultrathink-rainbow 10s linear infinite;
 }
+
+/* Preserve the soft line breaks typed in the composer inside prose and lists. */
+.chat-markdown--user p,
+.chat-markdown--user li {
+  white-space: pre-line;
+}
+
+.response-image-preview.response-image-thumbnail {
+  width: 100%;
+  height: 100%;
+}

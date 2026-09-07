@@ -9,13 +9,13 @@ import { cn } from "@/lib/utils"
 type ImageError = { message: string; retryable: boolean }
 
 /** Local previews and originals share the authenticated thread boundary. */
-export function ResponseImage({ source, label = "Agent image", compact = false, linkLabel }: { source: string; label?: string; compact?: boolean; linkLabel?: ReactNode }) {
+export function ResponseImage({ source, label = "Agent image", compact = false, thumbnail = false, linkLabel }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; linkLabel?: ReactNode }) {
   const threadId = useContext(ImageThreadContext)
-  return <ImageContent key={`${threadId}:${source}`} source={source} label={label} threadId={threadId} compact={compact} linkLabel={linkLabel} />
+  return <ImageContent key={`${threadId}:${source}`} source={source} label={label} threadId={threadId} compact={compact} thumbnail={thumbnail} linkLabel={linkLabel} />
 }
 
-function ImageContent({ source, label, threadId, compact, linkLabel }: { source: string; label: string; threadId: string | null; compact: boolean; linkLabel?: ReactNode }) {
-  const target = imageSource(source)
+function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }: { source: string; label: string; threadId: string | null; compact: boolean; thumbnail: boolean; linkLabel?: ReactNode }) {
+  const target = thumbnail && source.startsWith("blob:") ? { kind: "inline" as const, value: source } : imageSource(source)
   const isLink = linkLabel !== undefined
   const direct = target && target.kind !== "local" ? target.value : ""
   const initialError: ImageError | null = !target ? { message: "This image format is not supported.", retryable: false }
@@ -81,14 +81,15 @@ function ImageContent({ source, label, threadId, compact, linkLabel }: { source:
     </span>
     : <span role="status" className="block rounded-lg bg-[var(--color-background-button-secondary)] p-4 text-sm text-muted-foreground">Loading image…</span>
 
-  return <span ref={preview} className={isLink ? "inline" : compact ? "block w-[280px] max-w-full" : "my-3 block w-[280px] max-w-full"}>
+  return <span ref={preview} className={isLink ? "inline" : thumbnail ? "block size-16 shrink-0" : compact ? "block w-[280px] max-w-full" : "my-3 block w-[280px] max-w-full"}>
     {isLink ? <a href={source} className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline" onClick={(event) => { event.preventDefault(); changeOpen(true) }}>{linkLabel}</a>
+      : thumbnail && (error || !url) ? <button type="button" aria-label={`Preview ${label}`} className="response-image-preview response-image-thumbnail rounded-xl p-1 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => changeOpen(true)}>Preview image</button>
       : error || !url ? <span className="response-image-preview">{status(error, retryPreview, true)}</span>
-      : <button type="button" aria-label={`Preview ${label}`} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", compact ? "rounded-lg" : "rounded-xl")} onClick={() => changeOpen(true)}>
+      : <button type="button" aria-label={`Preview ${label}`} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl")} onClick={() => changeOpen(true)}>
         <img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
       </button>}
     <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogPopup className="max-w-[min(90vw,1200px)] p-4">
+      <DialogPopup finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
         <DialogTitle className="pe-8 text-sm">{label}</DialogTitle>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>
         {originalError || !original ? status(originalError, retryOriginal) : <img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}

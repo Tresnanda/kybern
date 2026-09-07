@@ -14,7 +14,7 @@ registerHooks({
 // Static imports would hoist above the hook, so these load after it.
 const { buildStructuredTextParts } = await import("./src/lib/composerTokens.ts")
 const { getAttachmentIconName, getFileIconName } = await import("./src/lib/kit/fileIcons.ts")
-const { humanizeToolName, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolLine, toolVisualKind } = await import("./src/lib/toolActivity.ts")
+const { isImageGenerationTool, humanizeToolName, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolLine, toolVisualKind } = await import("./src/lib/toolActivity.ts")
 
 const call = (name, input) => ({ id: "tool-1", name, input })
 
@@ -347,4 +347,9 @@ test("plugin catalog entries become @ mentions by display name or slug, skills s
   ])
   assert.deepEqual(buildStructuredTextParts("@Computer Use", new Set(), [computerUse]), [mention])
   assert.deepEqual(buildStructuredTextParts("email me@computer-use.dev", new Set(), [computerUse]), [{ type: "text", text: "email me@computer-use.dev" }])
+})
+
+test("image generation stays a deliverable without promoting inspection screenshots", () => {
+  for (const name of ["imageGeneration", "image_generation", "image_gen.imagegen", "mcp__images__generate_image"]) assert.equal(isImageGenerationTool({ name }), true, name)
+  for (const name of ["imageView", "view_image", "mcp__browser__screenshot", "exec_command"]) assert.equal(isImageGenerationTool({ name }), false, name)
 })

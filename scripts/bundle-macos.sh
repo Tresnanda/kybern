@@ -5,6 +5,7 @@
 # Usage: scripts/bundle-macos.sh
 #   SKIP_BUILD=1                reuse the last self-contained `pnpm tauri build`
 #   CARGO_TARGET_DIR            honoured if set
+#   KYBERN_BUILD_TARGET         optional aarch64-apple-darwin or x86_64-apple-darwin
 #   TAURI_SIGNING_PRIVATE_KEY   when set, also writes the signed updater
 #                               tarball (kybern-<v>-<arch>-apple-darwin.app.tar.gz
 #                               + .sig) that latest.json points at
@@ -23,18 +24,30 @@ fi
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 DIST="$ROOT/dist"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
-case "$(uname -m)" in
-  arm64) ARCH=aarch64 ;;
-  x86_64) ARCH=x86_64 ;;
-  *) ARCH="$(uname -m)" ;;
-esac
+BUILD_TARGET="${KYBERN_BUILD_TARGET:-${CARGO_BUILD_TARGET:-}}"
+TAURI_ARGS=(build --bundles app)
+if [[ -n "$BUILD_TARGET" ]]; then
+  case "$BUILD_TARGET" in
+    aarch64-apple-darwin) ARCH=aarch64 ;;
+    x86_64-apple-darwin) ARCH=x86_64 ;;
+    *) echo "Unsupported macOS target: $BUILD_TARGET" >&2; exit 1 ;;
+  esac
+  TAURI_ARGS+=(--target "$BUILD_TARGET")
+  BUNDLE_DIR="$TARGET_DIR/$BUILD_TARGET/release/bundle/macos"
+else
+  case "$(uname -m)" in
+    arm64) ARCH=aarch64 ;;
+    x86_64) ARCH=x86_64 ;;
+    *) echo "Unsupported Mac architecture" >&2; exit 1 ;;
+  esac
+  BUNDLE_DIR="$TARGET_DIR/release/bundle/macos"
+fi
 DMG="$DIST/kybern-$VERSION-$ARCH-apple-darwin.dmg"
-BUNDLE_DIR="$TARGET_DIR/release/bundle/macos"
 
 # 1. Build ---------------------------------------------------------------------
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   echo "==> pnpm tauri build with kybernd sidecar (apps/desktop)"
-  (cd apps/desktop && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$TARGET_DIR" pnpm tauri build --bundles app)
+  (cd apps/desktop && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$TARGET_DIR" pnpm tauri "${TAURI_ARGS[@]}")
 fi
 SRC_APP="$(ls -d "$BUNDLE_DIR"/*.app 2>/dev/null | head -n1 || true)"
 if [[ -z "$SRC_APP" ]]; then
@@ -45,6 +58,13 @@ if [[ ! -x "$SRC_APP/Contents/MacOS/kybernd" ]]; then
   echo "Tauri app does not contain the kybernd sidecar" >&2
   exit 1
 fi
+
+# Never label host binaries as an Intel release during cross compilation.
+MACH_ARCH="$ARCH"
+if [[ "$MACH_ARCH" == "aarch64" ]]; then MACH_ARCH=arm64; fi
+APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$SRC_APP/Contents/Info.plist")
+lipo -verify_arch "$MACH_ARCH" "$SRC_APP/Contents/MacOS/$APP_EXECUTABLE"
+lipo -verify_arch "$MACH_ARCH" "$SRC_APP/Contents/MacOS/kybernd"
 
 # 2. Assemble ----------------------------------------------------------------------
 APP="$DIST/kybern.app"

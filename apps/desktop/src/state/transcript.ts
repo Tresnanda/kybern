@@ -726,7 +726,6 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
   for (const b of blocks) {
     const g = get(b.turnId)
     switch (b.kind) {
-      case "image": g.images.push(b); break
       case "user":
         if (!g.user) g.user = b
         else g.work.push(b)
@@ -747,6 +746,13 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
   }
   for (const g of groups) {
     g.running = !g.end && !!g.user
+    // Explicit assistant image messages belong with the delivered response.
+    // While running they stay in sequence; tool-result screenshots never enter
+    // this gallery and remain inside their originating tool.
+    if (!g.running) {
+      g.images = g.work.filter((block): block is Extract<Block, { kind: "image" }> => block.kind === "image")
+      g.work = g.work.filter((block) => block.kind !== "image")
+    }
     // A final answer is a lifecycle fact, not a guess based on whichever
     // assistant message happened to arrive last. Until TurnCompleted, every
     // root message remains chronological narration in `work`.

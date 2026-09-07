@@ -13,19 +13,25 @@ import {
   DialogTitle,
   dialogFieldLabelClassName,
 } from "@/components/kit/dialog"
-import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import {
   Menu,
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
   MenuSeparator,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSub,
+  MenuSubTrigger,
   MenuTrigger,
 } from "@/components/kit/menu"
 import {
   CheckIcon,
   ChevronDownIcon,
   CopyIcon,
+  DeviceLaptopIcon,
+  WindowIcon,
   GlobeIcon,
   PencilIcon,
   Plus,
@@ -119,7 +125,7 @@ export function EnvironmentSwitcher() {
             {switching ? (
               <Spinner size={14} />
             ) : (
-              <GlobeIcon className="size-3.5 shrink-0" />
+              profile?.local ? <DeviceLaptopIcon className="size-3.5 shrink-0" /> : <GlobeIcon className="size-3.5 shrink-0" />
             )}
             <span className="min-w-0 flex-1 truncate text-foreground">
               {profile?.name ?? "Connecting"}
@@ -134,56 +140,61 @@ export function EnvironmentSwitcher() {
           <ComposerPickerMenuPopup
             align="start"
             side="bottom"
-            className="w-72 min-w-64 transition-[opacity,scale] duration-150 ease-out data-ending-style:scale-99 data-ending-style:opacity-0 data-starting-style:scale-97 data-starting-style:opacity-0 motion-reduce:transition-none"
+            className="w-72 min-w-0"
           >
             <MenuGroup>
               <MenuGroupLabel>Environments</MenuGroupLabel>
-              {profiles.map((item) => (
-                <MenuItem
-                  key={item.id}
-                  className="items-start [&>svg]:mt-0.5"
-                  onClick={() => {
-                    if (item.id !== selectedId || connection.state === "failed")
-                      void switchEnvironment(item.id)
-                  }}
-                >
-                  <GlobeIcon className="size-3.5" />
-                  <span className="min-w-0 flex-1 leading-normal break-words whitespace-normal">
-                    <bdi>{item.name}</bdi>
-                    {item.id === selectedId && (
-                      <span className="block text-[length:var(--app-font-size-ui-sm,13px)] font-normal text-muted-foreground">
-                        {statusLabel}
+              <MenuRadioGroup value={selectedId ?? ""} onValueChange={(id) => {
+                if (id !== selectedId) void switchEnvironment(id)
+              }}>
+                {profiles.map((item) => (
+                  <MenuRadioItem key={item.id} value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
+                    if (item.id === selectedId && connection.state === "failed") void switchEnvironment(item.id)
+                  }}>
+                    {item.local ? <DeviceLaptopIcon className="-mx-0.5 size-4 shrink-0 opacity-80" /> : <GlobeIcon className="-mx-0.5 size-4 shrink-0 opacity-80" />}
+                    <span className="min-w-0 flex-1 text-start">
+                      <bdi className="block break-words whitespace-normal leading-snug">{item.name}</bdi>
+                      <span className="mt-0.5 block break-words whitespace-normal font-normal text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground">
+                        {item.id === selectedId ? statusLabel : item.local ? "On this Mac" : item.ssh ? "SSH connection" : "Remote environment"}
                       </span>
-                    )}
-                  </span>
-                  {item.id === selectedId && <CheckIcon className="size-3.5" />}
-                </MenuItem>
-              ))}
+                    </span>
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
             </MenuGroup>
-            {isTauri() && <MenuGroup>
-              <MenuGroupLabel>Open in new window</MenuGroupLabel>
-              {profiles.map((item) => <MenuItem key={item.id} onClick={() => {
-                void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
-              }}><GlobeIcon /><bdi>{item.name}</bdi></MenuItem>)}
-            </MenuGroup>}
             <MenuSeparator />
             <MenuGroup>
+              {isTauri() && (
+                <MenuSub>
+                  <MenuSubTrigger><WindowIcon className="size-4" /><span className="flex-1">Open in new window</span></MenuSubTrigger>
+                  <ComposerPickerMenuSubPopup className="w-64 min-w-0">
+                    {profiles.map((item) => (
+                      <MenuItem key={item.id} onClick={() => {
+                        void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
+                      }}>
+                        {item.local ? <DeviceLaptopIcon className="size-4" /> : <GlobeIcon className="size-4" />}
+                        <bdi className="min-w-0 break-words whitespace-normal">{item.name}</bdi>
+                      </MenuItem>
+                    ))}
+                  </ComposerPickerMenuSubPopup>
+                </MenuSub>
+              )}
               <MenuItem
                 onClick={() => {
                   setEditing(null)
                   setDialog("add")
                 }}
               >
-                <Plus /> Add environment
+                <Plus className="size-4" /> Add environment
               </MenuItem>
               <MenuItem onClick={() => setDialog("manage")}>
-                <SettingsIcon /> Manage environments
+                <SettingsIcon className="size-4" /> Manage environments
               </MenuItem>
               <MenuItem
                 disabled={!canManageAccess}
                 onClick={() => setDialog("access")}
               >
-                <GlobeIcon /> Pair a device
+                <GlobeIcon className="size-4" /> Pair a device
               </MenuItem>
             </MenuGroup>
           </ComposerPickerMenuPopup>

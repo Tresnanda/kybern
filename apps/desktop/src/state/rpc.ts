@@ -344,6 +344,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   }
 
   const announced = new Map<string, number>()
+  const completedTurns = new Map<string, string>()
   const notificationsStartedAt = Date.now()
 
   async function announce(ev: ThreadEvent) {
@@ -354,9 +355,21 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     if (!st.settings?.notifications) return
     let focused = document.hasFocus()
     try { focused = await isWindowFocused() } catch { /* Browser focus is the fallback. */ }
-    const viewing = isThreadVisible(st, ev.thread_id)
+    // Focus lookup crosses the native bridge. Recheck current task state:
+    // another background wave may have arrived while it was in flight.
+    if (disposed) return
+    const current = useStore.getState()
+    const viewing = isThreadVisible(current, ev.thread_id)
     if (focused && viewing) return
-    const title = st.threads[ev.thread_id]?.title || "Thread"
+    if (ev.kind === "turn_completed" && ev.stop_reason === "completed") {
+      if (completedTurns.get(ev.thread_id) === ev.turn_id) return
+      if (current.runtimeTasks[ev.thread_id]?.some((task) =>
+        task.origin_turn_id === ev.turn_id &&
+        (task.status === "running" || task.status === "waiting" || task.status === "pending"),
+      )) return
+      if (ev.turn_id) completedTurns.set(ev.thread_id, ev.turn_id)
+    }
+    const title = current.threads[ev.thread_id]?.title || "Thread"
     const body = ev.kind === "user_input_requested" ? "Needs your input"
       : ev.kind === "approval_requested" ? `Needs approval: ${ev.approval.summary}`
       : ev.kind === "turn_failed" ? `Failed: ${ev.error}`

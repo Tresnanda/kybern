@@ -115,3 +115,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs sessions
+      - name: Native WebKit chat and environment controls
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs chat-fixes

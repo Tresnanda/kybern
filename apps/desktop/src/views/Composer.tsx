@@ -1,3 +1,4 @@
+import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { ProviderUsageIndicator } from "@/components/kybern/ProviderUsageIndicator"
 import type { ProviderUsage } from "@/protocol"
 // Composer: frosted 1.2rem squircle
@@ -744,7 +745,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 {attachments.map((a) =>
                   a.preview ? (
                     <div key={a.id} className="t-pop group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
-                        <img src={a.preview} alt="" className="size-full object-cover outline -outline-offset-1 outline-black/10 dark:outline-white/10" />
+                        <ResponseImage source={a.preview} label={a.name} thumbnail />
                       <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </div>
                   ) : (

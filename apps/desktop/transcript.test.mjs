@@ -344,12 +344,16 @@ test("subagent tools stay beneath the delegated task that ran them", () => {
   )
 })
 
-test("native response images remain in the settled turn without duplicate or child output", () => {
+test("native response images keep their chronological work position without duplicate or child output", () => {
   const image = { kind: "image_received", id: "image-1", origin: ROOT, source: "data:image/png;base64,YQ==" }
-  const state = fold([start, image, image, { ...image, id: "child-image", origin: agentOrigin("child") }, done])
-  assert.equal(groupTurns(state.blocks)[0].images.length, 1)
-  assert.equal(groupTurns(state.blocks)[0].images[0].source, image.source)
-  assert.equal(groupTurns(state.blocks)[0].work.length, 0)
+  const narration = (id, text) => ({ kind: "assistant_message_completed", message_id: id, origin: ROOT, text, thinking: null })
+  const state = fold([start, narration("before", "Before image"), image, image, { ...image, id: "child-image", origin: agentOrigin("child") }, narration("after", "After image")])
+  assert.deepEqual(groupTurns(state.blocks)[0].work.map((block) => block.kind), ["assistant", "image", "assistant"])
+  const settled = fold([start, narration("before", "Before image"), image, narration("after", "Final answer"), done])
+  const group = groupTurns(settled.blocks)[0]
+  assert.deepEqual(group.work.map((block) => block.kind), ["assistant"])
+  assert.equal(group.images[0].source, image.source)
+  assert.equal(group.answer.text, "Final answer")
 })
 
 

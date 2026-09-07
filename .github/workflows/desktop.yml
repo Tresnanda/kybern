@@ -18,9 +18,26 @@ name: Desktop
 
 on:
   push:
+    # Default-branch caches are readable by future tags; caches saved on one
+    # release tag cannot be restored by the next release tag.
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - 'crates/**'
+      - 'apps/desktop/**'
+      - 'packages/**'
+      - 'scripts/**'
+      - '.github/workflows/desktop.yml'
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+*"
   workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 permissions:
   contents: write
@@ -39,7 +56,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-15
           - target: x86_64-apple-darwin
-            os: macos-15-intel
+            os: macos-15
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
           - target: x86_64-pc-windows-msvc
@@ -58,6 +75,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: desktop-${{ matrix.target }}
+          # Avoid spending minutes saving tag-local caches nobody can reuse.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -70,6 +89,7 @@ jobs:
           sudo apt-get install -y build-essential curl wget file patchelf libssl-dev libgtk-3-dev \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev
       - name: Require the updater signing key
+        if: github.event_name != 'push' || github.ref_type == 'tag'
         shell: bash
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
@@ -88,21 +108,34 @@ jobs:
         working-directory: apps/desktop
         shell: bash
         run: pnpm install --frozen-lockfile
+      - name: Warm release builds on main
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            pnpm tauri build --target "${{ matrix.target }}" --no-bundle
+          else
+            pnpm tauri build --config src-tauri/tauri.updater.conf.json --no-bundle
+          fi
       - name: Build (macOS app, DMG and updater tarball)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && (github.event_name != 'push' || github.ref_type == 'tag')
+        env:
+          KYBERN_BUILD_TARGET: ${{ matrix.target }}
         shell: bash
         run: scripts/bundle-macos.sh
       - name: Build (AppImage and deb)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && (github.event_name != 'push' || github.ref_type == 'tag')
         working-directory: apps/desktop
         shell: bash
         run: pnpm tauri build --config src-tauri/tauri.updater.conf.json --bundles appimage,deb
       - name: Build (NSIS installer)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (github.event_name != 'push' || github.ref_type == 'tag')
         working-directory: apps/desktop
         shell: bash
         run: pnpm tauri build --config src-tauri/tauri.updater.conf.json --bundles nsis
       - name: Stage release assets
+        if: github.event_name != 'push' || github.ref_type == 'tag'
         shell: bash
         run: node scripts/desktop-artifacts.mjs --target "${{ matrix.target }}" --tag "${{ steps.release.outputs.tag }}"
       - name: Wait for dist to create the release
@@ -125,9 +158,13 @@ jobs:
         shell: bash
         run: gh release upload "${{ steps.release.outputs.tag }}" dist/kybern-* --clobber
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name != 'push' || github.ref_type == 'tag'
         with:
           name: desktop-${{ matrix.target }}
-          path: dist/*
+          compression-level: 0
+          path: |
+            dist/kybern-*
+            dist/updater-*.json
           if-no-files-found: error
 
   manifest:
@@ -135,7 +172,7 @@ jobs:
     needs: bundle
     # A platform that failed to build is simply absent from latest.json; the
     # other platforms still receive the update. The failed job stays red.
-    if: ${{ always() && needs.bundle.result != 'cancelled' }}
+    if: ${{ always() && needs.bundle.result != 'cancelled' && (github.event_name != 'push' || github.ref_type == 'tag') }}
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
