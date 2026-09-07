@@ -63,8 +63,8 @@ fi
 MACH_ARCH="$ARCH"
 if [[ "$MACH_ARCH" == "aarch64" ]]; then MACH_ARCH=arm64; fi
 APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$SRC_APP/Contents/Info.plist")
-lipo -verify_arch "$MACH_ARCH" "$SRC_APP/Contents/MacOS/$APP_EXECUTABLE"
-lipo -verify_arch "$MACH_ARCH" "$SRC_APP/Contents/MacOS/kybernd"
+lipo "$SRC_APP/Contents/MacOS/$APP_EXECUTABLE" -verify_arch "$MACH_ARCH"
+lipo "$SRC_APP/Contents/MacOS/kybernd" -verify_arch "$MACH_ARCH"
 
 # 2. Assemble ----------------------------------------------------------------------
 APP="$DIST/kybern.app"
