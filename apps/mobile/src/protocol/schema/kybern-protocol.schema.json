@@ -225,6 +225,27 @@
           ]
         },
         {
+          "description": "A saved native conversation was adopted without replaying its tools.",
+          "type": "object",
+          "properties": {
+            "provider": {
+              "$ref": "#/$defs/ProviderKind"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "session_imported"
+            }
+          },
+          "required": [
+            "kind",
+            "provider",
+            "session_id"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "message": {
@@ -560,6 +581,54 @@
         {
           "type": "object",
           "properties": {
+            "request": {
+              "$ref": "#/$defs/AsyncQuestionRequest"
+            },
+            "kind": {
+              "type": "string",
+              "const": "async_questions_requested"
+            }
+          },
+          "required": [
+            "kind",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string"
+            },
+            "answers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "message_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "message": {
+              "$ref": "#/$defs/UserMessage"
+            },
+            "kind": {
+              "type": "string",
+              "const": "async_questions_answered"
+            }
+          },
+          "required": [
+            "kind",
+            "request_id",
+            "answers",
+            "message_id",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "approval": {
               "$ref": "#/$defs/ApprovalRequest"
             },
@@ -665,6 +734,41 @@
           "required": [
             "kind",
             "error"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "commands": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ProviderCommand"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "provider_commands_updated"
+            }
+          },
+          "required": [
+            "kind",
+            "commands"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "usage": {
+              "$ref": "#/$defs/ProviderUsage"
+            },
+            "kind": {
+              "type": "string",
+              "const": "provider_usage_updated"
+            }
+          },
+          "required": [
+            "kind",
+            "usage"
           ]
         },
         {
@@ -1074,6 +1178,11 @@
           "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
           "oneOf": [
             {
+              "description": "The user released a parked process to reconnect on the next message.",
+              "type": "string",
+              "const": "manual"
+            },
+            {
               "description": "The thread was idle for longer than `background.session_idle_minutes`.",
               "type": "string",
               "const": "idle"
@@ -1407,6 +1516,43 @@
             }
           }
         },
+        "AsyncQuestionRequest": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AsyncQuestion"
+              }
+            }
+          },
+          "required": [
+            "id",
+            "questions"
+          ]
+        },
+        "AsyncQuestion": {
+          "description": "A provider question that does not pause the running turn.",
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "required": [
+            "title"
+          ]
+        },
         "ApprovalRequest": {
           "description": "A pending or resolved request for the user to approve a tool call.",
           "type": "object",
@@ -1530,6 +1676,97 @@
             "interrupted",
             "max_turns",
             "error"
+          ]
+        },
+        "ProviderCommand": {
+          "description": "A command advertised by a live harness's native protocol.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "description"
+          ]
+        },
+        "ProviderUsage": {
+          "description": "Authoritative context occupancy, distinct from cumulative billable tokens.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limits": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/UsageLimit"
+              }
+            }
+          }
+        },
+        "ContextUsage": {
+          "type": "object",
+          "properties": {
+            "used_tokens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "window_tokens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "used_tokens",
+            "window_tokens"
+          ]
+        },
+        "UsageLimit": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "used_percent": {
+              "type": "number",
+              "format": "double"
+            },
+            "window_minutes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "resets_at": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          "required": [
+            "name",
+            "used_percent"
           ]
         },
         "NoticeLevel": {
@@ -1682,6 +1919,27 @@
               },
               "required": [
                 "kind"
+              ]
+            },
+            {
+              "description": "A saved native conversation was adopted without replaying its tools.",
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "$ref": "#/$defs/ProviderKind"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "session_imported"
+                }
+              },
+              "required": [
+                "kind",
+                "provider",
+                "session_id"
               ]
             },
             {
@@ -2020,6 +2278,54 @@
             {
               "type": "object",
               "properties": {
+                "request": {
+                  "$ref": "#/$defs/AsyncQuestionRequest"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "async_questions_requested"
+                }
+              },
+              "required": [
+                "kind",
+                "request"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "request_id": {
+                  "type": "string"
+                },
+                "answers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "message_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "message": {
+                  "$ref": "#/$defs/UserMessage"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "async_questions_answered"
+                }
+              },
+              "required": [
+                "kind",
+                "request_id",
+                "answers",
+                "message_id",
+                "message"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
                 "approval": {
                   "$ref": "#/$defs/ApprovalRequest"
                 },
@@ -2125,6 +2431,41 @@
               "required": [
                 "kind",
                 "error"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "commands": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ProviderCommand"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "provider_commands_updated"
+                }
+              },
+              "required": [
+                "kind",
+                "commands"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "usage": {
+                  "$ref": "#/$defs/ProviderUsage"
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "provider_usage_updated"
+                }
+              },
+              "required": [
+                "kind",
+                "usage"
               ]
             },
             {
@@ -2534,6 +2875,11 @@
           "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
           "oneOf": [
             {
+              "description": "The user released a parked process to reconnect on the next message.",
+              "type": "string",
+              "const": "manual"
+            },
+            {
               "description": "The thread was idle for longer than `background.session_idle_minutes`.",
               "type": "string",
               "const": "idle"
@@ -2867,6 +3213,43 @@
             }
           }
         },
+        "AsyncQuestionRequest": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AsyncQuestion"
+              }
+            }
+          },
+          "required": [
+            "id",
+            "questions"
+          ]
+        },
+        "AsyncQuestion": {
+          "description": "A provider question that does not pause the running turn.",
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "required": [
+            "title"
+          ]
+        },
         "ApprovalRequest": {
           "description": "A pending or resolved request for the user to approve a tool call.",
           "type": "object",
@@ -2990,6 +3373,97 @@
             "interrupted",
             "max_turns",
             "error"
+          ]
+        },
+        "ProviderCommand": {
+          "description": "A command advertised by a live harness's native protocol.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "description"
+          ]
+        },
+        "ProviderUsage": {
+          "description": "Authoritative context occupancy, distinct from cumulative billable tokens.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limits": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/UsageLimit"
+              }
+            }
+          }
+        },
+        "ContextUsage": {
+          "type": "object",
+          "properties": {
+            "used_tokens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "window_tokens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "used_tokens",
+            "window_tokens"
+          ]
+        },
+        "UsageLimit": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "used_percent": {
+              "type": "number",
+              "format": "double"
+            },
+            "window_minutes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "resets_at": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          "required": [
+            "name",
+            "used_percent"
           ]
         },
         "NoticeLevel": {
@@ -4710,6 +5184,11 @@
           "type": "boolean",
           "default": false
         },
+        "auto_update_daemon": {
+          "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
+          "type": "boolean",
+          "default": false
+        },
         "background": {
           "description": "How the daemon trims CPU and memory while nothing needs it.",
           "$ref": "#/$defs/BackgroundSettings",
@@ -4719,6 +5198,13 @@
             "terminal_idle_minutes": 60,
             "daemon_idle_exit_minutes": 0,
             "save_power_on_battery": false
+          }
+        },
+        "access": {
+          "description": "Which networks other devices can reach this daemon on.",
+          "$ref": "#/$defs/AccessSettings",
+          "default": {
+            "tailscale": false
           }
         }
       },
@@ -4820,7 +5306,18 @@
               "default": 0
             },
             "save_power_on_battery": {
-              "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+              "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes` and hold\nautomatic harness updates until power returns.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "AccessSettings": {
+          "description": "Extra listeners the daemon opens besides its loopback port. Persisted so\na restart keeps the daemon reachable for paired phones.",
+          "type": "object",
+          "properties": {
+            "tailscale": {
+              "description": "Also listen on this machine's Tailscale address, so devices on the\nsame tailnet can pair and connect directly.",
               "type": "boolean",
               "default": false
             }
@@ -5595,6 +6092,341 @@
       }
     },
     {
+      "name": "sessions.list",
+      "scope": "orchestration_read",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SessionsListParams",
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/$defs/ProviderKind"
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "default": null
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "$defs": {
+          "ProviderKind": {
+            "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "opencode",
+              "pi",
+              "omp",
+              "cursor"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SessionsListResult",
+        "type": "object",
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SavedSession"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "$defs": {
+          "SavedSession": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "$ref": "#/$defs/ProviderKind"
+              },
+              "id": {
+                "description": "Native harness session identifier, not a Kybern thread id.",
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thread_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "provider",
+              "id",
+              "title",
+              "cwd",
+              "updated_at"
+            ]
+          },
+          "ProviderKind": {
+            "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "opencode",
+              "pi",
+              "omp",
+              "cursor"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "sessions.resume",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SessionsResumeParams",
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/$defs/ProviderKind"
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "session_id"
+        ],
+        "$defs": {
+          "ProviderKind": {
+            "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "opencode",
+              "pi",
+              "omp",
+              "cursor"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Thread",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/$defs/ProviderInstance"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permission_mode": {
+            "$ref": "#/$defs/PermissionMode"
+          },
+          "status": {
+            "$ref": "#/$defs/ThreadStatus"
+          },
+          "worktree": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WorktreeInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "description": "Working directory the agent runs in: the worktree path or the project path.",
+            "type": "string"
+          },
+          "provider_session_id": {
+            "description": "The provider's own session id once bound, used for resume and fork.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seq": {
+            "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "title",
+          "provider",
+          "permission_mode",
+          "status",
+          "cwd",
+          "pinned",
+          "created_at",
+          "updated_at",
+          "last_seq"
+        ],
+        "$defs": {
+          "ProviderInstance": {
+            "description": "A configured account/instance of a provider. `default` is created implicitly.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/ProviderKind"
+              },
+              "instance": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "instance"
+            ]
+          },
+          "ProviderKind": {
+            "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "opencode",
+              "pi",
+              "omp",
+              "cursor"
+            ]
+          },
+          "PermissionMode": {
+            "description": "The four permission modes.",
+            "oneOf": [
+              {
+                "description": "Every tool call that mutates or executes asks for approval.",
+                "type": "string",
+                "const": "supervised"
+              },
+              {
+                "description": "File edits proceed; shell and network still ask.",
+                "type": "string",
+                "const": "accept-edits"
+              },
+              {
+                "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+                "type": "string",
+                "const": "auto"
+              },
+              {
+                "description": "Nothing asks. Sandboxing is the provider's problem.",
+                "type": "string",
+                "const": "full-access"
+              }
+            ]
+          },
+          "ThreadStatus": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "awaiting-approval",
+              "failed",
+              "archived"
+            ]
+          },
+          "WorktreeInfo": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "branch"
+            ]
+          }
+        }
+      }
+    },
+    {
       "name": "providers.list",
       "scope": "orchestration_read",
       "params": {
@@ -5966,6 +6798,192 @@
               "updating",
               "updated",
               "current",
+              "unsupported",
+              "failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "daemon_update.status",
+      "scope": "orchestration_read",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DaemonUpdate",
+        "description": "The daemon's own update state. The daemon replaces its binary from the\nGitHub release feed and restarts under its service manager; persisted so\nclients see the same record after a reconnect or the restart itself.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/$defs/DaemonUpdateStatus"
+          },
+          "message": {
+            "type": "string"
+          },
+          "current_version": {
+            "description": "Version of the running daemon.",
+            "type": "string"
+          },
+          "latest_version": {
+            "description": "Newest published version, once a check has succeeded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "current_version"
+        ],
+        "$defs": {
+          "DaemonUpdateStatus": {
+            "type": "string",
+            "enum": [
+              "not_checked",
+              "checking",
+              "current",
+              "available",
+              "waiting",
+              "updating",
+              "restarting",
+              "unsupported",
+              "failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "daemon_update.check",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DaemonUpdate",
+        "description": "The daemon's own update state. The daemon replaces its binary from the\nGitHub release feed and restarts under its service manager; persisted so\nclients see the same record after a reconnect or the restart itself.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/$defs/DaemonUpdateStatus"
+          },
+          "message": {
+            "type": "string"
+          },
+          "current_version": {
+            "description": "Version of the running daemon.",
+            "type": "string"
+          },
+          "latest_version": {
+            "description": "Newest published version, once a check has succeeded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "current_version"
+        ],
+        "$defs": {
+          "DaemonUpdateStatus": {
+            "type": "string",
+            "enum": [
+              "not_checked",
+              "checking",
+              "current",
+              "available",
+              "waiting",
+              "updating",
+              "restarting",
+              "unsupported",
+              "failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "daemon_update.run",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DaemonUpdate",
+        "description": "The daemon's own update state. The daemon replaces its binary from the\nGitHub release feed and restarts under its service manager; persisted so\nclients see the same record after a reconnect or the restart itself.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/$defs/DaemonUpdateStatus"
+          },
+          "message": {
+            "type": "string"
+          },
+          "current_version": {
+            "description": "Version of the running daemon.",
+            "type": "string"
+          },
+          "latest_version": {
+            "description": "Newest published version, once a check has succeeded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "current_version"
+        ],
+        "$defs": {
+          "DaemonUpdateStatus": {
+            "type": "string",
+            "enum": [
+              "not_checked",
+              "checking",
+              "current",
+              "available",
+              "waiting",
+              "updating",
+              "restarting",
               "unsupported",
               "failed"
             ]
@@ -7006,6 +8024,24 @@
         "title": "ThreadsGetResult",
         "type": "object",
         "properties": {
+          "pending_questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/AsyncQuestionRequest"
+            },
+            "default": []
+          },
+          "provider_commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ProviderCommand"
+            },
+            "default": []
+          },
+          "provider_usage": {
+            "$ref": "#/$defs/ProviderUsage",
+            "default": {}
+          },
           "thread": {
             "$ref": "#/$defs/Thread"
           },
@@ -7035,6 +8071,134 @@
           "pending_approvals"
         ],
         "$defs": {
+          "AsyncQuestionRequest": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/AsyncQuestion"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "questions"
+            ]
+          },
+          "AsyncQuestion": {
+            "description": "A provider question that does not pause the running turn.",
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              }
+            },
+            "required": [
+              "title"
+            ]
+          },
+          "ProviderCommand": {
+            "description": "A command advertised by a live harness's native protocol.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "description"
+            ]
+          },
+          "ProviderUsage": {
+            "description": "Authoritative context occupancy, distinct from cumulative billable tokens.",
+            "type": "object",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ContextUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "limits": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/UsageLimit"
+                }
+              }
+            }
+          },
+          "ContextUsage": {
+            "type": "object",
+            "properties": {
+              "used_tokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "window_tokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "used_tokens",
+              "window_tokens"
+            ]
+          },
+          "UsageLimit": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "used_percent": {
+                "type": "number",
+                "format": "double"
+              },
+              "window_minutes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "resets_at": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              }
+            },
+            "required": [
+              "name",
+              "used_percent"
+            ]
+          },
           "Thread": {
             "type": "object",
             "properties": {
@@ -9078,6 +10242,100 @@
       }
     },
     {
+      "name": "threads.release",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadsInterruptParams",
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "thread_id"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      }
+    },
+    {
+      "name": "threads.compact",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadsInterruptParams",
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "thread_id"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadsSendResult",
+        "type": "object",
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "turn_id",
+          "message_id"
+        ]
+      }
+    },
+    {
+      "name": "threads.answer",
+      "scope": "orchestration_operate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadsAnswerParams",
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "thread_id",
+          "request_id",
+          "answers"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      }
+    },
+    {
       "name": "threads.interrupt",
       "scope": "orchestration_operate",
       "params": {
@@ -10804,6 +12062,11 @@
             "type": "boolean",
             "default": false
           },
+          "auto_update_daemon": {
+            "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
+            "type": "boolean",
+            "default": false
+          },
           "background": {
             "description": "How the daemon trims CPU and memory while nothing needs it.",
             "$ref": "#/$defs/BackgroundSettings",
@@ -10813,6 +12076,13 @@
               "terminal_idle_minutes": 60,
               "daemon_idle_exit_minutes": 0,
               "save_power_on_battery": false
+            }
+          },
+          "access": {
+            "description": "Which networks other devices can reach this daemon on.",
+            "$ref": "#/$defs/AccessSettings",
+            "default": {
+              "tailscale": false
             }
           }
         },
@@ -10914,7 +12184,18 @@
                 "default": 0
               },
               "save_power_on_battery": {
-                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes` and hold\nautomatic harness updates until power returns.",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "AccessSettings": {
+            "description": "Extra listeners the daemon opens besides its loopback port. Persisted so\na restart keeps the daemon reachable for paired phones.",
+            "type": "object",
+            "properties": {
+              "tailscale": {
+                "description": "Also listen on this machine's Tailscale address, so devices on the\nsame tailnet can pair and connect directly.",
                 "type": "boolean",
                 "default": false
               }
@@ -11007,6 +12288,11 @@
                 "type": "boolean",
                 "default": false
               },
+              "auto_update_daemon": {
+                "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
+                "type": "boolean",
+                "default": false
+              },
               "background": {
                 "description": "How the daemon trims CPU and memory while nothing needs it.",
                 "$ref": "#/$defs/BackgroundSettings",
@@ -11016,6 +12302,13 @@
                   "terminal_idle_minutes": 60,
                   "daemon_idle_exit_minutes": 0,
                   "save_power_on_battery": false
+                }
+              },
+              "access": {
+                "description": "Which networks other devices can reach this daemon on.",
+                "$ref": "#/$defs/AccessSettings",
+                "default": {
+                  "tailscale": false
                 }
               }
             }
@@ -11117,7 +12410,18 @@
                 "default": 0
               },
               "save_power_on_battery": {
-                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes` and hold\nautomatic harness updates until power returns.",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "AccessSettings": {
+            "description": "Extra listeners the daemon opens besides its loopback port. Persisted so\na restart keeps the daemon reachable for paired phones.",
+            "type": "object",
+            "properties": {
+              "tailscale": {
+                "description": "Also listen on this machine's Tailscale address, so devices on the\nsame tailnet can pair and connect directly.",
                 "type": "boolean",
                 "default": false
               }
@@ -11195,6 +12499,11 @@
             "type": "boolean",
             "default": false
           },
+          "auto_update_daemon": {
+            "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
+            "type": "boolean",
+            "default": false
+          },
           "background": {
             "description": "How the daemon trims CPU and memory while nothing needs it.",
             "$ref": "#/$defs/BackgroundSettings",
@@ -11204,6 +12513,13 @@
               "terminal_idle_minutes": 60,
               "daemon_idle_exit_minutes": 0,
               "save_power_on_battery": false
+            }
+          },
+          "access": {
+            "description": "Which networks other devices can reach this daemon on.",
+            "$ref": "#/$defs/AccessSettings",
+            "default": {
+              "tailscale": false
             }
           }
         },
@@ -11305,7 +12621,18 @@
                 "default": 0
               },
               "save_power_on_battery": {
-                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes`, keep none\nwarm, and hold automatic harness updates until power returns.",
+                "description": "While the host runs on battery, release idle agent processes after\n`BATTERY_SESSION_IDLE` instead of `session_idle_minutes` and hold\nautomatic harness updates until power returns.",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "AccessSettings": {
+            "description": "Extra listeners the daemon opens besides its loopback port. Persisted so\na restart keeps the daemon reachable for paired phones.",
+            "type": "object",
+            "properties": {
+              "tailscale": {
+                "description": "Also listen on this machine's Tailscale address, so devices on the\nsame tailnet can pair and connect directly.",
                 "type": "boolean",
                 "default": false
               }
@@ -11468,6 +12795,93 @@
           "code",
           "expires_at",
           "endpoints"
+        ]
+      }
+    },
+    {
+      "name": "access.exposure.get",
+      "scope": "access_read",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Exposure",
+        "description": "Which networks the daemon listens on besides loopback.",
+        "type": "object",
+        "properties": {
+          "tailscale_ip": {
+            "description": "This machine's Tailscale IPv4 address when Tailscale is running and\nthe daemon could bind it; `None` when Tailscale is absent or userspace.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tailscale": {
+            "description": "Whether the daemon currently listens on the Tailscale address.",
+            "type": "boolean"
+          },
+          "listeners": {
+            "description": "Every address the daemon listens on, loopback included.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tailscale",
+          "listeners"
+        ]
+      }
+    },
+    {
+      "name": "access.exposure.set",
+      "scope": "access_write",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ExposureSetParams",
+        "type": "object",
+        "properties": {
+          "tailscale": {
+            "description": "Listen on the Tailscale address as well. Persisted in settings.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tailscale"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Exposure",
+        "description": "Which networks the daemon listens on besides loopback.",
+        "type": "object",
+        "properties": {
+          "tailscale_ip": {
+            "description": "This machine's Tailscale IPv4 address when Tailscale is running and\nthe daemon could bind it; `None` when Tailscale is absent or userspace.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tailscale": {
+            "description": "Whether the daemon currently listens on the Tailscale address.",
+            "type": "boolean"
+          },
+          "listeners": {
+            "description": "Every address the daemon listens on, loopback included.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tailscale",
+          "listeners"
         ]
       }
     },
@@ -12689,6 +14103,27 @@
                 ]
               },
               {
+                "description": "A saved native conversation was adopted without replaying its tools.",
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "$ref": "#/$defs/ProviderKind"
+                  },
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "session_imported"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "provider",
+                  "session_id"
+                ]
+              },
+              {
                 "type": "object",
                 "properties": {
                   "message": {
@@ -13024,6 +14459,54 @@
               {
                 "type": "object",
                 "properties": {
+                  "request": {
+                    "$ref": "#/$defs/AsyncQuestionRequest"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "async_questions_requested"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "request"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": "string"
+                  },
+                  "answers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "message_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "message": {
+                    "$ref": "#/$defs/UserMessage"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "async_questions_answered"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "request_id",
+                  "answers",
+                  "message_id",
+                  "message"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
                   "approval": {
                     "$ref": "#/$defs/ApprovalRequest"
                   },
@@ -13129,6 +14612,41 @@
                 "required": [
                   "kind",
                   "error"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "commands": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/ProviderCommand"
+                    }
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "provider_commands_updated"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "commands"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "usage": {
+                    "$ref": "#/$defs/ProviderUsage"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "provider_usage_updated"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "usage"
                 ]
               },
               {
@@ -13538,6 +15056,11 @@
             "description": "Why the daemon closed an agent process. The thread's conversation is kept\nby the provider and resumes with the next message.",
             "oneOf": [
               {
+                "description": "The user released a parked process to reconnect on the next message.",
+                "type": "string",
+                "const": "manual"
+              },
+              {
                 "description": "The thread was idle for longer than `background.session_idle_minutes`.",
                 "type": "string",
                 "const": "idle"
@@ -13871,6 +15394,43 @@
               }
             }
           },
+          "AsyncQuestionRequest": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/AsyncQuestion"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "questions"
+            ]
+          },
+          "AsyncQuestion": {
+            "description": "A provider question that does not pause the running turn.",
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              }
+            },
+            "required": [
+              "title"
+            ]
+          },
           "ApprovalRequest": {
             "description": "A pending or resolved request for the user to approve a tool call.",
             "type": "object",
@@ -13994,6 +15554,97 @@
               "interrupted",
               "max_turns",
               "error"
+            ]
+          },
+          "ProviderCommand": {
+            "description": "A command advertised by a live harness's native protocol.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "description"
+            ]
+          },
+          "ProviderUsage": {
+            "description": "Authoritative context occupancy, distinct from cumulative billable tokens.",
+            "type": "object",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ContextUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "limits": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/UsageLimit"
+                }
+              }
+            }
+          },
+          "ContextUsage": {
+            "type": "object",
+            "properties": {
+              "used_tokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "window_tokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "used_tokens",
+              "window_tokens"
+            ]
+          },
+          "UsageLimit": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "used_percent": {
+                "type": "number",
+                "format": "double"
+              },
+              "window_minutes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "resets_at": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              }
+            },
+            "required": [
+              "name",
+              "used_percent"
             ]
           },
           "NoticeLevel": {
