@@ -133,10 +133,19 @@ async function verify(ep: EndpointInfo) {
   }
 }
 
-export async function selectEnvironment(id: string): Promise<void> {
+/** Only the saved profile id crosses into the new window; credentials stay in the shell. */
+export async function openEnvironmentWindow(id: string): Promise<void> {
+  if (!isTauri()) throw new Error("Opening an environment in a new window needs the desktop app")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("environment_open_window", { id })
+}
+
+export async function selectEnvironment(id: string, name = "Environment"): Promise<void> {
   if (isTauri()) {
     const { invoke } = await import("@tauri-apps/api/core")
     await invoke("environment_select", { id })
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    await getCurrentWindow().setTitle(`${name} — Kybern`)
   } else {
     previewSelected = id
   }

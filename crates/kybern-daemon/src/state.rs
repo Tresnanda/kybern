@@ -132,11 +132,14 @@ struct CachedProviderCatalog {
     refreshed_at: Instant,
 }
 
+const MAX_PROVIDER_CATALOGS: usize = 32;
+
 /// Keeps expensive, harness-owned model discovery off repeated app boots.
 ///
 /// The cache key includes project context and provider settings. A single
 /// refresh lock also coalesces concurrent desktop/CLI requests without adding
 /// any provider-specific policy to the daemon.
+
 #[derive(Default)]
 pub struct ProviderCatalogCache {
     entries: Mutex<HashMap<String, CachedProviderCatalog>>,
@@ -164,6 +167,12 @@ impl ProviderCatalogCache {
         let providers = refresh().await;
         let mut entries = self.entries.lock().await;
         entries.retain(|_, entry| entry.refreshed_at.elapsed() < PROVIDER_CATALOG_TTL);
+        if !entries.contains_key(&key)
+            && entries.len() >= MAX_PROVIDER_CATALOGS
+            && let Some(oldest) = entries.iter().min_by_key(|(_, entry)| entry.refreshed_at).map(|(key, _)| key.clone())
+        {
+            entries.remove(&oldest);
+        }
         entries.insert(key, CachedProviderCatalog { providers: providers.clone(), refreshed_at: Instant::now() });
         providers
     }
@@ -200,6 +209,26 @@ mod tests {
         assert!(first.is_empty());
         assert!(second.is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_catalog_cache_evicts_oldest_project() {
+        let cache = ProviderCatalogCache::default();
+        for index in 0..=MAX_PROVIDER_CATALOGS {
+            cache.get_or_refresh(index.to_string(), false, || async { Vec::new() }).await;
+        }
+        assert_eq!(cache.entries.lock().await.len(), MAX_PROVIDER_CATALOGS);
+        assert!(cache.fresh("0").await.is_none());
+        assert!(cache.fresh(&MAX_PROVIDER_CATALOGS.to_string()).await.is_some());
+        let calls = AtomicUsize::new(0);
+        cache
+            .get_or_refresh("0".into(), false, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Vec::new()
+            })
+            .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.entries.lock().await.len(), MAX_PROVIDER_CATALOGS);
     }
 
     #[tokio::test]

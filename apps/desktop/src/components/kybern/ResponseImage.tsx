@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState, type ReactNode } from "react"
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
 import { Button } from "@/components/kit/button"
 import { ImageThreadContext } from "@/lib/imageThread"
@@ -15,7 +15,16 @@ export function ResponseImage({ source, label = "Agent image", compact = false, 
 function ImageContent({ source, label, threadId, compact, linkLabel }: { source: string; label: string; threadId: string | null; compact: boolean; linkLabel?: ReactNode }) {
   const target = imageSource(source)
   const isLink = linkLabel !== undefined
-  const [requested, setRequested] = useState(!isLink)
+  const [requested, setRequested] = useState(false)
+  const preview = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (isLink || !preview.current) return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) { setRequested(true); observer.disconnect() }
+    }, { rootMargin: "300px" })
+    observer.observe(preview.current)
+    return () => observer.disconnect()
+  }, [isLink])
   const [retry, setRetry] = useState(0)
   const [url, setUrl] = useState(target && target.kind !== "local" ? target.value : "")
   const [error, setError] = useState<{ message: string; retryable: boolean } | null>(!target ? { message: "This image format is not supported.", retryable: false } : target.kind === "local" && !threadId ? { message: "Open the image from its conversation.", retryable: false } : null)
@@ -42,10 +51,10 @@ function ImageContent({ source, label, threadId, compact, linkLabel }: { source:
   const status = error
     ? <span role="status" className="flex flex-wrap items-center gap-3 rounded-lg bg-[var(--color-background-button-secondary)] p-3 text-sm"><span>{label}: {error.message}</span>{error.retryable && <Button type="button" variant="ghost" size="sm" onClick={onRetry}>Retry</Button>}</span>
     : <span role="status" className="block rounded-lg bg-[var(--color-background-button-secondary)] p-4 text-sm text-muted-foreground">Loading image…</span>
-  return <span className={isLink ? "inline" : compact ? "block max-w-full" : "my-3 block max-w-full"}>
+  return <span ref={preview} className={isLink ? "inline" : compact ? "block w-[280px] max-w-full" : "my-3 block w-[280px] max-w-full"}>
     {isLink ? <a href={source} className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline" onClick={(event) => { event.preventDefault(); setRequested(true); setOpen(true) }}>{linkLabel}</a>
-      : error || !url ? status
-      : <button type="button" aria-label={`Preview ${label}`} className={cn("block max-w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", compact ? "rounded-lg" : "rounded-xl")} onClick={() => setOpen(true)}><img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={onImageError} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "max-h-52 rounded-lg" : "max-h-96 rounded-xl")} /></button>}
+      : error || !url ? <span className="response-image-preview">{status}</span>
+      : <button type="button" aria-label={`Preview ${label}`} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", compact ? "rounded-lg" : "rounded-xl")} onClick={() => setOpen(true)}><img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={onImageError} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} /></button>}
     <Dialog open={open} onOpenChange={setOpen}><DialogPopup className="max-w-[min(90vw,1200px)] p-4"><DialogTitle className="pe-8 text-sm">{label}</DialogTitle><DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>{error || !url ? status : <img key={retry} src={url} alt={label} referrerPolicy="no-referrer" onError={onImageError} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}</DialogPopup></Dialog>
   </span>
 }

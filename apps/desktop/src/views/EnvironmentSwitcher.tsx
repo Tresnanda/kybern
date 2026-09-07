@@ -38,6 +38,7 @@ import { SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import {
   listSshHosts,
+  openEnvironmentWindow,
   type BootstrapProgress,
   type BootstrapStep,
   type EnvironmentProfile,
@@ -159,6 +160,12 @@ export function EnvironmentSwitcher() {
                 </MenuItem>
               ))}
             </MenuGroup>
+            {isTauri() && <MenuGroup>
+              <MenuGroupLabel>Open in new window</MenuGroupLabel>
+              {profiles.map((item) => <MenuItem key={item.id} onClick={() => {
+                void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
+              }}><GlobeIcon /><bdi>{item.name}</bdi></MenuItem>)}
+            </MenuGroup>}
             <MenuSeparator />
             <MenuGroup>
               <MenuItem

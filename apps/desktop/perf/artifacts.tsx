@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
+import { ResponseImage } from "../src/components/kybern/ResponseImage"
 import { Markdown } from "../src/components/kybern/Markdown"
 import { ImageThreadContext } from "../src/lib/imageThread"
 import { external, fetched } from "./artifacts-transport"
@@ -47,10 +48,69 @@ async function run() {
   await sleep(100)
   check(document.body.innerText.includes("copy it into that folder"), "Inline image has no recovery guidance")
   check(!Array.from(document.querySelectorAll("button")).some((button) => button.textContent === "Retry"), "Blocked inline image offers a useless retry")
+  const root = document.getElementById("root")!
+  root.style.width = "320px"
+  render("![Dark question](artifacts/sized-dark-portrait.png)\n\n![Light question](artifacts/sized-light-landscape.png)")
+  await sleep(50)
+  const before = root.getBoundingClientRect().height
+  await sleep(500)
+  const previews = Array.from(root.querySelectorAll<HTMLImageElement>(".response-image-preview img"))
+  check(previews.length === 2, "Missing inline previews")
+  await Promise.all(previews.map((image) => image.decode()))
+  check(Math.abs(root.getBoundingClientRect().height - before) < 1, "Image loading moved surrounding text")
+  for (const image of previews) {
+    const rect = image.getBoundingClientRect()
+    check(rect.width <= 280 && rect.height <= 176, "Image preview exceeds compact bounds")
+    check(getComputedStyle(image).objectFit === "scale-down", "Preview crops or stretches images")
+  }
+  previews[0]!.closest("button")!.click()
+  await sleep(100)
+  check(document.querySelector<HTMLImageElement>('[role="dialog"] img')?.src === previews[0]!.src, "Viewer does not use the full image")
+  render("![Offscreen](artifacts/sized-offscreen.png)")
+  root.style.marginTop = "3000px"
+  await sleep(100)
+  check(!fetched.includes("artifacts/sized-offscreen.png"), "Offscreen image fetched eagerly")
+  root.style.marginTop = "0"
+  await sleep(350)
+  check(fetched.includes("artifacts/sized-offscreen.png"), "Image did not load on approach")
+  flushSync(() => view.render(<ImageThreadContext value="thread-1"><div className="flex flex-wrap gap-2">{["portrait", "landscape"].map((shape) => <ResponseImage key={shape} compact source={`artifacts/sized-gallery-${shape}.png`} />)}</div></ImageThreadContext>))
+  await sleep(50)
+  const galleryHeight = root.getBoundingClientRect().height
+  await sleep(500)
+  check(Math.abs(root.getBoundingClientRect().height - galleryHeight) < 1, "Compact gallery shifts on image load")
+  check(root.scrollWidth <= 321, "Compact gallery overflows narrow layout")
+  root.style.height = "500px"
+  root.style.overflowY = "auto"
+  render(Array.from({ length: 40 }, (_, index) => `![Image ${index}](artifacts/sized-many-${index}.png)`).join("\n\n"))
+  await sleep(500)
+  const many = fetched.filter((path) => path.includes("sized-many-"))
+  check(many.length > 0 && many.length <= 8, `Long image response fetched ${many.length} previews immediately`)
+  root.scrollTop = root.scrollHeight
+  await sleep(500)
+  check(fetched.includes("artifacts/sized-many-39.png"), "Last image in a long response is unreachable")
+  root.scrollTop = 0
+  root.style.height = ""
+  root.style.overflowY = ""
+  render("| Agent | Where Kybern gets skills |\n| --- | --- |\n| Codex | Asks Codex for its effective catalog, preserving precedence and plugin namespaces. |\n| Claude | Scans project and home directories. |")
+  await sleep(100)
+  const cell = root.querySelector("td")!
+  const range = document.createRange()
+  range.selectNodeContents(cell)
+  check(range.getClientRects().length === 1, "Table splits a short agent name across lines")
+  render("| Path | Description |\n| --- | --- |\n| `" + "verylongpath".repeat(30) + "` | A long path |")
+  await sleep(100)
+  const table = root.querySelector<HTMLElement>(".chat-markdown-table")!
+  check(table.scrollWidth > table.clientWidth, "Wide table has no local scrolling")
+  check(root.scrollWidth <= 321, "Table overflows the conversation")
+  root.style.width = ""
   render("[Docs](https://example.com/docs)")
   await sleep(60)
   document.querySelector<HTMLAnchorElement>("a")!.click()
   check(external.length === 1 && external[0] === "https://example.com/docs", "External link routing changed")
+  root.style.cssText = "width:640px;max-width:100%;padding:24px"
+  render("| Agent | Where Kybern gets skills |\n| --- | --- |\n| Codex | Asks Codex for its effective catalog, preserving precedence and plugin namespaces. |\n| Claude | Scans project and home directories. |\n\n![Dark question](artifacts/sized-dark-portrait.png)\n\n![Light question](artifacts/sized-light-landscape.png)")
+  await sleep(1500)
+  check(Array.from(root.querySelectorAll<HTMLImageElement>("img")).every((image) => image.complete && image.naturalWidth > 0), "Final preview did not load")
 }
 const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }
 run().then(() => native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true }))).catch((error) => native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error) })))

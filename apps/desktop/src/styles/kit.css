@@ -2429,9 +2429,47 @@ label:has(> select#reasoning-effort) select {
   outline-offset: 2px;
 }
 
+.chat-markdown-table {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.65rem 0;
+}
+
+.chat-markdown-table:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .chat-markdown table {
   width: 100%;
   border-collapse: collapse;
+  /* Keep words as the intrinsic minimum; wide tables scroll locally. */
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.chat-markdown-table > table { margin: 0; }
+
+.response-image-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(100%, 280px);
+  height: 176px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--color-background-button-secondary);
+}
+
+.response-image-preview > [role="status"] {
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.response-image-preview > img {
+  width: 100%;
+  height: 100%;
+  object-fit: scale-down;
 }
 
 .chat-markdown th,

@@ -47,7 +47,7 @@ export async function bootEnvironments() {
     const registry = await listEnvironments()
     useEnvironments.setState({ profiles: registry.environments })
     await switchEnvironment(
-      booted ? useEnvironments.getState().selectedId : registry.selected_id
+      booted ? useEnvironments.getState().selectedId : new URLSearchParams(location.search).get("environment") ?? registry.selected_id
     )
     booted = true
   } catch (error) {
@@ -82,7 +82,11 @@ export async function switchEnvironment(id: string) {
     error: null,
   }))
   try {
-    await selectEnvironment(id)
+    // Persist this window's selection across reloads, independently of siblings.
+    const url = new URL(location.href)
+    url.searchParams.set("environment", id)
+    history.replaceState(null, "", url)
+    await selectEnvironment(id, profile.name)
     if (attempt !== sequence) return
     const { profile: resolved, endpoint } = await openEnvironment(id)
     if (attempt !== sequence) return

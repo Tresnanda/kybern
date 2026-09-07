@@ -210,6 +210,7 @@ const BASE_COMPONENTS: import("react-markdown").Components = {
     </a>
   ),
   pre: MarkdownCode,
+  table: ({ children }) => <div className="chat-markdown-table" role="region" aria-label="Table" tabIndex={0}><table>{children}</table></div>,
 }
 
 const LIVE_COMPONENTS = { ...LIVE_TEXT_COMPONENTS, ...BASE_COMPONENTS }

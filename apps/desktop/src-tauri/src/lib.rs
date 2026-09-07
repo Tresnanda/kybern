@@ -389,6 +389,7 @@ pub fn run() {
             notifications::send_notification,
             environments::environments_list,
             environments::environment_open,
+            environments::environment_open_window,
             environments::environment_select,
             environments::environment_save,
             environments::environment_remove,

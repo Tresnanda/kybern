@@ -209,6 +209,35 @@ pub async fn environment_open<R: tauri::Runtime>(app: tauri::AppHandle<R>, id: S
     inner(app, id).await.map_err(|e| format!("{e:#}"))
 }
 
+/// Create a separate renderer without connecting or changing the invoking window.
+#[tauri::command]
+pub async fn environment_open_window<R: tauri::Runtime>(app: tauri::AppHandle<R>, id: String) -> Result<(), String> {
+    let profile = {
+        let _guard = REGISTRY_LOCK.lock().await;
+        (|| -> Result<_> { resolve_profile(&read_registry(&registry_path(&app)?)?, &id) })().map_err(|e| format!("{e:#}"))?
+    };
+    let base = app.config().app.windows.first().cloned().ok_or("Missing window configuration")?;
+    let config = environment_window_config(base, &profile)?;
+    tauri::WebviewWindowBuilder::from_config(&app, &config)
+        .and_then(|builder| builder.build())
+        .map(|_| ())
+        .map_err(|e| format!("Unable to open window: {e}"))
+}
+
+fn environment_window_config(
+    mut config: tauri::utils::config::WindowConfig,
+    profile: &EnvironmentProfile,
+) -> Result<tauri::utils::config::WindowConfig, String> {
+    config.label = format!("environment-{}", uuid::Uuid::now_v7());
+    config.title = format!("{} — Kybern", profile.name);
+    let mut url = reqwest::Url::parse("https://kybern.invalid/").map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("environment", &profile.id);
+    let query = url.query().unwrap_or_default();
+    config.url = tauri::WebviewUrl::App(format!("index.html?{query}").into());
+    config.focus = true;
+    Ok(config)
+}
+
 #[tauri::command]
 pub async fn environment_select<R: tauri::Runtime>(app: tauri::AppHandle<R>, id: String) -> Result<(), String> {
     let _guard = REGISTRY_LOCK.lock().await;
@@ -360,6 +389,33 @@ pub async fn environment_remove<R: tauri::Runtime>(app: tauri::AppHandle<R>, id:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_windows_preserve_shell_config_and_encode_only_profile_id() {
+        let config: tauri::utils::config::Config = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let base = config.app.windows[0].clone();
+        let profile = EnvironmentProfile {
+            id: "remote & café/#".into(),
+            name: "Build machine".into(),
+            url: Some("wss://private-host/ws".into()),
+            environment_id: None,
+            hostname: None,
+            local: false,
+            ssh: None,
+        };
+        let first = environment_window_config(base.clone(), &profile).unwrap();
+        let second = environment_window_config(base.clone(), &profile).unwrap();
+        assert_ne!(first.label, second.label);
+        assert!(first.label.starts_with("environment-"));
+        assert_eq!(first.width, base.width);
+        assert_eq!(first.transparent, base.transparent);
+        assert_eq!(first.title_bar_style, base.title_bar_style);
+        let tauri::WebviewUrl::App(path) = first.url else { panic!("Must load bundled app") };
+        let url = reqwest::Url::parse("https://localhost/").unwrap().join(&path.to_string_lossy()).unwrap();
+        assert_eq!(url.query_pairs().collect::<Vec<_>>(), vec![("environment".into(), profile.id.into())]);
+        assert!(url.fragment().is_none());
+        assert!(!url.as_str().contains("private-host"));
+    }
 
     #[test]
     fn registry_roundtrip_contains_metadata_only_and_recovers_a_missing_selection() {
