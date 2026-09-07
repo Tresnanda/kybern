@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4
+
+- Resume conversations started in Claude Code, Codex, OpenCode, pi, OMP, or Cursor CLI. Open **Resume session** beside **New thread**, from a project's menu, or with `/resume` and `/sessions`.
+- Find saved conversations by title, project, folder, or session ID with an **All agents** filter. Import available message and tool history, preserve the native session, and reopen existing Kybern threads without duplicates.
+- Keep Claude background completions and follow-up tools in their original turn. Automatically continue when native background work finishes and replace provisional waiting messages with the final answer.
+- Preserve continuation state, usage, and history across reloads. Add regression checks for all six session formats, atomic imports, keyboard navigation, and light/dark and narrow native layouts.
+
 ## 0.2.3
 
 - Reduce retained conversation memory with bounded inactive caches, compact background updates, and cache release when switching environments. Preserve drafts, pending controls, split panes, and live updates during history reloads.

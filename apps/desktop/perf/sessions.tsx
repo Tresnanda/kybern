@@ -31,7 +31,7 @@ async function run() {
   for (const theme of ["light", "dark"] as const) {
     document.documentElement.classList.toggle("dark", theme === "dark")
     flushSync(() => root.render(<ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
-      <Dialog open><DialogPopup instant bottomStickOnMobile={false} className="max-h-[min(42rem,calc(100dvh-2rem))] max-w-2xl overflow-hidden"><SessionPicker key={theme} project={{ id: "project", name: "Kybern" }} available={kinds} fetchPage={fetchPage} onResume={async () => { calls++; await sleep(30); throw new Error("This session is open elsewhere. Close it there and retry.") }} /></DialogPopup></Dialog>
+      <Dialog open><DialogPopup instant bottomStickOnMobile={false} className="max-h-[min(42rem,calc(100dvh-2rem))] max-w-2xl overflow-hidden"><SessionPicker key={theme} project={{ id: "project", name: "Kybern" }} available={kinds} projects={[{ name: "Kybern", path: "/Users/example/projects/kybern" }]} fetchPage={fetchPage} onResume={async () => { calls++; await sleep(30); throw new Error("This session is open elsewhere. Close it there and retry.") }} /></DialogPopup></Dialog>
     </ThemeProviderContext>))
     await sleep(350)
     check(document.querySelectorAll('[role="option"]').length === 100, "Session options must be bounded to 100")
@@ -57,7 +57,7 @@ async function run() {
     search("old"); await sleep(200); search("conversation 14"); await sleep(400)
     check(document.querySelectorAll('[role="option"]').length === 6, "Stale search replaced current results")
     search("failure"); await sleep(300)
-    check(document.body.textContent?.includes("6 harnesses couldn’t be loaded"), "Provider errors missing")
+    check(document.body.textContent?.includes("6 agents couldn’t be loaded"), "Provider errors missing")
     search(""); await sleep(350)
     const dialog = document.querySelector('[role="dialog"]')!.getBoundingClientRect()
     check(dialog.left >= 0 && dialog.right <= innerWidth && dialog.top >= 0 && dialog.bottom <= innerHeight, "Dialog overflows viewport")

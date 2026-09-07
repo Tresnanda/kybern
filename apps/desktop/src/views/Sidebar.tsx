@@ -161,6 +161,7 @@ export function ThreadSidebar() {
           <SidebarGroup className="px-1.5 pt-1 pb-1.5">
             <SidebarMenu className="gap-0.5">
               <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
+              <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
               <PrimaryAction icon={<IoIosGitCompare className="size-[15px] shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
               <PrimaryAction icon={<CentralIcon name="analytics" className="size-[15px] shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
             </SidebarMenu>
@@ -324,6 +325,9 @@ function ProjectItem({ project }: { project: Project }) {
             <ContextMenuGroup>
               <ContextMenuItem onClick={() => useStore.getState().selectDraft(project.id)}>
                 <NewThreadIcon /> New thread
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => useStore.getState().set({ sessionsOpen: true, sessionsProjectId: project.id })}>
+                <ClockIcon /> Resume session
               </ContextMenuItem>
             </ContextMenuGroup>
             <ContextMenuSeparator />

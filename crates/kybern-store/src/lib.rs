@@ -761,6 +761,39 @@ fn other<E: std::error::Error + Send + Sync + 'static>(e: E) -> rusqlite::Error 
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
 }
 
+fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
+    c.execute(
+        "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
+                    status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                 ON CONFLICT(id) DO UPDATE SET
+                    title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
+                    status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
+                    cwd = excluded.cwd, provider_session_id = excluded.provider_session_id, pinned = excluded.pinned,
+                    updated_at = excluded.updated_at, last_seq = excluded.last_seq",
+        params![
+            t.id.to_string(),
+            t.project_id.to_string(),
+            t.title,
+            t.provider.kind.as_str(),
+            t.provider.instance,
+            t.model,
+            t.effort,
+            serde_json::to_value(t.permission_mode)?.as_str().unwrap().to_string(),
+            serde_json::to_value(t.status)?.as_str().unwrap().to_string(),
+            t.worktree.as_ref().map(|w| w.path.clone()),
+            t.worktree.as_ref().map(|w| w.branch.clone()),
+            t.cwd,
+            t.provider_session_id,
+            t.pinned,
+            t.created_at.to_rfc3339(),
+            t.updated_at.to_rfc3339(),
+            t.last_seq,
+        ],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -904,37 +937,4 @@ mod tests {
         assert!(s.runtime_tasks_for_thread(t.id).unwrap().is_empty(), "the targeted SQL query must include root bindings");
         assert_eq!(s.events_for_thread(t.id).unwrap().len(), 4, "projection repair must not delete history");
     }
-}
-
-fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
-    c.execute(
-        "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
-                    status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-                 ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
-                    status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
-                    cwd = excluded.cwd, provider_session_id = excluded.provider_session_id, pinned = excluded.pinned,
-                    updated_at = excluded.updated_at, last_seq = excluded.last_seq",
-        params![
-            t.id.to_string(),
-            t.project_id.to_string(),
-            t.title,
-            t.provider.kind.as_str(),
-            t.provider.instance,
-            t.model,
-            t.effort,
-            serde_json::to_value(t.permission_mode)?.as_str().unwrap().to_string(),
-            serde_json::to_value(t.status)?.as_str().unwrap().to_string(),
-            t.worktree.as_ref().map(|w| w.path.clone()),
-            t.worktree.as_ref().map(|w| w.branch.clone()),
-            t.cwd,
-            t.provider_session_id,
-            t.pinned,
-            t.created_at.to_rfc3339(),
-            t.updated_at.to_rfc3339(),
-            t.last_seq,
-        ],
-    )?;
-    Ok(())
 }

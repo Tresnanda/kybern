@@ -28,6 +28,7 @@ export function SessionsDialog() {
   const projectId = useStore((s) => s.sessionsProjectId)
   const project = useStore((s) => projectId ? s.projects[projectId] : undefined)
   const providers = useStore((s) => s.providers)
+  const projects = useStore((s) => s.projects)
   const environmentId = useStore((s) => s.environmentId)
   const available = providers.filter((p) => p.available).map((p) => p.kind)
   const fetchPage = useCallback<FetchPage>((provider, project_id, query, cursor) => rpc().call("sessions.list", { provider, project_id, query, cursor }), [])
@@ -47,7 +48,7 @@ export function SessionsDialog() {
   return (
     <Dialog open={open} onOpenChange={(sessionsOpen) => useStore.getState().set({ sessionsOpen })}>
       <DialogPopup instant bottomStickOnMobile={false} className="max-h-[min(42rem,calc(100dvh-2rem))] max-w-2xl overflow-hidden">
-        {open && <SessionPicker key={environmentId} project={project ?? null} available={available} fetchPage={fetchPage} onResume={resume} />}
+        {open && <SessionPicker key={environmentId} project={project ?? null} available={available} projects={Object.values(projects)} fetchPage={fetchPage} onResume={resume} />}
       </DialogPopup>
     </Dialog>
   )
@@ -55,9 +56,10 @@ export function SessionsDialog() {
 
 /** The same surface is exercised by the native WebKit fixture. Only its data
  * transport changes; the production component, focus, rows and copy do not. */
-export function SessionPicker({ project, available, fetchPage, onResume }: {
+export function SessionPicker({ project, available, projects = [], fetchPage, onResume }: {
   project: Pick<Project, "id" | "name"> | null
   available: ProviderKind[]
+  projects?: Pick<Project, "name" | "path">[]
   fetchPage: FetchPage
   onResume: (session: SavedSession) => Promise<void>
 }) {
@@ -136,18 +138,18 @@ export function SessionPicker({ project, available, fetchPage, onResume }: {
     <>
       <DialogHeader className="gap-1 px-5 pt-5 pb-4 pe-12">
         <DialogTitle>Resume session</DialogTitle>
-        <DialogDescription>Continue a conversation started outside Kybern.</DialogDescription>
+        <DialogDescription>Pick a conversation and continue where you left off.</DialogDescription>
       </DialogHeader>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 pb-3">
         <Menu>
           <MenuTrigger render={<button type="button" disabled={!!opening} className={COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} />}>
             {provider === "all" ? <ClockIcon className="size-3.5" /> : <ProviderMark kind={provider} size={14} />}
-            <span>{provider === "all" ? "All harnesses" : PROVIDER_LABEL[provider]}</span>
+            <span>{provider === "all" ? "All agents" : PROVIDER_LABEL[provider]}</span>
             <ChevronDownIcon className="size-3 opacity-50" />
           </MenuTrigger>
           <ComposerPickerMenuPopup align="start">
             <MenuRadioGroup value={provider} onValueChange={(value) => { setProvider(value as ProviderKind | "all"); setPageIndex(0) }}>
-              <MenuRadioItem value="all">All harnesses</MenuRadioItem>
+              <MenuRadioItem value="all">All agents</MenuRadioItem>
               {KINDS.map((kind) => <MenuRadioItem key={kind} value={kind}><ProviderMark kind={kind} size={14} /><span>{PROVIDER_LABEL[kind]}</span>{!available.includes(kind) && <span className="ms-auto text-muted-foreground">Not installed</span>}</MenuRadioItem>)}
             </MenuRadioGroup>
           </ComposerPickerMenuPopup>
@@ -186,7 +188,10 @@ export function SessionPicker({ project, available, fetchPage, onResume }: {
                 <span className="flex size-6 shrink-0 items-center justify-center pt-0.5 text-muted-foreground"><ProviderMark kind={session.provider} size={17} /></span>
                 <span className="flex min-w-0 flex-1 flex-col gap-1">
                   <span className="truncate text-[length:var(--app-font-size-ui,12px)] font-medium leading-normal text-foreground" title={session.title}>{session.title || "Untitled session"}</span>
-                  <span className="truncate text-[length:var(--app-font-size-ui-sm,11px)] leading-normal text-muted-foreground" title={session.cwd}><bdi>{session.cwd}</bdi></span>
+                  <span className="flex min-w-0 items-baseline gap-2 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal text-muted-foreground" title={session.cwd}>
+                    <span className="max-w-[50%] truncate font-medium">{projects.find((p) => p.path === session.cwd)?.name ?? session.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? session.cwd}</span>
+                    <bdi className="min-w-0 truncate opacity-70">{session.cwd}</bdi>
+                  </span>
                 </span>
                 <span className="flex shrink-0 flex-col items-end gap-1 pt-0.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal text-muted-foreground">
                   <time dateTime={session.updated_at} title={new Date(session.updated_at).toLocaleString()} className="tabular-nums">{relativeTime(session.updated_at)}</time>
@@ -199,7 +204,7 @@ export function SessionPicker({ project, available, fetchPage, onResume }: {
             {loading ? <span className="inline-flex items-center gap-2 py-2"><ThreadRunningSpinner />{query.trim() ? "Searching sessions…" : "Finding saved sessions…"}</span> : !visible.length ? (
               <>
                 <span className="font-medium text-foreground">{errors.length ? "Sessions couldn’t be loaded" : query.trim() ? `No sessions match “${query.trim()}”` : "No saved sessions here"}</span>
-                <span className="max-w-sm leading-relaxed">{errors.length ? "Check the harness details below and try again." : query.trim() ? "Try another title, folder, or session ID." : projectId ? "Look in all projects or start a conversation in your harness." : "Start a conversation in an installed harness, then refresh this list."}</span>
+                <span className="max-w-sm leading-relaxed">{errors.length ? "Check the agent details below and try again." : query.trim() ? "Try another title, folder, or session ID." : projectId ? "Look in all projects or start a conversation in your agent." : "Start a conversation in an installed agent, then refresh this list."}</span>
                 {!errors.length && (query.trim() || projectId) && <Button variant="ghost" size="sm" onClick={() => query.trim() ? setQuery("") : setAllProjects(true)}>{query.trim() ? "Clear search" : "Show all projects"}</Button>}
               </>
             ) : null}
@@ -208,7 +213,7 @@ export function SessionPicker({ project, available, fetchPage, onResume }: {
         </div>
       </Command>
       {errors.length > 0 && <details className="mx-5 my-2 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
-        <summary className="cursor-pointer py-1">{errors.length === 1 ? `${PROVIDER_LABEL[errors[0]!.kind]} couldn’t be loaded` : `${errors.length} harnesses couldn’t be loaded`}</summary>
+        <summary className="cursor-pointer py-1">{errors.length === 1 ? `${PROVIDER_LABEL[errors[0]!.kind]} couldn’t be loaded` : `${errors.length} agents couldn’t be loaded`}</summary>
         <div className="max-h-28 space-y-3 overflow-auto py-2">{errors.map(({ kind, error }) => <div key={kind} className="flex items-start gap-3"><p className="min-w-0 flex-1 break-words leading-relaxed"><span className="font-medium text-foreground">{PROVIDER_LABEL[kind]}: </span>{error}</p><Button variant="ghost" size="sm" disabled={!!opening} onClick={() => void fetchProvider(kind, null, generation.current)}>Retry</Button></div>)}</div>
       </details>}
       <div className="flex shrink-0 flex-col gap-3 border-t border-border/60 px-5 py-4">

@@ -107,3 +107,11 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs artifacts
+      - name: Native WebKit background continuation
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs continuation
+      - name: Native WebKit session picker
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs sessions

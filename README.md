@@ -292,8 +292,9 @@ Approvals show up inline in `new` and `send`; answer with `y`, `a` (always) or `
 
 ### Resume a conversation started elsewhere
 
-Use `/resume` or `/sessions` in the desktop composer, or **Resume session** in
-the command palette. Search by title, folder, or native session ID; filter by
+Choose **Resume session** beside **New thread** in the sidebar. You can also
+use `/resume` or `/sessions` in the composer, the project menu, or the command
+palette. Search by title, folder, or native session ID; filter by
 harness and project. Choosing a conversation imports its available message and
 tool history and continues the same native session on your next message.
 Choosing it again opens its existing Kybern thread, including archived threads.
