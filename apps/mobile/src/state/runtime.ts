@@ -1,6 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
+import { createNativeSocket } from "./nativeSocket";
 import { setDraft } from "./draft";
 import { applyIndexEvent } from "./indexProjection";
 import {
@@ -200,7 +201,12 @@ export async function boot() {
 }
 export async function addEnvironment(endpoint: Endpoint, name: string) {
   // Verify identity and credential before saving or replacing the active connection.
-  const candidate = new KybernClient(endpoint);
+  const candidate = new KybernClient(
+    { ...endpoint, url: normalizeDaemonUrl(endpoint.url) },
+    {
+      createSocket: Platform.OS === "web" ? undefined : createNativeSocket,
+    },
+  );
   const info = await new Promise<NonNullable<KybernClient["info"]>>(
     (resolve, reject) => {
       const timer = setTimeout(() => {
@@ -231,13 +237,16 @@ export async function addEnvironment(endpoint: Endpoint, name: string) {
     id: info.environment_id,
     name: name.trim() || info.hostname,
   };
+  await saveEnvironment(environment);
+  connect(environment.id);
+}
+async function saveEnvironment(environment: Environment) {
   const environments = [
     ...state.environments.filter((e) => e.id !== environment.id),
     environment,
   ];
-  await persist(environments, environment.id);
+  await persist(environments);
   publish({ environments });
-  connect(environment.id);
 }
 export async function pairEnvironment(
   url: string,
@@ -269,10 +278,25 @@ export async function pairEnvironment(
     throw new Error(
       "This invitation does not match the computer. Create a new invitation.",
     );
-  await addEnvironment(
-    { url: address, token: result.token, environmentId: result.environment_id },
-    name,
-  );
+  const endpoint = {
+    url: address,
+    token: result.token,
+    environmentId: result.environment_id,
+  };
+  // Redemption consumes the one-time code. Keep the issued credential even if
+  // the following socket handshake fails, so Settings can retry it safely.
+  await saveEnvironment({
+    ...endpoint,
+    id: result.environment_id,
+    name: name.trim() || new URL(address).hostname,
+  });
+  try {
+    await addEnvironment(endpoint, name);
+  } catch {
+    throw new Error(
+      "Pairing was saved, but the live connection could not open. Open Settings → Computers to reconnect without another code.",
+    );
+  }
 }
 export async function removeEnvironment(id: string) {
   const environments = state.environments.filter((e) => e.id !== id);
@@ -314,7 +338,9 @@ export function connect(id: string | null) {
   if (!env) return;
   const thisGeneration = generation;
   let appliedDefaults = false;
-  const next = new KybernClient(env);
+  const next = new KybernClient(env, {
+    createSocket: Platform.OS === "web" ? undefined : createNativeSocket,
+  });
   client = next;
   next.onStatus((status, detail) => {
     if (generation !== thisGeneration) return;

@@ -29,8 +29,10 @@ pnpm exec expo run:ios --configuration Release --device
 ```
 
 Connect using a pairing invitation from the desktop environment menu or an access
-token. `kybern://pair?...` invitations fill the connection sheet. Credentials are
-verified against the daemon identity before being saved in device secure storage.
+token. `kybern://pair?...` invitations fill the connection sheet. Pairing credentials are saved in device secure storage as soon as the invitation
+is redeemed, so a failed live connection can be retried from Settings → Computers.
+Every live connection verifies the daemon identity before exposing its data.
+Manually entered access tokens are verified before saving.
 A physical phone needs a reachable computer address (for example, its Tailscale
 address); `127.0.0.1` works only when the simulator and daemon share a Mac.
 The computer must stay awake and reachable. Do not expose the daemon publicly.
@@ -210,3 +212,9 @@ Android uses bundled Material Symbols alongside iOS SF Symbols. Root surfaces an
 system bar content follow the selected appearance. The terminal empty state keeps
 its own responsive inset while an open shell retains the full canvas. Latest sits
 at the trailing edge of the Files, Terminal, and Tasks & agents row.
+
+Native sockets send the device credential in an authorization header and explicitly
+use the existing trusted Kybern app origin (`tauri://localhost`). Android otherwise
+synthesizes the server's HTTP origin, which the daemon's browser-origin allowlist
+rejects after successful pairing. Browser clients retain the single-use ticket
+flow. This transport fix is JavaScript-only and works with existing Mac daemons.
