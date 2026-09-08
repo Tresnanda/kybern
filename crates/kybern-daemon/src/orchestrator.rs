@@ -3222,7 +3222,7 @@ mod tests {
         let app = Router::new().route("/ws", get(crate::ws::upgrade)).with_state(state);
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = Client::connect(&endpoint).await.unwrap();
-        client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id }).await.unwrap();
+        client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, ..Default::default() }).await.unwrap();
         client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None }).await.unwrap();
         client.call::<DaemonActivityMethod>(Empty {}).await.unwrap();
         server.abort();

@@ -179,12 +179,21 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsGet::NAME => {
             let p: ThreadsGetParams = parse(params)?;
-            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            if p.transcript_limit.is_some_and(|limit| !(1..=500).contains(&limit))
+                || (p.before_seq.is_some() && p.transcript_limit.is_none())
+                || p.before_seq.is_some_and(|seq| seq < 0)
+                || p.through_seq.is_some_and(|seq| seq < 0)
+            {
+                return Err(RpcError::invalid_params("use transcript_limit 1..500 and nonnegative history cursors"));
+            }
+            let mut thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let through_seq = p.through_seq.map_or(thread.last_seq, |seq| seq.min(thread.last_seq));
+            thread.last_seq = through_seq;
             let store = state.store.clone();
             let id = p.thread_id;
             let (transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands, pending_questions) =
                 tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                    let events = store.events_for_thread(id)?;
+                    let events = store.events_for_thread_through(id, through_seq)?;
                     Ok((
                         kybern_store::project_transcript(&events),
                         store.approvals_pending(Some(id))?,
@@ -204,9 +213,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .await
                 .map_err(internal)?
                 .map_err(internal)?;
+            let (transcript, next_before_seq) = kybern_store::transcript_page(transcript, p.transcript_limit, p.before_seq);
             ok(ThreadsGetResult {
                 thread,
                 transcript,
+                next_before_seq,
                 pending_approvals,
                 runtime_tasks,
                 provider_usage,

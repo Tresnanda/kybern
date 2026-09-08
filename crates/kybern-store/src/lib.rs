@@ -5,6 +5,8 @@
 
 mod projection;
 mod schema;
+mod transcript_page;
+pub use transcript_page::transcript_page;
 
 pub use projection::{
     project_pending_questions, project_provider_usage, project_runtime_tasks, project_thread_activity, project_transcript,
@@ -482,9 +484,15 @@ impl Store {
     }
 
     pub fn events_for_thread(&self, thread_id: ThreadId) -> Result<Vec<ThreadEvent>> {
+        self.events_for_thread_through(thread_id, i64::MAX)
+    }
+
+    /// Keep a hydrated transcript aligned with the thread's acknowledged head.
+    pub fn events_for_thread_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
-            let mut st = c.prepare("SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 ORDER BY seq")?;
-            Ok(st.query_map([thread_id.to_string()], row_to_event)?.collect::<Result<Vec<_>, _>>()?)
+            let mut st =
+                c.prepare("SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND seq <= ?2 ORDER BY seq")?;
+            Ok(st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?)
         })
     }
 

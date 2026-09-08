@@ -11,7 +11,7 @@ import {
   refresh,
   rpc,
   useApp,
-  useThread,
+  useThreadValue,
 } from "../state/runtime";
 import {
   Icon,
@@ -25,6 +25,8 @@ import {
 } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { useTheme } from "../ui/theme";
+import type { ThreadState } from "../state/transcript";
+const selectUsage = (state: ThreadState) => state.providerUsage;
 
 const modes: { value: PermissionMode; label: string; detail: string }[] = [
   {
@@ -61,7 +63,7 @@ export function ComposerControls({
 }) {
   const app = useApp();
   const draft = useDraft();
-  const snapshot = useThread(thread?.id ?? "");
+  const usage = useThreadValue(thread?.id ?? "", selectUsage);
   const { colors } = useTheme();
   const kind = thread?.provider.kind ?? draft.provider;
   const provider = app.providers.find((p) => p.kind === kind);
@@ -71,7 +73,6 @@ export function ComposerControls({
   const selectedModel = provider?.models?.find((m) => m.id === model);
   const modelLabel =
     selectedModel?.display_name || model || PROVIDER_DISPLAY_NAME[kind];
-  const usage = snapshot.providerUsage;
   const context = usage?.context;
   const fraction =
     context && context.window_tokens > 0
@@ -167,7 +168,7 @@ export function ComposerOptions({
 }) {
   const app = useApp();
   const draft = useDraft();
-  const snapshot = useThread(thread?.id ?? "");
+  const usage = useThreadValue(thread?.id ?? "", selectUsage);
   const { colors } = useTheme();
   const kind = thread?.provider.kind ?? draft.provider;
   const provider = app.providers.find((p) => p.kind === kind);
@@ -175,7 +176,6 @@ export function ComposerOptions({
   const effort = thread ? thread.effort : draft.effort;
   const mode = thread?.permission_mode ?? draft.permission;
   const selectedModel = provider?.models?.find((m) => m.id === model);
-  const usage = snapshot.providerUsage;
   const context = usage?.context;
   const fraction =
     context && context.window_tokens > 0

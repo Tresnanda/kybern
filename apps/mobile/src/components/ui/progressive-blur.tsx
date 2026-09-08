@@ -8,6 +8,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import type { ReactNode } from 'react';
 import {
+  Platform,
   StyleSheet,
   View,
   type ColorValue,
@@ -101,8 +102,20 @@ export function ProgressiveBlur({
   style,
 }: ProgressiveBlurProps) {
   const resolvedEdge = edge ?? direction ?? 'top';
-  const layerCount = clamp(Math.round(layers), 1, 6);
-  const layerIntensity = clamp(intensity, 1, 100) / layerCount;
+  // Each Android blur samples the target into its own render surface. One
+  // gradient-masked pass preserves the fading edge without repeating that work.
+  const requestedLayers = clamp(Math.round(layers), 1, 6);
+  const strength = clamp(intensity, 1, 100);
+  const android = Platform.OS === 'android';
+  const layerCount = android ? 1 : requestedLayers;
+  // Approximate the old layers' combined opacity, keeping their per-pass blur
+  // radius. Using the summed intensity directly makes a single pass too milky.
+  const layerIntensity = android
+    ? 100 * (1 - (1 - strength / 100 / requestedLayers) ** requestedLayers)
+    : strength / requestedLayers;
+  const blurReductionFactor = android
+    ? 4 * requestedLayers * layerIntensity / strength
+    : undefined;
   const safeHeight = Math.max(height, 1);
   const resolvedFadeStart = clamp(fadeStart, 0, safeHeight);
   const fadeDistance = Math.max(safeHeight - resolvedFadeStart, 0);
@@ -194,6 +207,7 @@ export function ProgressiveBlur({
                 blurMethod={resolvedBlurMethod}
                 blurTarget={blurTarget}
                 intensity={layerIntensity}
+                blurReductionFactor={blurReductionFactor}
                 tint={tint}
                 style={StyleSheet.absoluteFill}
               />

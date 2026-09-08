@@ -9,11 +9,15 @@ export type { Block } from "../../../../packages/kybern-client/src/transcript.ts
 export type ThreadState = shared.ThreadState & {
   tasks: RuntimeTask[];
   taskActivity: Record<string, shared.Block[]>;
+  nextBeforeSeq: number | null;
+  loadingEarlier: boolean;
 };
 export const emptyThreadState = (): ThreadState => ({
   ...shared.emptyThreadState(),
   tasks: [],
   taskActivity: {},
+  nextBeforeSeq: null,
+  loadingEarlier: false,
 });
 function agentId(entry: TranscriptEntry) {
   return "origin" in entry && entry.origin?.kind === "agent"
@@ -56,7 +60,68 @@ export function seedFromGet(result: ThreadsGetResult): ThreadState {
         task,
       });
   blocks.sort((a, b) => a.seq - b.seq);
-  return { ...root, blocks, tasks: [...tasks.values()], taskActivity };
+  return {
+    ...root,
+    blocks,
+    tasks: [...tasks.values()],
+    taskActivity,
+    nextBeforeSeq: result.next_before_seq ?? null,
+    loadingEarlier: false,
+  };
+}
+
+const blockKey = (block: shared.Block) => `${block.kind}:${block.id}`;
+function mergeBlocks(current: shared.Block[], older: shared.Block[]) {
+  const byId = new Map(current.map((block) => [blockKey(block), block]));
+  for (const block of older) {
+    const existing = byId.get(blockKey(block));
+    // A live delta can create a partial row whose beginning is in an unloaded
+    // page. Prefer the authoritative earlier beginning when that page arrives.
+    if (!existing || existing.seq > block.seq) byId.set(blockKey(block), block);
+  }
+  return [...byId.values()].sort((a, b) => a.seq - b.seq);
+}
+
+/** Merge at the request's sequence barrier, then replay events received in flight. */
+export function prependHistory(
+  base: ThreadState,
+  page: ThreadsGetResult,
+  events: ThreadEvent[] = [],
+): ThreadState {
+  const older = seedFromGet(page);
+  const activity = { ...base.taskActivity };
+  for (const [id, blocks] of Object.entries(older.taskActivity))
+    activity[id] = mergeBlocks(activity[id] ?? [], blocks);
+  let next = {
+    ...base,
+    blocks: mergeBlocks(base.blocks, older.blocks),
+    taskActivity: activity,
+    nextBeforeSeq: older.nextBeforeSeq,
+    loadingEarlier: false,
+  };
+  for (const event of events) next = applyEvent(next, event);
+  return next;
+}
+
+/** A page replay must not invalidate rows the visible stream already settled. */
+export function retainHistoryIdentities(
+  next: ThreadState,
+  visible: ThreadState,
+): ThreadState {
+  const retain = (blocks: shared.Block[], previous: shared.Block[]) => {
+    const byId = new Map(previous.map((block) => [blockKey(block), block]));
+    return blocks.map((block) => {
+      const old = byId.get(blockKey(block));
+      return old &&
+        (old === block || JSON.stringify(old) === JSON.stringify(block))
+        ? old
+        : block;
+    });
+  };
+  const taskActivity = { ...next.taskActivity };
+  for (const [id, blocks] of Object.entries(taskActivity))
+    taskActivity[id] = retain(blocks, visible.taskActivity[id] ?? []);
+  return { ...next, blocks: retain(next.blocks, visible.blocks), taskActivity };
 }
 export function applyEvent(
   state: ThreadState,
@@ -106,5 +171,11 @@ export function applyEvent(
     if (task?.kind === "runtime_task")
       tasks = [...tasks.filter((t) => t.id !== task.task.id), task.task];
   }
-  return { ...next, tasks, taskActivity: state.taskActivity };
+  return {
+    ...next,
+    tasks,
+    taskActivity: state.taskActivity,
+    nextBeforeSeq: state.nextBeforeSeq,
+    loadingEarlier: state.loadingEarlier,
+  };
 }

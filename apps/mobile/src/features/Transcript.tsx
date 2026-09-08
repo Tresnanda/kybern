@@ -34,13 +34,20 @@ export const TranscriptBlock = memo(function TranscriptBlock({
   block,
   threadId,
   active = true,
+  expansions,
 }: {
   block: Block;
   threadId: string;
   active?: boolean;
+  expansions?: Map<string, boolean>;
 }) {
   const { colors } = useTheme();
-  const [expanded, setExpanded] = useState(false);
+  const expansionKey = `${block.kind}:${block.id}`;
+  const [expanded, setExpandedValue] = useState(() => expansions?.get(expansionKey) ?? false);
+  const setExpanded = (value: boolean) => {
+    expansions?.set(expansionKey, value);
+    setExpandedValue(value);
+  };
   const [copied, setCopied] = useState(false);
   switch (block.kind) {
     case "user":

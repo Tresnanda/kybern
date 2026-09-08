@@ -164,8 +164,11 @@ BeUI's question-card flow is adapted in `src/components/beui`: single and multip
 selection, custom answers, previous/next navigation, and an editable review before
 submission. Existing provider response formats and connector approvals are retained.
 Agent and effort choices use compact rows inside the model sheet. Thread scrolling
-uses measured content bounds, and the Latest control no longer changes the bottom
-content padding as it appears. The Files and Terminal shortcuts are icon buttons.
+uses LegendList with an initial position at the end, stable row identities, and
+preserved expansion state. Recent history loads first (60 projected entries);
+earlier pages load as the reader scrolls up. Older daemons return full history and
+remain supported. The Latest control does not change bottom content padding.
+The Files and Terminal shortcuts are icon buttons.
 
 The thread header has one ellipsis button. Its menu uses the shape-morph model
 from liquid-gooey (MIT; attribution in `src/components/liquid`): a leading center
@@ -187,6 +190,9 @@ reproducible measurements and their limits.
 
 ## EAS
 
+For long-thread loading, Android rendering measurements, and verification limits,
+see [the long-history report](perf/long-history-2026-09-09.md).
+
 The project belongs to the personal account **treshnanda**:
 https://expo.dev/accounts/treshnanda/projects/kybern-mobile
 
@@ -201,7 +207,19 @@ npx eas-cli@latest build --platform android --profile preview
 npx eas-cli@latest build --platform ios --profile development-simulator
 # Store builds:
 npx eas-cli@latest build --platform all --profile production
+# Compatible JavaScript update for installed preview builds:
+npx eas-cli@latest update --channel preview --environment preview --platform android --message "Describe the fix"
 ```
+
+Mobile 0.1.1 includes EAS Update. Preview and production builds use their matching
+channels; runtime compatibility uses the native fingerprint. Native dependencies,
+plugins, and configuration changes need a new binary. Do not override the
+fingerprint to force incompatible updates. APKs built before OTA was enabled need
+one new install. Updates download on launch without blocking startup and apply on
+the next launch; Settings → App updates offers a manual check and restart.
+Verify the build and update runtime fingerprints match before delivery. An OTA
+does not update the computer's daemon; bounded history requires the daemon's
+optional `threads.get` pagination support.
 
 Physical iOS development builds require Apple signing and registered devices.
 Store submission credentials are configured when preparing a release. Native changes, including Android

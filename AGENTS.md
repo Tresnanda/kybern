@@ -128,6 +128,10 @@ point: review the diff, then `INSTA_UPDATE=always cargo test -p kybern-protocol`
 CI runs fmt, clippy, the Rust tests and desktop checks on ubuntu and macos.
 Mobile checks and EAS builds are currently manual; run the mobile checks for
 mobile or shared-client changes. Native configuration changes need a new build.
+EAS Update uses preview/production channels and fingerprint runtime compatibility.
+Use the corresponding `--environment` when publishing and verify the runtime
+matches the intended native build. Keep transcript pages sequence-bounded and
+replay events received during hydration; preserve row identity and reading position.
 
 ## Conventions
 

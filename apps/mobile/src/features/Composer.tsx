@@ -4,7 +4,7 @@ import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { fetch as expoFetch } from "expo/fetch";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { ScrollView, TextInput, View } from "react-native";
 import {
   clearContext,
@@ -26,7 +26,7 @@ import {
   errorText,
   loadThread,
   rpc,
-  useThread,
+  useThreadValue,
 } from "../state/runtime";
 import {
   ErrorBanner,
@@ -37,6 +37,8 @@ import {
   Tap,
 } from "../ui/primitives";
 import { type, useTheme } from "../ui/theme";
+import type { ThreadState } from "../state/transcript";
+const selectCommands = (state: ThreadState) => state.providerCommands;
 
 function contextLabel(part: ContentPart) {
   if (part.type === "mention") return part.display_name || part.name;
@@ -45,7 +47,7 @@ function contextLabel(part: ContentPart) {
   return "Attachment";
 }
 
-export function Composer({
+export const Composer = memo(function Composer({
   thread,
   onSend,
   onStop,
@@ -65,7 +67,7 @@ export function Composer({
   const [text, setText] = useState("");
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [dismissed, setDismissed] = useState("");
-  const snapshot = useThread(thread?.id ?? "");
+  const commands = useThreadValue(thread?.id ?? "", selectCommands);
   const trigger = composerTrigger(text, selection);
   const triggerKey = trigger
     ? `${trigger.start}:${trigger.marker}:${trigger.query}`
@@ -202,7 +204,7 @@ export function Composer({
   const canCompact =
     !!thread?.provider_session_id &&
     (["codex", "pi", "omp", "opencode"].includes(thread.provider.kind) ||
-      snapshot.providerCommands?.some((c) => c.name === "compact"));
+      commands?.some((c) => c.name === "compact"));
   const actions = [
     { name: "resume", description: "Continue a saved session" },
     { name: "sessions", description: "Browse saved sessions" },
@@ -353,7 +355,7 @@ export function Composer({
           trigger={trigger}
           projectId={thread?.project_id ?? draft.projectId}
           provider={thread?.provider.kind ?? draft.provider}
-          commands={(snapshot.providerCommands ?? []).filter(
+          commands={(commands ?? []).filter(
             (c) => c.name !== "compact" || !canCompact,
           )}
           actions={actions}
@@ -499,4 +501,4 @@ export function Composer({
       )}
     </View>
   );
-}
+});

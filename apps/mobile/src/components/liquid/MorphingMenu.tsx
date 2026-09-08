@@ -6,6 +6,7 @@ import { BlurView } from "expo-blur";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,6 +19,7 @@ import Animated, {
   interpolate,
   useAnimatedStyle,
   useSharedValue,
+  useDerivedValue,
   useReducedMotion,
   withSpring,
   withTiming,
@@ -130,7 +132,7 @@ export function MorphingMenu({
       ),
     );
   }, [open, ready, reduced, center, size, corners, fade, onClosed]);
-  const shape = useAnimatedStyle(() => {
+  const geometry = useDerivedValue(() => {
     const p = reduced ? 1 : size.get();
     const c = reduced ? 1 : center.get();
     const w = Math.max(1, origin.width + (menuWidth - origin.width) * p);
@@ -154,12 +156,22 @@ export function MorphingMenu({
         (28 - origin.width / 2) * corners.get() +
         round * Math.min(w, h) * 0.22,
     );
+    return { width: w, height: h, radius: r, x: x - w / 2, y: y - h / 2 };
+  });
+  const shape = useAnimatedStyle(() => {
+    const g = geometry.get();
     return {
-      width: w,
-      height: h,
-      borderRadius: r,
-      transform: [{ translateX: x - w / 2 }, { translateY: y - h / 2 }],
+      width: g.width,
+      height: g.height,
+      borderRadius: g.radius,
+      transform: [{ translateX: g.x }, { translateY: g.y }],
     };
+  });
+  // Keep labels at their final screen position while the native clipping view
+  // morphs around them. No text scaling or software mask bitmap on Android.
+  const inversePosition = useAnimatedStyle(() => {
+    const g = geometry.get();
+    return { transform: [{ translateX: -g.x }, { translateY: -g.y }] };
   });
   const contentStyle = useAnimatedStyle(() => ({
     opacity: reduced
@@ -172,12 +184,75 @@ export function MorphingMenu({
   const dotStyle = useAnimatedStyle(() => ({
     opacity: reduced ? 0 : interpolate(size.get(), [0, 0.25], [1, 0], "clamp"),
   }));
+  const menuContents = (
+    <>
+      <Animated.View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, materialStyle]}
+      >
+        <BlurView
+          intensity={70}
+          tint={dark ? "systemChromeMaterialDark" : "systemChromeMaterialLight"}
+          style={blurRegion}
+        />
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: dark ? "#202020B8" : "#FFFFFFB8" },
+          ]}
+        />
+      </Animated.View>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          {
+            position: "absolute",
+            left: origin.x,
+            top: origin.y,
+            width: origin.width,
+            height: origin.height,
+            alignItems: "center",
+            justifyContent: "center",
+          },
+          dotStyle,
+        ]}
+      >
+        <Icon name="ellipsis" />
+      </Animated.View>
+      <Animated.View
+        pointerEvents={open ? "auto" : "none"}
+        accessibilityElementsHidden={!open}
+        style={[
+          {
+            position: "absolute",
+            left: menuX,
+            top: menuY,
+            width: menuWidth,
+            maxHeight,
+          },
+          contentStyle,
+        ]}
+      >
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          bounces={false}
+          style={{ maxHeight }}
+          onContentSizeChange={(_, h) => setContentHeight(h)}
+          contentContainerStyle={{ padding: 10 }}
+        >
+          {children}
+        </ScrollView>
+      </Animated.View>
+    </>
+  );
   return (
     <Modal
       transparent
       visible
       animationType="none"
+      hardwareAccelerated
       statusBarTranslucent
+      navigationBarTranslucent
       onShow={() => setShown(true)}
       onRequestClose={onClose}
     >
@@ -210,84 +285,64 @@ export function MorphingMenu({
             ]}
           />
         </Animated.View>
-        <MaskedView
-          androidRenderingMode="software"
-          pointerEvents="box-none"
-          style={StyleSheet.absoluteFill}
-          maskElement={
+        {Platform.OS === "android" ? (
+          <Animated.View
+            style={[
+              { position: "absolute", top: 0, left: 0, overflow: "hidden" },
+              shape,
+            ]}
+          >
             <Animated.View
               style={[
-                {
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  backgroundColor: "black",
-                },
-                shape,
+                { position: "absolute", top: 0, left: 0, width, height },
+                inversePosition,
               ]}
-            />
-          }
-        >
-          <Animated.View
-            pointerEvents="none"
-            style={[StyleSheet.absoluteFill, materialStyle]}
-          >
-            <BlurView
-              intensity={70}
-              tint={
-                dark ? "systemChromeMaterialDark" : "systemChromeMaterialLight"
-              }
-              style={blurRegion}
-            />
-            <View
-              style={[
-                StyleSheet.absoluteFill,
-                { backgroundColor: dark ? "#202020B8" : "#FFFFFFB8" },
-              ]}
-            />
-          </Animated.View>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              {
-                position: "absolute",
-                left: origin.x,
-                top: origin.y,
-                width: origin.width,
-                height: origin.height,
-                alignItems: "center",
-                justifyContent: "center",
-              },
-              dotStyle,
-            ]}
-          >
-            <Icon name="ellipsis" />
-          </Animated.View>
-          <Animated.View
-            pointerEvents={open ? "auto" : "none"}
-            accessibilityElementsHidden={!open}
-            style={[
-              {
-                position: "absolute",
-                left: menuX,
-                top: menuY,
-                width: menuWidth,
-                maxHeight,
-              },
-              contentStyle,
-            ]}
-          >
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              bounces={false}
-              style={{ maxHeight }}
-              onContentSizeChange={(_, h) => setContentHeight(h)}
-              contentContainerStyle={{ padding: 10 }}
             >
-              {children}
-            </ScrollView>
+              {menuContents}
+            </Animated.View>
           </Animated.View>
-        </MaskedView>
+        ) : (
+          <MaskedView
+            androidRenderingMode="software"
+            pointerEvents="box-none"
+            style={blurRegion}
+            maskElement={
+              <View
+                style={{
+                  position: "absolute",
+                  left: -blurLeft,
+                  top: -blurTop,
+                  width,
+                  height,
+                }}
+              >
+                <Animated.View
+                  style={[
+                    {
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      backgroundColor: "black",
+                    },
+                    shape,
+                  ]}
+                />
+              </View>
+            }
+          >
+            <View
+              style={{
+                position: "absolute",
+                left: -blurLeft,
+                top: -blurTop,
+                width,
+                height,
+              }}
+            >
+              {menuContents}
+            </View>
+          </MaskedView>
+        )}
       </View>
     </Modal>
   );

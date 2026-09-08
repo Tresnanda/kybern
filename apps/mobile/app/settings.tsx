@@ -1,4 +1,5 @@
 import { router } from "expo-router";
+import Constants from "expo-constants";
 import { View } from "react-native";
 import { activeEnvironment, useApp } from "../src/state/runtime";
 import { Group, Page, Row, T, type IconName } from "../src/ui/primitives";
@@ -51,6 +52,12 @@ export default function SettingsScreen() {
               : "Connect your computer",
             "laptopcomputer",
           )}
+          <Row
+            title="App updates"
+            detail="Check for updates to Kybern on this phone"
+            icon="arrow.clockwise"
+            onPress={() => router.push("/app-updates")}
+          />
         </View>
       </Group>
       <Group
@@ -80,7 +87,7 @@ export default function SettingsScreen() {
         </View>
       </Group>
       <T variant="caption" tone="muted">
-        Kybern for mobile · 0.1.0
+        Kybern for mobile · {Constants.expoConfig?.version ?? Constants.nativeAppVersion}
       </T>
     </Page>
   );

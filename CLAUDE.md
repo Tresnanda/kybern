@@ -42,3 +42,6 @@ Mobile has its own app version and EAS build numbers. Daemon, CLI, and desktop
 remain one versioned release unit. Pushing `main` does not publish either one;
 see the root README's Releasing section before changing tags or release scripts.
 Run mobile typecheck/tests and both platform exports for mobile/shared changes.
+Mobile 0.1.1 supports EAS Update on preview/production channels with native
+fingerprint compatibility. Native changes need a new build; updates must use the
+matching EAS environment and runtime. Follow the mobile README for commands.

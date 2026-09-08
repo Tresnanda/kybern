@@ -252,9 +252,19 @@ pub struct ThreadsCreateParams {
 }
 method!(ThreadsCreate, "threads.create", Some(Scope::OrchestrationOperate), ThreadsCreateParams, Thread);
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetParams {
     pub thread_id: ThreadId,
+    /// Return the newest N transcript entries (1..=500), plus older unfinished
+    /// rows on the initial page. Equal-sequence entries stay together. Omit for full history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_limit: Option<u32>,
+    /// Return entries strictly before this cursor. Requires transcript_limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_seq: Option<crate::EventSeq>,
+    /// Freeze the projection at this acknowledged event sequence while paging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through_seq: Option<crate::EventSeq>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
@@ -266,6 +276,9 @@ pub struct ThreadsGetResult {
     pub provider_usage: crate::ProviderUsage,
     pub thread: Thread,
     pub transcript: Vec<TranscriptEntry>,
+    /// Cursor for the next older page; absent when all earlier entries are present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_before_seq: Option<crate::EventSeq>,
     pub pending_approvals: Vec<ApprovalRequest>,
     /// Durable latest-state task projection for this thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

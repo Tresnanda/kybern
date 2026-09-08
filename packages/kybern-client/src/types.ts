@@ -604,6 +604,11 @@ export interface ThreadsCreateParams {
 
 export interface ThreadsGetParams {
   thread_id: ThreadId;
+  /** Newest entries, 1..500. Omit for the complete transcript. */
+  transcript_limit?: number;
+  before_seq?: EventSeq;
+  /** Snapshot barrier for loading history while live events continue. */
+  through_seq?: EventSeq;
 }
 
 export interface AsyncQuestionRequest { id: string; questions: { title: string; options: string[] }[] }
@@ -614,6 +619,7 @@ export interface ThreadsGetResult {
   provider_usage?: ProviderUsage;
   thread: Thread;
   transcript: TranscriptEntry[];
+  next_before_seq?: EventSeq | null;
   pending_approvals: ApprovalRequest[];
   runtime_tasks?: RuntimeTask[];
 }

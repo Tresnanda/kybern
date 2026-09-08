@@ -119,7 +119,16 @@ enum Cmd {
         prompt: Vec<String>,
     },
     /// Print a thread's transcript.
-    Show { thread: String },
+    Show {
+        thread: String,
+        /// Show only the newest N entries; JSON output includes an older-page cursor.
+        #[arg(long)]
+        limit: Option<u32>,
+        #[arg(long, requires = "limit")]
+        before_seq: Option<i64>,
+        #[arg(long)]
+        through_seq: Option<i64>,
+    },
     /// Manage durable follow-ups on this environment.
     Queue {
         #[command(subcommand)]
@@ -539,8 +548,10 @@ pub async fn run() -> Result<()> {
                 client.call::<QueueRemove>(QueueRemoveParams { thread_id: thread.parse()?, id: id.parse()? }).await?;
             }
         },
-        Cmd::Show { thread } => {
-            let r = client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.parse()? }).await?;
+        Cmd::Show { thread, limit, before_seq, through_seq } => {
+            let r = client
+                .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.parse()?, transcript_limit: limit, before_seq, through_seq })
+                .await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::transcript(&r) }
         }
         Cmd::Watch { thread, after } => {

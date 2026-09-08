@@ -89,6 +89,7 @@ function Navigation() {
         />
         <Stack.Screen name="settings-detail" options={{ title: "Settings" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
+        <Stack.Screen name="app-updates" options={{ title: "App updates" }} />
         <Stack.Screen name="projects" options={{ title: "Projects" }} />
         <Stack.Screen name="activity" options={{ title: "Activity" }} />
         <Stack.Screen name="sessions" options={{ title: "Resume a session" }} />

@@ -1,6 +1,6 @@
 {
   "name": "kybern-mobile",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
@@ -13,6 +13,7 @@
     "start:go": "expo start --go"
   },
   "dependencies": {
+    "@legendapp/list": "3.3.10",
     "@react-native-masked-view/masked-view": "0.3.2",
     "expo": "57.0.21",
     "expo-blur": "57.0.2",
@@ -33,6 +34,7 @@
     "expo-status-bar": "57.0.1",
     "expo-symbols": "57.0.2",
     "expo-system-ui": "57.0.3",
+    "expo-updates": "57.0.21",
     "react": "19.2.3",
     "react-native": "0.86.3",
     "react-native-gesture-handler": "2.32.0",

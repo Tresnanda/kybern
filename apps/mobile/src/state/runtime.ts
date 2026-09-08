@@ -26,6 +26,8 @@ import {
   applyEvent,
   emptyThreadState,
   seedFromGet,
+  prependHistory,
+  retainHistoryIdentities,
   type ThreadState,
 } from "./transcript";
 
@@ -70,6 +72,12 @@ const empty = emptyThreadState();
 const threadListeners = new Map<string, Set<() => void>>();
 const hydrating = new Map<string, ThreadEvent[]>();
 const loads = new Map<string, Promise<void>>();
+const historyLoads = new Map<
+  string,
+  { events: ThreadEvent[]; promise: Promise<void> }
+>();
+const RECENT_ENTRIES = 60;
+const CACHED_THREADS = 3;
 const KEY = "kybern.ink.environments";
 
 export function getState() {
@@ -80,7 +88,9 @@ function publish(patch: Partial<State>) {
   listeners.forEach((fn) => fn());
 }
 function publishThread(id: string, value: ThreadState) {
+  snapshots.delete(id);
   snapshots.set(id, value);
+  trimSnapshots();
   changedThreads.add(id);
   // Fold every event, but render at most once per 32ms while an agent streams.
   notifyTimer ??= setTimeout(() => {
@@ -89,6 +99,13 @@ function publishThread(id: string, value: ThreadState) {
       threadListeners.get(key)?.forEach((fn) => fn());
     changedThreads.clear();
   }, 32);
+}
+function trimSnapshots() {
+  for (const id of snapshots.keys()) {
+    if (snapshots.size <= CACHED_THREADS) break;
+    if (!threadListeners.has(id) && !loads.has(id) && !historyLoads.has(id))
+      snapshots.delete(id);
+  }
 }
 export function useApp() {
   return useSyncExternalStore(
@@ -102,7 +119,14 @@ export function useApp() {
     getState,
   );
 }
+const threadIdentity = (snapshot: ThreadState) => snapshot;
 export function useThread(id: string) {
+  return useThreadValue(id, threadIdentity);
+}
+export function useThreadValue<T>(
+  id: string,
+  select: (snapshot: ThreadState) => T,
+) {
   const subscribe = useCallback(
     (fn: () => void) => {
       const set = threadListeners.get(id) ?? new Set();
@@ -112,17 +136,20 @@ export function useThread(id: string) {
         set.delete(fn);
         if (!set.size) {
           threadListeners.delete(id);
-          snapshots.delete(id);
+          trimSnapshots();
         }
       };
     },
     [id],
   );
-  const getSnapshot = useCallback(() => snapshots.get(id) ?? empty, [id]);
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => empty);
+  const getSnapshot = useCallback(
+    () => select(snapshots.get(id) ?? empty),
+    [id, select],
+  );
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   useEffect(() => {
     if (id && state.status === "open")
-      void loadThread(id).catch((e) => publish({ error: errorText(e) }));
+      void ensureThread(id).catch((e) => publish({ error: errorText(e) }));
   }, [id, state.status]);
   return snapshot;
 }
@@ -320,6 +347,7 @@ export function connect(id: string | null) {
   client = null;
   snapshots.clear();
   loads.clear();
+  historyLoads.clear();
   hydrating.clear();
   threadListeners.forEach((set) => set.forEach((fn) => fn()));
   publish({
@@ -345,16 +373,23 @@ export function connect(id: string | null) {
   next.onStatus((status, detail) => {
     if (generation !== thisGeneration) return;
     publish({ status, error: status === "open" ? null : (detail ?? null) });
-    if (status !== "open") subscriptionReady = false;
+    if (status !== "open") {
+      subscriptionReady = false;
+      // Unobserved cached threads cannot reconcile events missed while offline.
+      for (const key of snapshots.keys())
+        if (!threadListeners.has(key)) snapshots.delete(key);
+    }
   });
   next.subscribeEvents(
     {},
     (event) => {
       if (generation !== thisGeneration) return;
       hydrating.get(event.thread_id)?.push(event);
+      historyLoads.get(event.thread_id)?.events.push(event);
       const snapshot = snapshots.get(event.thread_id);
-      if (snapshot?.loaded)
+      if (snapshot?.loaded && threadListeners.has(event.thread_id))
         publishThread(event.thread_id, applyEvent(snapshot, event));
+      else if (snapshot) snapshots.delete(event.thread_id);
       if (
         event.kind === "runtime_task_started" ||
         event.kind === "runtime_task_updated" ||
@@ -458,14 +493,27 @@ export async function refresh() {
 export async function loadThread(id: string) {
   if (!id || !subscriptionReady) return;
   if (loads.has(id)) return loads.get(id)!;
+  historyLoads.delete(id);
   const epoch = generation;
   const buffer: ThreadEvent[] = [];
   hydrating.set(id, buffer);
-  const request = rpc("threads.get", { thread_id: id })
+  const previous = snapshots.get(id);
+  // Reconnects retain already loaded history. Large, fully browsed threads use
+  // the legacy full snapshot instead of dropping the user's reading position.
+  const requested = Math.max(RECENT_ENTRIES, previous?.blocks.length ?? 0);
+  const request = rpc("threads.get", {
+    thread_id: id,
+    ...(requested <= 500 ? { transcript_limit: requested } : {}),
+  })
     .then((result) => {
       if (epoch !== generation) return;
       let snapshot = seedFromGet(result);
       for (const event of buffer) snapshot = applyEvent(snapshot, event);
+      if (previous)
+        snapshot = retainHistoryIdentities(
+          snapshot,
+          snapshots.get(id) ?? previous,
+        );
       publishThread(id, snapshot);
     })
     .finally(() => {
@@ -476,6 +524,52 @@ export async function loadThread(id: string) {
     });
   loads.set(id, request);
   return request;
+}
+export async function ensureThread(id: string) {
+  if (!snapshots.get(id)?.loaded) await loadThread(id);
+}
+
+export async function loadEarlier(id: string) {
+  const existing = historyLoads.get(id);
+  if (existing) return existing.promise;
+  const base = snapshots.get(id);
+  if (
+    !subscriptionReady ||
+    !base?.loaded ||
+    base.nextBeforeSeq === null ||
+    loads.has(id)
+  )
+    return;
+  const epoch = generation;
+  const record = { events: [] as ThreadEvent[], promise: Promise.resolve() };
+  historyLoads.set(id, record);
+  publishThread(id, { ...base, loadingEarlier: true });
+  record.promise = rpc("threads.get", {
+    thread_id: id,
+    transcript_limit: RECENT_ENTRIES,
+    before_seq: base.nextBeforeSeq,
+    through_seq: base.lastSeq,
+  })
+    .then((page) => {
+      if (epoch !== generation || historyLoads.get(id) !== record) return;
+      const current = snapshots.get(id);
+      if (!current) return;
+      publishThread(
+        id,
+        retainHistoryIdentities(
+          prependHistory(base, page, record.events),
+          current,
+        ),
+      );
+    })
+    .finally(() => {
+      if (epoch !== generation || historyLoads.get(id) !== record) return;
+      historyLoads.delete(id);
+      const current = snapshots.get(id);
+      if (current?.loadingEarlier)
+        publishThread(id, { ...current, loadingEarlier: false });
+    });
+  return record.promise;
 }
 export async function mutate<M extends MethodName>(
   method: M,
