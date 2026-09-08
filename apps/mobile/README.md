@@ -204,8 +204,7 @@ npx eas-cli@latest build --platform all --profile production
 ```
 
 Physical iOS development builds require Apple signing and registered devices.
-Store submission credentials are configured when preparing a release. Cloud builds
-have not been started as part of project setup. Native changes, including Android
+Store submission credentials are configured when preparing a release. Native changes, including Android
 system appearance, require a new development build; Metro reload is insufficient.
 
 Android uses bundled Material Symbols alongside iOS SF Symbols. Root surfaces and
@@ -218,3 +217,8 @@ use the existing trusted Kybern app origin (`tauri://localhost`). Android otherw
 synthesizes the server's HTTP origin, which the daemon's browser-origin allowlist
 rejects after successful pairing. Browser clients retain the single-use ticket
 flow. This transport fix is JavaScript-only and works with existing Mac daemons.
+
+The Android release manifest explicitly allows direct LAN/Tailscale HTTP and
+WebSocket endpoints through `plugins/withAndroidLocalNetworking.js`. Expo Go's
+network defaults are not sufficient to verify a standalone APK. Preview and
+production builds auto-increment the remotely managed native build number.

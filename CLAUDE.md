@@ -23,3 +23,22 @@ for the measured regressions, their fixes, and the matching native checks.
   expected formatted content and reachable controls before claiming success.
 - Keep findings reproducible. Record the workload and measurement boundary;
   isolated CPU or frame results do not establish whole-app energy savings.
+
+## Mobile companion
+
+The Android/iOS app is in `apps/mobile`; read its README and the Mobile app
+section of `AGENTS.md` before editing it. Share protocol, transport, transcript,
+and composer logic through `packages/kybern-client`; use the mobile primitives,
+Ink tokens, and paired SF/Material icon map for native UI.
+
+`pnpm start:go --lan` targets Expo Go; `pnpm start --lan` targets an installed
+development app. EAS `preview` creates an installable Android APK that runs
+without Metro. The EAS owner is the personal `treshnanda` account, never
+`beme-mobile`. Release-only native behavior, especially networking, must be
+checked independently of Expo Go. Keep the iOS scene and Android local-network
+config plugins until the corresponding platform requirements change.
+
+Mobile has its own app version and EAS build numbers. Daemon, CLI, and desktop
+remain one versioned release unit. Pushing `main` does not publish either one;
+see the root README's Releasing section before changing tags or release scripts.
+Run mobile typecheck/tests and both platform exports for mobile/shared changes.

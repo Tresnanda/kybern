@@ -18,7 +18,8 @@ before touching UI.
 | `crates/kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell. |
 | `crates/kybern-cli` | The `kybern` CLI (`lib.rs`). Also the integration harness. |
 | `apps/desktop` | Desktop app. `src-tauri` is the Tauri 2 shell (crate `kybern-desktop`: resolves or spawns `kybernd`, exposes `endpoint`/`data_dir_path`). `src/` is the React app (see below). |
-| `apps/mobile` | Expo SDK 57 client (pnpm 11, exact pins). Native tabs, Liquid Glass surfaces, a dev client (not Expo Go). `plugins/withSceneLifecycle.js` adopts the UIScene life cycle the iOS 27 SDK requires; drop it once Expo ships `ExpoAppSceneDelegate`. See `apps/mobile/README.md`. |
+| `apps/mobile` | Expo SDK 57 Android/iOS companion (pnpm 11, exact pins). Expo Router, Ink theme, streamed conversations, approvals, files, terminals, and tasks. See `apps/mobile/README.md`. |
+| `packages/kybern-client` | Shared TypeScript transport, address/pairing helpers, wire types, transcript projection, and composer/provider-input helpers. Desktop forwarding modules and mobile both import these sources. |
 
 The old GPUI client is on the `gpui` branch. Do not port its views back.
 
@@ -61,6 +62,52 @@ stopped by the app. `pnpm build` only builds the web frontend; use the Tauri
 wrapper when daemon or driver changes must be included: `pnpm tauri dev` or
 `pnpm tauri build`.
 
+`target/` is disposable but grows without bound (60 GB before the last
+clean). `cargo sweep --time 7` (`cargo install cargo-sweep`) drops artifacts
+unused for a week; the user's `~/.cargo/config.toml` also strips dependency
+debuginfo in dev builds. Do not `cargo clean` or delete `target/` while a
+desktop session is running from `target/debug/kybernd`.
+
+## Mobile app
+
+- Read `apps/mobile/README.md` before working on the companion. Reuse
+  `src/ui/primitives.tsx`, `src/ui/theme.tsx`, and existing feature components.
+  Icons need both an SF Symbol and a Material Symbol in `src/ui/icons.ts`.
+- `app/` contains routes; `src/features/` holds conversation/workspace UI;
+  `src/state/runtime.ts` owns secure connections, subscriptions, and hydration.
+  Keep the shared TypeScript client and Rust wire types synchronized.
+- Preserve settled transcript identities, bounded history, paced streaming,
+  exact final text, and readable formatting. Mobile performance notes live in
+  `apps/mobile/perf/`; desktop WebKit fixtures do not exercise React Native.
+- Use `pnpm start:go --lan` for SDK 57-compatible Expo Go, or `pnpm start --lan`
+  for an installed development build. `pnpm ios` / `pnpm android` compile the
+  native app. The `preview` EAS profile produces an APK without Metro.
+- EAS belongs to personal account `treshnanda`, project `kybern-mobile`.
+  Preserve the explicit owner and project ID; do not move builds to `beme-mobile`.
+  Run EAS commands from `apps/mobile`. Root `.easignore` must retain both the
+  mobile app and `packages/kybern-client`, excluding local artifacts and caches.
+- Native config is generated. Keep `withSceneLifecycle.js` until Expo supplies
+  the iOS 27 scene delegate. `withAndroidLocalNetworking.js` permits direct
+  LAN/Tailscale HTTP/WebSocket connections in release APKs; test release config,
+  since Expo Go and debug builds can hide native configuration errors.
+- Native sockets use the existing trusted Kybern origin and authorization
+  header through `nativeSocket.ts`. Preserve identity verification and the
+  browser ticket flow. Save redeemed pairing credentials before connecting so
+  a failed socket handshake does not consume the only recovery path.
+- Test with a scratch daemon. Cleanup may stop scratch daemons and Metro and
+  remove generated build caches, but preserve the user's normal `~/.kybern`
+  data and installed daemon needed by their desktop/mobile sessions.
+
+## Release versions
+
+Daemon, CLI, and desktop share the workspace/Tauri version and `vX.Y.Z` release
+pipeline. The mobile app has its own `expo.version`; EAS manages native build
+numbers remotely. A push to `main` is not a release. The desktop release script
+does not version or build mobile. See the root README's Releasing section.
+Do not push mobile version tags through the broad daemon release trigger without
+first separating the workflows. Breaking protocol changes require a coordinated
+`PROTOCOL_VERSION` change; additive features may need a newer daemon too.
+
 ## Tests and checks
 
 ```sh
@@ -69,12 +116,18 @@ cargo test -p kybern-drivers --test live_drivers          # runs real agent CLIs
 cargo fmt --all --check && cargo clippy --workspace -- -D warnings
 
 cd apps/desktop && pnpm typecheck && pnpm lint && pnpm build
+
+cd apps/mobile
+pnpm typecheck && pnpm test
+pnpm exec expo-doctor
+pnpm exec expo export --platform all
 ```
 
 Protocol changes break `crates/kybern-protocol/tests/snapshots`. That is the
 point: review the diff, then `INSTA_UPDATE=always cargo test -p kybern-protocol`.
-CI runs fmt, clippy, the Rust tests and the desktop typecheck/lint/build on
-ubuntu and macos.
+CI runs fmt, clippy, the Rust tests and desktop checks on ubuntu and macos.
+Mobile checks and EAS builds are currently manual; run the mobile checks for
+mobile or shared-client changes. Native configuration changes need a new build.
 
 ## Conventions
 
