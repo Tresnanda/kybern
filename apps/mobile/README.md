@@ -168,6 +168,10 @@ uses LegendList with an initial position at the end, stable row identities, and
 preserved expansion state. Recent history loads first (60 projected entries);
 earlier pages load as the reader scrolls up. Older daemons return full history and
 remain supported. The Latest control does not change bottom content padding.
+Completed turns show the final answer, with preceding narration, reasoning, and
+tool results behind an expandable "Worked for…" row. Running turns stay in order;
+pending approvals, errors, and continuing background work remain visible. Expanded
+work uses individual virtual rows and retains its open state while scrolling.
 The Files and Terminal shortcuts are icon buttons.
 
 The thread header has one ellipsis button. Its menu uses the shape-morph model
@@ -175,6 +179,8 @@ from liquid-gooey (MIT; attribution in `src/components/liquid`): a leading cente
 spring, a following size spring, and a rounded silhouette that settles into the
 panel. The blur and labels are separate; text stays unscaled. Closing morphs back
 to the measured button before unmounting, while Reduce Motion uses a short fade.
+The menu is capped at 272 points wide with compact section spacing and 44-point
+minimum touch targets.
 
 The thread header uses a shorter progressive fade above the conversation. Terminal
 uses the app theme, an edge-to-edge xterm canvas and scrollable groups of shell

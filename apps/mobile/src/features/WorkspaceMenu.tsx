@@ -122,10 +122,17 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
       label={title}
       disabled={disabled || busy}
       onPress={action}
-      style={[styles.line, { paddingHorizontal: 12, paddingVertical: 7 }]}
+      style={[
+        styles.line,
+        { gap: 9, paddingHorizontal: 10, paddingVertical: 4 },
+      ]}
     >
-      <Icon name={icon} size={19} />
-      <T variant="label" style={{ flex: 1 }}>
+      <Icon name={icon} size={17} />
+      <T
+        variant="label"
+        numberOfLines={1}
+        style={{ flex: 1, fontSize: 14, lineHeight: 20 }}
+      >
         {title}
       </T>
       {trailing}
@@ -213,7 +220,11 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
               <T
                 variant="caption"
                 tone="secondary"
-                style={{ padding: 12, paddingTop: 20 }}
+                style={{
+                  paddingHorizontal: 10,
+                  paddingTop: 10,
+                  paddingBottom: 4,
+                }}
               >
                 Repository
               </T>
@@ -229,7 +240,11 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
               <T
                 variant="caption"
                 tone="secondary"
-                style={{ padding: 12, paddingTop: 20 }}
+                style={{
+                  paddingHorizontal: 10,
+                  paddingTop: 10,
+                  paddingBottom: 4,
+                }}
               >
                 Pull request
               </T>
@@ -250,7 +265,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           <T
             variant="caption"
             tone="secondary"
-            style={{ padding: 12, paddingTop: 20 }}
+            style={{ paddingHorizontal: 10, paddingTop: 10, paddingBottom: 4 }}
           >
             Thread
           </T>

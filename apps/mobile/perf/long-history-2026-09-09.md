@@ -101,3 +101,25 @@ Validation: 28 mobile tests, TypeScript, Expo Doctor (21 checks), Android and iO
 production exports; protocol/store/daemon/CLI tests, Rust formatting and targeted
 Clippy; desktop TypeScript/lint/build for the shared wire changes. Generated
 recordings, APKs and raw metrics stay outside commits.
+
+## Turn disclosure follow-up
+
+Completed turns now reuse the desktop final-answer grouping. Earlier narration,
+reasoning and tools collapse under "Worked for…"; completed background processes
+join that disclosure. Delegated agents, active work, pending approvals and errors
+remain visible. Expanded work stays as individual LegendList rows, with cached
+settled identities and expansion state retained while those rows unmount.
+
+The 1,000-tool test produces four collapsed rows (user, disclosure, answer,
+completion) and exposes all 1,000 tools as separate rows when expanded. Tests
+cover partial pages without their final message, running turns without a loaded
+user message, images, and updates in another turn. All 34 mobile and 106 desktop
+tests passed, along with typechecks, desktop lint/build and native exports.
+
+An iPhone 17 Pro / iOS 27 simulator on the M1 host ran the production-mode bundle
+in Expo Go 57.0.9 against the same 400-turn fixture. The disclosure's measured
+screen Y stayed at 423.33 points through expansion and collapse; tool rows appeared
+only when open and the final answer retained its separate formatting. The compact
+menu measured 272 × 309 points for this fixture, with 44-point item targets.
+These are layout and interaction checks, not release-APK or physical-device
+timings. The Android frame-duration measurements above predate this follow-up.

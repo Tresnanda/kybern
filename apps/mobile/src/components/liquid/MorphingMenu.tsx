@@ -71,7 +71,7 @@ export function MorphingMenu({
   const reduced = useReducedMotion();
   const [contentHeight, setContentHeight] = useState(0);
   const [shown, setShown] = useState(false);
-  const menuWidth = Math.min(width - 32, 320);
+  const menuWidth = Math.min(width - 32, 272);
   const menuX = width - 16 - menuWidth;
   const menuY = Math.max(insets.top + 4, origin.y - 8);
   const maxHeight = Math.max(44, height - menuY - insets.bottom - 16);
@@ -238,7 +238,7 @@ export function MorphingMenu({
           bounces={false}
           style={{ maxHeight }}
           onContentSizeChange={(_, h) => setContentHeight(h)}
-          contentContainerStyle={{ padding: 10 }}
+          contentContainerStyle={{ padding: 6 }}
         >
           {children}
         </ScrollView>

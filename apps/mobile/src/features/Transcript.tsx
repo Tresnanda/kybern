@@ -35,15 +35,19 @@ export const TranscriptBlock = memo(function TranscriptBlock({
   threadId,
   active = true,
   expansions,
+  grouped = false,
 }: {
   block: Block;
   threadId: string;
   active?: boolean;
   expansions?: Map<string, boolean>;
+  grouped?: boolean;
 }) {
   const { colors } = useTheme();
   const expansionKey = `${block.kind}:${block.id}`;
-  const [expanded, setExpandedValue] = useState(() => expansions?.get(expansionKey) ?? false);
+  const [expanded, setExpandedValue] = useState(
+    () => expansions?.get(expansionKey) ?? false,
+  );
   const setExpanded = (value: boolean) => {
     expansions?.set(expansionKey, value);
     setExpandedValue(value);
@@ -263,14 +267,20 @@ export const TranscriptBlock = memo(function TranscriptBlock({
           {block.error && <T tone="negative">{block.error}</T>}
           <View style={styles.spread}>
             <T variant="caption" tone="muted">
-              {block.stopReason === "completed"
-                ? "Completed"
-                : block.stopReason === "interrupted"
-                  ? "Stopped"
-                  : block.stopReason === "error"
-                    ? "Failed"
-                    : "Turn limit reached"}{" "}
-              · {Math.max(1, Math.round(block.durationMs / 1000))}s
+              {grouped && block.stopReason === "completed"
+                ? new Date(block.at).toLocaleTimeString([], {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })
+                : block.stopReason === "completed"
+                  ? "Completed"
+                  : block.stopReason === "interrupted"
+                    ? "Stopped"
+                    : block.stopReason === "error"
+                      ? "Failed"
+                      : "Turn limit reached"}
+              {(!grouped || block.stopReason !== "completed") &&
+                ` · ${Math.max(1, Math.round(block.durationMs / 1000))}s`}
               {block.costUsd != null ? ` · $${block.costUsd.toFixed(3)}` : ""}
             </T>
             <Tap

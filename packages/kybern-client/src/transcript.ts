@@ -767,6 +767,9 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
     }
     if (termId !== null) {
       const segs = g.work.filter((w): w is AssistantBlock => w.kind === "assistant" && w.messageId === termId)
+      // A bounded history page may contain the completion record before the
+      // final message's older entries have been loaded.
+      if (!segs.length) continue
       const { answer, reasoning } = splitAssistantForPresentation(joinSegments(segs))
       g.answer = answer
       // Drop the joined segments from work, keeping the reasoning where the

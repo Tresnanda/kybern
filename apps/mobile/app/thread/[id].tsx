@@ -7,7 +7,7 @@ import {
   type LegendListRef,
 } from "@legendapp/list/react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -26,11 +26,16 @@ import {
   useThread,
   taskActive,
 } from "../../src/state/runtime";
-import { type Block } from "../../src/state/transcript";
+import {
+  createTurnRows,
+  workDuration,
+  type TurnRow,
+} from "../../src/state/turnRows";
 import type { UserMessage } from "../../src/state/protocol";
 import {
   Empty,
   ErrorBanner,
+  Icon,
   IconButton,
   T,
   Tap,
@@ -42,31 +47,78 @@ import { Working } from "../../src/ui/Working";
 const followOptions = { animated: false };
 const anchorOptions = { data: true, size: true };
 const viewabilityConfig = { id: "transcript", itemVisiblePercentThreshold: 1 };
-const blockKey = (block: Block) => `${block.kind}:${block.id}`;
-const blockType = (block: Block) => block.kind;
+const rowKey = (row: TurnRow) => row.key;
+const rowType = (row: TurnRow) =>
+  row.kind === "block" ? row.block.kind : "work";
 const TranscriptRow = memo(function TranscriptRow({
-  block,
+  row,
   threadId,
   focused,
   expansions,
+  onToggleWork,
 }: {
-  block: Block;
+  row: TurnRow;
   threadId: string;
   focused: boolean;
   expansions: Map<string, boolean>;
+  onToggleWork: (turnId: string) => void;
 }) {
+  const { colors } = useTheme();
   const [visible, setVisible] = useState(false);
   useViewability(
     useCallback((token) => setVisible(token.isViewable), []),
     "transcript",
   );
+  if (row.kind === "work") {
+    return (
+      <View
+        style={{
+          marginBottom: 12,
+          borderBottomWidth: 1,
+          borderColor: colors.line,
+        }}
+      >
+        <Tap
+          label={`Worked for ${workDuration(row.durationMs)}. ${row.expanded ? "Hide" : "Show"} work`}
+          expanded={row.expanded}
+          onPress={() => onToggleWork(row.turnId)}
+          style={[styles.line, { gap: 8, paddingVertical: 8 }]}
+        >
+          <Icon name="hammer" size={14} color={colors.secondary} />
+          <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+            Worked for {workDuration(row.durationMs)}
+          </T>
+          <Icon
+            name={row.expanded ? "chevron.up" : "chevron.down"}
+            size={11}
+            color={colors.muted}
+          />
+        </Tap>
+      </View>
+    );
+  }
   return (
-    <TranscriptBlock
-      block={block}
-      threadId={threadId}
-      active={focused && visible}
-      expansions={expansions}
-    />
+    <View
+      style={
+        row.nested
+          ? {
+              marginStart: 7,
+              paddingStart: 14,
+              borderStartWidth: 1,
+              borderColor: colors.line,
+              paddingBottom: 8,
+            }
+          : undefined
+      }
+    >
+      <TranscriptBlock
+        block={row.block}
+        threadId={threadId}
+        active={focused && visible}
+        expansions={expansions}
+        grouped
+      />
+    </View>
   );
 });
 
@@ -86,6 +138,14 @@ export default function ThreadScreen() {
   const [following, setFollowing] = useState(true);
   const [historyError, setHistoryError] = useState("");
   const expansions = useRef(new Map<string, boolean>()).current;
+  const [expandedTurns, setExpandedTurns] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const projectRows = useMemo(() => createTurnRows(), [id]);
+  const rows = useMemo(
+    () => projectRows(snapshot.blocks, expandedTurns),
+    [projectRows, snapshot.blocks, expandedTurns],
+  );
   const list = useRef<LegendListRef>(null);
   const userScrolled = useRef(false);
   const nearEnd = useRef(true);
@@ -94,7 +154,18 @@ export default function ThreadScreen() {
     setAway(false);
     userScrolled.current = false;
     expansions.clear();
+    setExpandedTurns(new Set());
   }, [id, expansions]);
+  const toggleWork = useCallback((turnId: string) => {
+    userScrolled.current = true;
+    setFollowing(false);
+    setExpandedTurns((previous) => {
+      const next = new Set(previous);
+      if (next.has(turnId)) next.delete(turnId);
+      else next.add(turnId);
+      return next;
+    });
+  }, []);
   const thread = app.threads.find((t) => t.id === id) ?? snapshot.thread;
   const project = app.projects.find((p) => p.id === thread?.project_id);
   const queued = app.queue.filter((q) => q.thread_id === id);
@@ -112,15 +183,16 @@ export default function ThreadScreen() {
     );
   }, [id]);
   const renderItem = useCallback(
-    ({ item }: { item: Block }) => (
+    ({ item }: { item: TurnRow }) => (
       <TranscriptRow
-        block={item}
+        row={item}
         threadId={id}
         focused={focused}
         expansions={expansions}
+        onToggleWork={toggleWork}
       />
     ),
-    [id, focused, expansions],
+    [id, focused, expansions, toggleWork],
   );
   const jump = useCallback(() => {
     setFollowing(true);
@@ -169,9 +241,9 @@ export default function ThreadScreen() {
             <LegendList
               key={id}
               ref={list}
-              data={snapshot.blocks}
-              keyExtractor={blockKey}
-              getItemType={blockType}
+              data={rows}
+              keyExtractor={rowKey}
+              getItemType={rowType}
               renderItem={renderItem}
               extraData={focused}
               viewabilityConfig={viewabilityConfig}

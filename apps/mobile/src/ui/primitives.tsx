@@ -77,6 +77,7 @@ export function Tap({
   style,
   disabled,
   selected,
+  expanded,
   static: isStatic = false,
 }: PropsWithChildren<{
   onPress?: () => void;
@@ -85,6 +86,7 @@ export function Tap({
   style?: StyleProp<ViewStyle>;
   disabled?: boolean;
   selected?: boolean;
+  expanded?: boolean;
   static?: boolean;
 }>) {
   const [pressed, setPressed] = useState(false);
@@ -94,7 +96,7 @@ export function Tap({
       style={{ flex: StyleSheet.flatten(style)?.flex }}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled, selected }}
+      accessibilityState={{ disabled, selected, expanded }}
       disabled={disabled}
       onPress={onPress}
       onLongPress={onLongPress}
