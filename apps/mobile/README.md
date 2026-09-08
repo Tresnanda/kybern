@@ -181,6 +181,9 @@ panel. The blur and labels are separate; text stays unscaled. Closing morphs bac
 to the measured button before unmounting, while Reduce Motion uses a short fade.
 The menu is capped at 272 points wide with compact section spacing and 44-point
 minimum touch targets.
+Android menus use opaque themed surfaces and custom animated controls, following
+the liquid-gooey motion model. Do not use translucent glass or stock Android
+widget styling for these surfaces. iOS retains its native glass treatment.
 
 The thread header uses a shorter progressive fade above the conversation. Terminal
 uses the app theme, an edge-to-edge xterm canvas and scrollable groups of shell

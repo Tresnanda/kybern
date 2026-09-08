@@ -73,6 +73,9 @@ desktop session is running from `target/debug/kybernd`.
 - Read `apps/mobile/README.md` before working on the companion. Reuse
   `src/ui/primitives.tsx`, `src/ui/theme.tsx`, and existing feature components.
   Icons need both an SF Symbol and a Material Symbol in `src/ui/icons.ts`.
+- Android uses custom themed components and liquid-gooey-style motion, not stock
+  native Android controls. Menus must have opaque readable surfaces. iOS may use
+  native Liquid Glass. Preserve this platform distinction when adding UI.
 - `app/` contains routes; `src/features/` holds conversation/workspace UI;
   `src/state/runtime.ts` owns secure connections, subscriptions, and hydration.
   Keep the shared TypeScript client and Rust wire types synchronized.

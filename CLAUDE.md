@@ -30,6 +30,8 @@ The Android/iOS app is in `apps/mobile`; read its README and the Mobile app
 section of `AGENTS.md` before editing it. Share protocol, transport, transcript,
 and composer logic through `packages/kybern-client`; use the mobile primitives,
 Ink tokens, and paired SF/Material icon map for native UI.
+Android uses custom themed components and liquid-gooey-style animation; keep
+menus opaque and avoid stock Android controls. iOS may use native Liquid Glass.
 
 `pnpm start:go --lan` targets Expo Go; `pnpm start --lan` targets an installed
 development app. EAS `preview` creates an installable Android APK that runs

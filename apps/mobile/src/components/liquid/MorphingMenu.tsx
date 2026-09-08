@@ -190,15 +190,28 @@ export function MorphingMenu({
         pointerEvents="none"
         style={[StyleSheet.absoluteFill, materialStyle]}
       >
-        <BlurView
-          intensity={70}
-          tint={dark ? "systemChromeMaterialDark" : "systemChromeMaterialLight"}
-          style={blurRegion}
-        />
+        {Platform.OS === "ios" && (
+          <BlurView
+            intensity={70}
+            tint={
+              dark ? "systemChromeMaterialDark" : "systemChromeMaterialLight"
+            }
+            style={blurRegion}
+          />
+        )}
         <View
           style={[
             StyleSheet.absoluteFill,
-            { backgroundColor: dark ? "#202020B8" : "#FFFFFFB8" },
+            {
+              // Android menus use our solid themed surface. Translucent tint
+              // without a sampled backdrop lets transcript text bleed through.
+              backgroundColor:
+                Platform.OS === "ios"
+                  ? dark
+                    ? "#202020B8"
+                    : "#FFFFFFB8"
+                  : colors.surface,
+            },
           ]}
         />
       </Animated.View>
