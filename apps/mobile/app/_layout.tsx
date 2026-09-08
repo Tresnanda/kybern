@@ -1,91 +1,110 @@
-import React, { useEffect, useRef } from "react";
-import { Platform } from "react-native";
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider, useRouter } from "expo-router";
+import { Stack } from "expo-router";
+import { NavigationBar } from "expo-navigation-bar";
+import * as SystemUI from "expo-system-ui";
+import { View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import * as Linking from "expo-linking";
+import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
-import { SafeAreaProvider } from "react-native-safe-area-context";
-import { ConnectionProvider, useConnection } from "@/connection/ConnectionContext";
-import { parsePairingUrl } from "@/connection/pairing";
-import { useDaemonSync } from "@/state/daemon";
-import { useTheme } from "@/ui/theme";
+import { useReducedMotion } from "react-native-reanimated";
+import { boot } from "../src/state/runtime";
+import { ThemeProvider, useTheme } from "../src/ui/theme";
 
+function Navigation() {
+  const { colors, dark } = useTheme();
+  const reduced = useReducedMotion();
+  useEffect(() => {
+    void boot();
+  }, []);
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(colors.background);
+  }, [colors.background]);
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <StatusBar style={dark ? "light" : "dark"} />
+      <NavigationBar style={dark ? "light" : "dark"} />
+      <Stack
+        screenOptions={{
+          headerShadowVisible: false,
+          headerStyle: { backgroundColor: colors.background },
+          headerTintColor: colors.ink,
+          headerTitleStyle: { fontSize: 17, fontWeight: "500" },
+          contentStyle: { backgroundColor: colors.background },
+          headerBackButtonDisplayMode: "minimal",
+          animation: reduced ? "fade" : "default",
+        }}
+      >
+        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="library"
+          options={{ title: "Threads", headerLargeTitleEnabled: true }}
+        />
+        <Stack.Screen
+          name="thread/[id]"
+          options={{ title: "", headerShown: false }}
+        />
+        <Stack.Screen
+          name="connect"
+          options={{ title: "Connect a computer", presentation: "modal" }}
+        />
+        <Stack.Screen
+          name="configure"
+          options={{
+            title: "Thread setup",
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.75, 1],
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen name="tasks" options={{ title: "Tasks & agents" }} />
+        <Stack.Screen name="file" options={{ title: "File" }} />
+        <Stack.Screen name="workspace" options={{ title: "Workspace" }} />
+        <Stack.Screen name="scan-pairing" options={{ title: "Scan QR code" }} />
+        <Stack.Screen
+          name="project-picker"
+          options={{
+            title: "Choose project",
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.75, 1],
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen name="add-project" options={{ title: "Add project" }} />
+        <Stack.Screen
+          name="capabilities"
+          options={{
+            title: "Add to message",
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.75, 1],
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
+          name="composer-options"
+          options={{
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.75, 1],
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen name="settings-detail" options={{ title: "Settings" }} />
+        <Stack.Screen name="settings" options={{ title: "Settings" }} />
+        <Stack.Screen name="projects" options={{ title: "Projects" }} />
+        <Stack.Screen name="activity" options={{ title: "Activity" }} />
+        <Stack.Screen name="sessions" options={{ title: "Resume a session" }} />
+        <Stack.Screen name="pair" options={{ headerShown: false }} />
+      </Stack>
+    </View>
+  );
+}
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardProvider>
-        <SafeAreaProvider>
-          <ConnectionProvider>
-            <DaemonSync />
-            <PairingLinkHandler />
-            <Navigator />
-          </ConnectionProvider>
-        </SafeAreaProvider>
+        <ThemeProvider>
+          <Navigation />
+        </ThemeProvider>
       </KeyboardProvider>
     </GestureHandlerRootView>
   );
-}
-
-function Navigator() {
-  const th = useTheme();
-  const base = th.dark ? DarkTheme : DefaultTheme;
-  const navTheme = {
-    ...base,
-    colors: { ...base.colors, background: th.canvas, card: th.canvas, text: th.text, primary: th.text, border: th.hairline },
-  };
-  return (
-    <ThemeProvider value={navTheme}>
-      <StatusBar style={th.dark ? "light" : "dark"} />
-      <Stack
-        screenOptions={{
-          headerTransparent: Platform.OS === "ios",
-          headerShadowVisible: false,
-          headerTintColor: th.text,
-          headerTitleStyle: { fontWeight: "600" },
-          headerBackButtonDisplayMode: "minimal",
-          contentStyle: { backgroundColor: th.canvas },
-        }}
-      >
-        <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="connect" options={{ headerShown: false }} />
-        <Stack.Screen name="pair" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="thread/new"
-          options={{
-            presentation: "formSheet",
-            sheetGrabberVisible: true,
-            sheetAllowedDetents: [0.82, 1],
-            sheetCornerRadius: 28,
-            headerShown: false,
-          }}
-        />
-      </Stack>
-    </ThemeProvider>
-  );
-}
-
-function DaemonSync() {
-  const { client } = useConnection();
-  useDaemonSync(client);
-  return null;
-}
-
-/** `kybern://pair?url=...&code=...&environment=...` from the desktop app. */
-function PairingLinkHandler() {
-  const url = Linking.useLinkingURL();
-  const { ready } = useConnection();
-  const router = useRouter();
-  const handled = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!ready || !url || handled.current === url) return;
-    const pairing = parsePairingUrl(url);
-    if (!pairing) return;
-    handled.current = url;
-    router.replace({ pathname: "/connect", params: { url: pairing.url, code: pairing.code, environment: pairing.environmentId } });
-  }, [ready, url, router]);
-
-  return null;
 }

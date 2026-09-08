@@ -1,174 +1,157 @@
-// Pairing. Paste the invitation from the desktop app, or type the address and
-// the six-digit code. A device token is the escape hatch.
+import { router, Stack, useLocalSearchParams } from "expo-router";
+import { useEffect, useState } from "react";
+import { View } from "react-native";
+import { parsePairingInvitation } from "../src/state/protocol";
+import {
+  addEnvironment,
+  errorText,
+  pairEnvironment,
+} from "../src/state/runtime";
+import { Brand } from "../src/ui/Brand";
+import {
+  Button,
+  ErrorBanner,
+  Field,
+  IconButton,
+  Page,
+  T,
+  Tap,
+} from "../src/ui/primitives";
 
-import React, { useState } from "react";
-import { StyleSheet, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { FadeIn, FadeInDown, LinearTransition } from "react-native-reanimated";
-import { useConnection } from "@/connection/ConnectionContext";
-import { endpointFromForm, parsePairingUrl, redeemPairing } from "@/connection/pairing";
-import { Button } from "@/ui/Button";
-import { Field } from "@/ui/Field";
-import { Glass } from "@/ui/Glass";
-import { Icon } from "@/ui/Icon";
-import { Screen, Txt } from "@/ui/Screen";
-import { GUTTER, radius, space, useTheme } from "@/ui/theme";
-
-export default function ConnectScreen() {
-  const th = useTheme();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const params = useLocalSearchParams<{ url?: string; token?: string; code?: string; environment?: string }>();
-  const { connectTo, endpoint } = useConnection();
-  const [url, setUrl] = useState(params.url ?? endpoint?.url ?? "");
-  const [token, setToken] = useState(params.token ?? "");
-  const [code, setCode] = useState(params.code ?? "");
-  const [useToken, setUseToken] = useState(Boolean(params.token));
-  const [environmentId, setEnvironmentId] = useState(params.environment);
+export default function Connect() {
+  const { invitation } = useLocalSearchParams<{ invitation?: string }>();
+  const [address, setAddress] = useState("");
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [token, setToken] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  const [expected, setExpected] = useState<string>();
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const onUrlChange = (text: string) => {
-    const pairing = parsePairingUrl(text);
-    if (pairing) {
-      setUrl(pairing.url);
-      setToken("");
-      setCode(pairing.code);
-      setUseToken(false);
-      setEnvironmentId(pairing.environmentId);
-    } else {
-      setUrl(text);
-      setEnvironmentId(undefined);
+  useEffect(() => {
+    if (invitation) {
+      const parsed = parsePairingInvitation(invitation);
+      if (parsed) {
+        setAddress(parsed.url);
+        setCode(parsed.code);
+        setExpected(parsed.environmentId);
+      } else
+        setError(
+          "This invitation is incomplete. Create a new one in Kybern on your computer.",
+        );
     }
-  };
-
-  const connect = async () => {
-    const ep = useToken ? endpointFromForm(url, token) : null;
-    if (!url.trim()) {
-      setError("Enter the address of the machine running kybernd.");
+  }, [invitation]);
+  async function submit() {
+    if (!address.trim()) {
+      setError("Enter the address shown on your computer.");
       return;
     }
-    if (!useToken && code.trim().length < 6) {
-      setError("Enter the six-digit code from the desktop app.");
+    if (!advanced && !/^\d{6}$/.test(code.trim())) {
+      setError("Enter the six-digit pairing code.");
       return;
     }
-    if (useToken && !ep) {
-      setError("Paste the device token.");
-      return;
-    }
+    setError("");
     setBusy(true);
-    setError(null);
     try {
-      await connectTo(useToken ? ep! : await redeemPairing(url, code.trim(), environmentId));
-      router.replace("/threads");
+      if (advanced)
+        await addEnvironment({ url: address, token: token.trim() }, name);
+      else await pairEnvironment(address, code, name, expected);
+      router.dismissTo("/");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }
-  };
-
+  }
   return (
-    <Screen>
-      <KeyboardAwareScrollView bottomOffset={32} contentContainerStyle={[styles.content, { paddingTop: insets.top + space.xxl, paddingBottom: insets.bottom + space.xl }]} keyboardShouldPersistTaps="handled">
-        <Animated.View entering={FadeInDown.duration(320)} style={styles.hero}>
-          <Glass radius={radius.xl} style={styles.mark}>
-            <Icon name="signal" size={30} color={th.text} weight="semibold" />
-          </Glass>
-          <Txt variant="largeTitle" style={{ letterSpacing: -0.4 }}>
-            Connect to your machine
-          </Txt>
-          <Txt variant="body" tone="secondary" style={{ maxWidth: 340 }}>
-            Watch agents work, approve what they ask for, and start threads from anywhere on your network.
-          </Txt>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(60).duration(320)} layout={LinearTransition.springify().damping(20)} style={styles.form}>
+    <Page>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <IconButton
+              name="xmark"
+              label="Close connection setup"
+              onPress={() => router.back()}
+            />
+          ),
+        }}
+      />
+      <View style={{ paddingTop: 22, gap: 16, paddingBottom: 32 }}>
+        <Brand size={45} />
+        <T variant="title">Connect your computer.</T>
+        <T tone="secondary">
+          Open Kybern on your computer, choose its environment menu, then create
+          a pairing invitation.
+        </T>
+      </View>
+      <View style={{ gap: 22 }}>
+        <Button
+          secondary
+          icon="qrcode.viewfinder"
+          onPress={() => router.push("/scan-pairing")}
+        >
+          Scan QR code
+        </Button>
+        <Field
+          label="Computer address"
+          placeholder="100.64.0.2:4173"
+          value={address}
+          onChangeText={setAddress}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+        {advanced ? (
           <Field
-            label="Machine address"
-            mono
-            placeholder="ws://100.64.0.1:4173/ws"
-            hint="A host, host:port, or a pairing link. Paste the invitation here."
-            value={url}
-            onChangeText={onUrlChange}
+            label="Access token"
+            value={token}
+            onChangeText={setToken}
+            secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
-            keyboardType="url"
-            textContentType="URL"
-            returnKeyType="next"
+            placeholder="Paste your access token"
           />
-          {useToken ? (
-            <Animated.View entering={FadeIn.duration(160)}>
-              <Field
-                label="Device token"
-                mono
-                placeholder="Paste the bearer token"
-                value={token}
-                onChangeText={setToken}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry
-                returnKeyType="go"
-                onSubmitEditing={() => void connect()}
-              />
-            </Animated.View>
-          ) : (
-            <Animated.View entering={FadeIn.duration(160)}>
-              <Field
-                label="Pairing code"
-                mono
-                placeholder="000000"
-                hint="On the desktop app, choose Pair a device from the environment menu."
-                value={code}
-                onChangeText={setCode}
-                keyboardType="number-pad"
-                textContentType="oneTimeCode"
-                maxLength={6}
-                returnKeyType="go"
-                onSubmitEditing={() => void connect()}
-                style={{ letterSpacing: 6, fontSize: 22 }}
-              />
-            </Animated.View>
-          )}
-
-          {error ? (
-            <Animated.View entering={FadeIn.duration(160)}>
-              <Txt variant="footnote" color={th.failed}>
-                {error}
-              </Txt>
-            </Animated.View>
-          ) : null}
-
-          <Button title="Connect" variant="ink" size="large" haptic="medium" busy={busy} disabled={busy} onPress={() => void connect()} />
-          <Txt
-            variant="footnote"
-            tone="secondary"
-            onPress={() => {
-              setUseToken((v) => !v);
-              setError(null);
-            }}
-            suppressHighlighting
-            style={styles.switch}
-          >
-            {useToken ? "Use a pairing code instead" : "Use a device token instead"}
-          </Txt>
-        </Animated.View>
-
-        <View style={{ flex: 1 }} />
-        <Txt variant="footnote" tone="tertiary" style={{ textAlign: "center" }}>
-          Same LAN or Tailscale. Traffic stays on your private network.
-        </Txt>
-      </KeyboardAwareScrollView>
-    </Screen>
+        ) : (
+          <Field
+            label="Pairing code"
+            placeholder="000000"
+            value={code}
+            onChangeText={setCode}
+            keyboardType="number-pad"
+            maxLength={6}
+            style={{ fontSize: 24, letterSpacing: 6 }}
+          />
+        )}
+        <Field
+          label="Computer name (optional)"
+          placeholder="MacBook Pro"
+          value={name}
+          onChangeText={setName}
+        />
+        <ErrorBanner error={error} />
+        <Button
+          onPress={() => void submit()}
+          busy={busy}
+          disabled={advanced && !token.trim()}
+        >
+          Connect computer
+        </Button>
+        <T variant="caption" tone="secondary">
+          Use the address from your pairing invitation. For connections away
+          from home, keep both devices on the same Tailscale network.
+        </T>
+        <Tap
+          label={advanced ? "Use a pairing code" : "Use an access token"}
+          onPress={() => {
+            setAdvanced(!advanced);
+            setError("");
+          }}
+        >
+          <T variant="caption" tone="secondary">
+            {advanced ? "Use a pairing code" : "Use an access token instead"}
+          </T>
+        </Tap>
+      </View>
+    </Page>
   );
 }
-
-const styles = StyleSheet.create({
-  content: { flexGrow: 1, paddingHorizontal: GUTTER, gap: space.xxl },
-  hero: { gap: space.md },
-  mark: { width: 64, height: 64, alignItems: "center", justifyContent: "center", marginBottom: space.sm },
-  form: { gap: space.lg },
-  switch: { textAlign: "center", paddingVertical: space.sm },
-});

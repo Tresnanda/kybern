@@ -493,14 +493,14 @@ test("native resumption removes the provisional answer until the scoped continua
 test("mobile live projection removes a provisional summary when Claude resumes", async () => {
   const mobile = await import("../mobile/src/state/transcript.ts")
   const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/claude-process-resumed.json", import.meta.url), "utf8"))
-  let state = mobile.emptyThreadState
+  let state = mobile.emptyThreadState()
   for (const event of events) {
     state = mobile.applyEvent(state, event)
-    if (event.kind === "turn_resumed") assert.equal(state.entries.some((entry) => entry.role === "turn_summary"), false)
+    if (event.kind === "turn_resumed") assert.equal(state.blocks.some((entry) => entry.kind === "turn_end"), false)
   }
-  const summaries = state.entries.filter((entry) => entry.role === "turn_summary")
+  const summaries = state.blocks.filter((entry) => entry.kind === "turn_end")
   assert.equal(summaries.length, 1)
-  assert.equal(summaries[0].terminal_message_id, events.at(-1).terminal_message_id)
-  assert.equal(state.entries.filter((entry) => entry.role === "user").length, 1)
-  assert.equal(state.entries.filter((entry) => entry.role === "tool_call").length, 1)
+  assert.equal(summaries[0].terminalMessageId, events.at(-1).terminal_message_id)
+  assert.equal(state.blocks.filter((entry) => entry.kind === "user").length, 1)
+  assert.equal(state.blocks.filter((entry) => entry.kind === "tool").length, 1)
 })

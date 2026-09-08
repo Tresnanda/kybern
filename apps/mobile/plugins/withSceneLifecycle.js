@@ -6,7 +6,7 @@
 // into a SceneDelegate and forwards URL opens to the existing linking hooks.
 // Remove once Expo ships `ExpoAppSceneDelegate` (expo/expo#46733) in SDK 57.
 
-const { withAppDelegate, withInfoPlist } = require("@expo/config-plugins");
+const { withAppDelegate, withInfoPlist } = require("expo/config-plugins");
 
 const SCENE_CONFIGURATION = `  public func application(
     _ application: UIApplication,

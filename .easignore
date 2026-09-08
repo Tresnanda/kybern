@@ -1,0 +1,22 @@
+# Keep the mobile app and shared client sources in the EAS monorepo archive.
+/target/
+/dist/
+/artifacts/
+/docs/
+/assets/
+/crates/
+/fixtures/
+/scripts/
+/.claude/
+/.github/
+/.cargo/
+/apps/desktop/
+**/node_modules/
+/apps/mobile/.expo/
+/apps/mobile/dist/
+/apps/mobile/ios/
+/apps/mobile/android/
+/apps/mobile/expo-env.d.ts
+**/.DS_Store
+**/.env.local
+**/.env.*.local

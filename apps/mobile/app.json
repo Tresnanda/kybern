@@ -1,46 +1,60 @@
 {
   "expo": {
-    "name": "kybern",
-    "slug": "kybern",
+    "name": "Kybern",
+    "slug": "kybern-mobile",
     "version": "0.1.0",
     "scheme": "kybern",
-    "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "orientation": "default",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true,
       "bundleIdentifier": "dev.kybern.mobile",
+      "supportsTablet": true,
       "infoPlist": {
+        "CADisableMinimumFrameDurationOnPhone": true,
+        "NSLocalNetworkUsageDescription": "Connect to Kybern on your computer.",
         "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true,
           "NSAllowsLocalNetworking": true
-        },
-        "CADisableMinimumFrameDurationOnPhone": true
+        }
       }
     },
     "android": {
       "package": "dev.kybern.mobile",
-      "adaptiveIcon": {
-        "backgroundColor": "#F4F2EE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": true
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-dev-client",
-      "./plugins/withSceneLifecycle.js",
-      "expo-font"
+      "./plugins/withSceneLifecycle",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan a Kybern pairing QR code to connect your computer.",
+          "recordAudioAndroid": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
     },
-    "backgroundColor": "#F6F6F7"
+    "icon": "./assets/icon.png",
+    "owner": "treshnanda",
+    "extra": {
+      "router": {},
+      "expo-navigation-bar": {
+        "enforceContrast": false
+      },
+      "eas": {
+        "projectId": "8a6031c9-5d00-4377-9114-546bd7736a9d"
+      }
+    }
   }
 }

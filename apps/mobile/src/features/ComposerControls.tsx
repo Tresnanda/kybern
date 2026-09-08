@@ -1,0 +1,497 @@
+import { useState, type ReactNode } from "react";
+import { View } from "react-native";
+import { router } from "expo-router";
+import Svg, { Circle } from "react-native-svg";
+import { setDraft, useDraft } from "../state/draft";
+import type { PermissionMode, Thread } from "../state/protocol";
+import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
+import {
+  errorText,
+  loadThread,
+  refresh,
+  rpc,
+  useApp,
+  useThread,
+} from "../state/runtime";
+import {
+  Icon,
+  T,
+  Tap,
+  styles,
+  ErrorBanner,
+  Page,
+  Group,
+  Field,
+} from "../ui/primitives";
+import { ProviderMark } from "../ui/ProviderMark";
+import { useTheme } from "../ui/theme";
+
+const modes: { value: PermissionMode; label: string; detail: string }[] = [
+  {
+    value: "supervised",
+    label: "Ask before acting",
+    detail: "Review commands and edits before they run.",
+  },
+  {
+    value: "accept-edits",
+    label: "Allow edits",
+    detail: "Allow file edits; ask before running commands.",
+  },
+  {
+    value: "auto",
+    label: "Automatic",
+    detail: "Let the agent decide when to ask.",
+  },
+  {
+    value: "full-access",
+    label: "Full access",
+    detail: "Allow commands and edits without asking.",
+  },
+];
+export function ComposerControls({
+  thread,
+  disabled,
+  leading,
+  trailing,
+}: {
+  thread?: Thread | null;
+  disabled?: boolean;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+}) {
+  const app = useApp();
+  const draft = useDraft();
+  const snapshot = useThread(thread?.id ?? "");
+  const { colors } = useTheme();
+  const kind = thread?.provider.kind ?? draft.provider;
+  const provider = app.providers.find((p) => p.kind === kind);
+  const model = thread ? thread.model : draft.model;
+  const effort = thread ? thread.effort : draft.effort;
+  const mode = thread?.permission_mode ?? draft.permission;
+  const selectedModel = provider?.models?.find((m) => m.id === model);
+  const modelLabel =
+    selectedModel?.display_name || model || PROVIDER_DISPLAY_NAME[kind];
+  const usage = snapshot.providerUsage;
+  const context = usage?.context;
+  const fraction =
+    context && context.window_tokens > 0
+      ? Math.min(1, context.used_tokens / context.window_tokens)
+      : 0;
+  function show(section: "permissions" | "model" | "usage") {
+    router.push({
+      pathname: "/composer-options",
+      params: {
+        section,
+        ...(thread ? { threadId: thread.id } : {}),
+      },
+    });
+  }
+  return (
+    <View style={[styles.line, { gap: 0 }]}>
+      {leading}
+      <Tap
+        label={`Permissions: ${modes.find((m) => m.value === mode)?.label}`}
+        disabled={disabled}
+        onPress={() => show("permissions")}
+        style={{ alignItems: "center" }}
+      >
+        <Icon
+          name={
+            mode === "full-access"
+              ? "lock.open"
+              : mode === "auto"
+                ? "sparkles"
+                : "lock"
+          }
+          size={16}
+          color={mode === "full-access" ? colors.warning : colors.secondary}
+        />
+      </Tap>
+      {thread && (
+        <Tap
+          label={
+            context
+              ? `Context used: ${Math.round(fraction * 100)} percent. Show usage`
+              : "Show context and usage"
+          }
+          onPress={() => show("usage")}
+          style={{ alignItems: "center" }}
+        >
+          <Svg width={24} height={24} viewBox="0 0 24 24">
+            <Circle
+              cx={12}
+              cy={12}
+              r={9}
+              stroke={colors.line}
+              strokeWidth={2.5}
+              fill="none"
+            />
+            <Circle
+              cx={12}
+              cy={12}
+              r={9}
+              stroke={fraction > 0.85 ? colors.warning : colors.ink}
+              strokeWidth={2.5}
+              fill="none"
+              strokeDasharray={`${fraction * 56.55} 56.55`}
+              rotation={-90}
+              origin="12,12"
+            />
+          </Svg>
+        </Tap>
+      )}
+      <Tap
+        label={`${modelLabel}${effort ? `, ${effort} effort` : ""}. Change model and reasoning`}
+        disabled={disabled}
+        onPress={() => show("model")}
+        style={[styles.line, { flex: 1, gap: 6, paddingHorizontal: 8 }]}
+      >
+        <ProviderMark kind={kind} size={17} />
+        <T variant="caption" numberOfLines={1} style={{ flexShrink: 1 }}>
+          {modelLabel}
+          {effort ? ` · ${effort}` : ""}
+        </T>
+        <Icon name="chevron.down" size={9} />
+      </Tap>
+      {trailing}
+    </View>
+  );
+}
+
+export function ComposerOptions({
+  thread,
+  section: open,
+}: {
+  thread?: Thread | null;
+  section: "permissions" | "model" | "usage";
+}) {
+  const app = useApp();
+  const draft = useDraft();
+  const snapshot = useThread(thread?.id ?? "");
+  const { colors } = useTheme();
+  const kind = thread?.provider.kind ?? draft.provider;
+  const provider = app.providers.find((p) => p.kind === kind);
+  const model = thread ? thread.model : draft.model;
+  const effort = thread ? thread.effort : draft.effort;
+  const mode = thread?.permission_mode ?? draft.permission;
+  const selectedModel = provider?.models?.find((m) => m.id === model);
+  const usage = snapshot.providerUsage;
+  const context = usage?.context;
+  const fraction =
+    context && context.window_tokens > 0
+      ? Math.min(1, context.used_tokens / context.window_tokens)
+      : 0;
+  const [busy, setBusy] = useState(false);
+  const [choosing, setChoosing] = useState<"agent" | "effort" | null>(null);
+  const [error, setError] = useState("");
+  const [modelQuery, setModelQuery] = useState("");
+  const visibleModels = [
+    { id: "", display_name: "Agent default", default_effort: "" },
+    ...(provider?.models ?? []),
+  ].filter((m) =>
+    `${m.display_name} ${m.id}`
+      .toLowerCase()
+      .includes(modelQuery.trim().toLowerCase()),
+  );
+  async function update(patch: {
+    model?: string;
+    effort?: string;
+    permission_mode?: PermissionMode;
+  }) {
+    setBusy(true);
+    setError("");
+    try {
+      if (thread) {
+        await rpc("threads.update", { thread_id: thread.id, ...patch });
+        await Promise.all([refresh(), loadThread(thread.id)]);
+      } else
+        setDraft({
+          ...(patch.model !== undefined ? { model: patch.model } : {}),
+          ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+          ...(patch.permission_mode
+            ? { permission: patch.permission_mode }
+            : {}),
+        });
+      return true;
+    } catch (e) {
+      setError(errorText(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Page>
+      <ErrorBanner error={error} />
+      {open === "permissions" &&
+        modes
+          .filter((m) => provider?.supported_permission_modes.includes(m.value))
+          .map((m) => (
+            <Tap
+              key={m.value}
+              label={m.label}
+              selected={mode === m.value}
+              disabled={busy}
+              onPress={() => {
+                void update({ permission_mode: m.value }).then((saved) => {
+                  if (saved) router.back();
+                });
+              }}
+              style={[
+                styles.spread,
+                {
+                  padding: 16,
+                  marginBottom: 8,
+                  borderRadius: 20,
+                  backgroundColor:
+                    mode === m.value ? colors.accentSoft : colors.raised,
+                },
+              ]}
+            >
+              <View style={{ flex: 1, gap: 5 }}>
+                <T variant="label">{m.label}</T>
+                <T variant="caption" tone="secondary">
+                  {m.detail}
+                </T>
+              </View>
+              {mode === m.value && <Icon name="checkmark" size={14} />}
+            </Tap>
+          ))}
+      {open === "model" && (
+        <>
+          <View
+            style={{
+              borderRadius: 18,
+              backgroundColor: colors.surface,
+              paddingHorizontal: 16,
+              marginBottom: 20,
+            }}
+          >
+            {thread ? (
+              <View style={[styles.line, { minHeight: 54 }]}>
+                <ProviderMark kind={kind} size={22} />
+                <T style={{ flex: 1 }}>{provider?.display_name ?? kind}</T>
+              </View>
+            ) : (
+              <>
+                <Tap
+                  label="Choose agent"
+                  disabled={!!thread}
+                  onPress={() =>
+                    setChoosing(choosing === "agent" ? null : "agent")
+                  }
+                  style={[styles.line, { minHeight: 54 }]}
+                >
+                  <ProviderMark kind={kind} size={22} />
+                  <T style={{ flex: 1 }}>{provider?.display_name ?? kind}</T>
+                  {!thread && <Icon name="chevron.down" size={12} />}
+                </Tap>
+              </>
+            )}
+            <View style={{ height: 1, backgroundColor: colors.line }} />
+            <Tap
+              label={`Reasoning effort: ${effort || "Default"}`}
+              onPress={() =>
+                setChoosing(choosing === "effort" ? null : "effort")
+              }
+              style={[styles.spread, { minHeight: 50 }]}
+            >
+              <T variant="caption" tone="secondary">
+                Reasoning effort
+              </T>
+              <View style={styles.line}>
+                <T variant="caption" style={{ textTransform: "capitalize" }}>
+                  {effort || "Default"}
+                </T>
+                <Icon name="chevron.down" size={12} />
+              </View>
+            </Tap>
+          </View>
+          {choosing === "agent" && (
+            <Group title="Choose an agent">
+              <View
+                style={{ borderRadius: 18, backgroundColor: colors.surface }}
+              >
+                {app.providers
+                  .filter((p) => p.available)
+                  .map((p) => (
+                    <Tap
+                      key={p.kind}
+                      label={`Use ${p.display_name}`}
+                      selected={kind === p.kind}
+                      onPress={() => {
+                        setModelQuery("");
+                        setDraft({
+                          provider: p.kind,
+                          instance: p.instances[0] ?? "default",
+                          model: "",
+                          effort: "",
+                          permission: p.supported_permission_modes.includes(
+                            mode,
+                          )
+                            ? mode
+                            : (p.supported_permission_modes[0] ?? "supervised"),
+                        });
+                        setChoosing(null);
+                      }}
+                      style={[
+                        styles.line,
+                        { paddingHorizontal: 16, minHeight: 54 },
+                      ]}
+                    >
+                      <ProviderMark kind={p.kind} size={22} />
+                      <T style={{ flex: 1 }}>{p.display_name}</T>
+                      {kind === p.kind && <Icon name="checkmark" size={16} />}
+                    </Tap>
+                  ))}
+              </View>
+            </Group>
+          )}
+          {choosing === "effort" && (
+            <Group title="Choose reasoning effort">
+              <View
+                style={{ borderRadius: 18, backgroundColor: colors.surface }}
+              >
+                {[
+                  "",
+                  ...(selectedModel?.efforts ??
+                    provider?.supported_efforts ??
+                    []),
+                ].map((e) => (
+                  <Tap
+                    key={e}
+                    label={e || "Default effort"}
+                    selected={(effort ?? "") === e}
+                    disabled={busy}
+                    onPress={() =>
+                      void update({ effort: e }).then((saved) => {
+                        if (saved) setChoosing(null);
+                      })
+                    }
+                    style={[
+                      styles.spread,
+                      { paddingHorizontal: 16, minHeight: 50 },
+                    ]}
+                  >
+                    <T style={{ textTransform: "capitalize" }}>
+                      {e || "Default"}
+                    </T>
+                    {(effort ?? "") === e && (
+                      <Icon name="checkmark" size={16} />
+                    )}
+                  </Tap>
+                ))}
+              </View>
+            </Group>
+          )}
+          {!choosing && (
+            <View>
+              <Group title="Choose a model">
+                <Field
+                  label="Search models"
+                  placeholder="Search by name or model ID"
+                  value={modelQuery}
+                  onChangeText={setModelQuery}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  clearButtonMode="while-editing"
+                  returnKeyType="search"
+                />
+                {!visibleModels.length && (
+                  <T
+                    variant="caption"
+                    tone="secondary"
+                    style={{ paddingVertical: 12 }}
+                  >
+                    No models match your search.
+                  </T>
+                )}
+                <View
+                  style={{
+                    backgroundColor: colors.surface,
+                    borderRadius: 18,
+                    overflow: "hidden",
+                  }}
+                >
+                  {visibleModels.map((m) => (
+                    <Tap
+                      key={m.id}
+                      label={m.display_name}
+                      disabled={busy}
+                      selected={(model ?? "") === m.id}
+                      onPress={() =>
+                        void update({
+                          model: m.id,
+                          effort: m.default_effort ?? "",
+                        })
+                      }
+                      style={[
+                        styles.spread,
+                        {
+                          paddingHorizontal: 16,
+                          paddingVertical: 12,
+                          minHeight: 52,
+                          borderBottomWidth: 0.5,
+                          borderColor: colors.line,
+                        },
+                      ]}
+                    >
+                      <T variant="label" style={{ flex: 1 }}>
+                        {m.display_name}
+                      </T>
+                      {(model ?? "") === m.id && (
+                        <Icon name="checkmark" size={12} />
+                      )}
+                    </Tap>
+                  ))}
+                </View>
+              </Group>
+            </View>
+          )}
+        </>
+      )}
+      {open === "usage" && (
+        <>
+          <T variant="caption" selectable>
+            {context
+              ? `${context.used_tokens.toLocaleString()} / ${context.window_tokens.toLocaleString()} tokens · ${Math.round(fraction * 100)}% used`
+              : "The agent has not reported its context window yet."}
+          </T>
+          {usage?.limits?.map((l) => (
+            <View key={l.name} style={{ paddingVertical: 6 }}>
+              <T variant="label">
+                {l.name} · {Math.round(l.used_percent)}% used
+              </T>
+              {l.resets_at && (
+                <T variant="caption" tone="secondary">
+                  Resets {new Date(l.resets_at * 1000).toLocaleString()}
+                </T>
+              )}
+            </View>
+          ))}
+          {thread && (
+            <Tap
+              label="Compact conversation"
+              disabled={
+                busy ||
+                thread.status === "running" ||
+                thread.status === "awaiting-approval"
+              }
+              onPress={() => {
+                setBusy(true);
+                void rpc("threads.compact", { thread_id: thread.id })
+                  .then(() => loadThread(thread.id))
+                  .catch((e) => setError(errorText(e)))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <T variant="label" tone="accent">
+                Compact conversation
+              </T>
+            </Tap>
+          )}
+        </>
+      )}
+    </Page>
+  );
+}
