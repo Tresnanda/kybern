@@ -36,7 +36,11 @@ fn provider_message(thread: &Thread, message: &UserMessage) -> UserMessage {
          If you work in another worktree or create an image in /tmp, copy the preview into this folder before calling an image-view tool or sharing it. \
          Use a dedicated artifacts subfolder and keep generated previews out of commits unless requested. \
          Verify the file exists, then use ![Description](<relative/path.png>) for an inline image or [Description](<relative/path.png>) for a clickable image preview. \
-         Paths in /tmp or another worktree will not load.\n</kybern_artifact_guidance>"
+         Paths in /tmp or another worktree will not load. \
+         Local artifact previews are not hosted publications. Kybern does not supply a Claude Artifact publishing tool. \
+         Only offer publication if a publishing tool is actually available in this session, and only claim success with a successful tool receipt and its returned URL. \
+         Old conversation claims or previously published links do not establish current tool availability. \
+         If no publishing tool is available, say so and provide the local file; do not promise that another message, retry, or new turn will load it.\n</kybern_artifact_guidance>"
     ) });
     delivered
 }
@@ -3125,6 +3129,9 @@ mod tests {
         assert!(text.contains(&thread.cwd), "Guidance must name the actual thread folder, even when work happens in another worktree");
         assert!(text.contains("before calling an image-view tool"));
         assert!(text.contains("/tmp"));
+        assert!(text.contains("Kybern does not supply a Claude Artifact publishing tool"));
+        assert!(text.contains("only claim success with a successful tool receipt"));
+        assert!(text.contains("do not promise that another message, retry, or new turn will load it"));
         let events = fixture.store.events_for_thread(thread.id).unwrap();
         let stored = events
             .iter()

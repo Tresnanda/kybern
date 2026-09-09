@@ -88,6 +88,25 @@ fn write_startup_announcement(paths: &config::Paths, id: &str, port: u16) -> Res
     Ok(())
 }
 
+fn desktop_listen_port(requested: u16, desktop_managed: bool, root: &std::path::Path) -> Result<u16> {
+    if requested != 0 || !desktop_managed {
+        return Ok(requested);
+    }
+    // Self-update restarts inherit the original --port 0 argument. Retain the
+    // paired address even when no desktop process is around to select it.
+    let path = root.join("desktop.port");
+    match std::fs::read_to_string(&path) {
+        Ok(value) => value
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or_else(|| anyhow!("Invalid saved desktop port at {}; correct it before restarting Kybern", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Run the daemon with the process arguments. `kybernd` is a thin wrapper around this.
 #[tokio::main]
 pub async fn run() -> Result<()> {
@@ -107,7 +126,8 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
-    let requested_addr = SocketAddr::new(args.bind.parse()?, args.port);
+    let requested_port = desktop_listen_port(args.port, args.desktop_startup_id.is_some(), &paths.root)?;
+    let requested_addr = SocketAddr::new(args.bind.parse()?, requested_port);
     let listener = tokio::net::TcpListener::bind(requested_addr).await?;
     let addr = listener.local_addr()?;
     state.port.store(addr.port(), std::sync::atomic::Ordering::Relaxed);
@@ -116,6 +136,7 @@ pub async fn run() -> Result<()> {
         *state.advertised_urls.write().unwrap() = vec![kybern_client::address::normalize(&url)?];
     }
     if let Some(startup_id) = &args.desktop_startup_id {
+        std::fs::write(paths.root.join("desktop.port"), addr.port().to_string())?;
         write_startup_announcement(&paths, startup_id, addr.port())?;
     }
     state.desktop_managed.store(args.desktop_startup_id.is_some(), std::sync::atomic::Ordering::SeqCst);
@@ -182,6 +203,9 @@ pub async fn run() -> Result<()> {
             _ = tokio::signal::ctrl_c() => {}
             _ = shutdown_token.cancelled() => {}
         }
+        // Signal-driven shutdown must also wake maintenance/update workers
+        // before we await them and release the endpoint files.
+        shutdown_token.cancel();
         tracing::info!("shutting down");
     };
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
@@ -242,7 +266,21 @@ fn owns_endpoint_file(contents: &str, expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{owns_endpoint_file, startup_announcement_filename};
+    use super::{desktop_listen_port, owns_endpoint_file, startup_announcement_filename};
+
+    #[test]
+    fn desktop_self_restart_reuses_the_port_but_explicit_and_scratch_ports_stay_explicit() {
+        let root = std::env::temp_dir().join(format!("kybern-restart-port-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(desktop_listen_port(0, true, &root).unwrap(), 0);
+        std::fs::write(root.join("desktop.port"), "59930").unwrap();
+        assert_eq!(desktop_listen_port(0, true, &root).unwrap(), 59930);
+        assert_eq!(desktop_listen_port(4219, true, &root).unwrap(), 4219);
+        assert_eq!(desktop_listen_port(0, false, &root).unwrap(), 0);
+        std::fs::write(root.join("desktop.port"), "broken").unwrap();
+        assert!(desktop_listen_port(0, true, &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn endpoint_files_are_only_released_by_the_daemon_they_name() {

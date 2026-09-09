@@ -44,12 +44,14 @@ export function MorphingMenu({
   onClose,
   onClosed,
   children,
+  placement = "below",
 }: {
   origin: MenuOrigin;
   open: boolean;
   onClose: () => void;
   onClosed: () => void;
   children: ReactNode;
+  placement?: "above" | "below";
 }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -58,10 +60,22 @@ export function MorphingMenu({
   const [contentHeight, setContentHeight] = useState(0);
   const [shown, setShown] = useState(false);
   const menuWidth = Math.min(width - 32, 272);
-  const menuX = width - 16 - menuWidth;
-  const menuY = Math.max(insets.top + 4, origin.y - 8);
-  const maxHeight = Math.max(44, height - menuY - insets.bottom - 16);
+  const menuX =
+    placement === "above"
+      ? Math.max(16, Math.min(origin.x, width - 16 - menuWidth))
+      : width - 16 - menuWidth;
+  const belowY = Math.max(insets.top + 4, origin.y - 8);
+  const maxHeight = Math.max(
+    44,
+    placement === "above"
+      ? origin.y - insets.top - 16
+      : height - belowY - insets.bottom - 16,
+  );
   const menuHeight = Math.min(contentHeight, maxHeight);
+  const menuY =
+    placement === "above"
+      ? Math.max(insets.top + 4, origin.y - menuHeight - 8)
+      : belowY;
   const destinationHeight = useSharedValue(0);
   const measured = useRef(false);
   useEffect(() => {

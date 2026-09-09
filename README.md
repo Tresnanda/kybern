@@ -282,7 +282,8 @@ cd apps/desktop && pnpm tauri dev
 
 The desktop app reuses an authenticated, protocol-compatible daemon selected
 by `KYBERN_DATA_DIR`. If none is available it starts the bundled daemon on an
-unused port, writes that port to `daemon.port`, and leaves the daemon running
+unused port once, saves it in `desktop.port` for future restarts and updates,
+publishes the live endpoint in `daemon.port`, and leaves the daemon running
 for CLI and mobile clients when the window closes.
 
 For app-managed local endpoints, reopening the desktop automatically replaces a
@@ -392,11 +393,12 @@ the composer’s capability picker.
 
 In a Claude conversation, ask for an artifact, or open **Artifacts** in the
 desktop dock or mobile conversation menu. You can preview an HTML, Markdown,
-or SVG file, inspect its source, request native publication, open a returned
-Claude URL, and republish to that URL. React and other sources must be prepared
-as HTML/Markdown for Claude’s native Artifact tool. Publication remains a normal
-Claude turn with its normal approval handling; a successful native tool receipt
-is required before Kybern marks an artifact as published.
+or SVG file and inspect its source. Kybern supplies local previews, not Claude’s
+hosted Artifact publishing tool. **Check publishing options** asks Claude to
+check its current tools first; a missing tool must not be described as something
+a retry will restore. Existing successful publication receipts retain their
+Claude URL and update action. Requests remain ordinary Claude turns with their
+normal approval handling, and publication requires a successful tool receipt.
 
 **Share and versions** opens the hosted Claude page. Claude owns hosting,
 sharing permissions, version selection, and live account connectors; Kybern

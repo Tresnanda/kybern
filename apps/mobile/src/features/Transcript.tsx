@@ -15,6 +15,7 @@ import { Code, Markdown } from "../ui/Markdown";
 import { Icon, IconButton, T, Tap, styles } from "../ui/primitives";
 import { useStreamedText } from "../ui/useStreamedText";
 import { useTheme } from "../ui/theme";
+import { UserMessageBubble } from "./UserMessageBubble";
 import { TaskRow } from "./Tasks";
 import { ApprovalPanel } from "./Approvals";
 
@@ -56,60 +57,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
   const [copied, setCopied] = useState(false);
   switch (block.kind) {
     case "user":
-      return (
-        <View
-          style={{
-            alignSelf: "flex-end",
-            maxWidth: "94%",
-            borderRadius: 22,
-            borderBottomEndRadius: 7,
-            paddingHorizontal: 18,
-            paddingVertical: 14,
-            backgroundColor: colors.raised,
-            gap: 8,
-            marginTop: 22,
-            marginBottom: 24,
-          }}
-        >
-          {block.message.parts.map((part, i) =>
-            part.type === "text" ? (
-              <T key={i} selectable>
-                {part.text}
-              </T>
-            ) : part.type === "image" ? (
-              <Image
-                key={i}
-                source={{ uri: `data:${part.media_type};base64,${part.data}` }}
-                accessibilityLabel="Attached image"
-                style={{ width: 220, height: 170, borderRadius: 12 }}
-                resizeMode="contain"
-              />
-            ) : (
-              <View key={i} style={styles.line}>
-                <Icon
-                  name={
-                    part.type === "file_mention"
-                      ? "doc"
-                      : part.type === "skill"
-                        ? "sparkles"
-                        : "paperclip"
-                  }
-                  size={15}
-                />
-                <T variant="caption">
-                  {part.type === "attachment"
-                    ? part.name
-                    : part.type === "file_mention"
-                      ? part.path
-                      : part.type === "skill"
-                        ? part.name
-                        : (part.display_name ?? part.name)}
-                </T>
-              </View>
-            ),
-          )}
-        </View>
-      );
+      return <UserMessageBubble block={block} threadId={threadId} />;
     case "assistant":
       return (
         <View style={{ paddingBottom: 18, gap: 10 }}>

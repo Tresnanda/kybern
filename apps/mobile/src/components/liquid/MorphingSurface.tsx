@@ -1,4 +1,4 @@
-import { useEffect, useState, type PropsWithChildren } from "react";
+import { useEffect, useRef, useState, type PropsWithChildren } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -9,6 +9,8 @@ import {
 import Animated, {
   ReduceMotion,
   interpolate,
+  type SharedValue,
+  useDerivedValue,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -17,7 +19,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { useTheme } from "../../ui/theme";
-import { MASS, SIZE } from "./motion";
+import { SHEET, SHEET_OUTLINE } from "./motion";
 
 export function MorphingBackdrop({
   open,
@@ -59,8 +61,8 @@ export function MorphingBackdrop({
   );
 }
 
-// The same leading mass / following size as the ellipsis menu. Only the empty
-// silhouette changes dimensions; text lays out once at its final size.
+// Only measured controls use MorphingMenu. A source-less dialog fades in at
+// its final bounds; a sheet comes from the screen edge and carries drag velocity.
 export function MorphingSurface({
   open,
   onClosed,
@@ -68,95 +70,121 @@ export function MorphingSurface({
   style,
   slideFromBottom = false,
   bottomInset = 0,
+  offset: externalOffset,
+  releaseVelocity,
 }: PropsWithChildren<{
   open: boolean;
   onClosed: () => void;
   style?: StyleProp<ViewStyle>;
   slideFromBottom?: boolean;
   bottomInset?: number;
+  offset?: SharedValue<number>;
+  releaseVelocity?: SharedValue<number>;
 }>) {
   const { colors } = useTheme();
   const reduced = useReducedMotion();
   const [bounds, setBounds] = useState({ width: 0, height: 0 });
-  const mass = useSharedValue(0);
-  const size = useSharedValue(0);
+  const initialized = useRef(false);
+  const ready = useSharedValue(false);
+  const localOffset = useSharedValue(0);
+  const offset = externalOffset ?? localOffset;
   const fade = useSharedValue(0);
+  const distance = bounds.height + bottomInset + 32;
+  const outlineOffset = useDerivedValue(() =>
+    withSpring(offset.get(), SHEET_OUTLINE),
+  );
   useEffect(() => {
     if (!bounds.width || !bounds.height) return;
-    mass.set(withSpring(open ? 1 : 0, MASS));
-    size.set(
-      withSpring(open ? 1 : 0, SIZE, (finished) => {
-        if (finished && !open && !reduced) scheduleOnRN(onClosed);
-      }),
-    );
+    if (!initialized.current) {
+      offset.set(slideFromBottom ? distance : 0);
+      initialized.current = true;
+      ready.set(true);
+    }
+    if (slideFromBottom) {
+      offset.set(
+        withSpring(
+          open ? 0 : distance,
+          {
+            ...SHEET,
+            velocity: releaseVelocity?.get() ?? 0,
+            overshootClamping: !open,
+          },
+          (finished) => {
+            if (finished && !open && !reduced) scheduleOnRN(onClosed);
+          },
+        ),
+      );
+    }
     fade.set(
       withTiming(
         open ? 1 : 0,
-        { duration: 140, reduceMotion: ReduceMotion.Never },
+        {
+          duration: 140,
+          reduceMotion: ReduceMotion.Never,
+        },
         (finished) => {
-          if (finished && !open && reduced) scheduleOnRN(onClosed);
+          if (finished && !open && (reduced || !slideFromBottom))
+            scheduleOnRN(onClosed);
         },
       ),
     );
-  }, [open, bounds.width, bounds.height, reduced, mass, size, fade, onClosed]);
+  }, [
+    open,
+    bounds.width,
+    bounds.height,
+    distance,
+    slideFromBottom,
+    reduced,
+    offset,
+    fade,
+    releaseVelocity,
+    ready,
+    onClosed,
+  ]);
+  const rise = useAnimatedStyle(() => ({
+    opacity: !ready.get() ? 0 : reduced || !slideFromBottom ? fade.get() : 1,
+    transform: [{ translateY: reduced || !slideFromBottom ? 0 : offset.get() }],
+  }));
   const silhouette = useAnimatedStyle(() => {
-    const p = reduced ? 1 : size.get();
-    const c = reduced ? 1 : mass.get();
-    if (slideFromBottom) {
-      const remaining = 1 - Math.max(0, Math.min(1, p));
-      // A broad sheet rises first; its outline follows, softly releasing the
-      // narrower shoulders and stretched lower edge. Children never scale.
-      return {
-        width: bounds.width - 16 * remaining,
-        height: bounds.height + 24 * remaining,
-        borderRadius: 28 + 16 * remaining,
-        opacity: reduced ? fade.get() : 1,
-        transform: [{ translateX: 8 * remaining }, { translateY: 0 }],
-      };
-    }
-    const width = 56 + (bounds.width - 56) * p;
-    const height = 44 + (bounds.height - 44) * p;
-    const round = Math.sin(Math.PI * Math.max(0, Math.min(1, p)));
+    // Difference between the leading mass and its following outline gives a
+    // directional stretch, then a small recoil. The content stays unscaled.
+    const lag =
+      reduced || !slideFromBottom
+        ? 0
+        : Math.max(
+            -24,
+            Math.min(40, (outlineOffset.get() - offset.get()) * 0.12),
+          );
     return {
-      width,
-      height,
-      borderRadius: Math.min(width / 2, height / 2, 28 + round * 48),
-      opacity: fade.get(),
-      transform: [
-        { translateX: (bounds.width - width) / 2 },
-        {
-          translateY:
-            (bounds.height - 22) * (1 - c) +
-            (bounds.height / 2) * c -
-            height / 2,
-        },
-      ],
+      width: bounds.width - Math.abs(lag) * 0.35,
+      height: bounds.height + lag,
+      borderRadius: 28 + Math.abs(lag) * 0.25,
+      transform: [{ translateX: Math.abs(lag) * 0.175 }],
     };
   });
   const content = useAnimatedStyle(() => ({
-    opacity: reduced
-      ? fade.get()
-      : slideFromBottom
-        ? interpolate(mass.get(), [0, 0.18], [0, 1], "clamp")
-        : interpolate(size.get(), [0.7, 1], [0, 1], "clamp"),
-  }));
-  const rise = useAnimatedStyle(() => ({
     transform: [
       {
-        translateY: reduced
-          ? 0
-          : (bounds.height + bottomInset + 24) * (1 - mass.get()),
+        translateX:
+          reduced || !slideFromBottom
+            ? 0
+            : -Math.abs(
+                Math.max(
+                  -24,
+                  Math.min(40, (outlineOffset.get() - offset.get()) * 0.12),
+                ),
+              ) * 0.175,
       },
     ],
-  }));
-  const fixedContent = useAnimatedStyle(() => ({
-    transform: [
-      {
-        translateX: reduced
-          ? 0
-          : -8 * (1 - Math.max(0, Math.min(1, size.get()))),
-      },
-    ],
+    opacity:
+      reduced || !slideFromBottom
+        ? 1
+        : interpolate(
+            offset.get(),
+            [0, distance * 0.65, distance],
+            [1, 1, 0],
+            "clamp",
+          ),
   }));
   return (
     <View
@@ -186,6 +214,9 @@ export function MorphingSurface({
               silhouette,
             ]}
           >
+            {/* Only the clipping bounds deform. The page is positioned at its
+                final dimensions, so its opaque background cannot escape the
+                liquid outline and its labels never scale or rewrap. */}
             <Animated.View
               pointerEvents={open ? "auto" : "none"}
               accessibilityElementsHidden={!open}
@@ -196,7 +227,6 @@ export function MorphingSurface({
                   width: bounds.width,
                   height: bounds.height,
                 },
-                fixedContent,
                 content,
               ]}
             >
@@ -205,39 +235,26 @@ export function MorphingSurface({
           </Animated.View>
         </Animated.View>
       ) : (
-        <>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              {
-                position: "absolute",
-                left: 0,
-                top: 0,
-                backgroundColor: colors.surface,
-                borderWidth: 1,
-                borderColor: colors.line,
-                boxShadow: "0 8px 36px #00000025",
-              },
-              silhouette,
-            ]}
-          />
-          <Animated.View
-            pointerEvents={open ? "auto" : "none"}
-            accessibilityElementsHidden={!open}
-            importantForAccessibility={open ? "auto" : "no-hide-descendants"}
-            style={[
-              {
-                flexGrow: 1,
-                flexShrink: 1,
-                borderRadius: 28,
-                overflow: "hidden",
-              },
-              content,
-            ]}
-          >
-            {children}
-          </Animated.View>
-        </>
+        <Animated.View
+          pointerEvents={open ? "auto" : "none"}
+          accessibilityElementsHidden={!open}
+          importantForAccessibility={open ? "auto" : "no-hide-descendants"}
+          style={[
+            {
+              flexGrow: 1,
+              flexShrink: 1,
+              borderRadius: 28,
+              overflow: "hidden",
+              backgroundColor: colors.surface,
+              borderWidth: 1,
+              borderColor: colors.line,
+              boxShadow: "0 8px 36px #00000025",
+            },
+            rise,
+          ]}
+        >
+          {children}
+        </Animated.View>
       )}
     </View>
   );

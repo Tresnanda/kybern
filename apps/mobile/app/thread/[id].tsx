@@ -201,14 +201,25 @@ export default function ThreadScreen() {
     setAway(false);
     list.current?.scrollToEnd({ animated: false });
   }, []);
-  const steeringAttempt = useRef<{ signature: string; id: string } | null>(null);
-  const steer = useCallback(async (message: UserMessage) => {
-    const signature = JSON.stringify([id, message]);
-    if (steeringAttempt.current?.signature !== signature) steeringAttempt.current = { signature, id: randomUUID() };
-    await rpc("threads.steer", { thread_id: id, id: steeringAttempt.current.id, message });
-    steeringAttempt.current = null;
-    jump();
-  }, [id, jump]);
+  const steeringAttempt = useRef<{ signature: string; id: string } | null>(
+    null,
+  );
+  const steer = useCallback(
+    async (message: UserMessage) => {
+      const signature = JSON.stringify([id, message]);
+      if (steeringAttempt.current?.signature !== signature)
+        steeringAttempt.current = { signature, id: randomUUID() };
+      const receipt = await rpc("threads.steer", {
+        thread_id: id,
+        id: steeringAttempt.current.id,
+        message,
+      });
+      steeringAttempt.current = null;
+      jump();
+      return { threadId: id, messageId: receipt.message_id };
+    },
+    [id, jump],
+  );
   const send = useCallback(
     async (message: UserMessage) => {
       if (
@@ -217,7 +228,11 @@ export default function ThreadScreen() {
       ) {
         await rpc("queue.add", { thread_id: id, id: randomUUID(), message });
         await refresh();
-      } else await rpc("threads.send", { thread_id: id, message });
+      } else {
+        const receipt = await rpc("threads.send", { thread_id: id, message });
+        jump();
+        return { threadId: id, messageId: receipt.message_id };
+      }
       jump();
     },
     [id, thread?.status, jump],

@@ -60,6 +60,7 @@ export default function Home() {
     });
     void refresh();
     router.push({ pathname: "/thread/[id]", params: { id: thread.id } });
+    return { threadId: thread.id };
   }
   return (
     <KeyboardAvoidingView

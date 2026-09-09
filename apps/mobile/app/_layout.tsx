@@ -14,6 +14,7 @@ import {
   AndroidHeader,
   androidScreenLayout,
 } from "../src/ui/AndroidNavigation";
+import { SendTransitionProvider } from "../src/components/liquid/SendTransition";
 import { DialogHost } from "../src/ui/Alert";
 
 // A sheet opened from a deep link still needs a destination to dismiss to.
@@ -90,7 +91,10 @@ function Navigation() {
         <Stack.Screen name="tasks" options={{ title: "Tasks & agents" }} />
         <Stack.Screen name="file" options={{ title: "File" }} />
         <Stack.Screen name="workspace" options={{ title: "Workspace" }} />
-        <Stack.Screen name="integrations" options={{ title: "Connectors and plugins" }} />
+        <Stack.Screen
+          name="integrations"
+          options={{ title: "Connectors and plugins" }}
+        />
         <Stack.Screen name="artifact" options={{ title: "Artifact" }} />
         <Stack.Screen name="scan-pairing" options={{ title: "Scan QR code" }} />
         <Stack.Screen
@@ -140,7 +144,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardProvider>
         <ThemeProvider>
-          <Navigation />
+          <SendTransitionProvider>
+            <Navigation />
+          </SendTransitionProvider>
         </ThemeProvider>
       </KeyboardProvider>
     </GestureHandlerRootView>

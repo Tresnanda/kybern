@@ -125,7 +125,7 @@ async function run() {
       )
     )
     await waitFor(
-      () => !!button("Show more") && !!button("Republish"),
+      () => !!button("Show more") && !!button("Ask to update publication"),
       "Catalog and artifacts load"
     )
     check(
@@ -225,10 +225,10 @@ async function run() {
     )
     button("Open in Claude").click()
     await waitFor(() => transport.opened.length > 0, "Hosted artifact opens")
-    button("Republish").click()
+    button("Ask to update publication").click()
     await waitFor(
       () => transport.sent.some((r) => r.method === "threads.send"),
-      "Republish sends native request"
+      "Publication request checks available tools"
     )
     check(
       JSON.stringify(
@@ -236,6 +236,7 @@ async function run() {
       ).includes("https://claude.ai/public/artifacts/fixture"),
       "Republish preserves hosted URL"
     )
+    check(JSON.stringify(transport.sent.filter((r) => r.method === "threads.send").at(-1)).includes("Check whether a publishing tool is actually available"), "Publication does not assume a native tool exists")
     previewCount = 0
     button("Preview").click()
     await waitFor(

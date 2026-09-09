@@ -82,8 +82,11 @@ WebView receives only a short-lived preview URL and no daemon credentials.
 Source/preview switching retains the same document and interactive state.
 Local HTML/SVG previews block network access; live connectors, sharing, and
 version history belong to the hosted Claude page opened by **Share and versions**.
-Publishing runs as a regular Claude turn, so pending approvals remain visible in
-the conversation. These controls require a daemon with the integrations/artifacts
+Kybern supplies local previews, not Claude’s hosted Artifact tool. The publishing
+action asks the agent to check its actual tools first; it must not promise a
+future turn will load a missing tool. Existing successful publication receipts
+still appear here. Requests run as regular Claude turns, with approvals visible
+in the conversation. These controls require a daemon with the integrations/artifacts
 RPCs; an older daemon reports an unsupported-method error.
 
 ## Notes and follow-ups

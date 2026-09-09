@@ -537,5 +537,8 @@ test("artifact publication requires native successful receipts and republishing 
   const prompt = publishArtifactPrompt(artifactView(receipt));
   assert.match(prompt, /https:\/\/claude.ai\/public\/artifacts\/example/);
   assert.match(prompt, /Never force/);
+  assert.match(prompt, /Check whether a publishing tool is actually available/);
+  assert.match(prompt, /Do not promise that another message or turn/);
+  assert.match(prompt, /only after a successful tool receipt/);
   assert.throws(() => publishArtifactPrompt({ path: null, url: null }));
 });

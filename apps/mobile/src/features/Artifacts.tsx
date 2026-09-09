@@ -71,10 +71,10 @@ export function Artifacts({ thread }: { thread: Thread }) {
           id: randomUUID(),
           message,
         });
-        setNotice("Publication request queued.");
+        setNotice("Publishing capability check queued.");
       } else {
         await rpc("threads.send", { thread_id: thread.id, message });
-        setNotice("Claude is handling your publication request.");
+        setNotice("Claude is checking which publishing tools are available.");
       }
       await refresh();
     } catch (e) {
@@ -185,7 +185,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
                   </T>
                 </Tap>
                 <Tap
-                  label="Publish with Claude"
+                  label="Check publishing options"
                   disabled={busy || !path.trim()}
                   onPress={() => void publish(path.trim(), null)}
                   style={{
@@ -194,7 +194,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
                     backgroundColor: dark ? colors.raised : colors.surface,
                   }}
                 >
-                  <T variant="label">Publish with Claude</T>
+                  <T variant="label">Check publishing options</T>
                 </Tap>
               </View>
             </>
@@ -213,8 +213,9 @@ export function Artifacts({ thread }: { thread: Thread }) {
               tone="secondary"
               style={{ textAlign: "center", maxWidth: 280 }}
             >
-              Ask Claude to publish a page or tool. You can preview a generated
-              file before publishing.
+              Preview a local HTML, Markdown, or SVG file. Hosting requires a
+              publishing tool available to Claude; local previews stay on your
+              computer.
             </T>
           )}
         </View>
@@ -316,12 +317,18 @@ export function Artifacts({ thread }: { thread: Thread }) {
                 )}
                 {item.path && item.status !== "publishing" && (
                   <Tap
-                    label={item.url ? "Republish" : "Retry publishing"}
+                    label={
+                      item.url
+                        ? "Ask to update publication"
+                        : "Check publishing options"
+                    }
                     disabled={busy}
                     onPress={() => void publish(item.path!, item.url)}
                   >
                     <T variant="label">
-                      {item.url ? "Republish" : "Retry publishing"}
+                      {item.url
+                        ? "Ask to update publication"
+                        : "Check publishing options"}
                     </T>
                   </Tap>
                 )}

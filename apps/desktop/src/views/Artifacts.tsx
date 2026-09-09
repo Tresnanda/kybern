@@ -81,10 +81,10 @@ export function ArtifactsPane({
       }
       if (status === "running" || status === "awaiting-approval") {
         await runtime.queueMessage(threadId, message)
-        setNotice("Publication request queued.")
+        setNotice("Publishing capability check queued.")
       } else {
         await runtime.sendMessage(threadId, message)
-        setNotice("Claude is handling your publication request.")
+        setNotice("Claude is checking which publishing tools are available.")
       }
     } catch (e) {
       setError(errorText(e))
@@ -163,7 +163,7 @@ export function ArtifactsPane({
               disabled={!path.trim() || publishing}
               onClick={() => void publishFile()}
             >
-              Publish with Claude
+              Check publishing options
             </Button>
           </div>
         </div>
@@ -187,8 +187,8 @@ export function ArtifactsPane({
           {loading
             ? "Loading artifacts…"
             : provider === "claude-code"
-              ? "Ask Claude to create an artifact. Published pages and their local previews appear here."
-              : "Claude Code publishes native artifacts. Open a Claude conversation to create one."}
+              ? "Preview a local file or check whether Claude has a publishing tool available."
+              : "Local previews stay on your computer. Hosting requires a publishing tool available to the agent."}
         </p>
       )}
       <div className="space-y-3">
@@ -301,8 +301,8 @@ export function ArtifactCard({
             {busy
               ? "Sending…"
               : artifact.url
-                ? "Republish"
-                : "Retry publishing"}
+                ? "Ask to update publication"
+                : "Check publishing options"}
           </Button>
         )}
       </div>

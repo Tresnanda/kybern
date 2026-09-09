@@ -4,8 +4,8 @@ import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { fetch as expoFetch } from "expo/fetch";
-import { memo, useEffect, useRef, useState } from "react";
-import { ScrollView, TextInput, View } from "react-native";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Image, Keyboard, ScrollView, TextInput, View } from "react-native";
 import {
   clearContext,
   setDraft,
@@ -38,6 +38,36 @@ import {
 } from "../ui/primitives";
 import { type, useTheme } from "../ui/theme";
 import type { ThreadState } from "../state/transcript";
+import Animated, {
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSequence,
+  withSpring,
+} from "react-native-reanimated";
+import {
+  measureSendView,
+  useSendTransition,
+} from "../components/liquid/SendTransition";
+import {
+  sendPartKey,
+  type SendReceipt,
+  type SendSource,
+} from "../state/sendTransition";
+import { imageSource } from "./MessagePart";
+import {
+  MorphingMenu,
+  type MenuOrigin,
+} from "../components/liquid/MorphingMenu";
+
+const COMPOSER_REFLOW = LinearTransition.springify()
+  .duration(300)
+  .dampingRatio(0.8);
+const ATTACH_ENTER = FadeIn.duration(140);
+const ATTACH_EXIT = FadeOut.duration(120);
 const selectCommands = (state: ThreadState) => state.providerCommands;
 
 function contextLabel(part: ContentPart) {
@@ -57,14 +87,39 @@ export const Composer = memo(function Composer({
   onPromptConsumed,
 }: {
   thread?: Thread | null;
-  onSend: (message: UserMessage) => Promise<void>;
-  onSteer?: (message: UserMessage) => Promise<void>;
+  onSend: (message: UserMessage) => Promise<SendReceipt | void>;
+  onSteer?: (message: UserMessage) => Promise<SendReceipt | void>;
   onStop?: () => void;
   disabled?: boolean;
   prompt?: string;
   onPromptConsumed?: () => void;
 }) {
   const { colors } = useTheme();
+  const reduced = useReducedMotion();
+  const sendTransition = useSendTransition();
+  const inputBounds = useRef<View>(null);
+  const attachmentViews = useRef(new Map<string, View>());
+  const attachmentUris = useRef(new Map<string, string>());
+  const inputContentHeight = useRef(22);
+  const sendLock = useRef(false);
+  const recoil = useSharedValue(1);
+  const composerMotion = useAnimatedStyle(() => ({
+    transform: [{ scale: recoil.get() }],
+  }));
+  const addButton = useRef<View>(null);
+  const [addOrigin, setAddOrigin] = useState<MenuOrigin | null>(null);
+  const afterAddClose = useRef<(() => void) | null>(null);
+  const finishAddClose = useCallback(() => {
+    setAddOrigin(null);
+    const action = afterAddClose.current;
+    afterAddClose.current = null;
+    action?.();
+  }, []);
+  function chooseAddAction(action: () => void) {
+    if (afterAddClose.current) return;
+    afterAddClose.current = action;
+    setAdding(false);
+  }
   const draft = useDraft();
   const [text, setText] = useState("");
   const [selection, setSelection] = useState({ start: 0, end: 0 });
@@ -117,7 +172,15 @@ export const Composer = memo(function Composer({
     thread?.status === "running" || thread?.status === "awaiting-approval";
   const steering = running && !!onSteer && promptMode === "steer";
   async function send() {
-    if (busy || uploading || (!text.trim() && !attachments.length)) return;
+    if (
+      sendLock.current ||
+      disabled ||
+      busy ||
+      uploading ||
+      (!text.trim() && !attachments.length)
+    )
+      return;
+    sendLock.current = true;
     setBusy(true);
     setError("");
     try {
@@ -129,20 +192,65 @@ export const Composer = memo(function Composer({
             })
           ).skills
         : [];
-      await (steering ? onSteer! : onSend)({
+      const message: UserMessage = {
         parts: [
           ...attachments,
           ...buildStructuredTextParts(text, new Set(), skillItems),
         ],
-      });
+      };
+      const sources: Record<string, SendSource> = {};
+      if (!reduced) {
+        const textRect = await measureSendView(inputBounds.current);
+        if (textRect && text.trim())
+          sources.text = {
+            rect: {
+              x: textRect.x + 9,
+              y: textRect.y + 8,
+              width: textRect.width - 18,
+              height: Math.max(
+                22,
+                Math.min(textRect.height - 23, inputContentHeight.current),
+              ),
+            },
+          };
+        await Promise.all(
+          message.parts.map(async (part, index) => {
+            if (part.type === "text") return;
+            const key = sendPartKey(part, index);
+            const rect = await measureSendView(
+              attachmentViews.current.get(key) ?? null,
+            );
+            if (rect)
+              sources[key] = {
+                rect,
+                uri:
+                  part.type === "attachment"
+                    ? attachmentUris.current.get(part.asset_id)
+                    : undefined,
+              };
+          }),
+        );
+      }
+      const receipt = await (steering ? onSteer! : onSend)(message);
+      if (receipt) sendTransition.start(receipt, message, sources);
+      if (!running) Keyboard.dismiss();
+      if (!reduced)
+        recoil.set(
+          withSequence(
+            withSpring(0.985, { duration: 100, dampingRatio: 1 }),
+            withSpring(1, { duration: 300, dampingRatio: 0.8 }),
+          ),
+        );
       setText("");
       setAttachments([]);
+      attachmentUris.current.clear();
       lastPrompt.current = "";
       onPromptConsumed?.();
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (e) {
       setError(errorText(e));
     } finally {
+      sendLock.current = false;
       setBusy(false);
     }
   }
@@ -180,6 +288,7 @@ export const Composer = memo(function Composer({
           media_type: string;
           size: number;
         };
+        attachmentUris.current.set(result.id, asset.uri);
         setAttachments((prev) => [
           ...prev,
           {
@@ -307,22 +416,21 @@ export const Composer = memo(function Composer({
       }}
     >
       <ErrorBanner error={error} />
-      {adding && (
-        <View
-          style={{
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.line,
-            borderRadius: 20,
-            padding: 12,
-          }}
+      {addOrigin && (
+        <MorphingMenu
+          origin={addOrigin}
+          open={adding}
+          placement="above"
+          onClose={() => setAdding(false)}
+          onClosed={finishAddClose}
         >
           <Tap
             label="Attach a file"
-            onPress={() => {
-              setAdding(false);
-              void attach();
-            }}
+            onPress={() =>
+              chooseAddAction(() => {
+                void attach();
+              })
+            }
             style={[styles.line, { paddingHorizontal: 12 }]}
           >
             <Icon name="paperclip" size={18} />
@@ -330,15 +438,16 @@ export const Composer = memo(function Composer({
           </Tap>
           <Tap
             label="Mention a project file"
-            onPress={() => {
-              setAdding(false);
-              router.push({
-                pathname: "/workspace",
-                params: thread
-                  ? { threadId: thread.id, tab: "Files" }
-                  : { projectId: draft.projectId, tab: "Files" },
-              });
-            }}
+            onPress={() =>
+              chooseAddAction(() => {
+                router.push({
+                  pathname: "/workspace",
+                  params: thread
+                    ? { threadId: thread.id, tab: "Files" }
+                    : { projectId: draft.projectId, tab: "Files" },
+                });
+              })
+            }
             style={[styles.line, { paddingHorizontal: 12 }]}
           >
             <Icon name="folder" size={18} />
@@ -346,13 +455,13 @@ export const Composer = memo(function Composer({
           </Tap>
           <Tap
             label="Skills, plugins, and commands"
-            onPress={() => openCapabilities()}
+            onPress={() => chooseAddAction(() => openCapabilities())}
             style={[styles.line, { paddingHorizontal: 12 }]}
           >
             <Icon name="sparkles" size={18} />
             <T variant="label">Skills, plugins & commands</T>
           </Tap>
-        </View>
+        </MorphingMenu>
       )}
       {trigger && triggerKey !== dismissed && !disabled && (
         <ComposerSuggestions
@@ -380,104 +489,210 @@ export const Composer = memo(function Composer({
         />
       )}
 
-      {attachments.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8 }}
-        >
-          {attachments.map((part, index) => (
-            <Tap
-              key={index}
-              label={`Remove ${contextLabel(part)}`}
-              onPress={() =>
-                setAttachments((a) => a.filter((_, i) => i !== index))
-              }
-              style={{
-                ...styles.line,
-                paddingHorizontal: 12,
-                borderRadius: 14,
-                backgroundColor: colors.raised,
-              }}
-            >
-              <Icon
-                name={
-                  part.type === "skill"
-                    ? "sparkles"
-                    : part.type === "mention"
-                      ? "puzzlepiece.extension"
-                      : part.type === "file_mention"
-                        ? "doc.text"
-                        : "paperclip"
-                }
-                size={14}
-              />
-              <T variant="caption">{contextLabel(part)}</T>
-              <Icon name="xmark" size={11} />
-            </Tap>
-          ))}
-        </ScrollView>
-      )}
-      <View
-        style={{
-          borderRadius: 26,
-          backgroundColor: colors.surface,
-          borderWidth: 1,
-          borderColor: colors.line,
-          padding: 10,
-          boxShadow: `0 3px 12px ${colors.backdrop.slice(0, 7)}08`,
-        }}
+      <Animated.View
+        layout={reduced ? undefined : COMPOSER_REFLOW}
+        style={[
+          composerMotion,
+          {
+            borderRadius: 26,
+            backgroundColor: colors.surface,
+            borderWidth: 1,
+            borderColor: colors.line,
+            padding: 10,
+            boxShadow: `0 3px 12px ${colors.backdrop.slice(0, 7)}08`,
+          },
+        ]}
       >
-        {running && onSteer && <View style={[styles.line, { gap: 6, paddingHorizontal: 8 }]}>
-          {(["queue", "steer"] as const).map((mode) => <Tap key={mode}
-            label={mode === "queue" ? "Queue follow-up" : "Steer now"}
-            selected={promptMode === mode}
-            disabled={busy} onPress={() => setPromptMode(mode)}
-            style={{ paddingHorizontal: 12, minHeight: 44, justifyContent: "center", borderRadius: 14, backgroundColor: promptMode === mode ? colors.background : "transparent" }}>
-            <T variant="caption" tone={promptMode === mode ? undefined : "secondary"}>{mode === "queue" ? "Queue follow-up" : "Steer now"}</T>
-          </Tap>)}
-        </View>}
-        <TextInput
-          underlineColorAndroid="transparent"
-          ref={input}
-          accessibilityLabel={running ? "Follow-up message" : "Message"}
-          placeholder={
-            steering ? "Guide the current turn…" : running ? "Add a follow-up…" : "Ask Kybern to build something…"
-          }
-          placeholderTextColor={colors.muted}
-          value={text}
-          onChangeText={(value) => {
-            setText(value);
-            setDismissed("");
-          }}
-          onSelectionChange={(event) =>
-            setSelection(event.nativeEvent.selection)
-          }
-          multiline
-          editable={!busy}
-          selectionColor={colors.accent}
-          style={[
-            type.body,
-            {
-              color: colors.ink,
-              minHeight: 60,
-              maxHeight: 180,
-              paddingHorizontal: 9,
-              paddingTop: 8,
-              paddingBottom: 15,
-            },
-          ]}
-        />
+        {attachments.length > 0 && (
+          <Animated.View layout={reduced ? undefined : COMPOSER_REFLOW}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 8, padding: 4 }}
+            >
+              {attachments.map((part, index) => {
+                const key = sendPartKey(part, index);
+                const source = imageSource(
+                  part,
+                  part.type === "attachment"
+                    ? attachmentUris.current.get(part.asset_id)
+                    : undefined,
+                );
+                return (
+                  <Animated.View
+                    key={key}
+                    layout={reduced ? undefined : COMPOSER_REFLOW}
+                    entering={ATTACH_ENTER}
+                    exiting={ATTACH_EXIT}
+                  >
+                    <Tap
+                      label={`Remove ${contextLabel(part)}`}
+                      disabled={busy}
+                      onPress={() => {
+                        setAttachments((previous) =>
+                          previous.filter((_, i) => i !== index),
+                        );
+                      }}
+                      style={{
+                        borderRadius: 16,
+                        backgroundColor: colors.raised,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <View
+                        collapsable={false}
+                        ref={(view) => {
+                          if (view) attachmentViews.current.set(key, view);
+                          else attachmentViews.current.delete(key);
+                        }}
+                        style={
+                          source
+                            ? { width: 72, height: 72 }
+                            : { ...styles.line, paddingHorizontal: 12 }
+                        }
+                      >
+                        {source ? (
+                          <Image
+                            source={source}
+                            accessibilityLabel={contextLabel(part)}
+                            style={{ width: 72, height: 72, borderRadius: 16 }}
+                            resizeMode="contain"
+                          />
+                        ) : (
+                          <>
+                            <Icon
+                              name={
+                                part.type === "skill"
+                                  ? "sparkles"
+                                  : part.type === "file_mention"
+                                    ? "doc.text"
+                                    : "paperclip"
+                              }
+                              size={14}
+                            />
+                            <T variant="caption">{contextLabel(part)}</T>
+                          </>
+                        )}
+                      </View>
+                      <View
+                        pointerEvents="none"
+                        style={
+                          source
+                            ? {
+                                position: "absolute",
+                                right: 3,
+                                top: 3,
+                                borderRadius: 12,
+                                padding: 5,
+                                backgroundColor: colors.surface,
+                              }
+                            : { position: "absolute", right: 3, top: 3 }
+                        }
+                      >
+                        <Icon name="xmark" size={11} />
+                      </View>
+                    </Tap>
+                  </Animated.View>
+                );
+              })}
+            </ScrollView>
+          </Animated.View>
+        )}
+
+        {running && onSteer && (
+          <View style={[styles.line, { gap: 6, paddingHorizontal: 8 }]}>
+            {(["queue", "steer"] as const).map((mode) => (
+              <Tap
+                key={mode}
+                label={mode === "queue" ? "Queue follow-up" : "Steer now"}
+                selected={promptMode === mode}
+                disabled={busy}
+                onPress={() => setPromptMode(mode)}
+                style={{
+                  paddingHorizontal: 12,
+                  minHeight: 44,
+                  justifyContent: "center",
+                  borderRadius: 14,
+                  backgroundColor:
+                    promptMode === mode ? colors.background : "transparent",
+                }}
+              >
+                <T
+                  variant="caption"
+                  tone={promptMode === mode ? undefined : "secondary"}
+                >
+                  {mode === "queue" ? "Queue follow-up" : "Steer now"}
+                </T>
+              </Tap>
+            ))}
+          </View>
+        )}
+        <View ref={inputBounds} collapsable={false}>
+          <TextInput
+            underlineColorAndroid="transparent"
+            ref={input}
+            accessibilityLabel={running ? "Follow-up message" : "Message"}
+            placeholder={
+              steering
+                ? "Guide the current turn…"
+                : running
+                  ? "Add a follow-up…"
+                  : "Ask Kybern to build something…"
+            }
+            placeholderTextColor={colors.muted}
+            value={text}
+            onChangeText={(value) => {
+              setText(value);
+              setDismissed("");
+            }}
+            onSelectionChange={(event) =>
+              setSelection(event.nativeEvent.selection)
+            }
+            onContentSizeChange={(event) => {
+              inputContentHeight.current = Math.max(
+                22,
+                event.nativeEvent.contentSize.height - 23,
+              );
+            }}
+            multiline
+            editable={!busy}
+            selectionColor={colors.accent}
+            style={[
+              type.body,
+              {
+                color: colors.ink,
+                minHeight: 60,
+                maxHeight: 180,
+                paddingHorizontal: 9,
+                paddingTop: 8,
+                paddingBottom: 15,
+              },
+            ]}
+          />
+        </View>
         <ComposerControls
           thread={thread}
           disabled={disabled}
           leading={
-            <IconButton
-              name="plus"
-              label={adding ? "Close attachment menu" : "Add to message"}
-              onPress={() => setAdding((value) => !value)}
-              disabled={disabled || uploading}
-            />
+            <View ref={addButton} collapsable={false}>
+              <IconButton
+                name="plus"
+                label={adding ? "Close attachment menu" : "Add to message"}
+                onPress={() => {
+                  if (adding) {
+                    setAdding(false);
+                    return;
+                  }
+                  void measureSendView(addButton.current).then((rect) => {
+                    if (rect) {
+                      setAddOrigin(rect);
+                      setAdding(true);
+                    }
+                  });
+                }}
+                disabled={disabled || uploading || busy}
+              />
+            </View>
           }
           trailing={
             <View style={[styles.line, { gap: 0 }]}>
@@ -489,8 +704,16 @@ export const Composer = memo(function Composer({
                 />
               )}
               <IconButton
-                name={running && !steering ? "arrow.turn.down.right" : "arrow.up"}
-                label={steering ? "Steer now" : running ? "Queue follow-up" : "Send message"}
+                name={
+                  running && !steering ? "arrow.turn.down.right" : "arrow.up"
+                }
+                label={
+                  steering
+                    ? "Steer now"
+                    : running
+                      ? "Queue follow-up"
+                      : "Send message"
+                }
                 filled
                 onPress={() => void send()}
                 disabled={
@@ -503,14 +726,16 @@ export const Composer = memo(function Composer({
             </View>
           }
         />
-      </View>
+      </Animated.View>
       {(busy || uploading) && (
         <T variant="caption" tone="secondary">
           {uploading
             ? "Attaching files…"
-            : steering ? "Steering…" : running
-              ? "Queueing follow-up…"
-              : "Sending…"}
+            : steering
+              ? "Steering…"
+              : running
+                ? "Queueing follow-up…"
+                : "Sending…"}
         </T>
       )}
     </View>

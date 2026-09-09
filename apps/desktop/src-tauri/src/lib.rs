@@ -174,7 +174,7 @@ fn daemon_needs_restart(info: &DaemonInfo, binary_modified: Option<SystemTime>) 
     modified_ms > info.started_at.timestamp_millis()
 }
 
-async fn stop_daemon(endpoint: &Endpoint) -> Result<()> {
+async fn stop_daemon(endpoint: &Endpoint, root: &Path) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(2), async {
         let client = Client::connect(endpoint).await?;
         client.call::<DaemonShutdown>(Empty {}).await
@@ -182,13 +182,18 @@ async fn stop_daemon(endpoint: &Endpoint) -> Result<()> {
     .await
     .context("timed out while stopping the stale daemon")??;
 
-    for _ in 0..100 {
-        if daemon_info(endpoint).await.is_none() {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        // Losing the socket does not mean shutdown has finished. The old
+        // process removes these files after closing agents and terminals;
+        // starting a successor on the same port earlier lets that cleanup
+        // remove the successor's endpoint files.
+        if !root.join("daemon.port").exists() && !root.join("daemon.listen").exists() && daemon_info(endpoint).await.is_none() {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    Err(anyhow!("the stale daemon did not stop in time"))
+    Err(anyhow!("the old daemon is still shutting down; wait for its agents to close, then reopen Kybern"))
 }
 
 fn daemon_binary() -> Result<PathBuf> {
@@ -275,7 +280,35 @@ fn login_shell_path() -> Option<String> {
     }
 }
 
-fn spawn_daemon(startup_id: &str) -> Result<std::process::Child> {
+// daemon.port is a live discovery file and is removed on clean shutdown.
+// Keep a separate durable address for phones paired with this installation.
+fn preferred_daemon_port(root: &Path) -> Result<u16> {
+    for name in ["daemon.port", "desktop.port"] {
+        match std::fs::read_to_string(root.join(name)) {
+            Ok(value) => {
+                return value
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|port| *port != 0)
+                    .with_context(|| format!("Invalid port in {}; correct the file before restarting Kybern", root.join(name).display()));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(0)
+}
+
+fn remember_daemon_port(root: &Path, port: u16) -> Result<()> {
+    if port != 0 {
+        std::fs::create_dir_all(root)?;
+        std::fs::write(root.join("desktop.port"), port.to_string())?;
+    }
+    Ok(())
+}
+
+fn spawn_daemon(startup_id: &str, port: u16) -> Result<std::process::Child> {
     let bin = daemon_binary()?;
     let root = data_dir();
     // Launch the bundled externalBin directly instead of through the shell
@@ -292,10 +325,10 @@ fn spawn_daemon(startup_id: &str) -> Result<std::process::Child> {
     } else {
         cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     }
-    // Let the OS select an unused port for app-managed daemons. The daemon
-    // records the selected port under its data directory for every client.
+    // Choose once, then retain the address across upgrades and clean shutdowns.
+    // A port conflict must fail visibly instead of silently breaking pairing.
     if std::env::var_os("KYBERN_PORT").is_none() {
-        cmd.arg("--port").arg("0");
+        cmd.arg("--port").arg(port.to_string());
     }
     cmd.arg("--desktop-startup-id").arg(startup_id);
     cmd.stdin(std::process::Stdio::null());
@@ -319,6 +352,13 @@ async fn endpoint() -> Result<EndpointInfo, String> {
         if let Some(endpoint) = fresh_starting_endpoint(&mut *STARTING_ENDPOINT.lock().await)? {
             return Ok(endpoint);
         }
+        let root = data_dir().context("no data directory for the local daemon")?;
+        let managed = std::env::var_os("KYBERN_URL").is_none();
+        let port = if managed && std::env::var_os("KYBERN_PORT").is_none() { preferred_daemon_port(&root)? } else { 0 };
+        if managed {
+            // Capture the old port before shutdown removes daemon.port.
+            remember_daemon_port(&root, port)?;
+        }
         if let Ok(ep) = resolve() {
             if let Some(info) = daemon_info(&ep).await {
                 let externally_managed = std::env::var_os("KYBERN_URL").is_some();
@@ -331,7 +371,7 @@ async fn endpoint() -> Result<EndpointInfo, String> {
                         info.started_at,
                         binary.as_ref().map_or_else(|| "the bundled daemon".into(), |path| path.display().to_string())
                     );
-                    stop_daemon(&ep).await?;
+                    stop_daemon(&ep, &root).await?;
                 } else {
                     ensure_compatible(&info)?;
                     return Ok(EndpointInfo { http_base: http_base(&ep.url), url: ep.url, token: ep.token, spawned: false });
@@ -344,8 +384,9 @@ async fn endpoint() -> Result<EndpointInfo, String> {
         let root = data_dir().context("no data directory for the local daemon")?;
         std::fs::create_dir_all(&root)?;
         let (startup_id, startup_file) = new_startup_announcement(&root);
-        let mut child = spawn_daemon(&startup_id)?;
+        let mut child = spawn_daemon(&startup_id, port)?;
         let announcement = wait_for_startup_announcement(&startup_file.path, &mut child).await?;
+        remember_daemon_port(&root, announcement.port)?;
         let token = resolve()?.token;
         let endpoint = endpoint_from_announcement(announcement, token)?;
         *STARTING_ENDPOINT.lock().await =
@@ -415,11 +456,41 @@ fn pairing_qr(invitation: String) -> Result<String, String> {
 mod tests {
     use super::{
         DaemonStartupAnnouncement, EndpointInfo, STARTUP_ANNOUNCEMENT_TIMEOUT, StartingEndpoint, daemon_needs_restart,
-        endpoint_from_announcement, fresh_starting_endpoint,
+        endpoint_from_announcement, fresh_starting_endpoint, preferred_daemon_port, remember_daemon_port,
     };
     use kybern_protocol::PROTOCOL_VERSION;
     use kybern_protocol::methods::DaemonInfo;
     use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn paired_port_survives_upgrade_and_clean_shutdown() {
+        let root = std::env::temp_dir().join(format!("kybern-desktop-port-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(preferred_daemon_port(&root).unwrap(), 0);
+        // Migrate the live endpoint before the old daemon removes its files.
+        std::fs::write(root.join("daemon.port"), "59930").unwrap();
+        let port = preferred_daemon_port(&root).unwrap();
+        remember_daemon_port(&root, port).unwrap();
+        std::fs::remove_file(root.join("daemon.port")).unwrap();
+        assert_eq!(preferred_daemon_port(&root).unwrap(), 59930);
+        // An explicitly changed live port becomes the new paired address.
+        std::fs::write(root.join("daemon.port"), "4219").unwrap();
+        remember_daemon_port(&root, preferred_daemon_port(&root).unwrap()).unwrap();
+        std::fs::remove_file(root.join("daemon.port")).unwrap();
+        assert_eq!(preferred_daemon_port(&root).unwrap(), 4219);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_saved_port_does_not_silently_change_the_pairing_address() {
+        let root = std::env::temp_dir().join(format!("kybern-desktop-port-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        for value in ["0", "65536", "", "broken"] {
+            std::fs::write(root.join("desktop.port"), value).unwrap();
+            assert!(preferred_daemon_port(&root).is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn daemon(version: &str) -> DaemonInfo {
         DaemonInfo {
