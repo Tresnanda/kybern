@@ -1,6 +1,7 @@
+import { Busy } from "../../ui/Busy";
 // Native adaptation of BeUI FileTree (MIT): https://beui.dev/r/file-tree/raw
 // Retains the flattened expanded collection, indentation and selected-row model.
-import { ActivityIndicator, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import Animated, { useReducedMotion } from "react-native-reanimated";
 import type { FileEntry } from "../../state/protocol";
 import { Icon, T } from "../../ui/primitives";
@@ -116,7 +117,7 @@ export function FileTreeRow({
       <T variant="caption" numberOfLines={1} style={{ flex: 1 }}>
         {row.item.name}
       </T>
-      {loading && <ActivityIndicator size="small" color={colors.secondary} />}
+      {loading && <Busy size="small" color={colors.secondary} />}
     </Pressable>
   );
 }

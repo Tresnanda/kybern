@@ -35,22 +35,8 @@ export type MenuOrigin = {
   width: number;
   height: number;
 };
-// liquid-gooey's morph defaults, mapped through speed=2, bounce=.15.
-// Separate springs preserve the mass-before-size character without a long wobble.
+import { MASS, SIZE } from "./motion";
 const SPEED = 2;
-const DAMPING = (1 - 1.1 * 0.15) / 0.45;
-const MASS = {
-  stiffness: 320 * SPEED * SPEED,
-  damping: 17 * SPEED * DAMPING,
-  mass: 1,
-  reduceMotion: ReduceMotion.System,
-};
-const SIZE = {
-  stiffness: 170 * SPEED * SPEED,
-  damping: 11.5 * SPEED * DAMPING,
-  mass: 1,
-  reduceMotion: ReduceMotion.System,
-};
 
 export function MorphingMenu({
   origin,

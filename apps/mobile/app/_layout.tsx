@@ -1,7 +1,7 @@
 import { Stack } from "expo-router";
 import { NavigationBar } from "expo-navigation-bar";
 import * as SystemUI from "expo-system-ui";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -9,6 +9,25 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { useReducedMotion } from "react-native-reanimated";
 import { boot } from "../src/state/runtime";
 import { ThemeProvider, useTheme } from "../src/ui/theme";
+
+import {
+  AndroidHeader,
+  androidScreenLayout,
+} from "../src/ui/AndroidNavigation";
+import { DialogHost } from "../src/ui/Alert";
+
+// A sheet opened from a deep link still needs a destination to dismiss to.
+export const unstable_settings = { anchor: "index" };
+
+const androidSheet =
+  Platform.OS === "android"
+    ? {
+        presentation: "transparentModal" as const,
+        headerShown: false,
+        animation: "none" as const,
+        contentStyle: { backgroundColor: "transparent" },
+      }
+    : {};
 
 function Navigation() {
   const { colors, dark } = useTheme();
@@ -24,8 +43,15 @@ function Navigation() {
       <StatusBar style={dark ? "light" : "dark"} />
       <NavigationBar style={dark ? "light" : "dark"} />
       <Stack
+        screenLayout={
+          Platform.OS === "android" ? androidScreenLayout : undefined
+        }
         screenOptions={{
           headerShadowVisible: false,
+          header:
+            Platform.OS === "android"
+              ? (props) => <AndroidHeader {...props} />
+              : undefined,
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.ink,
           headerTitleStyle: { fontSize: 17, fontWeight: "500" },
@@ -45,7 +71,11 @@ function Navigation() {
         />
         <Stack.Screen
           name="connect"
-          options={{ title: "Connect a computer", presentation: "modal" }}
+          options={{
+            title: "Connect a computer",
+            presentation: "modal",
+            ...androidSheet,
+          }}
         />
         <Stack.Screen
           name="configure"
@@ -54,6 +84,7 @@ function Navigation() {
             presentation: "formSheet",
             sheetAllowedDetents: [0.75, 1],
             sheetGrabberVisible: true,
+            ...androidSheet,
           }}
         />
         <Stack.Screen name="tasks" options={{ title: "Tasks & agents" }} />
@@ -67,6 +98,7 @@ function Navigation() {
             presentation: "formSheet",
             sheetAllowedDetents: [0.75, 1],
             sheetGrabberVisible: true,
+            ...androidSheet,
           }}
         />
         <Stack.Screen name="add-project" options={{ title: "Add project" }} />
@@ -77,6 +109,7 @@ function Navigation() {
             presentation: "formSheet",
             sheetAllowedDetents: [0.75, 1],
             sheetGrabberVisible: true,
+            ...androidSheet,
           }}
         />
         <Stack.Screen
@@ -85,6 +118,7 @@ function Navigation() {
             presentation: "formSheet",
             sheetAllowedDetents: [0.75, 1],
             sheetGrabberVisible: true,
+            ...androidSheet,
           }}
         />
         <Stack.Screen name="settings-detail" options={{ title: "Settings" }} />
@@ -95,6 +129,7 @@ function Navigation() {
         <Stack.Screen name="sessions" options={{ title: "Resume a session" }} />
         <Stack.Screen name="pair" options={{ headerShown: false }} />
       </Stack>
+      <DialogHost />
     </View>
   );
 }

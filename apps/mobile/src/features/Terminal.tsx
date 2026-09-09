@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Keyboard, ScrollView, TextInput, View } from "react-native";
+import { Keyboard, ScrollView, TextInput, View } from "react-native";
+import { Alert } from "../ui/Alert";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../ui/theme";
@@ -397,6 +398,7 @@ export function Terminal({ threadId }: { threadId: string }) {
             </ScrollView>
             <View style={{ backgroundColor: colors.raised, borderRadius: 22 }}>
               <TextInput
+                underlineColorAndroid="transparent"
                 ref={input}
                 accessibilityLabel="Terminal keyboard input"
                 defaultValue=""

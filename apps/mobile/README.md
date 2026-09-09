@@ -1,6 +1,6 @@
 # Kybern mobile
 
-A fresh Expo client for the Kybern daemon, with an Ink palette, native navigation,
+A fresh Expo client for the Kybern daemon, with an Ink palette, platform-aware navigation,
 light/dark appearance, SF Symbols, responsive text, touch feedback, and motion that
 respects Reduce Motion. The computer runs the agents; the phone controls their work.
 
@@ -131,7 +131,8 @@ sending; local navigation commands execute on selection. New-thread composers
 allow agent, model, reasoning, permission, and workspace setup. Existing threads
 keep their agent and workspace while exposing model, reasoning, permissions,
 context usage, queue/stop controls, and session-specific commands. Permissions,
-model/reasoning, and usage open native picker sheets without expanding the input.
+model/reasoning, and usage open picker sheets without expanding the input: custom
+morphing surfaces on Android and native sheets on iOS.
 
 Settings opens a compact overview with dedicated pages for appearance, computers,
 thread defaults, agents, usage, background/updates, and access. Computer settings
@@ -181,9 +182,15 @@ panel. The blur and labels are separate; text stays unscaled. Closing morphs bac
 to the measured button before unmounting, while Reduce Motion uses a short fade.
 The menu is capped at 272 points wide with compact section spacing and 44-point
 minimum touch targets.
-Android menus use opaque themed surfaces and custom animated controls, following
-the liquid-gooey motion model. Do not use translucent glass or stock Android
-widget styling for these surfaces. iOS retains its native glass treatment.
+Android menus, dialogs, and picker sheets use opaque themed surfaces, following
+the liquid-gooey motion model. Dialogs and sheets share the menu's mass and size
+springs; content stays unscaled, and dialog actions and navigation removal wait
+for the exit to finish. Sheets dismiss with Back, the close button, the backdrop, or a header drag.
+`src/ui/Alert.tsx` provides confirmations and editable prompts, `Toggle.tsx`
+provides the shaped toggle, and `AndroidNavigation.tsx` provides custom headers
+and sheets. Loading and pull-to-refresh visuals are custom too. Use these shared
+components for new Android UI. iOS retains its native controls and glass treatment.
+Reduce Motion removes the spatial morph and retains a short fade.
 
 The thread header uses a shorter progressive fade above the conversation. Terminal
 uses the app theme, an edge-to-edge xterm canvas and scrollable groups of shell

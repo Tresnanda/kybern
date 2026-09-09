@@ -1,6 +1,7 @@
 import { router } from "expo-router";
 import { useState } from "react";
-import { Alert, Linking, View } from "react-native";
+import { Linking, View } from "react-native";
+import { Alert } from "../src/ui/Alert";
 import { setDraft } from "../src/state/draft";
 import { type Project, type PullRequest } from "../src/state/protocol";
 import { errorText, refresh, rpc, useApp } from "../src/state/runtime";

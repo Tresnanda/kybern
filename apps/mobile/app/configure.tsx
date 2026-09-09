@@ -1,7 +1,8 @@
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { Switch, View } from "react-native";
+import { View } from "react-native";
+import { Toggle } from "../src/ui/Toggle";
 import { getDraft, setDraft, type DraftOptions } from "../src/state/draft";
 import {
   type BranchInfo,
@@ -360,7 +361,7 @@ export default function Configure() {
             title="Use a worktree"
             detail="Keep this thread’s changes in a separate checkout."
             trailing={
-              <Switch
+              <Toggle
                 accessibilityLabel="Use a worktree"
                 value={options.worktree}
                 onValueChange={(worktree) => patch({ worktree })}

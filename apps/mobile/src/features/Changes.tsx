@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Alert, Linking, View } from "react-native";
+import { Linking, View } from "react-native";
+import { Alert } from "../ui/Alert";
 import { type Diff, type GitStatus } from "../state/protocol";
 import { errorText, rpc } from "../state/runtime";
 import { Code } from "../ui/Markdown";

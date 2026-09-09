@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
 import { useState } from "react";
-import { Alert } from "react-native";
+import { Alert } from "../src/ui/Alert";
 import { Button, ErrorBanner, Group, Page, Row, T } from "../src/ui/primitives";
 
 export default function AppUpdatesScreen() {

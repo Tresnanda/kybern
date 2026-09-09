@@ -1,6 +1,7 @@
 import * as Clipboard from "expo-clipboard";
 import { memo, useState } from "react";
-import { Alert, Image, Share, View } from "react-native";
+import { Image, Share, View } from "react-native";
+import { Alert } from "../ui/Alert";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { httpBase } from "../state/protocol";
 import {

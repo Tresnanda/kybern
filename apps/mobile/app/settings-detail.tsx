@@ -1,6 +1,8 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, Switch, View } from "react-native";
+import { View } from "react-native";
+import { Toggle } from "../src/ui/Toggle";
+import { Alert } from "../src/ui/Alert";
 import {
   type DaemonActivity,
   type DaemonUpdate,
@@ -142,7 +144,7 @@ export default function SettingsDetail() {
         title={title}
         detail={detail}
         trailing={
-          <Switch
+          <Toggle
             accessibilityLabel={title}
             disabled={busy}
             value={settings[key]}
@@ -432,7 +434,7 @@ export default function SettingsDetail() {
                   title="Save power on battery"
                   detail="Release idle agents sooner and pause automatic updates."
                   trailing={
-                    <Switch
+                    <Toggle
                       accessibilityLabel="Save power on battery"
                       disabled={busy}
                       value={settings.background.save_power_on_battery}
@@ -540,7 +542,7 @@ export default function SettingsDetail() {
                   title="Connect over Tailscale"
                   detail="Allow paired devices on your private Tailscale network."
                   trailing={
-                    <Switch
+                    <Toggle
                       accessibilityLabel="Connect over Tailscale"
                       value={settings.access.tailscale}
                       onValueChange={(value) => {

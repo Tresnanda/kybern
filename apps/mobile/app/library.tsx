@@ -1,8 +1,14 @@
+import Animated, {
+  useSharedValue,
+  useAnimatedScrollHandler,
+} from "react-native-reanimated";
+import { PullRefresh } from "../src/ui/PullRefresh";
 import { threadHasActivity } from "../src/state/runtime";
 import * as Haptics from "expo-haptics";
 import { router, Stack } from "expo-router";
-import { useMemo, useState } from "react";
-import { Alert, FlatList, RefreshControl, TextInput, View } from "react-native";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Platform, RefreshControl, TextInput, View } from "react-native";
+import { Alert } from "../src/ui/Alert";
 import { type Thread, PROVIDER_DISPLAY_NAME } from "../src/state/protocol";
 import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
 import {
@@ -56,7 +62,16 @@ export default function Library() {
         ),
     [app.threads, app.projects, app.activity, query, filter],
   );
-  async function reload() {
+  const offset = useSharedValue(0);
+  const onScroll = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      offset.set(event.contentOffset.y);
+    },
+  });
+  const refreshingRef = useRef(false);
+  const reload = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
     setRefreshing(true);
     try {
       await refresh();
@@ -65,8 +80,9 @@ export default function Library() {
       setError(errorText(e));
     } finally {
       setRefreshing(false);
+      refreshingRef.current = false;
     }
-  }
+  }, []);
   function options(t: Thread) {
     Alert.alert(t.title || "Thread", undefined, [
       {
@@ -97,207 +113,228 @@ export default function Library() {
       <Stack.Screen
         options={{
           headerRight: () => (
-            <IconButton
-              name="square.and.pencil"
-              label="Start a thread"
-              onPress={() => router.dismissTo("/")}
-            />
+            <View style={styles.line}>
+              {Platform.OS === "android" && (
+                <IconButton
+                  name="arrow.clockwise"
+                  label="Refresh threads"
+                  disabled={refreshing}
+                  onPress={() => void reload()}
+                />
+              )}
+              <IconButton
+                name="square.and.pencil"
+                label="Start a thread"
+                onPress={() => router.dismissTo("/")}
+              />
+            </View>
           ),
         }}
       />
-      <FlatList
-        data={rows}
-        keyExtractor={(t) => t.id}
-        keyboardShouldPersistTaps="handled"
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{
-          paddingHorizontal: 24,
-          paddingBottom: 40,
-          maxWidth: 760,
-          width: "100%",
-          alignSelf: "center",
-        }}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => void reload()}
-            tintColor={colors.ink}
-          />
-        }
-        ListHeaderComponent={
-          <>
-            <View
-              style={{
-                ...styles.line,
-                backgroundColor: colors.raised,
-                borderRadius: 15,
-                paddingHorizontal: 13,
-                marginVertical: 16,
-              }}
-            >
-              <Icon name="magnifyingglass" size={18} color={colors.secondary} />
-              <TextInput
-                accessibilityLabel="Search threads"
-                placeholder="Search your threads"
-                value={query}
-                onChangeText={setQuery}
-                placeholderTextColor={colors.muted}
-                style={[
-                  type.body,
-                  { color: colors.ink, flex: 1, minHeight: 48 },
-                ]}
+      <PullRefresh offset={offset} refreshing={refreshing} onRefresh={reload}>
+        <Animated.FlatList
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          data={rows}
+          keyExtractor={(t) => t.id}
+          keyboardShouldPersistTaps="handled"
+          contentInsetAdjustmentBehavior="automatic"
+          contentContainerStyle={{
+            paddingHorizontal: 24,
+            paddingBottom: 40,
+            maxWidth: 760,
+            width: "100%",
+            alignSelf: "center",
+          }}
+          refreshControl={
+            Platform.OS === "ios" ? (
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => void reload()}
+                tintColor={colors.ink}
               />
-            </View>
-            <View
-              style={{
-                flexDirection: "row",
-                gap: 7,
-                marginBottom: 18,
-                flexWrap: "wrap",
-              }}
-            >
-              {["All", "Working", "Pinned", "Archived"].map((f) => (
-                <Tap
-                  key={f}
-                  label={f}
-                  selected={f === filter}
-                  onPress={() => {
-                    setFilter(f);
-                    void Haptics.selectionAsync();
-                  }}
-                  style={{
-                    backgroundColor: filter === f ? colors.ink : undefined,
-                    paddingHorizontal: 14,
-                    borderRadius: 22,
-                  }}
-                >
+            ) : undefined
+          }
+          ListHeaderComponent={
+            <>
+              <View
+                style={{
+                  ...styles.line,
+                  backgroundColor: colors.raised,
+                  borderRadius: 15,
+                  paddingHorizontal: 13,
+                  marginVertical: 16,
+                }}
+              >
+                <Icon
+                  name="magnifyingglass"
+                  size={18}
+                  color={colors.secondary}
+                />
+                <TextInput
+                  underlineColorAndroid="transparent"
+                  accessibilityLabel="Search threads"
+                  placeholder="Search your threads"
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholderTextColor={colors.muted}
+                  style={[
+                    type.body,
+                    { color: colors.ink, flex: 1, minHeight: 48 },
+                  ]}
+                />
+              </View>
+              <View
+                style={{
+                  flexDirection: "row",
+                  gap: 7,
+                  marginBottom: 18,
+                  flexWrap: "wrap",
+                }}
+              >
+                {["All", "Working", "Pinned", "Archived"].map((f) => (
+                  <Tap
+                    key={f}
+                    label={f}
+                    selected={f === filter}
+                    onPress={() => {
+                      setFilter(f);
+                      void Haptics.selectionAsync();
+                    }}
+                    style={{
+                      backgroundColor: filter === f ? colors.ink : undefined,
+                      paddingHorizontal: 14,
+                      borderRadius: 22,
+                    }}
+                  >
+                    <T
+                      variant="caption"
+                      tone={filter === f ? "inverse" : "secondary"}
+                    >
+                      {f}
+                    </T>
+                  </Tap>
+                ))}
+              </View>
+              <ErrorBanner error={error} />
+            </>
+          }
+          renderItem={({ item, index }) => {
+            const project = app.projects.find((p) => p.id === item.project_id);
+            const running = threadHasActivity(item, app.activity);
+            return (
+              <Tap
+                label={`${item.title || "Untitled thread"}, ${running ? "Working" : item.status}`}
+                onPress={() =>
+                  router.push({
+                    pathname: "/thread/[id]",
+                    params: { id: item.id },
+                  })
+                }
+                onLongPress={() => options(item)}
+                style={{
+                  paddingVertical: 18,
+                  borderTopWidth: index ? 0.5 : 0,
+                  borderColor: colors.line,
+                  gap: 8,
+                }}
+              >
+                <View style={styles.spread}>
+                  <T
+                    variant="body"
+                    style={{ flex: 1, fontWeight: "500" }}
+                    numberOfLines={2}
+                  >
+                    {item.title || "Untitled thread"}
+                  </T>
+                  {item.pinned ? (
+                    <Icon name="pin.fill" size={12} color={colors.secondary} />
+                  ) : (
+                    <T variant="caption" tone="muted">
+                      {relativeTime(item.updated_at)}
+                    </T>
+                  )}
+                </View>
+                <View style={styles.spread}>
+                  <ProviderMark kind={item.provider.kind} size={16} />
+                  <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+                    {project?.name ?? "Project"} ·{" "}
+                    {PROVIDER_DISPLAY_NAME[item.provider.kind]}
+                  </T>
                   <T
                     variant="caption"
-                    tone={filter === f ? "inverse" : "secondary"}
+                    tone={
+                      running
+                        ? "accent"
+                        : item.status === "failed"
+                          ? "negative"
+                          : "muted"
+                    }
                   >
-                    {f}
+                    {running
+                      ? "◌ Working"
+                      : item.status === "failed"
+                        ? "Failed"
+                        : ""}
                   </T>
-                </Tap>
-              ))}
-            </View>
-            <ErrorBanner error={error} />
-          </>
-        }
-        renderItem={({ item, index }) => {
-          const project = app.projects.find((p) => p.id === item.project_id);
-          const running = threadHasActivity(item, app.activity);
-          return (
-            <Tap
-              label={`${item.title || "Untitled thread"}, ${running ? "Working" : item.status}`}
-              onPress={() =>
-                router.push({
-                  pathname: "/thread/[id]",
-                  params: { id: item.id },
-                })
+                </View>
+              </Tap>
+            );
+          }}
+          ListEmptyComponent={
+            <Empty
+              title={
+                query
+                  ? "No matching threads"
+                  : filter === "All"
+                    ? "A fresh page."
+                    : `No ${filter.toLowerCase()} threads`
               }
-              onLongPress={() => options(item)}
+              detail={
+                query
+                  ? `Nothing matches “${query}”. Try another search.`
+                  : "Start a conversation and your work will appear here."
+              }
+            />
+          }
+          ListFooterComponent={
+            <View
               style={{
-                paddingVertical: 18,
-                borderTopWidth: index ? 0.5 : 0,
+                paddingTop: 24,
+                marginTop: 20,
+                borderTopWidth: 0.5,
                 borderColor: colors.line,
-                gap: 8,
               }}
             >
-              <View style={styles.spread}>
-                <T
-                  variant="body"
-                  style={{ flex: 1, fontWeight: "500" }}
-                  numberOfLines={2}
-                >
-                  {item.title || "Untitled thread"}
-                </T>
-                {item.pinned ? (
-                  <Icon name="pin.fill" size={12} color={colors.secondary} />
-                ) : (
-                  <T variant="caption" tone="muted">
-                    {relativeTime(item.updated_at)}
-                  </T>
-                )}
-              </View>
-              <View style={styles.spread}>
-                <ProviderMark kind={item.provider.kind} size={16} />
-                <T variant="caption" tone="secondary" style={{ flex: 1 }}>
-                  {project?.name ?? "Project"} ·{" "}
-                  {PROVIDER_DISPLAY_NAME[item.provider.kind]}
-                </T>
-                <T
-                  variant="caption"
-                  tone={
-                    running
-                      ? "accent"
-                      : item.status === "failed"
-                        ? "negative"
-                        : "muted"
-                  }
-                >
-                  {running
-                    ? "◌ Working"
-                    : item.status === "failed"
-                      ? "Failed"
-                      : ""}
-                </T>
-              </View>
-            </Tap>
-          );
-        }}
-        ListEmptyComponent={
-          <Empty
-            title={
-              query
-                ? "No matching threads"
-                : filter === "All"
-                  ? "A fresh page."
-                  : `No ${filter.toLowerCase()} threads`
-            }
-            detail={
-              query
-                ? `Nothing matches “${query}”. Try another search.`
-                : "Start a conversation and your work will appear here."
-            }
-          />
-        }
-        ListFooterComponent={
-          <View
-            style={{
-              paddingTop: 24,
-              marginTop: 20,
-              borderTopWidth: 0.5,
-              borderColor: colors.line,
-            }}
-          >
-            <Row
-              title="Projects"
-              icon="folder"
-              onPress={() => router.push("/projects")}
-            />
-            <Row
-              title="Activity"
-              icon="waveform.path"
-              detail={
-                app.approvals.length
-                  ? `${app.approvals.length} waiting for you`
-                  : undefined
-              }
-              onPress={() => router.push("/activity")}
-            />
-            <Row
-              title="Resume a session"
-              icon="clock.arrow.circlepath"
-              onPress={() => router.push("/sessions")}
-            />
-            <Row
-              title="Settings"
-              icon="gearshape"
-              onPress={() => router.push("/settings")}
-            />
-          </View>
-        }
-      />
+              <Row
+                title="Projects"
+                icon="folder"
+                onPress={() => router.push("/projects")}
+              />
+              <Row
+                title="Activity"
+                icon="waveform.path"
+                detail={
+                  app.approvals.length
+                    ? `${app.approvals.length} waiting for you`
+                    : undefined
+                }
+                onPress={() => router.push("/activity")}
+              />
+              <Row
+                title="Resume a session"
+                icon="clock.arrow.circlepath"
+                onPress={() => router.push("/sessions")}
+              />
+              <Row
+                title="Settings"
+                icon="gearshape"
+                onPress={() => router.push("/settings")}
+              />
+            </View>
+          }
+        />
+      </PullRefresh>
     </View>
   );
 }

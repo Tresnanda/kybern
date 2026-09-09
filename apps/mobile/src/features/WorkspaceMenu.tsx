@@ -1,7 +1,8 @@
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Linking, View } from "react-native";
+import { Linking, View } from "react-native";
+import { Alert } from "../ui/Alert";
 import {
   MorphingMenu,
   type MenuOrigin,

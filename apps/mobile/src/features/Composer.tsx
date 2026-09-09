@@ -425,6 +425,7 @@ export const Composer = memo(function Composer({
         }}
       >
         <TextInput
+          underlineColorAndroid="transparent"
           ref={input}
           accessibilityLabel={running ? "Follow-up message" : "Message"}
           placeholder={

@@ -1,7 +1,8 @@
+import { Busy } from "./Busy";
 import { SymbolView } from "expo-symbols";
 import { useState, type PropsWithChildren, type ReactNode } from "react";
 import {
-  ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -102,6 +103,7 @@ export function Tap({
       onLongPress={onLongPress}
       onPressIn={() => setPressed(true)}
       onPressOut={() => setPressed(false)}
+      hitSlop={Platform.OS === "android" ? 2 : undefined}
       pressRetentionOffset={16}
     >
       <Animated.View
@@ -193,7 +195,7 @@ export function Button({
       }}
     >
       {busy ? (
-        <ActivityIndicator color={secondary ? colors.ink : colors.inverse} />
+        <Busy color={secondary ? colors.ink : colors.inverse} />
       ) : (
         icon && (
           <Icon
@@ -212,13 +214,15 @@ export function Button({
 export function Field({
   label,
   error,
+  hideLabel = false,
   ...props
-}: TextInputProps & { label: string; error?: string }) {
+}: TextInputProps & { label: string; error?: string; hideLabel?: boolean }) {
   const { colors } = useTheme();
   return (
     <View style={{ gap: 8 }}>
-      <T variant="label">{label}</T>
+      {!hideLabel && <T variant="label">{label}</T>}
       <TextInput
+        underlineColorAndroid="transparent"
         {...props}
         accessibilityLabel={label}
         placeholderTextColor={colors.muted}

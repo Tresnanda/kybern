@@ -1,6 +1,7 @@
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, View } from "react-native";
+import { View } from "react-native";
+import { Alert } from "../src/ui/Alert";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { TaskRow } from "../src/features/Tasks";
 import { Changes } from "../src/features/Changes";
