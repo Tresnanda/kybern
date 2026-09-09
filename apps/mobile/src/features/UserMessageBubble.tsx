@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
-import { View, useWindowDimensions } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Image,
+  Modal,
+  ScrollView,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import Animated, { useAnimatedRef } from "react-native-reanimated";
 import {
   measureSendView,
@@ -12,7 +18,9 @@ import {
 } from "../state/sendTransition";
 import type { Block } from "../state/transcript";
 import { useTheme } from "../ui/theme";
-import { MessagePart } from "./MessagePart";
+import { T, Tap, IconButton } from "../ui/primitives";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MessagePart, imageSource } from "./MessagePart";
 
 export function UserMessageBubble({
   block,
@@ -22,8 +30,21 @@ export function UserMessageBubble({
   threadId: string;
 }) {
   const { colors } = useTheme();
-  const { height } = useWindowDimensions();
-  const { flight, land, finish } = useSendTransition();
+  const { height, width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const [viewing, setViewing] = useState<number | null>(null);
+  const textSurface = useRef<View>(null);
+  const { flight, outgoing, land } = useSendTransition();
+  const pending =
+    outgoing?.key === block.id && outgoing.threadId === threadId
+      ? outgoing
+      : null;
+  const localUris = useRef(new Map<number, string>());
+  if (pending)
+    pending.message.parts.forEach((part, index) => {
+      const uri = pending.sources[sendPartKey(part, index)]?.uri;
+      if (uri) localUris.current.set(index, uri);
+    });
   const bubble = useAnimatedRef<View>();
   const parts = useRef(new Map<string, View>());
   const matching =
@@ -32,7 +53,6 @@ export function UserMessageBubble({
     if (!matching || !flight || flight.destination) return;
     const bounds = await measureSendView(bubble.current);
     if (!bounds || bounds.y + bounds.height <= 0 || bounds.y >= height) {
-      finish(flight.id);
       return;
     }
     const measured: Record<string, SendRect> = {};
@@ -42,64 +62,175 @@ export function UserMessageBubble({
         if (rect) measured[key] = rect;
       }),
     );
-    land(flight.id, { bubble: bounds, parts: measured, bubbleRef: bubble });
-  }, [matching, flight, height, finish, land]);
+    const surface = await measureSendView(textSurface.current);
+    land(flight.id, {
+      bubble: bounds,
+      surface: surface ?? undefined,
+      parts: measured,
+      bubbleRef: bubble,
+    });
+  }, [matching, flight, height, land]);
   useEffect(() => {
     if (!matching) return;
-    // Let the cleared composer and the list's follow-to-end settle first.
-    let next = 0;
     const frame = requestAnimationFrame(() => {
-      next = requestAnimationFrame(() => {
-        void measure();
-      });
+      void measure();
     });
-    return () => {
-      cancelAnimationFrame(frame);
-      cancelAnimationFrame(next);
-    };
+    return () => cancelAnimationFrame(frame);
   }, [matching, measure]);
+  const images = block.message.parts
+    .map((part, index) => ({ part, index }))
+    .filter(
+      ({ part }) =>
+        part.type === "image" ||
+        (part.type === "attachment" && part.media_type.startsWith("image/")),
+    );
+  const body = block.message.parts
+    .map((part, index) => ({ part, index }))
+    .filter(({ index }) => !images.some((image) => image.index === index));
+  const tileSize = Math.min(220, (width - 48) * 0.72);
+  const register = (index: number, view: View | null) => {
+    const part = matching
+      ? flight?.message.parts[index]
+      : block.message.parts[index];
+    if (!part) return;
+    const key = sendPartKey(part, index);
+    if (view) parts.current.set(key, view);
+    else parts.current.delete(key);
+  };
   return (
-    <View
-      style={{
-        alignSelf: "flex-end",
-        maxWidth: "94%",
-        marginTop: 22,
-        marginBottom: 24,
-      }}
-    >
+    <>
       <Animated.View
         ref={bubble}
         collapsable={false}
+        onLayout={() => {
+          void measure();
+        }}
         style={{
-          borderRadius: 22,
-          borderBottomEndRadius: 7,
-          paddingHorizontal: 18,
-          paddingVertical: 14,
-          backgroundColor: colors.raised,
+          alignSelf: "flex-end",
+          maxWidth: "94%",
+          width: images.length > 1 ? "100%" : undefined,
+          marginTop: 22,
+          marginBottom: 24,
           gap: 8,
           opacity: matching ? 0 : 1,
         }}
       >
-        {block.message.parts.map((part, index) => {
-          const key = sendPartKey(part, index);
-          const targetKey =
-            matching && flight?.message.parts[index]
-              ? sendPartKey(flight.message.parts[index]!, index)
-              : key;
-          return (
-            <View
-              key={`${key}:${index}`}
-              collapsable={false}
-              ref={(view) => {
-                if (view) parts.current.set(targetKey, view);
-                else parts.current.delete(targetKey);
-              }}
-            >
-              <MessagePart part={part} />
-            </View>
-          );
-        })}
+        {images.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={images.length > 1}
+            accessibilityLabel={
+              images.length > 1
+                ? `${images.length} attached images. Swipe horizontally to browse`
+                : undefined
+            }
+            style={{ alignSelf: "flex-end", maxWidth: "100%" }}
+            contentContainerStyle={{ gap: 10 }}
+          >
+            {images.map(({ part, index }) => (
+              <Tap
+                key={index}
+                label={`Open image ${images.findIndex((image) => image.index === index) + 1} of ${images.length}`}
+                onPress={() => setViewing(index)}
+                static
+                style={{ width: tileSize, height: tileSize }}
+              >
+                <View
+                  collapsable={false}
+                  ref={(view) => register(index, view)}
+                  style={{
+                    width: tileSize,
+                    height: tileSize,
+                    borderRadius: 24,
+                    borderCurve: "continuous",
+                    overflow: "hidden",
+                    backgroundColor: colors.raised,
+                  }}
+                >
+                  <Image
+                    source={imageSource(part, localUris.current.get(index))}
+                    fadeDuration={0}
+                    resizeMode="cover"
+                    style={{ width: "100%", height: "100%" }}
+                  />
+                </View>
+              </Tap>
+            ))}
+          </ScrollView>
+        )}
+        {body.length > 0 && (
+          <View
+            ref={textSurface}
+            collapsable={false}
+            style={{
+              alignSelf: "flex-end",
+              maxWidth: "100%",
+              borderRadius: 22,
+              borderBottomEndRadius: 7,
+              paddingHorizontal: 18,
+              paddingVertical: 12,
+              backgroundColor: colors.raised,
+              gap: 8,
+            }}
+          >
+            {body.map(({ part, index }) => (
+              <View
+                key={index}
+                collapsable={false}
+                ref={(view) => register(index, view)}
+              >
+                <MessagePart
+                  part={part}
+                  localUri={localUris.current.get(index)}
+                />
+              </View>
+            ))}
+          </View>
+        )}
+        {pending && !pending.receipt && !matching && (
+          <T
+            variant="caption"
+            tone="muted"
+            accessibilityLiveRegion="polite"
+            style={{ position: "absolute", right: 0, bottom: -23 }}
+          >
+            Sending…
+          </T>
+        )}
       </Animated.View>
-    </View>
+      {viewing !== null && (
+        <Modal
+          visible
+          transparent={false}
+          animationType="fade"
+          onRequestClose={() => setViewing(null)}
+        >
+          <View
+            style={{ flex: 1, backgroundColor: colors.background }}
+            accessibilityViewIsModal
+          >
+            <Image
+              source={imageSource(
+                block.message.parts[viewing]!,
+                localUris.current.get(viewing),
+              )}
+              accessibilityLabel="Full attached image"
+              resizeMode="contain"
+              fadeDuration={0}
+              style={{ flex: 1, width: "100%" }}
+            />
+            <View
+              style={{ position: "absolute", top: insets.top + 8, right: 16 }}
+            >
+              <IconButton
+                name="xmark"
+                label="Close image"
+                onPress={() => setViewing(null)}
+              />
+            </View>
+          </View>
+        </Modal>
+      )}
+    </>
   );
 }

@@ -44,6 +44,8 @@ import {
 } from "../../src/ui/primitives";
 import { useTheme } from "../../src/ui/theme";
 import { Working } from "../../src/ui/Working";
+import { useSendTransition } from "../../src/components/liquid/SendTransition";
+import { createOutgoingProjection } from "../../src/state/sendTransition";
 
 const followOptions = { animated: false };
 const anchorOptions = { data: true, size: true };
@@ -127,6 +129,9 @@ export default function ThreadScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const app = useApp();
   const snapshot = useThread(id);
+  const sendMotion = useSendTransition();
+  const outgoing =
+    sendMotion.outgoing?.threadId === id ? sendMotion.outgoing : null;
   const { colors, dark } = useTheme();
   const insets = useSafeAreaInsets();
   const blurTarget = useRef<View>(null);
@@ -143,10 +148,19 @@ export default function ThreadScreen() {
     () => new Set(),
   );
   const projectRows = useMemo(() => createTurnRows(), [id]);
-  const rows = useMemo(
+  const baseRows = useMemo(
     () => projectRows(snapshot.blocks, expandedTurns),
     [projectRows, snapshot.blocks, expandedTurns],
   );
+  const projectOutgoing = useMemo(() => createOutgoingProjection(), [id]);
+  const outgoingRows = useMemo(
+    () => projectOutgoing(baseRows, outgoing),
+    [projectOutgoing, baseRows, outgoing],
+  );
+  const rows = outgoingRows.rows;
+  useEffect(() => {
+    if (outgoing && outgoingRows.received) sendMotion.received(outgoing.id);
+  }, [outgoing?.id, outgoingRows.received, sendMotion.received]);
   const list = useRef<LegendListRef>(null);
   const userScrolled = useRef(false);
   const nearEnd = useRef(true);
@@ -201,6 +215,9 @@ export default function ThreadScreen() {
     setAway(false);
     list.current?.scrollToEnd({ animated: false });
   }, []);
+  useEffect(() => {
+    if (outgoing) jump();
+  }, [outgoing?.id, jump]);
   const steeringAttempt = useRef<{ signature: string; id: string } | null>(
     null,
   );
@@ -230,7 +247,6 @@ export default function ThreadScreen() {
         await refresh();
       } else {
         const receipt = await rpc("threads.send", { thread_id: id, message });
-        jump();
         return { threadId: id, messageId: receipt.message_id };
       }
       jump();

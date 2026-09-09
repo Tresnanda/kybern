@@ -105,6 +105,10 @@ export const Composer = memo(function Composer({
   const attachmentUris = useRef(new Map<string, string>());
   const inputContentHeight = useRef(22);
   const sendLock = useRef(false);
+  const [departed, setDeparted] = useState(false);
+  const modeButton = useRef<View>(null);
+  const [modeOrigin, setModeOrigin] = useState<SendRect | null>(null);
+  const [modeOpen, setModeOpen] = useState(false);
   const recoil = useSharedValue(1);
   const composerMotion = useAnimatedStyle(() => ({
     transform: [{ scale: recoil.get() }],
@@ -243,39 +247,40 @@ export const Composer = memo(function Composer({
       return;
     sendLock.current = true;
     setBusy(true);
+    setDeparted(false);
     setError("");
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const sentText = text;
+    const sentAttachments = attachments;
+    const visualMessage: UserMessage = {
+      parts: [
+        ...sentAttachments,
+        ...(sentText.trim()
+          ? [{ type: "text" as const, text: sentText.trim() }]
+          : []),
+      ],
+    };
+    const structured = /(?:^|\s)[$@]/.test(sentText);
+    let outgoingId: number | undefined;
     try {
-      const skillItems = /(?:^|\s)[$@]/.test(text)
-        ? (
-            await rpc("skills.list", {
-              project_id: thread?.project_id ?? draft.projectId,
-              provider: thread?.provider.kind ?? draft.provider,
-            })
-          ).skills
-        : [];
-      const message: UserMessage = {
-        parts: [
-          ...attachments,
-          ...buildStructuredTextParts(text, new Set(), skillItems),
-        ],
-      };
       const sources: Record<string, SendSource> = {};
-      if (!reduced) {
-        const textRect = await measureSendView(inputBounds.current);
-        if (textRect && text.trim())
-          sources.text = {
-            rect: {
-              x: textRect.x + 9,
-              y: textRect.y + 8,
-              width: textRect.width - 18,
-              height: Math.max(
-                22,
-                Math.min(textRect.height - 23, inputContentHeight.current),
-              ),
-            },
-          };
-        await Promise.all(
-          message.parts.map(async (part, index) => {
+      if (!reduced && !structured) {
+        await Promise.all([
+          measureSendView(inputBounds.current).then((rect) => {
+            if (rect && sentText.trim())
+              sources.text = {
+                rect: {
+                  x: rect.x + 9,
+                  y: rect.y + 8,
+                  width: rect.width - 18,
+                  height: Math.max(
+                    22,
+                    Math.min(rect.height - 16, inputContentHeight.current),
+                  ),
+                },
+              };
+          }),
+          ...visualMessage.parts.map(async (part, index) => {
             if (part.type === "text") return;
             const key = sendPartKey(part, index);
             const rect = await measureSendView(
@@ -290,28 +295,66 @@ export const Composer = memo(function Composer({
                     : undefined,
               };
           }),
-        );
+        ]);
       }
-      const receipt = await (steering ? onSteer! : onSend)(message);
-      if (receipt) sendTransition.start(receipt, message, sources);
-      if (!running) Keyboard.dismiss();
-      if (!reduced)
-        recoil.set(
-          withSequence(
-            withSpring(0.985, { duration: 100, dampingRatio: 1 }),
-            withSpring(1, { duration: 300, dampingRatio: 0.8 }),
-          ),
+      if (!running) {
+        outgoingId = sendTransition.begin(
+          thread?.id,
+          thread?.last_seq ?? 0,
+          visualMessage,
+          sources,
         );
-      setText("");
-      setAttachments([]);
+        // Snapshot first, then clear and dismiss in the same render. The native
+        // keyboard drives layout while the outgoing overlay owns the message.
+        setDeparted(true);
+        setText("");
+        setAttachments([]);
+        Keyboard.dismiss();
+        if (!reduced)
+          recoil.set(
+            withSequence(
+              withSpring(0.985, { duration: 100, dampingRatio: 1 }),
+              withSpring(1, { duration: 300, dampingRatio: 0.8 }),
+            ),
+          );
+      }
+      const skillItems = structured
+        ? (
+            await rpc("skills.list", {
+              project_id: thread?.project_id ?? draft.projectId,
+              provider: thread?.provider.kind ?? draft.provider,
+            })
+          ).skills
+        : [];
+      const message: UserMessage = {
+        parts: [
+          ...sentAttachments,
+          ...buildStructuredTextParts(sentText, new Set(), skillItems),
+        ],
+      };
+      const receipt = await (steering ? onSteer! : onSend)(message);
+      if (outgoingId !== undefined) {
+        if (receipt) sendTransition.confirm(outgoingId, receipt, message);
+        else sendTransition.cancel(outgoingId);
+      } else {
+        if (receipt) sendTransition.start(receipt, message, sources);
+        setText("");
+        setAttachments([]);
+      }
       attachmentUris.current.clear();
       lastPrompt.current = "";
       onPromptConsumed?.();
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (e) {
+      if (outgoingId !== undefined) {
+        sendTransition.cancel(outgoingId);
+        setText(sentText);
+        setAttachments(sentAttachments);
+        setSelection({ start: sentText.length, end: sentText.length });
+      }
       setError(errorText(e));
     } finally {
       sendLock.current = false;
+      setDeparted(false);
       setBusy(false);
     }
   }
@@ -603,6 +646,61 @@ export const Composer = memo(function Composer({
           ))}
         </MorphingMenu>
       )}
+      {modeOrigin && (
+        <MorphingMenu
+          origin={modeOrigin}
+          open={modeOpen}
+          placement="above"
+          sourceIcon="chevron.down"
+          dismissLabel="Close send options"
+          onClose={() => setModeOpen(false)}
+          onClosed={() => setModeOrigin(null)}
+        >
+          {(onSteer ? (["queue", "steer"] as const) : (["queue"] as const)).map(
+            (mode) => (
+              <Tap
+                key={mode}
+                label={mode === "queue" ? "Queue follow-up" : "Steer now"}
+                selected={promptMode === mode}
+                onPress={() => {
+                  setPromptMode(mode);
+                  setModeOpen(false);
+                }}
+                style={[
+                  styles.line,
+                  {
+                    gap: 12,
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                    minHeight: 48,
+                  },
+                ]}
+              >
+                <T variant="label" style={{ flex: 1 }}>
+                  {mode === "queue" ? "Queue follow-up" : "Steer now"}
+                </T>
+                {promptMode === mode && <Icon name="checkmark" size={16} />}
+              </Tap>
+            ),
+          )}
+          {onStop && (
+            <Tap
+              label="Stop agent"
+              onPress={() => {
+                setModeOpen(false);
+                onStop();
+              }}
+              style={[
+                styles.line,
+                { gap: 12, paddingHorizontal: 14, minHeight: 48 },
+              ]}
+            >
+              <Icon name="stop.fill" size={16} />
+              <T variant="label">Stop agent</T>
+            </Tap>
+          )}
+        </MorphingMenu>
+      )}
       {trigger && triggerKey !== dismissed && !disabled && (
         <ComposerSuggestions
           trigger={trigger}
@@ -632,23 +730,20 @@ export const Composer = memo(function Composer({
       <Animated.View
         ref={composerBounds}
         collapsable={false}
-        layout={reduced || landingAsset ? undefined : COMPOSER_REFLOW}
         style={[
           composerMotion,
           {
-            borderRadius: 26,
+            borderRadius: 24,
             backgroundColor: colors.surface,
             borderWidth: 1,
             borderColor: colors.line,
-            padding: 10,
+            padding: 6,
             boxShadow: `0 3px 12px ${colors.backdrop.slice(0, 7)}08`,
           },
         ]}
       >
         {attachments.length > 0 && (
-          <Animated.View
-            layout={reduced || landingAsset ? undefined : COMPOSER_REFLOW}
-          >
+          <View>
             <ScrollView
               ref={attachmentScroll}
               onContentSizeChange={() => {
@@ -682,10 +777,12 @@ export const Composer = memo(function Composer({
                           : 1,
                     }}
                     layout={
-                      reduced || landingAsset ? undefined : COMPOSER_REFLOW
+                      reduced || landingAsset || busy
+                        ? undefined
+                        : COMPOSER_REFLOW
                     }
                     entering={landingAsset ? undefined : ATTACH_ENTER}
-                    exiting={ATTACH_EXIT}
+                    exiting={busy ? undefined : ATTACH_EXIT}
                   >
                     <Tap
                       label={`Remove ${contextLabel(part)}`}
@@ -722,7 +819,7 @@ export const Composer = memo(function Composer({
                               height: 72,
                               borderRadius: 16,
                             }}
-                            resizeMode="contain"
+                            resizeMode="cover"
                           />
                         ) : (
                           <>
@@ -762,37 +859,9 @@ export const Composer = memo(function Composer({
                 );
               })}
             </ScrollView>
-          </Animated.View>
-        )}
-
-        {running && onSteer && (
-          <View style={[styles.line, { gap: 6, paddingHorizontal: 8 }]}>
-            {(["queue", "steer"] as const).map((mode) => (
-              <Tap
-                key={mode}
-                label={mode === "queue" ? "Queue follow-up" : "Steer now"}
-                selected={promptMode === mode}
-                disabled={busy}
-                onPress={() => setPromptMode(mode)}
-                style={{
-                  paddingHorizontal: 12,
-                  minHeight: 44,
-                  justifyContent: "center",
-                  borderRadius: 14,
-                  backgroundColor:
-                    promptMode === mode ? colors.background : "transparent",
-                }}
-              >
-                <T
-                  variant="caption"
-                  tone={promptMode === mode ? undefined : "secondary"}
-                >
-                  {mode === "queue" ? "Queue follow-up" : "Steer now"}
-                </T>
-              </Tap>
-            ))}
           </View>
         )}
+
         <View ref={inputBounds} collapsable={false}>
           <TextInput
             underlineColorAndroid="transparent"
@@ -802,12 +871,13 @@ export const Composer = memo(function Composer({
               steering
                 ? "Guide the current turn…"
                 : running
-                  ? "Add a follow-up…"
+                  ? "Ask for follow-up changes…"
                   : "Ask Kybern to build something…"
             }
             placeholderTextColor={colors.muted}
             value={text}
             onChangeText={(value) => {
+              if (sendLock.current) return;
               setText(value);
               setDismissed("");
             }}
@@ -817,21 +887,21 @@ export const Composer = memo(function Composer({
             onContentSizeChange={(event) => {
               inputContentHeight.current = Math.max(
                 22,
-                event.nativeEvent.contentSize.height - 23,
+                event.nativeEvent.contentSize.height - 16,
               );
             }}
             multiline
-            editable={!busy}
+            editable={!departed}
             selectionColor={colors.accent}
             style={[
               type.body,
               {
                 color: colors.ink,
-                minHeight: 60,
+                minHeight: 44,
                 maxHeight: 180,
                 paddingHorizontal: 9,
                 paddingTop: 8,
-                paddingBottom: 15,
+                paddingBottom: 8,
               },
             ]}
           />
@@ -862,38 +932,66 @@ export const Composer = memo(function Composer({
           }
           trailing={
             <View style={[styles.line, { gap: 0 }]}>
-              {running && onStop && (
-                <IconButton
-                  name="stop.fill"
-                  label="Stop agent"
-                  onPress={onStop}
-                />
+              {running && (
+                <View ref={modeButton} collapsable={false}>
+                  <Tap
+                    label={`${steering ? "Steer now" : "Queue follow-up"}. Change send mode`}
+                    disabled={busy}
+                    onPress={() => {
+                      void measureSendView(modeButton.current).then((rect) => {
+                        if (rect) {
+                          setModeOrigin(rect);
+                          setModeOpen(true);
+                        }
+                      });
+                    }}
+                    style={{ width: 44, alignItems: "center" }}
+                  >
+                    <Icon
+                      name={
+                        steering ? "arrow.up.right" : "arrow.turn.down.right"
+                      }
+                      size={18}
+                      color={colors.secondary}
+                    />
+                  </Tap>
+                </View>
               )}
               <IconButton
                 name={
-                  running && !steering ? "arrow.turn.down.right" : "arrow.up"
+                  running && onStop && !text.trim() && !attachments.length
+                    ? "stop.fill"
+                    : running && !steering
+                      ? "arrow.turn.down.right"
+                      : "arrow.up"
                 }
                 label={
-                  steering
-                    ? "Steer now"
-                    : running
-                      ? "Queue follow-up"
-                      : "Send message"
+                  running && onStop && !text.trim() && !attachments.length
+                    ? "Stop agent"
+                    : steering
+                      ? "Steer now"
+                      : running
+                        ? "Queue follow-up"
+                        : "Send message"
                 }
                 filled
-                onPress={() => void send()}
+                onPress={() => {
+                  if (running && onStop && !text.trim() && !attachments.length)
+                    onStop();
+                  else void send();
+                }}
                 disabled={
                   disabled ||
                   busy ||
                   uploading ||
-                  (!text.trim() && !attachments.length)
+                  (!text.trim() && !attachments.length && !(running && onStop))
                 }
               />
             </View>
           }
         />
       </Animated.View>
-      {(busy || uploading) && (
+      {(uploading || (busy && running)) && (
         <T variant="caption" tone="secondary">
           {uploading
             ? "Attaching files…"

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { View } from "react-native";
-import { router } from "expo-router";
 import Svg, { Circle } from "react-native-svg";
+import { router } from "expo-router";
 import { setDraft, useDraft } from "../state/draft";
 import type { PermissionMode, Thread } from "../state/protocol";
 import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
@@ -76,83 +76,91 @@ export function ComposerControls({
   const context = usage?.context;
   const fraction =
     context && context.window_tokens > 0
-      ? Math.min(1, context.used_tokens / context.window_tokens)
+      ? Math.max(0, Math.min(1, context.used_tokens / context.window_tokens))
       : 0;
-  function show(section: "permissions" | "model" | "usage") {
+  const effortLabel = effort
+    ? effort.charAt(0).toUpperCase() + effort.slice(1)
+    : "";
+  const compactModel = modelLabel.replace(/^GPT[- ]?/i, "");
+  const permissionLabel =
+    modes.find((item) => item.value === mode)?.label ?? mode;
+  function openOptions(section: "model" | "permissions" | "usage") {
     router.push({
       pathname: "/composer-options",
-      params: {
-        section,
-        ...(thread ? { threadId: thread.id } : {}),
-      },
+      params: { section, ...(thread ? { threadId: thread.id } : {}) },
     });
   }
   return (
     <View style={[styles.line, { gap: 0 }]}>
       {leading}
       <Tap
-        label={`Permissions: ${modes.find((m) => m.value === mode)?.label}`}
+        label={`Permissions: ${permissionLabel}`}
         disabled={disabled}
-        onPress={() => show("permissions")}
-        style={{ alignItems: "center" }}
+        onPress={() => openOptions("permissions")}
+        style={{ width: 44, alignItems: "center" }}
       >
         <Icon
-          name={
-            mode === "full-access"
-              ? "lock.open"
-              : mode === "auto"
-                ? "sparkles"
-                : "lock"
-          }
-          size={16}
+          name="lock.shield"
+          size={19}
           color={mode === "full-access" ? colors.warning : colors.secondary}
         />
       </Tap>
+      <View style={{ width: 8 }} />
       {thread && (
         <Tap
           label={
             context
-              ? `Context used: ${Math.round(fraction * 100)} percent. Show usage`
-              : "Show context and usage"
+              ? `Context usage: ${Math.round(fraction * 100)} percent`
+              : "Context usage unavailable"
           }
-          onPress={() => show("usage")}
-          style={{ alignItems: "center" }}
+          disabled={disabled}
+          onPress={() => openOptions("usage")}
+          style={{ width: 44, alignItems: "center" }}
         >
-          <Svg width={24} height={24} viewBox="0 0 24 24">
+          <Svg width={20} height={20} viewBox="0 0 20 20">
             <Circle
-              cx={12}
-              cy={12}
-              r={9}
+              cx={10}
+              cy={10}
+              r={7.5}
               stroke={colors.line}
               strokeWidth={2.5}
               fill="none"
             />
-            <Circle
-              cx={12}
-              cy={12}
-              r={9}
-              stroke={fraction > 0.85 ? colors.warning : colors.ink}
-              strokeWidth={2.5}
-              fill="none"
-              strokeDasharray={`${fraction * 56.55} 56.55`}
-              rotation={-90}
-              origin="12,12"
-            />
+            {fraction > 0 && (
+              <Circle
+                cx={10}
+                cy={10}
+                r={7.5}
+                stroke={fraction >= 0.85 ? colors.warning : colors.ink}
+                strokeWidth={2.5}
+                fill="none"
+                strokeLinecap="round"
+                strokeDasharray={`${fraction * 47.124} 47.124`}
+                rotation={-90}
+                origin="10, 10"
+              />
+            )}
           </Svg>
         </Tap>
       )}
       <Tap
         label={`${modelLabel}${effort ? `, ${effort} effort` : ""}. Change model and reasoning`}
         disabled={disabled}
-        onPress={() => show("model")}
-        style={[styles.line, { flex: 1, gap: 6, paddingHorizontal: 8 }]}
+        onPress={() => openOptions("model")}
+        style={[
+          styles.line,
+          { flex: 1, minWidth: 0, paddingHorizontal: 8, gap: 0 },
+        ]}
       >
-        <ProviderMark kind={kind} size={17} />
         <T variant="caption" numberOfLines={1} style={{ flexShrink: 1 }}>
-          {modelLabel}
-          {effort ? ` · ${effort}` : ""}
+          {compactModel}
+          {effortLabel ? (
+            <T variant="caption" tone="secondary">
+              {" "}
+              {effortLabel}
+            </T>
+          ) : null}
         </T>
-        <Icon name="chevron.down" size={9} />
       </Tap>
       {trailing}
     </View>

@@ -70,29 +70,45 @@ export function MorphingSurface({
   style,
   slideFromBottom = false,
   bottomInset = 0,
+  heightFraction = 1,
   offset: externalOffset,
   releaseVelocity,
+  touchBias,
 }: PropsWithChildren<{
   open: boolean;
   onClosed: () => void;
   style?: StyleProp<ViewStyle>;
   slideFromBottom?: boolean;
   bottomInset?: number;
+  heightFraction?: number;
   offset?: SharedValue<number>;
   releaseVelocity?: SharedValue<number>;
+  touchBias?: SharedValue<number>;
 }>) {
   const { colors } = useTheme();
   const reduced = useReducedMotion();
   const [bounds, setBounds] = useState({ width: 0, height: 0 });
   const initialized = useRef(false);
   const ready = useSharedValue(false);
+  const visualHeight = useSharedValue(0);
   const localOffset = useSharedValue(0);
   const offset = externalOffset ?? localOffset;
   const fade = useSharedValue(0);
-  const distance = bounds.height + bottomInset + 32;
+  const targetHeight = bounds.height * heightFraction;
+  const distance = targetHeight + bottomInset + 32;
   const outlineOffset = useDerivedValue(() =>
     withSpring(offset.get(), SHEET_OUTLINE),
   );
+  useEffect(() => {
+    if (!bounds.height) return;
+    // Keep the measured parent at full height. Detent changes only move this
+    // silhouette, so no native layout frame can briefly move its bottom edge.
+    visualHeight.set(
+      visualHeight.get() === 0 || reduced
+        ? targetHeight
+        : withSpring(targetHeight, SHEET),
+    );
+  }, [bounds.height, targetHeight, reduced, visualHeight]);
   useEffect(() => {
     if (!bounds.width || !bounds.height) return;
     if (!initialized.current) {
@@ -143,37 +159,44 @@ export function MorphingSurface({
   ]);
   const rise = useAnimatedStyle(() => ({
     opacity: !ready.get() ? 0 : reduced || !slideFromBottom ? fade.get() : 1,
-    transform: [{ translateY: reduced || !slideFromBottom ? 0 : offset.get() }],
+    transform: [
+      {
+        translateY: !slideFromBottom
+          ? 0
+          : (reduced ? 0 : offset.get()) + bounds.height - visualHeight.get(),
+      },
+    ],
   }));
-  const silhouette = useAnimatedStyle(() => {
-    // Difference between the leading mass and its following outline gives a
-    // directional stretch, then a small recoil. The content stays unscaled.
+  const deformation = useDerivedValue(() => {
     const lag =
       reduced || !slideFromBottom
         ? 0
         : Math.max(
-            -24,
-            Math.min(40, (outlineOffset.get() - offset.get()) * 0.12),
+            -28,
+            Math.min(44, (outlineOffset.get() - offset.get()) * 0.2),
           );
+    const pull = Math.abs(lag);
+    const bias = touchBias?.get() ?? 0;
+    return { lag, pull, inset: pull * 0.3, bias };
+  });
+  const silhouette = useAnimatedStyle(() => {
+    // The touched side leads; the far corner stretches and catches up. Only
+    // the clipping surface bends, while the content keeps its native scale.
+    const { lag, pull, inset, bias } = deformation.get();
     return {
-      width: bounds.width - Math.abs(lag) * 0.35,
-      height: bounds.height + lag,
-      borderRadius: 28 + Math.abs(lag) * 0.25,
-      transform: [{ translateX: Math.abs(lag) * 0.175 }],
+      width: bounds.width - inset * 2,
+      height: visualHeight.get() + lag,
+      borderTopLeftRadius: 28 + pull * (0.45 + bias * 0.25),
+      borderTopRightRadius: 28 + pull * (0.45 - bias * 0.25),
+      borderBottomLeftRadius: 28 + pull * (0.2 - bias * 0.12),
+      borderBottomRightRadius: 28 + pull * (0.2 + bias * 0.12),
+      transform: [{ translateX: inset }],
     };
   });
   const content = useAnimatedStyle(() => ({
     transform: [
       {
-        translateX:
-          reduced || !slideFromBottom
-            ? 0
-            : -Math.abs(
-                Math.max(
-                  -24,
-                  Math.min(40, (outlineOffset.get() - offset.get()) * 0.12),
-                ),
-              ) * 0.175,
+        translateX: -deformation.get().inset,
       },
     ],
     opacity:
@@ -188,6 +211,7 @@ export function MorphingSurface({
   }));
   return (
     <View
+      pointerEvents="box-none"
       style={style}
       onLayout={({ nativeEvent: { layout } }) => {
         setBounds((old) =>
@@ -198,7 +222,7 @@ export function MorphingSurface({
       }}
     >
       {slideFromBottom ? (
-        <Animated.View style={[{ flex: 1 }, rise]}>
+        <Animated.View pointerEvents="box-none" style={[{ flex: 1 }, rise]}>
           <Animated.View
             style={[
               {
@@ -225,7 +249,7 @@ export function MorphingSurface({
                 {
                   position: "absolute",
                   width: bounds.width,
-                  height: bounds.height,
+                  height: targetHeight,
                 },
                 content,
               ]}

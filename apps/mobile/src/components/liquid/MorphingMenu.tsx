@@ -38,6 +38,11 @@ export type MenuOrigin = {
 };
 import { MASS, SIZE } from "./motion";
 const SPEED = 2;
+const EXIT = {
+  duration: 220,
+  easing: Easing.bezier(0.4, 0, 0.2, 1),
+  reduceMotion: ReduceMotion.System,
+};
 
 export function MorphingMenu({
   origin,
@@ -116,23 +121,29 @@ export function MorphingMenu({
   const ready = shown && contentHeight > 0;
   useEffect(() => {
     if (!ready) return;
-    center.set(withSpring(open ? 1 : 0, MASS));
+    center.set(open ? withSpring(1, MASS) : withTiming(0, EXIT));
     corners.set(
       withTiming(open ? 1 : 0, {
-        duration: 460 / SPEED,
-        easing: Easing.bezier(0.3, 1.05, 0.4, 1),
+        duration: open ? 460 / SPEED : EXIT.duration,
+        easing: open ? Easing.bezier(0.3, 1.05, 0.4, 1) : EXIT.easing,
         reduceMotion: ReduceMotion.System,
       }),
     );
     size.set(
-      withSpring(open ? 1 : 0, SIZE, (finished) => {
-        if (finished && !open && !reduced) scheduleOnRN(onClosed);
-      }),
+      open
+        ? withSpring(1, SIZE)
+        : withTiming(0, EXIT, (finished) => {
+            if (finished && !reduced) scheduleOnRN(onClosed);
+          }),
     );
     fade.set(
       withTiming(
         open ? 1 : 0,
-        { duration: 140, reduceMotion: ReduceMotion.Never },
+        {
+          duration: open || reduced ? 140 : EXIT.duration,
+          easing: EXIT.easing,
+          reduceMotion: ReduceMotion.Never,
+        },
         (finished) => {
           if (finished && !open && reduced) scheduleOnRN(onClosed);
         },
@@ -184,15 +195,26 @@ export function MorphingMenu({
     opacity: reduced
       ? fade.get()
       : Math.min(
-          fade.get(),
+          open ? fade.get() : 1,
           interpolate(size.get(), [0.45, 0.9], [0, 1], "clamp"),
         ),
   }));
   const materialStyle = useAnimatedStyle(() => ({
-    opacity: reduced ? fade.get() : 1,
+    // Keep the returning silhouette visible. Fade surface and shadow together
+    // only when it reaches the source, before the bounded exit unmounts it.
+    opacity: reduced
+      ? fade.get()
+      : open
+        ? 1
+        : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
   }));
   const dotStyle = useAnimatedStyle(() => ({
-    opacity: reduced ? 0 : interpolate(size.get(), [0, 0.25], [1, 0], "clamp"),
+    opacity: reduced
+      ? 0
+      : (open
+          ? fade.get()
+          : interpolate(size.get(), [0, 0.12], [0, 1], "clamp")) *
+        interpolate(size.get(), [0, 0.25], [1, 0], "clamp"),
   }));
   const menuContents = (
     <>

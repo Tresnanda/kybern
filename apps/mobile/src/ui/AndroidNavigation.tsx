@@ -9,14 +9,12 @@ import {
   useSyncExternalStore,
   type ComponentProps,
 } from "react";
-import { View } from "react-native";
+import { View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, {
+import {
   cancelAnimation,
-  LinearTransition,
-  useReducedMotion,
   useSharedValue,
   withSpring,
 } from "react-native-reanimated";
@@ -28,8 +26,6 @@ import {
 import { IconButton, T } from "./primitives";
 import { useTheme } from "./theme";
 import { SHEET } from "../components/liquid/motion";
-
-const DETENT = LinearTransition.springify().duration(400).dampingRatio(0.8);
 
 type ScreenLayoutProps = Parameters<
   NonNullable<ComponentProps<typeof Stack>["screenLayout"]>
@@ -132,8 +128,9 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
   const [open, setOpen] = useState(true);
   const [allowRemove, setAllowRemove] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const reduced = useReducedMotion();
+  const { width } = useWindowDimensions();
   const drag = useSharedValue(0);
+  const touchBias = useSharedValue(0);
   const dragStart = useSharedValue(0);
   const releaseVelocity = useSharedValue(0);
   const pending = useRef<
@@ -155,7 +152,10 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
       Gesture.Pan()
         .enabled(open)
         .activeOffsetY([-10, 10])
-        .onStart(() => {
+        .onStart((event) => {
+          touchBias.set(
+            Math.max(-1, Math.min(1, (event.absoluteX / width) * 2 - 1)),
+          );
           cancelAnimation(drag);
           releaseVelocity.set(0);
           dragStart.set(drag.get());
@@ -191,7 +191,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
         .onFinalize((_event, success) => {
           if (!success) drag.set(withSpring(0, SHEET));
         }),
-    [open, drag, dragStart, releaseVelocity, dismiss, expand],
+    [open, width, touchBias, drag, dragStart, releaseVelocity, dismiss, expand],
   );
   useEffect(() => {
     if (allowRemove && pending.current)
@@ -214,11 +214,11 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
         accessibilityViewIsModal
       >
         <MorphingBackdrop open={open} onPress={dismiss} label="Dismiss sheet" />
-        <Animated.View
-          layout={reduced ? undefined : DETENT}
+        <View
+          pointerEvents="box-none"
           style={[
             {
-              height: `${Math.round((expanded ? 1 : compactHeight) * 100)}%`,
+              height: "100%",
               width: "100%",
               maxWidth: 760,
               alignSelf: "center",
@@ -229,8 +229,10 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
             open={open}
             onClosed={closed}
             slideFromBottom
+            heightFraction={expanded ? 1 : compactHeight}
             bottomInset={Math.max(insets.bottom, 12)}
             offset={drag}
+            touchBias={touchBias}
             releaseVelocity={releaseVelocity}
             style={{ flex: 1 }}
           >
@@ -246,7 +248,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
             </GestureDetector>
             {children}
           </MorphingSurface>
-        </Animated.View>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );

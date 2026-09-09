@@ -4,6 +4,7 @@ import {
   matchesSend,
   sendPartKey,
   usableSendRect,
+  createOutgoingProjection,
 } from "../src/state/sendTransition.ts";
 const message = { parts: [{ type: "text", text: "Same words" }] };
 const flight = {
@@ -16,6 +17,82 @@ test("send motion is tied to the acknowledged message, never an identical histor
   assert.equal(matchesSend(flight, "a", "old", message), false);
   assert.equal(matchesSend(flight, "b", "new", message), false);
   assert.equal(matchesSend(flight, "a", "new", message), true);
+});
+
+const row = (id, seq, content = message) => ({
+  kind: "block",
+  key: `turn:${id}`,
+  nested: false,
+  block: {
+    kind: "user",
+    id,
+    seq,
+    turnId: `turn-${id}`,
+    at: "now",
+    message: content,
+  },
+});
+const outgoing = {
+  id: 8,
+  key: "outgoing-8",
+  threadId: "a",
+  sourceThreadId: "a",
+  afterSeq: 10,
+  at: "now",
+  message,
+  sources: {},
+};
+test("a pending send appears immediately and never takes an identical history row", () => {
+  const project = createOutgoingProjection();
+  const history = row("old", 5);
+  const result = project([history], outgoing);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0], history);
+  assert.equal(result.rows[1].key, outgoing.key);
+  assert.equal(result.received, false);
+});
+test("event-before-receipt renders one pending message and only the receipt confirms delivery", () => {
+  const project = createOutgoingProjection();
+  const event = row("ack", 11);
+  const provisional = project([event], outgoing);
+  assert.equal(provisional.rows.length, 1);
+  assert.equal(provisional.rows[0].key, outgoing.key);
+  assert.equal(provisional.received, false);
+  const receipt = { ...outgoing, receipt: { threadId: "a", messageId: "ack" } };
+  assert.equal(project([event], receipt).received, true);
+  const settled = project([event], null);
+  assert.equal(settled.rows[0].key, outgoing.key);
+  assert.equal(settled.rows[0].block, event.block);
+  assert.equal(
+    project([event, row("later", 20)], null).rows[0],
+    settled.rows[0],
+  );
+});
+test("receipt-before-event retains the optimistic message until its canonical row arrives", () => {
+  const project = createOutgoingProjection();
+  const receipt = { ...outgoing, receipt: { threadId: "a", messageId: "ack" } };
+  assert.equal(project([], receipt).received, false);
+  assert.equal(project([], receipt).rows[0].key, outgoing.key);
+  assert.equal(project([row("ack", 11)], receipt).received, true);
+});
+test("concurrent identical messages remain distinct after receipt reconciliation", () => {
+  const project = createOutgoingProjection();
+  const other = row("other-client", 11);
+  const ours = row("ours", 12);
+  project([other], outgoing);
+  const final = project([other, ours], {
+    ...outgoing,
+    receipt: { threadId: "a", messageId: "ours" },
+  });
+  assert.equal(final.rows.length, 2);
+  assert.equal(final.rows[0], other);
+  assert.equal(final.rows[1].key, outgoing.key);
+});
+test("canceling a failed send removes only its pending presentation", () => {
+  const project = createOutgoingProjection();
+  const history = row("old", 5);
+  project([history], outgoing);
+  assert.deepEqual(project([history], null).rows, [history]);
 });
 test("a freshly created thread can match its initial message without a message receipt", () => {
   const fresh = { ...flight, receipt: { threadId: "fresh" } };

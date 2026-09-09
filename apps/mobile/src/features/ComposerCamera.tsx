@@ -228,10 +228,8 @@ export function ComposerCamera({
       preview.width + ((to?.width ?? preview.width) - preview.width) * p;
     const h =
       preview.height + ((to?.height ?? preview.height) - preview.height) * p;
-    // Uncrop continuously from the camera's cover framing to the thumbnail's contain framing.
-    const coverHeight = Math.max(h, w / photoAspect);
-    const containHeight = Math.min(h, w / photoAspect);
-    const imageHeight = coverHeight + (containHeight - coverHeight) * p;
+    // Keep cover framing continuous as the preview becomes a compact photo tile.
+    const imageHeight = Math.max(h, w / photoAspect);
     return {
       width: imageHeight * photoAspect,
       height: imageHeight,
@@ -268,6 +266,7 @@ export function ComposerCamera({
               top: 0,
               left: 0,
               overflow: "hidden",
+              borderCurve: "continuous",
               backgroundColor: colors.raised,
             },
             surface,

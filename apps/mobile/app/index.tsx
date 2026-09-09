@@ -1,6 +1,6 @@
 import { threadHasActivity } from "../src/state/runtime";
-import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
@@ -8,16 +8,43 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
 import { setDraft, useDraft } from "../src/state/draft";
 import { type UserMessage } from "../src/state/protocol";
-import { refresh, rpc, useApp } from "../src/state/runtime";
+import { ensureThread, refresh, rpc, useApp } from "../src/state/runtime";
 import { Brand } from "../src/ui/Brand";
 import { Button, Icon, IconButton, T, Tap, styles } from "../src/ui/primitives";
 import { useTheme } from "../src/ui/theme";
+import { useSendTransition } from "../src/components/liquid/SendTransition";
+import { DRAFT_SEND_THREAD, outgoingBlock } from "../src/state/sendTransition";
+import { UserMessageBubble } from "../src/features/UserMessageBubble";
 
 export default function Home() {
   const app = useApp();
   const draft = useDraft();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const sendMotion = useSendTransition();
+  const [focused, setFocused] = useState(true);
+  useFocusEffect(
+    useCallback(() => {
+      setFocused(true);
+      return () => setFocused(false);
+    }, []),
+  );
+  const outgoing =
+    sendMotion.outgoing?.sourceThreadId === DRAFT_SEND_THREAD
+      ? sendMotion.outgoing
+      : null;
+  useEffect(() => {
+    if (focused && outgoing?.receipt && sendMotion.flight?.id !== outgoing.id)
+      router.push({
+        pathname: "/thread/[id]",
+        params: { id: outgoing.receipt.threadId, created: "1" },
+      });
+  }, [
+    focused,
+    outgoing?.receipt?.threadId,
+    outgoing?.id,
+    sendMotion.flight?.id,
+  ]);
   const [prompt, setPrompt] = useState("");
   const connected = app.status === "open";
   const project =
@@ -59,7 +86,9 @@ export default function Home() {
       message,
     });
     void refresh();
-    router.push({ pathname: "/thread/[id]", params: { id: thread.id } });
+    // Keep the local message visible while the new conversation hydrates.
+    // A hydration failure must not turn an accepted send into a retry.
+    await ensureThread(thread.id).catch(() => {});
     return { threadId: thread.id };
   }
   return (
@@ -105,72 +134,79 @@ export default function Home() {
           alignSelf: "center",
         }}
       >
-        <Animated.View
-          entering={FadeIn.duration(280).reduceMotion(ReduceMotion.System)}
-          style={{ flex: 1, justifyContent: "center", paddingBottom: 16 }}
-        >
-          <View style={{ marginBottom: 24 }}>
-            <Brand size={52} />
-          </View>
-          <T variant="display">What are we{`\n`}building?</T>
-          <T tone="secondary" style={{ marginTop: 18, maxWidth: 300 }}>
-            {connected
-              ? "Choose a project and start a conversation."
-              : "Work with your coding agents from anywhere."}
-          </T>
-          {!connected ? (
-            <View style={{ marginTop: 30, alignSelf: "flex-start" }}>
-              <Button
-                onPress={() =>
-                  app.activeId
-                    ? router.push("/settings")
-                    : router.push("/connect")
-                }
-                icon="arrow.right"
-              >
-                {app.activeId ? "Open connections" : "Connect your computer"}
-              </Button>
+        {outgoing ? (
+          <UserMessageBubble
+            block={outgoingBlock(outgoing)}
+            threadId={outgoing.threadId}
+          />
+        ) : (
+          <Animated.View
+            entering={FadeIn.duration(280).reduceMotion(ReduceMotion.System)}
+            style={{ flex: 1, justifyContent: "center", paddingBottom: 16 }}
+          >
+            <View style={{ marginBottom: 24 }}>
+              <Brand size={52} />
             </View>
-          ) : (
-            <View style={{ marginTop: 28, alignItems: "flex-start", gap: 2 }}>
-              {(
-                [
-                  {
-                    icon: "hammer",
-                    title: "Build something new",
-                    prompt: "Help me build ",
-                  },
-                  {
-                    icon: "viewfinder",
-                    title: "Explore this project",
-                    prompt:
-                      "Explore this project and explain how it is organized.",
-                  },
-                  {
-                    icon: "arrow.triangle.branch",
-                    title: "Review recent changes",
-                    prompt:
-                      "Review the recent changes in this project. Look for bugs and improvements.",
-                  },
-                ] as const
-              ).map((item) => (
-                <Tap
-                  key={item.title}
-                  label={item.title}
-                  onPress={() => setPrompt(item.prompt)}
-                  style={[styles.line, { paddingVertical: 4, gap: 13 }]}
+            <T variant="display">What are we{`\n`}building?</T>
+            <T tone="secondary" style={{ marginTop: 18, maxWidth: 300 }}>
+              {connected
+                ? "Choose a project and start a conversation."
+                : "Work with your coding agents from anywhere."}
+            </T>
+            {!connected ? (
+              <View style={{ marginTop: 30, alignSelf: "flex-start" }}>
+                <Button
+                  onPress={() =>
+                    app.activeId
+                      ? router.push("/settings")
+                      : router.push("/connect")
+                  }
+                  icon="arrow.right"
                 >
-                  <Icon name={item.icon} size={18} color={colors.secondary} />
-                  <T variant="label" tone="secondary">
-                    {item.title}
-                  </T>
-                  <Icon name="arrow.up.left" size={11} color={colors.muted} />
-                </Tap>
-              ))}
-            </View>
-          )}
-        </Animated.View>
-        {connected && recent.length > 0 && (
+                  {app.activeId ? "Open connections" : "Connect your computer"}
+                </Button>
+              </View>
+            ) : (
+              <View style={{ marginTop: 28, alignItems: "flex-start", gap: 2 }}>
+                {(
+                  [
+                    {
+                      icon: "hammer",
+                      title: "Build something new",
+                      prompt: "Help me build ",
+                    },
+                    {
+                      icon: "viewfinder",
+                      title: "Explore this project",
+                      prompt:
+                        "Explore this project and explain how it is organized.",
+                    },
+                    {
+                      icon: "arrow.triangle.branch",
+                      title: "Review recent changes",
+                      prompt:
+                        "Review the recent changes in this project. Look for bugs and improvements.",
+                    },
+                  ] as const
+                ).map((item) => (
+                  <Tap
+                    key={item.title}
+                    label={item.title}
+                    onPress={() => setPrompt(item.prompt)}
+                    style={[styles.line, { paddingVertical: 4, gap: 13 }]}
+                  >
+                    <Icon name={item.icon} size={18} color={colors.secondary} />
+                    <T variant="label" tone="secondary">
+                      {item.title}
+                    </T>
+                    <Icon name="arrow.up.left" size={11} color={colors.muted} />
+                  </Tap>
+                ))}
+              </View>
+            )}
+          </Animated.View>
+        )}
+        {!outgoing && connected && recent.length > 0 && (
           <View style={{ paddingTop: 8, gap: 4 }}>
             <View style={styles.spread}>
               <T variant="caption" tone="muted">

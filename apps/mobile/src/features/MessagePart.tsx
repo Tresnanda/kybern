@@ -33,6 +33,7 @@ export function MessagePart({
   if (source)
     return (
       <Image
+        fadeDuration={0}
         source={source}
         accessibilityLabel="Attached image"
         style={{

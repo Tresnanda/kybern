@@ -9,6 +9,7 @@ import {
   type PropsWithChildren,
 } from "react";
 import { AppState, StyleSheet, View } from "react-native";
+import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, {
   measure,
   type AnimatedRef,
@@ -16,6 +17,7 @@ import Animated, {
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
+  useFrameCallback,
   withSpring,
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
@@ -28,6 +30,8 @@ import {
   type SendReceipt,
   type SendRect,
   type SendSource,
+  type OutgoingSend,
+  DRAFT_SEND_THREAD,
 } from "../../state/sendTransition";
 import { useTheme } from "../../ui/theme";
 
@@ -51,12 +55,23 @@ export function measureSendView(view: View | null): Promise<SendRect | null> {
 
 type Destination = {
   bubble: SendRect;
+  surface?: SendRect;
   parts: Record<string, SendRect>;
   bubbleRef: AnimatedRef<View>;
 };
 type PendingFlight = SendFlight & { destination?: Destination };
 type MotionContext = {
   flight: PendingFlight | null;
+  outgoing: OutgoingSend | null;
+  begin: (
+    threadId: string | undefined,
+    afterSeq: number,
+    message: UserMessage,
+    sources: Record<string, SendSource>,
+  ) => number;
+  confirm: (id: number, receipt: SendReceipt, message: UserMessage) => void;
+  cancel: (id: number) => void;
+  received: (id: number) => void;
   start: (
     receipt: SendReceipt,
     message: UserMessage,
@@ -67,6 +82,11 @@ type MotionContext = {
 };
 const Context = createContext<MotionContext>({
   flight: null,
+  outgoing: null,
+  begin: () => 0,
+  confirm: () => {},
+  cancel: () => {},
+  received: () => {},
   start: () => {},
   land: () => {},
   finish: () => {},
@@ -75,10 +95,82 @@ export const useSendTransition = () => useContext(Context);
 
 export function SendTransitionProvider({ children }: PropsWithChildren) {
   const [flight, setFlight] = useState<PendingFlight | null>(null);
+  const [outgoing, setOutgoing] = useState<OutgoingSend | null>(null);
   const root = useRef<View>(null);
   const [origin, setOrigin] = useState({ x: 0, y: 0 });
   const serial = useRef(0);
   const reduced = useReducedMotion();
+  const begin = useCallback(
+    (
+      threadId: string | undefined,
+      afterSeq: number,
+      message: UserMessage,
+      sources: Record<string, SendSource>,
+    ) => {
+      const id = ++serial.current;
+      const key = `outgoing-${id}`;
+      const targetThread = threadId ?? DRAFT_SEND_THREAD;
+      setOutgoing({
+        id,
+        key,
+        threadId: targetThread,
+        sourceThreadId: targetThread,
+        afterSeq,
+        message,
+        sources,
+        at: new Date().toISOString(),
+      });
+      if (
+        !reduced &&
+        Object.keys(sources).length &&
+        message.parts.filter((part) => part.type === "text").length <= 1
+      )
+        setFlight({
+          id,
+          receipt: { threadId: targetThread, messageId: key },
+          message,
+          sources,
+        });
+      return id;
+    },
+    [reduced],
+  );
+  const confirm = useCallback(
+    (id: number, receipt: SendReceipt, message: UserMessage) => {
+      setOutgoing((current) =>
+        current?.id === id
+          ? { ...current, receipt, message, threadId: receipt.threadId }
+          : current,
+      );
+      // A new thread adopts the already travelling message; never restart it.
+      setFlight((current) =>
+        current?.id === id
+          ? {
+              ...current,
+              receipt: {
+                threadId: receipt.threadId,
+                messageId: `outgoing-${id}`,
+              },
+            }
+          : current,
+      );
+    },
+    [],
+  );
+  const cancel = useCallback((id: number) => {
+    setOutgoing((current) => (current?.id === id ? null : current));
+    setFlight((current) => (current?.id === id ? null : current));
+  }, []);
+  const received = useCallback((id: number) => {
+    setOutgoing((current) =>
+      current?.id === id && !current.received
+        ? { ...current, received: true }
+        : current,
+    );
+  }, []);
+  useEffect(() => {
+    if (outgoing?.received && flight?.id !== outgoing.id) setOutgoing(null);
+  }, [outgoing, flight?.id]);
   const finish = useCallback(
     (id: number) =>
       setFlight((current) => (current?.id === id ? null : current)),
@@ -124,8 +216,18 @@ export function SendTransitionProvider({ children }: PropsWithChildren) {
     if (reduced) setFlight(null);
   }, [reduced]);
   const context = useMemo(
-    () => ({ flight, start, land, finish }),
-    [flight, start, land, finish],
+    () => ({
+      flight,
+      outgoing,
+      begin,
+      confirm,
+      cancel,
+      received,
+      start,
+      land,
+      finish,
+    }),
+    [flight, outgoing, begin, confirm, cancel, received, start, land, finish],
   );
   return (
     <Context.Provider value={context}>
@@ -171,51 +273,77 @@ function Flight({
 }) {
   const progress = useSharedValue(0);
   const shape = useSharedValue(0);
+  const settled = useSharedValue(false);
+  const finished = useSharedValue(false);
+  const targetPosition = useSharedValue({ x: 0, y: 0 });
+  const stableFrames = useSharedValue(0);
+  const previousKeyboard = useSharedValue(0);
+  const keyboard = useReanimatedKeyboardAnimation();
   const { colors } = useTheme();
   const destination = flight.destination;
   const bubbleRef = destination?.bubbleRef;
   const bubbleRect = destination?.bubble;
   // One geometry read per frame, only while a send is in flight. All parts
   // share the bubble's displacement as the keyboard and list move underneath.
+  useFrameCallback(() => {
+    if (!bubbleRef || !bubbleRect || finished.get()) return;
+    const target = measure(bubbleRef);
+    if (!target) return;
+    const next = {
+      x: target.pageX - bubbleRect.x,
+      y: target.pageY - bubbleRect.y,
+    };
+    const previous = targetPosition.get();
+    const keyboardHeight = keyboard.height.get();
+    const stable =
+      Math.abs(next.x - previous.x) < 0.5 &&
+      Math.abs(next.y - previous.y) < 0.5 &&
+      Math.abs(keyboardHeight - previousKeyboard.get()) < 0.5;
+    stableFrames.set(stable ? stableFrames.get() + 1 : 0);
+    previousKeyboard.set(keyboardHeight);
+    targetPosition.set(next);
+    if (settled.get() && stableFrames.get() >= 2) {
+      finished.set(true);
+      scheduleOnRN(finish, flight.id);
+    }
+  });
   const tracking = useAnimatedStyle(() => {
-    const target = _WORKLET && bubbleRef ? measure(bubbleRef) : null;
+    const target = targetPosition.get();
     const weight = progress.get();
     return {
       transform: [
         {
-          translateX:
-            target && bubbleRect ? (target.pageX - bubbleRect.x) * weight : 0,
+          translateX: target.x * weight,
         },
         {
-          translateY:
-            target && bubbleRect ? (target.pageY - bubbleRect.y) * weight : 0,
+          translateY: target.y * weight,
         },
       ],
     };
   });
   useEffect(() => {
     if (!destination) return;
-    progress.set(withSpring(1, { duration: 300, dampingRatio: 1 }));
+    progress.set(withSpring(1, { duration: 400, dampingRatio: 1 }));
     shape.set(
       withSpring(1, { duration: 400, dampingRatio: 0.8 }, (done) => {
-        if (done) scheduleOnRN(finish, flight.id);
+        if (done) settled.set(true);
       }),
     );
-  }, [destination, flight.id, finish, progress, shape]);
+  }, [destination, progress, shape, settled]);
   const background = useAnimatedStyle(() => ({
     opacity: interpolate(progress.get(), [0, 0.7, 1], [0, 0.8, 1]),
   }));
   return (
     <Animated.View style={[StyleSheet.absoluteFill, tracking]}>
-      {destination && (
+      {destination?.surface && (
         <Animated.View
           style={[
             {
               position: "absolute",
-              left: destination.bubble.x - origin.x,
-              top: destination.bubble.y - origin.y,
-              width: destination.bubble.width,
-              height: destination.bubble.height,
+              left: destination.surface.x - origin.x,
+              top: destination.surface.y - origin.y,
+              width: destination.surface.width,
+              height: destination.surface.height,
               backgroundColor: colors.raised,
               borderRadius: 22,
               borderBottomEndRadius: 7,
@@ -413,10 +541,10 @@ function FlyingImage({
 }) {
   const style = useAnimatedStyle(() => ({
     // This is an absolute image leaf, so changing its bounds cannot reflow the
-    // composer or list. Contain preserves the photograph's aspect ratio.
+    // composer or list. Cover framing matches both the composer and photo tile.
     width: Math.max(1, from.width + (to.width - from.width) * shape.get()),
     height: Math.max(1, from.height + (to.height - from.height) * shape.get()),
-    borderRadius: 16 + (12 - 16) * Math.min(1, shape.get()),
+    borderRadius: 16 + (24 - 16) * Math.min(1, shape.get()),
     transform: [
       { translateX: (to.x - from.x) * progress.get() },
       { translateY: (to.y - from.y) * progress.get() },
@@ -424,8 +552,9 @@ function FlyingImage({
   }));
   return (
     <Animated.Image
+      fadeDuration={0}
       source={imageSource(part, source?.uri)}
-      resizeMode="contain"
+      resizeMode="cover"
       style={[
         {
           position: "absolute",

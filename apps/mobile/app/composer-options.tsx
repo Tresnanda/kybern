@@ -1,14 +1,17 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
+import { ScrollView } from "react-native";
+import { useTheme } from "../src/ui/theme";
 import { ComposerOptions } from "../src/features/ComposerControls";
 import { errorText, loadThread, useApp, useThread } from "../src/state/runtime";
-import { ErrorBanner, IconButton, Page, T } from "../src/ui/primitives";
+import { ErrorBanner, IconButton, Page, T, Tap } from "../src/ui/primitives";
 
 export default function ComposerOptionsScreen() {
   const { threadId, section: requested } = useLocalSearchParams<{
     threadId?: string;
     section?: string;
   }>();
+  const { colors } = useTheme();
   const section =
     requested === "permissions" || requested === "usage" ? requested : "model";
   const app = useApp();
@@ -46,6 +49,52 @@ export default function ComposerOptionsScreen() {
           ),
         }}
       />
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0 }}
+        contentContainerStyle={{
+          flexGrow: 1,
+          flexDirection: "row",
+          paddingHorizontal: 16,
+          paddingBottom: 8,
+          gap: 4,
+        }}
+      >
+        {(
+          ["model", "permissions", ...(threadId ? ["usage"] : [])] as const
+        ).map((tab) => (
+          <Tap
+            key={tab}
+            label={
+              tab === "model"
+                ? "Model"
+                : tab === "permissions"
+                  ? "Permissions"
+                  : "Usage"
+            }
+            selected={section === tab}
+            onPress={() => router.setParams({ section: tab })}
+            style={{
+              flexGrow: 1,
+              flexShrink: 0,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              alignItems: "center",
+              borderRadius: 14,
+              backgroundColor: section === tab ? colors.raised : "transparent",
+            }}
+          >
+            <T variant="caption" tone={section === tab ? "ink" : "secondary"}>
+              {tab === "model"
+                ? "Model"
+                : tab === "permissions"
+                  ? "Permissions"
+                  : "Usage"}
+            </T>
+          </Tap>
+        ))}
+      </ScrollView>
       {threadId && !thread ? (
         <Page>
           <ErrorBanner error={error} />

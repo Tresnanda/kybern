@@ -68,7 +68,15 @@ function Navigation() {
         />
         <Stack.Screen
           name="thread/[id]"
-          options={{ title: "", headerShown: false }}
+          options={({ route }) => ({
+            title: "",
+            headerShown: false,
+            // The composer-to-message flight already supplies this transition.
+            ...((route.params as { created?: string } | undefined)?.created ===
+            "1"
+              ? { animation: "none" as const }
+              : {}),
+          })}
         />
         <Stack.Screen
           name="connect"
