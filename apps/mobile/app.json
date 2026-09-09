@@ -2,7 +2,7 @@
   "expo": {
     "name": "Kybern",
     "slug": "kybern-mobile",
-    "version": "0.1.2",
+    "version": "0.1.1",
     "runtimeVersion": { "policy": "fingerprint" },
     "updates": {
       "url": "https://u.expo.dev/8a6031c9-5d00-4377-9114-546bd7736a9d",
