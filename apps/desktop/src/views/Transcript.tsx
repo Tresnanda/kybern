@@ -65,7 +65,7 @@ import {
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
-import { diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
+import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
@@ -228,12 +228,12 @@ export function Transcript({
   surfaceMode?: "single" | "split"
 }) {
   const state = useStore((s) => s.transcripts[threadId])
-  const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
   const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
   const selectedActivity = agentActivityTrail.at(-1)
+  const runtimeTasks = useStore((s) => selectedActivity?.threadId === threadId ? s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS : EMPTY_RUNTIME_TASKS)
   const agentActivityDetail = useMemo(
     () => selectedActivity?.threadId === threadId ? resolveAgentActivityDetail(groups, runtimeTasks, selectedActivity) : null,
     [groups, runtimeTasks, selectedActivity, threadId],
@@ -364,7 +364,7 @@ export function Transcript({
               <p className="text-sm text-muted-foreground/30">Send a message to start the conversation.</p>
             </div>
           ) : (
-            <TranscriptStateRoot key={threadId}><VirtualRows items={groups} getKey={turnKey} estimateSize={estimateTurnSize} viewport={virtualViewport} controllerRef={rows}>
+            <TranscriptStateRoot key={threadId}><VirtualRows items={groups} getKey={turnKey} estimateSize={estimateTurnSize} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
               {(g, i) => <div data-turn-id={turnKey(g, i)}><Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} /></div>}
             </VirtualRows></TranscriptStateRoot>
           )}
@@ -478,7 +478,7 @@ const estimateActivitySize = () => 48
 function AgentActivityEntries({ viewport, entries, tasksByToolCall, childrenByParent, onOpenAgentActivity }: { viewport: { current: HTMLElement | null }; entries: readonly AgentActivityEntry[]; tasksByToolCall: ReadonlyMap<string, RuntimeTask>; childrenByParent: ReadonlyMap<string, ToolBlock[]>; onOpenAgentActivity: OpenAgentActivity }) {
   if (entries.length === 0) return <AgentActivityEmpty>No child activity was reported.</AgentActivityEmpty>
   return (
-    <VirtualRows viewport={viewport} items={entries} getKey={activityEntryKey} estimateSize={estimateActivitySize}>{(entry, index) => (
+    <VirtualRows viewport={viewport} items={entries} getKey={activityEntryKey} estimateSize={estimateActivitySize} anchor="start">{(entry, index) => (
       <div className={cn("border-b border-border/45", entry.kind === "tool" ? "py-2" : "py-3", index === 0 && "pt-0", index === entries.length - 1 && "border-b-0 pb-0")}>
         {entry.kind === "tool" ? <ToolRow block={entry.block} task={tasksByToolCall.get(entry.block.call.id)} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} showTimestamp />
           : <RuntimeTaskActivityEntry task={entry.task} navigable={entry.navigable} onOpenAgentActivity={onOpenAgentActivity} />}
@@ -529,11 +529,8 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   useEffect(() => {
     if (canLoadDiff && group.end && !diff) void loadDiff(threadId, group.turnId)
   }, [canLoadDiff, group.end, group.turnId, threadId, diff])
-  const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
-  const launchedTasks = useMemo(
-    () => runtimeTasks.filter((task) => task.origin_turn_id === group.turnId),
-    [group.turnId, runtimeTasks],
-  )
+  const selectTasks = useMemo(() => createTurnTasksSelector(threadId, group.turnId), [threadId, group.turnId])
+  const launchedTasks = useStore(selectTasks)
   const settledWork = useMemo(
     () => settledWorkPresentation(group.work, launchedTasks),
     [group.work, launchedTasks],

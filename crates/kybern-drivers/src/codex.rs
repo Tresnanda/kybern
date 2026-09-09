@@ -64,7 +64,7 @@ async fn codex_models(bin: &std::path::Path) -> Vec<ProviderModel> {
         "initialize",
         json!({
             "clientInfo": { "name": "kybern", "title": "Kybern", "version": env!("CARGO_PKG_VERSION") },
-            "capabilities": { "experimentalApi": false }
+            "capabilities": { "experimentalApi": true }
         }),
     )
     .await
@@ -123,10 +123,14 @@ async fn codex_models(bin: &std::path::Path) -> Vec<ProviderModel> {
 /// Ask Codex's own app-server for its effective skill catalog. This preserves
 /// plugin namespaces, disabled state, and repo/system precedence that cannot be
 /// reconstructed reliably from a blind filesystem walk.
-pub async fn discover_skills(cwd: &std::path::Path, binary: Option<&PathBuf>) -> Option<Vec<SkillInfo>> {
+pub async fn discover_skills(
+    cwd: &std::path::Path,
+    binary: Option<&PathBuf>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<Vec<SkillInfo>> {
     let bin = resolve(ProviderKind::Codex, binary).ok()?;
     let mut cmd = Command::new(bin);
-    cmd.current_dir(cwd).arg("app-server");
+    cmd.current_dir(cwd).arg("app-server").envs(env);
     let child = NdjsonChild::spawn(cmd).ok()?;
     let initialized = catalog_call(
         &child,
@@ -147,6 +151,16 @@ pub async fn discover_skills(cwd: &std::path::Path, binary: Option<&PathBuf>) ->
     let cwd_text = cwd.to_string_lossy().to_string();
     let result = catalog_call(&child, 2, "skills/list", json!({ "cwds": [&cwd_text] })).await;
     let plugins = catalog_call(&child, 3, "plugin/installed", json!({})).await;
+    let mut apps = Vec::new();
+    let mut cursor = Value::Null;
+    for page in 0..10 {
+        let Some(value) = catalog_call(&child, 4 + page, "app/list", json!({ "cursor": cursor, "limit": 100 })).await else { break };
+        apps.extend(connected_apps(&value));
+        cursor = value.get("nextCursor").cloned().unwrap_or(Value::Null);
+        if cursor.is_null() {
+            break;
+        }
+    }
     child.kill().await;
     let result = result?;
     let entries = result.get("data")?.as_array()?;
@@ -196,7 +210,34 @@ pub async fn discover_skills(cwd: &std::path::Path, binary: Option<&PathBuf>) ->
         })
         .collect();
     skills.extend(plugins.iter().flat_map(installed_plugins));
+    skills.extend(apps);
     Some(skills)
+}
+
+fn connected_apps(result: &Value) -> Vec<SkillInfo> {
+    result
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|app| {
+            if app.get("isAccessible").and_then(Value::as_bool) != Some(true)
+                || app.get("isEnabled").and_then(Value::as_bool) == Some(false)
+            {
+                return None;
+            }
+            let id = app.get("id")?.as_str()?;
+            let name = app.get("name")?.as_str()?;
+            Some(SkillInfo {
+                name: name.into(),
+                display_name: Some(name.into()),
+                description: app.get("description").and_then(Value::as_str).map(str::to_string),
+                path: format!("app://{id}"),
+                scope: SkillScope::Plugin,
+                enabled: true,
+            })
+        })
+        .collect()
 }
 
 /// Installed plugins the composer can mention with `@name`, such as Computer
@@ -2198,5 +2239,20 @@ wait
         assert_eq!(limits[1].window_minutes, Some(10080));
         assert!(limits[1].resets_at.is_none());
         assert!(parse_rate_limits(&json!({"primary":null})).is_none());
+    }
+}
+
+#[cfg(test)]
+mod app_catalog_tests {
+    #[test]
+    fn only_connected_enabled_apps_can_be_mentioned() {
+        let apps = super::connected_apps(&serde_json::json!({"data":[
+            {"id":"app-one","name":"One","isAccessible":true,"isEnabled":true},
+            {"id":"app-two","name":"Two","isAccessible":false},
+            {"id":"app-three","name":"Three","isAccessible":true,"isEnabled":false}
+        ]}));
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].path, "app://app-one");
+        assert_eq!(apps[0].scope, kybern_protocol::SkillScope::Plugin);
     }
 }

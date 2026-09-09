@@ -10,7 +10,7 @@ import { emptyThreadState, type Block } from "../src/state/transcript"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import "../src/index.css"
 
-const HISTORY = 400
+const HISTORY = Math.max(1, Math.min(2000, Number(new URLSearchParams(location.search).get("history") ?? 400)))
 const TOOLS = 800
 const AT = "2026-09-01T12:00:00Z"
 const origin = { kind: "root" } as const
@@ -73,9 +73,11 @@ async function run() {
   const historyMessages = document.querySelectorAll('[data-slot="message"]').length
   const historyNodes = document.querySelectorAll("*").length
   let messageRects = 0
+  let listRects = 0
   const rect = Element.prototype.getBoundingClientRect
   Element.prototype.getBoundingClientRect = function() {
     if (this.matches('[data-slot="message"]')) messageRects++
+    if (this.hasAttribute("data-virtual-list")) listRects++
     return rect.call(this)
   }
   const scrollFrames: number[] = []
@@ -130,9 +132,9 @@ async function run() {
   const finalCommitMs = performance.now() - finalAt
   for (let attempt = 0; attempt < 100 && !document.getElementById("stream-viewport")?.textContent?.endsWith("FINAL_MARKER"); attempt++) await sleep(20)
   const finalPass = document.getElementById("stream-viewport")?.textContent?.endsWith("FINAL_MARKER") === true && document.querySelectorAll("#stream-viewport table").length === 180
-  const result = { historyTurns: HISTORY + 1, mountMs, historyMessages, historyNodes, messageRects, scrollFrameP95: p95(scrollFrames), scrollFramesOver25ms: scrollFrames.filter((value) => value > 25).length, expandMs, grouped: !!grouped, workRows, expandedNodes, streamChars: text.length, streamFrames: streamFrames.length, streamFrameP95: p95(streamFrames), streamFramesOver25ms: streamFrames.filter((value) => value > 25).length, inputTicks, inputEvents, inputFrameP95: p95(inputDelay), finalCommitMs, finalPass }
+  const result = { historyTurns: HISTORY + 1, mountMs, historyMessages, historyNodes, messageRects, listRects, scrollFrameP95: p95(scrollFrames), scrollFramesOver25ms: scrollFrames.filter((value) => value > 25).length, expandMs, grouped: !!grouped, workRows, expandedNodes, streamChars: text.length, streamFrames: streamFrames.length, streamFrameP95: p95(streamFrames), streamFramesOver25ms: streamFrames.filter((value) => value > 25).length, inputTicks, inputEvents, inputFrameP95: p95(inputDelay), finalCommitMs, finalPass }
   const responsivenessPass = p95(streamFrames) < 50 && p95(inputDelay) < 50 && inputEvents === inputTicks && inputEvents >= 20 && finalCommitMs < 30
-  const pass = responsivenessPass && historyMessages > 0 && historyMessages < 100 && !!grouped && workRows > 0 && workRows < 160 && messageRects < 5000 && finalPass
+  const pass = responsivenessPass && historyMessages > 0 && historyMessages < 100 && !!grouped && workRows > 0 && workRows < 160 && messageRects < 5000 && listRects < 10 && finalPass
   const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }
   native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ ...result, responsivenessPass, pass }))
 }

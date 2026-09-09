@@ -41,6 +41,16 @@ pub enum EventPayload {
     MessageRemoved {
         message_id: MessageId,
     },
+    MessageQueueUpdated {
+        message: crate::methods::QueuedMessage,
+    },
+    MessageSteered {
+        message_id: MessageId,
+        message: UserMessage,
+    },
+    ThreadNotesUpdated {
+        notes: crate::methods::ThreadNotes,
+    },
     TurnStarted {
         message_id: MessageId,
         message: UserMessage,

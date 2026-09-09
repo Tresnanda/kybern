@@ -378,6 +378,46 @@ historical usage to Kybern. History imports are limited to 64 MB. If a harness
 refuses continuation because another process owns the session, close that
 process and retry. Saved sessions remain native to their original harness.
 
+### Connectors, plugins, and Claude artifacts
+
+Open **Settings → Integrations** on desktop, or **Connectors and plugins** in a
+mobile conversation’s menu. Claude Code uses its native plugin catalog, scopes,
+installation commands, and MCP sign-in. Codex uses its app-server catalog,
+plugin actions, and account connector setup pages. Provider restrictions remain
+in effect; plugins that require Codex’s installation interstitial must be
+installed there. New Claude plugin installs use the native user scope. Existing
+project/local scopes are preserved. Start a fresh agent session after changing
+plugins. Connected Codex apps and enabled Claude plugin skills also appear in
+the composer’s capability picker.
+
+In a Claude conversation, ask for an artifact, or open **Artifacts** in the
+desktop dock or mobile conversation menu. You can preview an HTML, Markdown,
+or SVG file, inspect its source, request native publication, open a returned
+Claude URL, and republish to that URL. React and other sources must be prepared
+as HTML/Markdown for Claude’s native Artifact tool. Publication remains a normal
+Claude turn with its normal approval handling; a successful native tool receipt
+is required before Kybern marks an artifact as published.
+
+**Share and versions** opens the hosted Claude page. Claude owns hosting,
+sharing permissions, version selection, and live account connectors; Kybern
+does not clone those account controls or use an undocumented publishing API.
+Local HTML/SVG previews have an isolated origin and cannot access the daemon’s
+credentials or fetch network resources. Use the hosted page for connector-backed
+content and remote dependencies. Sources are limited to 1 MB inside the thread’s
+workspace. Native publication also requires a Claude account and CLI version
+that supports [Claude Code artifacts](https://code.claude.com/docs/en/artifacts).
+
+```sh
+kybern integrations list . --provider claude-code
+kybern integrations change . plugin-name@marketplace enable --scope project
+kybern integrations login <thread-id> <mcp-server-name>
+kybern artifacts list <thread-id>
+kybern artifacts read <thread-id> artifacts/dashboard.html
+```
+
+These additive RPCs require a daemon containing this feature. Updating only the
+phone’s JavaScript does not add the corresponding daemon support.
+
 ### Background behaviour
 
 The daemon outlives the app, so it trims what it keeps alive once work

@@ -309,6 +309,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     if (ev.kind === "approval_resolved") toast.dismiss(`agent-input:${ev.approval_id}`)
     if (
       ev.kind === "message_queued" ||
+      ev.kind === "message_queue_updated" ||
       ev.kind === "message_removed" ||
       ev.kind === "turn_started"
     ) {
@@ -751,6 +752,11 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     }
   }
 
+  async function artifactPreviewUrl(threadId: string, path: string): Promise<string> {
+    const result = await rpc().call("threads.artifacts.preview", { thread_id: threadId, path })
+    return `${httpBase}/artifact-preview/${encodeURIComponent(result.ticket)}`
+  }
+
   async function fetchThreadImage(threadId: string, path: string, signal: AbortSignal, preview = false): Promise<Blob> {
     const response = await fetch(`${httpBase}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(path)}${preview ? "&preview=true" : ""}`, { headers: { authorization: `Bearer ${token}` }, signal })
     if (!response.ok) throw new Error((await response.text()).trim() || "Unable to load image. Try again.")
@@ -792,6 +798,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     removeProject,
     uploadFile,
     fetchThreadImage,
+    artifactPreviewUrl,
   }
 }
 

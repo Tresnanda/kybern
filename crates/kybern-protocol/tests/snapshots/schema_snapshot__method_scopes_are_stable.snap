@@ -46,7 +46,15 @@ expression: scopes
   - "orchestration:operate"
 - - threads.send
   - "orchestration:operate"
+- - threads.steer
+  - "orchestration:operate"
+- - threads.notes.get
+  - "orchestration:read"
+- - threads.notes.set
+  - "orchestration:operate"
 - - queue.add
+  - "orchestration:operate"
+- - queue.update
   - "orchestration:operate"
 - - queue.list
   - "orchestration:read"
@@ -122,6 +130,18 @@ expression: scopes
   - "orchestration:read"
 - - skills.list
   - "orchestration:read"
+- - integrations.list
+  - "orchestration:read"
+- - threads.artifacts.list
+  - "orchestration:read"
+- - threads.artifacts.read
+  - "orchestration:read"
+- - threads.artifacts.preview
+  - "orchestration:read"
+- - integrations.change
+  - "orchestration:operate"
+- - integrations.login
+  - "terminal:operate"
 - - approvals.respond
   - "orchestration:operate"
 - - approvals.list

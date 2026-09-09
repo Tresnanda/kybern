@@ -185,6 +185,16 @@ async function run() {
   await sleep(350)
   check(viewport().scrollHeight - viewport().scrollTop - viewport().clientHeight < 60, "Following tracks new output after thread switch")
   results.follow = true
+  // A small upward gesture must leave the live edge immediately, even inside
+  // the usual near-bottom tolerance, and must not be undone by new output.
+  viewport().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -8 }))
+  viewport().scrollTop -= 8
+  await sleep(80)
+  const smallScrollTop = viewport().scrollTop
+  publish(blocks.map(block => block.id === "answer-heavy" && block.kind === "assistant" ? { ...block, text: block.text + "\n\n" + "Additional output. ".repeat(50) } : block))
+  await sleep(300)
+  check(Math.abs(viewport().scrollTop - smallScrollTop) < 2, "A small upward scroll is not pulled back to the live edge")
+  results.smallScrollAway = true
   const launch: Block = { kind: "tool", id: "agent-parent", turnId: "agent-turn", at, seq: ++seq, origin, call: { id: "agent-parent", name: "Task", input: { description: "Review files", prompt: "Inspect the project files" }, parent_id: null }, stream: "", output: "The agent finished reviewing.", isError: false, complete: true }
   const childTools = heavy.filter((block): block is Extract<Block, { kind: "tool" }> => block.kind === "tool").map(block => ({ ...block, id: "child-" + block.id, turnId: "agent-turn", call: { ...block.call, id: "child-" + block.call.id, parent_id: "agent-parent" } }))
   useStore.getState().set({ transcripts: { ...useStore.getState().transcripts, agents: { ...emptyThreadState(), loaded: true, blocks: [user("agent-turn"), launch, ...childTools, assistant("agent-turn"), end("agent-turn")] } } })

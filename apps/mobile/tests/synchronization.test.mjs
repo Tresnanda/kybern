@@ -159,3 +159,26 @@ test("transcript hydration applies only events after its acknowledged sequence",
     "Hello world",
   );
 });
+
+
+test("queue edits retain order and never resurrect a consumed prompt", () => {
+  const first = { id: "first", thread_id: thread.id, message: { parts: [{ type: "text", text: "Original" }] } };
+  const second = { id: "second", thread_id: thread.id, message: { parts: [] } };
+  let state = { ...initial(), queue: [first, second] };
+  const edited = { ...first, message: { parts: [{ type: "text", text: "Edited" }] } };
+  state = applyIndexEvent(state, event({ kind: "message_queue_updated", message: edited }, 7));
+  assert.deepEqual(state.queue, [edited, second]);
+  state = applyIndexEvent(state, event({ kind: "message_removed", message_id: "first" }, 8));
+  state = applyIndexEvent(state, event({ kind: "message_queue_updated", message: edited }, 9));
+  assert.deepEqual(state.queue, [second]);
+});
+
+import * as mobile from "../src/state/transcript.ts";
+test("mobile notes hydrate and update independently of transcript rows and provider tasks", () => {
+  let state = mobile.seedFromGet({ thread, transcript: [], pending_approvals: [], notes: { text: "From desktop", revision: 2 } });
+  const blocks = state.blocks;
+  state = mobile.applyEvent(state, event({ kind: "thread_notes_updated", notes: { text: "From phone", revision: 3 } }, 5));
+  assert.equal(state.notes.text, "From phone");
+  assert.equal(state.blocks, blocks);
+  assert.deepEqual(state.tasks, []);
+});

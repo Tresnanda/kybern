@@ -19,6 +19,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/artifact-preview/{ticket}", get(crate::artifacts::serve))
         .route("/pair", post(pair).options(asset_preflight))
         .route("/session", post(session).options(asset_preflight))
         .route("/assets", post(upload_asset).options(asset_preflight))

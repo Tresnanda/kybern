@@ -1,4 +1,5 @@
 mod access;
+mod artifacts;
 mod auth;
 mod bounded_broadcast;
 mod config;
@@ -8,6 +9,7 @@ mod files;
 mod github;
 mod harness_updates;
 mod http;
+mod integrations;
 mod maintenance;
 mod orchestrator;
 mod power;

@@ -72,3 +72,13 @@ test("typing triggers suggestions at the caret and preserves surrounding text", 
   );
   assert.equal(composerTrigger("/review", { start: 7, end: 7 }).marker, "/");
 });
+
+test("connector login links wait for complete lines and reject credential-bearing URLs", async () => {
+  const { connectorLoginOutput } = await import("../../../packages/kybern-client/src/connectorLogin.ts");
+  const read = connectorLoginOutput();
+  const output = text => read(btoa(text));
+  assert.equal(output("\x1b[32mOpen: https://auth.example.test/authorize?state="), null);
+  assert.equal(output("abc&scope=read\x1b[0m\r\n"), "https://auth.example.test/authorize?state=abc&scope=read");
+  assert.equal(connectorLoginOutput()(btoa("https://user:secret@example.test/\n")), null);
+  assert.equal(connectorLoginOutput()(btoa("javascript:alert(1)\n")), null);
+});

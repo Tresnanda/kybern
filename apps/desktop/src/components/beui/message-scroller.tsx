@@ -358,13 +358,16 @@ export function MessageScroller({
 
     const distance =
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    setFollowing(distance <= followThreshold);
+    // Once the reader leaves, resume only at the actual bottom. Reusing the
+    // near-end tolerance here pulled small upward gestures back during output.
+    setFollowing(distance <= (followingRef.current ? followThreshold : 1));
     scheduleActiveRailItem();
   }, [followThreshold, setFollowing, scheduleActiveRailItem]);
 
-  const leaveLiveEdge = useCallback(() => {
+  const leaveLiveEdge = useCallback((stopFollowing = true) => {
     programmaticScrollRef.current = false;
-  }, []);
+    if (stopFollowing) setFollowing(false);
+  }, [setFollowing]);
 
   useLayoutEffect(() => {
     if (!followOutput) {
@@ -509,11 +512,11 @@ export function MessageScroller({
         onViewportScroll?.(event);
       }}
       onWheel={(event) => {
-        leaveLiveEdge();
+        leaveLiveEdge(event.deltaY < 0);
         onViewportWheel?.(event);
       }}
       onTouchStart={(event) => {
-        leaveLiveEdge();
+        leaveLiveEdge(false);
         onViewportTouchStart?.(event);
       }}
       onKeyDown={(event) => {

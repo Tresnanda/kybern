@@ -11,12 +11,14 @@
 
 pub mod auth;
 pub mod event;
+pub mod integrations;
 pub mod methods;
 pub mod model;
 pub mod rpc;
 
 pub use auth::*;
 pub use event::*;
+pub use integrations::*;
 pub use model::*;
 pub use rpc::*;
 

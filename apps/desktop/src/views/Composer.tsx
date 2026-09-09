@@ -84,6 +84,7 @@ export interface ComposerProps {
   sendDisabled?: boolean
   disabledReason?: string
   onSend: (message: UserMessage) => Promise<void> | void
+  onSteer?: (message: UserMessage) => Promise<void> | void
   onStop?: () => void
   mode: PermissionMode
   onModeChange: (m: PermissionMode) => void
@@ -238,6 +239,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     disabled: disabledByParent,
     disabledReason,
     onSend,
+    onSteer,
     onStop,
     mode,
     onModeChange,
@@ -266,6 +268,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [attachments, setAttachments] = useState<Attachment[]>(savedDraft?.attachments ?? [])
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
+  const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue")
+  const steering = running && !!onSteer && promptMode === "steer"
   const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [fileResult, setFileResult] = useState<{ query: string; files: string[] }>({ query: "", files: [] })
@@ -506,7 +510,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!canSend) return
     setSending(true)
     try {
-      await onSend({ parts: buildParts() })
+      await (steering ? onSteer! : onSend)({ parts: buildParts() })
       if (props.draftKey) ownerStore.getState().set((state) => {
         const composerDrafts = { ...state.composerDrafts }
         delete composerDrafts[props.draftKey!]
@@ -1024,6 +1028,28 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   </Menu>
                 )}
 
+                {running && (
+                  <div className="flex items-center gap-0.5">
+                    <Button variant="subtle" size="chip" disabled={!canSend} onClick={() => void submit()}>
+                      {sending ? "Sending…" : steering ? "Steer now" : "Queue"}
+                    </Button>
+                    {onSteer && <Menu>
+                      <MenuTrigger render={<Button variant="chrome" size="icon-xs" aria-label="Choose prompt delivery" disabled={sending} />}>
+                        <ChevronDownIcon className="size-3" />
+                      </MenuTrigger>
+                      <ComposerPickerMenuPopup align="end" side="top" className="w-60">
+                        <MenuGroup>
+                          <MenuItem onClick={() => setPromptMode("queue")}>
+                            <div><div>Queue follow-up{!steering ? " ✓" : ""}</div><div className="text-xs text-muted-foreground">Send after the current work finishes</div></div>
+                          </MenuItem>
+                          <MenuItem onClick={() => setPromptMode("steer")}>
+                            <div><div>Steer now{steering ? " ✓" : ""}</div><div className="text-xs text-muted-foreground">Guide the current turn immediately</div></div>
+                          </MenuItem>
+                        </MenuGroup>
+                      </ComposerPickerMenuPopup>
+                    </Menu>}
+                  </div>
+                )}
                 {running ? (
                   <Tooltip>
                     <TooltipTrigger
@@ -1042,7 +1068,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     >
                       <span className="block size-2.5 rounded-[2px] bg-current" />
                     </TooltipTrigger>
-                    <TooltipPopup side="top">{canSend ? "Stop. Press Enter to queue your message." : "Stop generation"}</TooltipPopup>
+                    <TooltipPopup side="top">Stop generation</TooltipPopup>
                   </Tooltip>
                 ) : (
                   <Tooltip>

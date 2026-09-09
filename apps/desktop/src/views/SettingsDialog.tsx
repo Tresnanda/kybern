@@ -1,3 +1,4 @@
+import { Integrations } from "./Integrations"
 import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from "@/lib/appUpdate"
 import { notificationPermission, notify, type NotificationPermissionState } from "@/lib/tauri"
 // Settings, in a dialog: a 16rem nav column of sidebar rows and a
@@ -37,11 +38,12 @@ import { errorText, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 
-type Tab = "general" | "agents" | "appearance" | "usage" | "about"
+type Tab = "general" | "agents" | "integrations" | "appearance" | "usage" | "about"
 
 const TABS: [Tab, string, string][] = [
   ["general", "General", "Defaults for new threads and notifications."],
   ["agents", "Agents", "Availability on the connected machine."],
+  ["integrations", "Integrations", "Plugins and connectors for your agents."],
   ["appearance", "Appearance", "Theme and window material."],
   ["usage", "Usage", "Tokens and cost by agent, model or day."],
   ["about", "About", "Daemon, protocol and data folder."],
@@ -51,6 +53,7 @@ export function SettingsDialog() {
   const open = useStore((s) => s.settingsOpen)
   const set = useStore((s) => s.set)
   const tab = useStore((s) => s.settingsTab)
+  const environmentId = useStore((s) => s.environmentId)
   const current = TABS.find((t) => t[0] === tab) ?? TABS[0]!
   const [navRef, pillStyle, pillReady] = useSlidingPill<HTMLUListElement>(tab)
   return (
@@ -71,7 +74,7 @@ export function SettingsDialog() {
                   onClick={() => set({ settingsTab: v })}
                   className={cn("w-full", SIDEBAR_HEADER_ROW_CLASS_NAME, tab === v ? "text-[var(--sidebar-accent-foreground)]" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}
                 >
-                  {(() => { const Icon = { general: SettingsIcon, agents: TerminalIcon, appearance: AppearanceIcon, usage: ClockIcon, about: InfoIcon }[v]; return <Icon className="size-4 shrink-0" /> })()}
+                  {(() => { const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: SettingsIcon, appearance: AppearanceIcon, usage: ClockIcon, about: InfoIcon }[v]; return <Icon className="size-4 shrink-0" /> })()}
                   <span className="truncate">{label}</span>
                 </button>
               </li>
@@ -89,6 +92,7 @@ export function SettingsDialog() {
             <div className="space-y-6">
               {tab === "general" && <General />}
               {tab === "agents" && <Agents />}
+              {tab === "integrations" && <Integrations key={environmentId} />}
               {tab === "appearance" && <Appearance />}
               {tab === "usage" && <Usage />}
               {tab === "about" && <About />}

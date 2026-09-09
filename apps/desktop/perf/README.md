@@ -24,6 +24,13 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [connectors and artifact verification](integrations-2026-09-09.md) for native
+provider controls, isolated previews, and the iOS simulator check.
+
+See [Notes, prompt controls, and Activity follow-up](notes-activity-scroll-2026-09-09.md)
+for the 4,000-task comparison, short/long scroll checks, and the small upward
+scroll regression.
+
 See [turn lifecycle and release verification](turn-fixes-2026-09-07.md) for
 background-task completion, image previews, environment menu checks, and the
 release build changes.
@@ -69,6 +76,9 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
 | Attached-image controls, user line breaks, environment menu | `node scripts/check-rendering.mjs chat-fixes` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
+| Provider catalogs, sign-in terminals, native artifact preview and publication controls | `node scripts/check-rendering.mjs integrations` |
+| Activity task sorting, retained history, hidden timers | `node scripts/check-rendering.mjs activity` |
+| Notes, queued prompt editing, and steering controls | `node scripts/check-rendering.mjs prompts` |
 | Saved-session picker, search, pagination, keyboard navigation | `node scripts/check-rendering.mjs sessions` |
 | Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |
 

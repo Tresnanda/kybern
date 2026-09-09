@@ -41,7 +41,8 @@ final class Bench: NSObject, WKScriptMessageHandler {
   window.contentView = web
   window.orderFront(nil)
   let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
-  web.load(URLRequest(url: URL(string: "tauri://localhost/perf/\(fixture).html")!))
+  let history = Int(ProcessInfo.processInfo.environment["KYBERN_PERF_HISTORY"] ?? "400") ?? 400
+  web.load(URLRequest(url: URL(string: "tauri://localhost/perf/\(fixture).html?history=\(history)")!))
  }
  func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
   print(message.body)

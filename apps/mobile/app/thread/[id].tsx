@@ -1,3 +1,4 @@
+import { QueuedPrompts } from "../../src/features/QueuedPrompts";
 import { BlurTargetView } from "expo-blur";
 import { ProgressiveBlur } from "../../src/components/ui/progressive-blur";
 import { randomUUID } from "expo-crypto";
@@ -200,6 +201,14 @@ export default function ThreadScreen() {
     setAway(false);
     list.current?.scrollToEnd({ animated: false });
   }, []);
+  const steeringAttempt = useRef<{ signature: string; id: string } | null>(null);
+  const steer = useCallback(async (message: UserMessage) => {
+    const signature = JSON.stringify([id, message]);
+    if (steeringAttempt.current?.signature !== signature) steeringAttempt.current = { signature, id: randomUUID() };
+    await rpc("threads.steer", { thread_id: id, id: steeringAttempt.current.id, message });
+    steeringAttempt.current = null;
+    jump();
+  }, [id, jump]);
   const send = useCallback(
     async (message: UserMessage) => {
       if (
@@ -451,39 +460,13 @@ export default function ThreadScreen() {
             activeTasks={snapshot.tasks.filter(taskActive).length}
             onJumpToLatest={away ? jump : undefined}
           />
-          {queued.length > 0 && (
-            <View style={{ paddingHorizontal: 24, maxHeight: 110 }}>
-              {queued.map((q) => (
-                <View key={q.id} style={styles.spread}>
-                  <T
-                    variant="caption"
-                    tone="secondary"
-                    numberOfLines={1}
-                    style={{ flex: 1 }}
-                  >
-                    Queued ·{" "}
-                    {q.message.parts
-                      .map((p) => (p.type === "text" ? p.text : `[${p.type}]`))
-                      .join(" ")}
-                  </T>
-                  <IconButton
-                    name="xmark"
-                    label="Remove queued message"
-                    onPress={() => {
-                      void rpc("queue.remove", { thread_id: id, id: q.id })
-                        .then(refresh)
-                        .catch((e) => setError(errorText(e)));
-                    }}
-                  />
-                </View>
-              ))}
-            </View>
-          )}
+          {queued.length > 0 && <QueuedPrompts items={queued} />}
           <View
             onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}
           >
             <Composer
               thread={thread}
+              onSteer={thread?.provider.kind === "codex" ? steer : undefined}
               disabled={
                 app.status !== "open" ||
                 !snapshot.loaded ||

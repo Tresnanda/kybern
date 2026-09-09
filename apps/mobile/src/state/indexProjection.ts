@@ -78,6 +78,8 @@ export function applyIndexEvent<S extends ThreadIndex>(
         ...state,
         approvals: state.approvals.filter((a) => a.id !== event.approval_id),
       };
+    case "message_queue_updated":
+      return { ...state, queue: state.queue.map((q) => q.id === event.message.id ? event.message : q) };
     case "message_queued":
       return {
         ...state,

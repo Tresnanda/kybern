@@ -3,6 +3,10 @@
 // close actions, and one xterm + pty per tab that stays alive across tab
 // switches. Terminals render edge to edge on the surface colour.
 
+import { connectorLoginOutput } from "../../../../packages/kybern-client/src/connectorLogin"
+import { Button } from "@/components/kit/button"
+import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
+import { openExternal } from "@/lib/tauri"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import "@xterm/xterm/css/xterm.css"
 
@@ -227,6 +231,9 @@ function TabChip({ tab, active, onSelect, onClose }: { tab: TerminalTab; active:
 function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId: ThreadId; tab: TerminalTab; active: boolean; onExit: () => void; onTitle: (t: string) => void }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loginUrl, setLoginUrl] = useState<string | null>(null)
+  const [redirect, setRedirect] = useState("")
+  const [submitting, setSubmitting] = useState(false)
   const [ready, setReady] = useState(false)
   const [everActive, setEverActive] = useState(active)
   const dark = useIsDark()
@@ -313,9 +320,14 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     const ownerStore = useStore
     let attaching = false
     let exitTimer: ReturnType<typeof setTimeout> | undefined
+    const loginOutput = tab.connectorLogin ? connectorLoginOutput() : null
     const offOut = client.onNotification(TERMINAL_OUTPUT_NOTIFICATION, (p) => {
       const n = p as TerminalOutputNotification
-      if (n.terminal_id === idRef.current) term.write(b64ToBytes(n.data))
+      if (n.terminal_id === idRef.current) {
+        term.write(b64ToBytes(n.data))
+        const url = loginOutput?.(n.data)
+        if (url) setLoginUrl(url)
+      }
     })
     const offExit = client.onNotification(TERMINAL_EXITED_NOTIFICATION, (p) => {
       const n = p as TerminalExitedNotification
@@ -354,7 +366,10 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
         [threadId]: (state.terminalTabs[threadId] ?? []).map((item) => item.key === tab.key ? { ...item, terminalId: tab.key, daemonStartedAt: startedAt } : item),
       } }))
       try {
-        const info = await client.call("terminals.create", { terminal_id: tab.key, thread_id: threadId, cwd, cols: term.cols, rows: term.rows, command: tab.command })
+        const info = tab.connectorLogin
+          ? (await client.call("terminals.list", { thread_id: threadId })).terminals.find(info => info.id === tab.terminalId)
+          : await client.call("terminals.create", { terminal_id: tab.key, thread_id: threadId, cwd, cols: term.cols, rows: term.rows, command: tab.command })
+        if (!info) throw new Error("The sign-in terminal closed. Start sign-in again from Integrations.")
         if (disposed) {
           if (!ownerStore.getState().terminalTabs[threadId]?.some((item) => item.key === tab.key)) {
             void client.call("terminals.close", { terminal_id: info.id }).catch(() => {})
@@ -408,9 +423,23 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, cwd, everActive])
 
+  async function submitRedirect() {
+    if (!idRef.current || !redirect.trim()) return
+    setSubmitting(true)
+    try {
+      await rpc().call("terminals.input", { terminal_id: idRef.current, data: bytesToB64(redirect.trim() + "\r") })
+      setRedirect("")
+    } catch (e) { setError(errorText(e)) } finally { setSubmitting(false) }
+  }
   return (
-    <div className="h-full min-h-0 w-full bg-[var(--color-background-surface)] px-3 pt-1 pb-2" onClick={() => termRef.current?.focus()}>
-      <div className="relative h-full min-h-0 w-full overflow-hidden">
+    <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] px-3 pt-1 pb-2">
+      {tab.connectorLogin && <div className="mb-3 space-y-2">
+        {loginUrl && <Button size="sm" variant="subtle" onClick={() => void openExternal(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
+        <p className="text-xs text-muted-foreground">After signing in, paste the full redirect URL when Claude asks for it.</p>
+        <InputGroup><InputGroupInput aria-label="Sign-in redirect URL" type="password" autoComplete="off" value={redirect} onChange={e => setRedirect(e.target.value)} placeholder="Paste the redirect URL" /></InputGroup>
+        <Button size="chip" variant="subtle" disabled={!ready || !redirect.trim() || submitting} onClick={() => void submitRedirect()}>Complete sign-in</Button>
+      </div>}
+      <div className="relative min-h-0 w-full flex-1 overflow-hidden" onClick={() => termRef.current?.focus()}>
         <div ref={host} className="xterm-host absolute inset-0" />
         {!ready && !error && everActive && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">

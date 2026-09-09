@@ -4,10 +4,10 @@ import { activeEnvironment } from "@/state/environments"
 // docked at the right edge of the thread, toggled from the header. Rows use
 // the EnvironmentRow skin; sections can be hidden from the gear menu.
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
-import { Markdown } from "@/components/kybern/Markdown"
+import { ThreadNotes } from "./ThreadNotes"
 import { Spinner } from "@/components/kybern/bits"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
@@ -49,15 +49,14 @@ const LABEL = "font-normal text-muted-foreground/40"
 const TITLE = `${LABEL} text-[length:var(--app-font-size-ui,12px)]`
 const SECTION_LABEL_INLINE = `${LABEL} text-[length:var(--app-font-size-ui-sm,11px)]`
 const SECTION_LABEL = `${SECTION_LABEL_INLINE} px-2 py-1`
-const MUTED_BODY = "font-system-ui text-[length:var(--app-font-size-chat,12px)] leading-relaxed text-muted-foreground/40"
 
-type Section = "changes" | "repository" | "pullRequest" | "editor" | "recap"
+type Section = "changes" | "repository" | "pullRequest" | "editor" | "notes"
 const SECTIONS: [Section, string][] = [
   ["changes", "Changes"],
   ["repository", "Repository"],
   ["pullRequest", "Pull request"],
   ["editor", "Editor"],
-  ["recap", "Recap"],
+  ["notes", "Notes"],
 ]
 
 export function EnvironmentRowChevron() {
@@ -149,26 +148,16 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
   const thread = useStore((s) => s.threads[threadId])
   const project = useStore((s) => (thread ? s.projects[thread.project_id] : undefined))
   const diff = useStore((s) => s.diffs[diffKey(threadId)])
-  const blocks = useStore((s) => open ? s.transcripts[threadId]?.blocks : undefined)
   const git = useStore((s) => s.gitStatuses[threadId] ?? null)
   const [busy, setBusy] = useState<"commit" | "pr" | null>(null)
   const [hidden, setHidden] = useLocalStorage<Partial<Record<Section, boolean>>>("kybern.env.hidden", {})
-  const [recapOpen, setRecapOpen] = useLocalStorage("kybern.env.recap", true)
+  const [notesOpen, setNotesOpen] = useLocalStorage("kybern.env.notes", true)
 
   useEffect(() => {
     if (!open) return
     void loadDiff(threadId)
     void loadGitStatus(threadId)
   }, [threadId, open])
-
-  const recap = useMemo(() => {
-    if (!blocks) return ""
-    for (let i = blocks.length - 1; i >= 0; i--) {
-      const b = blocks[i]!
-      if (b.kind === "assistant" && b.complete && b.text.trim()) return b.text.trim()
-    }
-    return ""
-  }, [blocks])
 
   const adds = diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0
   const dels = diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0
@@ -360,23 +349,9 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
               </LabeledSection>
             )}
 
-            {show("recap") && (
-              <CollapsibleSection label="Recap" open={recapOpen} onToggle={() => setRecapOpen(!recapOpen)}>
-                <div className="flex flex-col gap-1.5 pb-1.5">
-                  <div className="px-2">
-                    {recap ? (
-                      <Markdown
-                        text={recap.length > 600 ? `${recap.slice(0, 600)}…` : recap}
-                        className={cn(MUTED_BODY, "text-muted-foreground/40! [&_strong]:font-medium [&_strong]:text-muted-foreground/40 [&_:not(pre)>code]:!text-muted-foreground/45 [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_pre]:my-2")}
-                      />
-                    ) : (
-                      <div className="flex flex-col gap-1.5">
-                        <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45" />
-                        <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35" />
-                      </div>
-                    )}
-                  </div>
-                </div>
+            {show("notes") && (
+              <CollapsibleSection label="Notes" open={notesOpen} onToggle={() => setNotesOpen(!notesOpen)}>
+                <ThreadNotes key={threadId} threadId={threadId} />
               </CollapsibleSection>
             )}
           </div>

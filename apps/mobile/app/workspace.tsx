@@ -7,6 +7,8 @@ import { TaskRow } from "../src/features/Tasks";
 import { Changes } from "../src/features/Changes";
 import { Files } from "../src/features/Files";
 import { Terminal } from "../src/features/Terminal";
+import { Artifacts } from "../src/features/Artifacts";
+import { ThreadNotes } from "../src/features/ThreadNotes";
 import { type Checkpoint, type RuntimeTask } from "../src/state/protocol";
 import {
   errorText,
@@ -31,10 +33,14 @@ export default function Workspace() {
   const {
     threadId,
     projectId,
+    terminalId,
+    login,
     tab: initialTab,
   } = useLocalSearchParams<{
     threadId?: string;
     projectId?: string;
+    terminalId?: string;
+    login?: string;
     tab?: string;
   }>();
   const app = useApp();
@@ -110,13 +116,15 @@ export default function Workspace() {
       </View>
       {tab === "Terminal" && threadId ? (
         <View style={{ flex: 1 }}>
-          <Terminal threadId={threadId} />
+          <Terminal key={`${app.activeId}:${threadId}:${terminalId ?? ""}`} threadId={threadId} initialTerminalId={terminalId} connectorLogin={login === "1"} />
         </View>
       ) : tab === "Files" && project ? (
         <Files key={project.id} project={project} threadId={threadId} />
       ) : (
         <Page>
           <ErrorBanner error={error} />
+          {tab === "Artifacts" && thread && <Artifacts key={`${app.activeId}:${threadId}`} thread={thread} />}
+          {tab === "Notes" && threadId && <ThreadNotes key={`${app.activeId}:${threadId}`} threadId={threadId} />}
           {tab === "Changes" && threadId && <Changes threadId={threadId} />}
           {tab === "More" && thread && (
             <>

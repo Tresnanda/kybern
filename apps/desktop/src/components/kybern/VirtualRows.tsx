@@ -30,6 +30,8 @@ interface VirtualRowsProps<T> {
   viewport?: RefObject<HTMLElement | null>
   controllerRef?: Ref<VirtualRowsController>
   className?: string
+  anchor?: "start" | "end"
+  followEnd?: boolean
 }
 
 export function VirtualRows<T>(props: VirtualRowsProps<T>) {
@@ -45,6 +47,8 @@ function VirtualizedRows<T>({
   viewport: providedViewport,
   controllerRef,
   className,
+  anchor,
+  followEnd = true,
 }: VirtualRowsProps<T>) {
   const inherited = useContext(VirtualScrollContext)
   const viewport = providedViewport ?? inherited?.viewport
@@ -65,13 +69,17 @@ function VirtualizedRows<T>({
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
     schedule()
-    scroll.addEventListener("scroll", schedule, { passive: true })
     const observer = new ResizeObserver(schedule)
-    observer.observe(list)
     observer.observe(scroll)
+    // Scrolling and measuring row heights do not move the list's origin in
+    // scroll-content coordinates. Reading its rectangles on every scroll forced
+    // layout directly after the virtualizer moved rows. Only preceding content,
+    // viewport resizing, or an inherited row position can change this margin.
+    for (let node: Element | null = list; node && node !== scroll; node = node.parentElement) {
+      for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) observer.observe(sibling)
+    }
     return () => {
       cancelAnimationFrame(frame)
-      scroll.removeEventListener("scroll", schedule)
       observer.disconnect()
     }
   }, [viewport, inherited?.origin, items.length])
@@ -126,8 +134,12 @@ function VirtualizedRows<T>({
     scrollMargin: margin,
     rangeExtractor,
     overscan: providedViewport ? 2 : 8,
-    anchorTo: providedViewport ? "end" : "start",
-    scrollEndThreshold: 56,
+    anchorTo: anchor ?? (providedViewport ? "end" : "start"),
+    // End anchoring is also needed to preserve history prepends. Keep that
+    // anchor, but disable automatic size-change pinning after a user gesture.
+    // The library's virtual end excludes our composer's trailing overlay space,
+    // so a distance threshold alone cannot tell whether the reader left it.
+    scrollEndThreshold: followEnd ? 1 : -1,
     useAnimationFrameWithResizeObserver: true,
     directDomUpdates: true,
     directDomUpdatesMode: "position",

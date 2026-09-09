@@ -72,6 +72,7 @@ export type Block =
   | { kind: "reverted"; id: string; turnId: TurnId; at: string; seq: number; commit: string }
 
 export interface ThreadState {
+  notes?: import("./types.ts").ThreadNotes
   thread: Thread | null
   blocks: Block[]
   pendingQuestions?: import("./types.ts").AsyncQuestionRequest[]
@@ -94,6 +95,7 @@ export const emptyThreadState = (): ThreadState => ({
 
 export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadState {
   return {
+    notes: res.notes,
     providerCommands: res.provider_commands ?? [],
     providerUsage: res.provider_usage ?? {},
     thread: res.thread,
@@ -119,6 +121,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
   const compact = compactThreadState(state)
   switch (event.kind) {
     case "thread_created": case "thread_updated": case "thread_archived":
+    case "thread_notes_updated":
     case "approval_requested": case "user_input_requested": case "approval_resolved":
     case "async_questions_requested": case "async_questions_answered":
     case "provider_commands_updated": case "provider_usage_updated":
@@ -206,8 +209,15 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
   let pending = state.pendingApprovals
   let checkpoints = state.checkpoints
   let thread = state.thread
+  let notes = state.notes
 
   switch (ev.kind) {
+    case "thread_notes_updated":
+      if (!notes || ev.notes.revision >= notes.revision) notes = ev.notes
+      break
+    case "message_steered":
+      if (!blocks.some((block) => block.kind === "user" && block.id === ev.message_id)) blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
+      break
     case "thread_created":
     case "thread_updated":
       thread = ev.thread
@@ -406,7 +416,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     default:
       break
   }
-  return { pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
+  return { notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {

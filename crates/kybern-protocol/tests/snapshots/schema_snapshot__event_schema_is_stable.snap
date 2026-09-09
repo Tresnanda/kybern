@@ -135,6 +135,59 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "message": {
+          "$ref": "#/$defs/QueuedMessage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "message_queue_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "message_steered"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "notes": {
+          "$ref": "#/$defs/ThreadNotes"
+        },
+        "kind": {
+          "type": "string",
+          "const": "thread_notes_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "notes"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "message_id": {
           "type": "string",
           "format": "uuid"
@@ -1026,6 +1079,23 @@ expression: schema_for!(ThreadEvent)
             "path"
           ]
         }
+      ]
+    },
+    "ThreadNotes": {
+      "description": "A user-owned notepad, separate from the agent's conversation.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "text",
+        "revision"
       ]
     },
     "SessionReleaseReason": {

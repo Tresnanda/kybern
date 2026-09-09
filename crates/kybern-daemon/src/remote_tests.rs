@@ -184,6 +184,40 @@ async fn queue_survives_restart_and_consumption_is_atomic_with_turn_started() {
     assert!(reopened.queue_list(None).unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn notes_sync_between_clients_and_survive_reopening_the_store() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let desktop = host.client().await;
+    let phone = host.client().await;
+    let empty = phone.call::<ThreadNotesGet>(ThreadsInterruptParams { thread_id: thread.id }).await.unwrap();
+    assert_eq!(empty, ThreadNotes::default());
+    let notes = desktop
+        .call::<ThreadNotesSet>(ThreadNotesSetParams {
+            thread_id: thread.id,
+            text: "Desktop note\n☑ Test phone".into(),
+            expected_revision: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(phone.call::<ThreadNotesGet>(ThreadsInterruptParams { thread_id: thread.id }).await.unwrap(), notes);
+    assert!(
+        phone
+            .call::<ThreadNotesSet>(ThreadNotesSetParams { thread_id: thread.id, text: "Stale phone edit".into(), expected_revision: 0 })
+            .await
+            .is_err()
+    );
+    let snapshot = phone
+        .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), before_seq: None, through_seq: None })
+        .await
+        .unwrap();
+    assert_eq!(snapshot.notes, notes);
+    assert!(snapshot.transcript.is_empty());
+    let reopened = kybern_store::Store::open(&host.state.paths.db).unwrap();
+    assert_eq!(reopened.thread_notes(thread.id).unwrap(), notes);
+    assert!(matches!(reopened.events_for_thread(thread.id).unwrap()[0].payload, EventPayload::ThreadNotesUpdated { .. }));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn reconnect_reattaches_terminal_and_closed_identity_cannot_spawn_again() {
@@ -490,4 +524,115 @@ async fn previews_share_auth_and_path_checks_and_originals_remain_exact() {
         .await
         .unwrap();
     assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn artifacts_paginate_receipts_and_confine_isolated_previews() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let client = host.client().await;
+    let file = host.root.join("demo.html");
+    std::fs::write(&file, "<button onclick=\"this.textContent='Clicked'\">Click</button>").unwrap();
+    let mut seqs = Vec::new();
+    for index in 0..3 {
+        let id = format!("artifact-{index}");
+        let event = host
+            .state
+            .store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::ToolCallStarted {
+                    call: ToolCall { id: id.clone(), name: "Artifact".into(), input: json!({"file_path":"demo.html"}), parent_id: None },
+                    origin: EventOrigin::Root,
+                },
+            )
+            .unwrap();
+        seqs.push(event.seq);
+        if index != 2 {
+            host.state
+                .store
+                .event_append(
+                    thread.id,
+                    None,
+                    EventPayload::ToolCallCompleted {
+                        tool_call_id: id,
+                        output: json!({"url":"https://claude.ai/public/artifacts/example"}),
+                        is_error: index == 1,
+                    },
+                )
+                .unwrap();
+        }
+    }
+    // Replayed completion receipts must not duplicate gallery rows or consume its page limit.
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            None,
+            EventPayload::ToolCallCompleted {
+                tool_call_id: "artifact-1".into(),
+                output: json!({"url":"https://claude.ai/public/artifacts/example"}),
+                is_error: true,
+            },
+        )
+        .unwrap();
+    let page = client.call::<ArtifactsList>(ArtifactsListParams { thread_id: thread.id, before_seq: None, limit: 2 }).await.unwrap();
+    assert_eq!(page.artifacts.len(), 2);
+    assert_eq!(page.artifacts[0].seq, seqs[2]);
+    assert!(page.artifacts[0].output.is_none());
+    assert!(page.artifacts[1].is_error);
+    let older = client
+        .call::<ArtifactsList>(ArtifactsListParams { thread_id: thread.id, before_seq: page.next_before_seq, limit: 2 })
+        .await
+        .unwrap();
+    assert_eq!(older.artifacts.len(), 1);
+    assert_eq!(older.artifacts[0].seq, seqs[0]);
+    assert!(older.next_before_seq.is_none());
+    let source =
+        client.call::<ArtifactRead>(ArtifactReadParams { thread_id: thread.id, path: file.to_string_lossy().into_owned() }).await.unwrap();
+    assert!(source.content.contains("Clicked"));
+    for path in ["../outside.html", "/etc/passwd", "state.sqlite"] {
+        assert!(client.call::<ArtifactRead>(ArtifactReadParams { thread_id: thread.id, path: path.into() }).await.is_err());
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/etc/passwd", host.root.join("escape.html")).unwrap();
+        assert!(client.call::<ArtifactRead>(ArtifactReadParams { thread_id: thread.id, path: "escape.html".into() }).await.is_err());
+    }
+    let preview = client.call::<ArtifactPreview>(ArtifactReadParams { thread_id: thread.id, path: "demo.html".into() }).await.unwrap();
+    let url = format!("{}/artifact-preview/{}", host.url, preview.ticket);
+    let http = reqwest::Client::new();
+    let response = http.get(&url).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let policy = response.headers()["content-security-policy"].to_str().unwrap();
+    assert!(policy.contains("sandbox allow-scripts"));
+    assert!(policy.contains("connect-src 'none'"));
+    assert!(!policy.contains("allow-same-origin"));
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(response.text().await.unwrap().contains("Clicked"));
+    assert_eq!(http.get(url).send().await.unwrap().status(), 404);
+}
+
+#[tokio::test]
+async fn integration_mutations_require_operation_scopes_before_provider_execution() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let token = "read-only-fixture-token";
+    host.state.store.token_insert(Uuid::now_v7(), &crate::auth::hash(token), "read-only", &[Scope::OrchestrationRead]).unwrap();
+    let client = Client::connect(&Endpoint { url: format!("{}/ws", host.url.replace("http:", "ws:")), token: token.into() }).await.unwrap();
+    let change = client
+        .call::<IntegrationChange>(IntegrationChangeParams {
+            project_id: thread.project_id,
+            provider: ProviderKind::ClaudeCode,
+            id: "fixture@mock".into(),
+            kind: IntegrationKind::Plugin,
+            scope: None,
+            action: IntegrationAction::Install,
+        })
+        .await
+        .unwrap_err();
+    assert!(change.to_string().contains("scope"), "{change}");
+    let login = client.call::<IntegrationLogin>(IntegrationLoginParams { thread_id: thread.id, name: "fixture".into() }).await.unwrap_err();
+    assert!(login.to_string().contains("scope"), "{login}");
 }

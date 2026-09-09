@@ -1,3 +1,5 @@
+import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
+import { Textarea } from "@/components/kit/textarea"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
 import { Markdown } from "@/components/kybern/Markdown"
@@ -85,6 +87,7 @@ export function ThreadView({
   isFocused?: boolean
   showSidebarControls?: boolean
 }) {
+  const steeringAttempt = useRef<{ signature: string; id: string } | null>(null)
   const thread = useStore((s) => s.threads[threadId])
   const providerUsage = useStore((s) => s.transcripts[threadId]?.providerUsage)
   const loaded = useStore((s) => s.transcripts[threadId]?.loaded)
@@ -210,6 +213,13 @@ export function ThreadView({
     await sendMessage(threadId, message)
   }
 
+  const onSteer = thread.provider.kind === "codex" ? async (message: UserMessage) => {
+    const signature = JSON.stringify([threadId, message])
+    if (steeringAttempt.current?.signature !== signature) steeringAttempt.current = { signature, id: crypto.randomUUID() }
+    await rpc().call("threads.steer", { thread_id: threadId, id: steeringAttempt.current.id, message })
+    steeringAttempt.current = null
+  } : undefined
+
   const placeholder = approval ? (isUserInput(approval) && !connector ? "Answer the questions above" : "Resolve this approval request to continue") : running ? "Ask for follow-up changes" : undefined
 
   return (
@@ -241,6 +251,7 @@ export function ThreadView({
               hideInput={!!approval && isUserInput(approval) && !connector}
               onStop={() => void interrupt(threadId)}
               onSend={onSend}
+              onSteer={onSteer}
               mode={thread.permission_mode}
               onModeChange={(m) => updateThread(threadId, { permission_mode: m }).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={thread.provider}
@@ -255,7 +266,7 @@ export function ThreadView({
               above={
                 <>
                   {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
-                  {queued.length > 0 && <QueuedPanel threadId={threadId} onEdit={(t) => composer.current?.setText(t)} />}
+                  {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <div className="t-panel-enter pb-2"><AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} /></div>}
                   {approval && (
                     <div key={approval.id} className="t-panel-enter pb-2">
@@ -292,50 +303,45 @@ function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
   )
 }
 
-function messageText(m: UserMessage): string {
-  return m.parts
-    .filter((p): p is Extract<UserMessage["parts"][number], { type: "text" }> => p.type === "text")
-    .map((p) => p.text)
-    .join("\n")
+export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
+  const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
+  return <ComposerStackedPanel className="flex max-h-64 flex-col overflow-y-auto">
+    <div className="px-3 pt-2 text-xs text-muted-foreground">Queued · {queued.length}</div>
+    {queued.map((q, i) => <QueuedRow key={q.id} item={{ ...q, thread_id: threadId }} divided={i > 0} />)}
+  </ComposerStackedPanel>
 }
 
-function QueuedPanel({ threadId, onEdit }: { threadId: ThreadId; onEdit: (text: string) => void }) {
-  const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
+function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage; divided: boolean }) {
+  const [entered, setEntered] = useState(false)
   const connected = useStore((s) => s.connection.state === "open")
-  const remove = async (id: string, edit?: string) => {
+  const [edit, setEdit] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const contextCount = item.message.parts.filter((part) => part.type !== "text").length
+  const run = async (save: boolean) => {
+    setBusy(true)
     try {
-      await removeQueuedMessage(threadId, id)
-      if (edit !== undefined) onEdit(edit)
-    } catch (error) { toast.error("Unable to remove follow-up", { description: errorText(error) }) }
+      if (save) {
+        await rpc().call("queue.update", { ...item, message: replacePromptText(item.message, edit ?? promptText(item.message)) })
+        setEdit(null)
+      } else await removeQueuedMessage(item.thread_id, item.id)
+    } catch (error) { toast.error("Unable to update follow-up", { description: errorText(error) }) }
+    finally { setBusy(false) }
   }
-  return (
-    <ComposerStackedPanel className="flex flex-col">
-      {queued.map((q, i) => {
-        const text = messageText(q.message) || "Queued follow-up"
-        return (
-          <ComposerStackedPanelRow key={q.id} compact data-testid="queued-follow-up-row" className={cn("t-row-enter", i > 0 && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
-            <ComposerStackedPanelRowMain>
-              <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-              <span className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}>{text}</span>
-            </ComposerStackedPanelRowMain>
-            <div className="flex shrink-0 items-center gap-0">
-              <Button
-                variant="subtle"
-                size="chip"
-                disabled={!connected}
-                onClick={() => void remove(q.id, text)}
-              >
-                <PencilIcon /> Edit
-              </Button>
-              <IconButton variant="ghost" size="icon-chip" label="Delete queued follow-up" tooltip="Remove" disabled={!connected} onClick={() => void remove(q.id)}>
-                <Trash2 />
-              </IconButton>
-            </div>
-          </ComposerStackedPanelRow>
-        )
-      })}
-    </ComposerStackedPanel>
-  )
+  return <ComposerStackedPanelRow compact data-testid="queued-follow-up-row" onAnimationEnd={(event) => { if (event.target === event.currentTarget) setEntered(true) }} className={cn(!entered && "t-row-enter", divided && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
+    <ComposerStackedPanelRowMain>
+      <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+      <div className="min-w-0 flex-1">
+        {edit === null ? <span className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}>{promptText(item.message) || "Queued follow-up"}</span>
+          : <Textarea aria-label="Edit queued prompt" value={edit} disabled={busy} onChange={(e) => setEdit(e.target.value)} size="sm" />}
+        {contextCount > 0 && <span className="block text-xs text-muted-foreground">{contextCount} attached context {contextCount === 1 ? "item" : "items"}</span>}
+      </div>
+    </ComposerStackedPanelRowMain>
+    <div className="flex shrink-0 items-center gap-0">
+      {edit === null ? <Button variant="subtle" size="chip" disabled={!connected || busy} onClick={() => setEdit(promptText(item.message))}><PencilIcon /> Edit</Button>
+        : <><Button variant="subtle" size="chip" disabled={!connected || busy || (!edit.trim() && !contextCount)} onClick={() => void run(true)}>Save</Button><Button variant="ghost" size="chip" disabled={busy} onClick={() => setEdit(null)}>Cancel</Button></>}
+      <IconButton variant="ghost" size="icon-chip" label="Delete queued follow-up" tooltip="Remove" disabled={!connected || busy} onClick={() => void run(false)}><Trash2 /></IconButton>
+    </div>
+  </ComposerStackedPanelRow>
 }
 
 function approvalPrompt(a: ApprovalRequest): { prompt: string; detail: React.ReactNode } {

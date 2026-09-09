@@ -29,6 +29,49 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum IntegrationsCmd {
+    List {
+        project: String,
+        #[arg(long, default_value = "claude-code")]
+        provider: ProviderKind,
+    },
+    Change {
+        project: String,
+        id: String,
+        #[arg(value_parser = ["install", "uninstall", "enable", "disable", "update"])]
+        action: String,
+        #[arg(long, default_value = "claude-code")]
+        provider: ProviderKind,
+        #[arg(long, default_value = "plugin", value_parser = ["plugin", "connector"])]
+        kind: String,
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Start Claude connector sign-in in a thread terminal.
+    Login { thread: String, name: String },
+}
+
+#[derive(Subcommand)]
+enum ArtifactsCmd {
+    List {
+        thread: String,
+        #[arg(long)]
+        before_seq: Option<i64>,
+        #[arg(long, default_value_t = 30)]
+        limit: u32,
+    },
+    Read {
+        thread: String,
+        path: String,
+    },
+    /// Issue a single-use preview ticket (expires after 60 seconds).
+    Preview {
+        thread: String,
+        path: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Show daemon info.
     Info,
@@ -117,6 +160,15 @@ enum Cmd {
         #[arg(long)]
         detach: bool,
         prompt: Vec<String>,
+    },
+    /// Steer the currently running turn using the provider's native input control.
+    Steer { thread: String, prompt: Vec<String> },
+    /// Read or update a thread's personal notes.
+    Notes {
+        thread: String,
+        /// Replace the notes with this UTF-8 file (an empty file clears them).
+        #[arg(long)]
+        file: Option<PathBuf>,
     },
     /// Print a thread's transcript.
     Show {
@@ -220,6 +272,16 @@ enum Cmd {
         #[arg(default_value = "")]
         query: String,
     },
+    /// Manage provider-owned plugins and connectors.
+    Integrations {
+        #[command(subcommand)]
+        cmd: IntegrationsCmd,
+    },
+    /// Inspect native Claude artifact receipts and local source files.
+    Artifacts {
+        #[command(subcommand)]
+        cmd: ArtifactsCmd,
+    },
     /// List skills available to an agent in a project.
     Skills {
         project: String,
@@ -258,6 +320,7 @@ enum Cmd {
 enum QueueCmd {
     List { thread: Option<String> },
     Add { thread: String, prompt: Vec<String> },
+    Edit { thread: String, id: String, prompt: Vec<String> },
     Remove { thread: String, id: String },
 }
 
@@ -532,6 +595,34 @@ pub async fn run() -> Result<()> {
                 render::follow_turn(&client, sub.subscription_id, thread_id, json).await?;
             }
         }
+        Cmd::Steer { thread, prompt } => {
+            let result = client
+                .call::<ThreadsSteer>(QueuedMessage {
+                    thread_id: thread.parse()?,
+                    id: uuid::Uuid::now_v7(),
+                    message: UserMessage::text(join_prompt(prompt)?),
+                })
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Cmd::Notes { thread, file } => {
+            let thread_id = thread.parse()?;
+            let mut notes = client.call::<ThreadNotesGet>(ThreadsInterruptParams { thread_id }).await?;
+            if let Some(file) = file {
+                notes = client
+                    .call::<ThreadNotesSet>(ThreadNotesSetParams {
+                        thread_id,
+                        text: std::fs::read_to_string(file)?,
+                        expected_revision: notes.revision,
+                    })
+                    .await?;
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&notes)?);
+            } else {
+                println!("{}", notes.text);
+            }
+        }
         Cmd::Queue { cmd } => match cmd {
             QueueCmd::List { thread } => {
                 let result = client.call::<QueueList>(QueueListParams { thread_id: thread.map(|id| id.parse()).transpose()? }).await?;
@@ -546,6 +637,21 @@ pub async fn run() -> Result<()> {
             }
             QueueCmd::Remove { thread, id } => {
                 client.call::<QueueRemove>(QueueRemoveParams { thread_id: thread.parse()?, id: id.parse()? }).await?;
+            }
+            QueueCmd::Edit { thread, id, prompt } => {
+                let thread_id = thread.parse()?;
+                let id: MessageId = id.parse()?;
+                let mut item = client
+                    .call::<QueueList>(QueueListParams { thread_id: Some(thread_id) })
+                    .await?
+                    .messages
+                    .into_iter()
+                    .find(|item| item.id == id)
+                    .ok_or_else(|| anyhow!("Queued message not found."))?;
+                let text = join_prompt(prompt)?;
+                item.message.parts.retain(|part| !matches!(part, ContentPart::Text { .. }));
+                item.message.parts.insert(0, ContentPart::Text { text });
+                client.call::<QueueUpdate>(item).await?;
             }
         },
         Cmd::Show { thread, limit, before_seq, through_seq } => {
@@ -742,6 +848,49 @@ pub async fn run() -> Result<()> {
             }
             eprintln!("{} of {} files", r.files.len(), r.total);
         }
+        Cmd::Integrations { cmd } => match cmd {
+            IntegrationsCmd::List { project, provider } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client.call::<IntegrationsList>(IntegrationsListParams { project_id, provider }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            IntegrationsCmd::Change { project, id, action, provider, kind, scope } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client
+                    .call::<IntegrationChange>(IntegrationChangeParams {
+                        project_id,
+                        provider,
+                        id,
+                        scope,
+                        action: serde_json::from_value(serde_json::Value::String(action))?,
+                        kind: serde_json::from_value(serde_json::Value::String(kind))?,
+                    })
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            IntegrationsCmd::Login { thread, name } => {
+                let result = client.call::<IntegrationLogin>(IntegrationLoginParams { thread_id: thread.parse()?, name }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+        },
+        Cmd::Artifacts { cmd } => match cmd {
+            ArtifactsCmd::List { thread, before_seq, limit } => {
+                let result = client.call::<ArtifactsList>(ArtifactsListParams { thread_id: thread.parse()?, before_seq, limit }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            ArtifactsCmd::Read { thread, path } => {
+                let result = client.call::<ArtifactRead>(ArtifactReadParams { thread_id: thread.parse()?, path }).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    print!("{}", result.content);
+                }
+            }
+            ArtifactsCmd::Preview { thread, path } => {
+                let result = client.call::<ArtifactPreview>(ArtifactReadParams { thread_id: thread.parse()?, path }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+        },
         Cmd::Skills { project, provider } => {
             let project_id = resolve_project(&client, &project, false).await?;
             let r = client.call::<SkillsList>(SkillsListParams { project_id, provider }).await?;

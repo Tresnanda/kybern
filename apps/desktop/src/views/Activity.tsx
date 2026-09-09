@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react"
+import { memo, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { Spinner } from "@/components/kybern/bits"
+import { VirtualRows } from "@/components/kybern/VirtualRows"
 import { ThreadRunningSpinner } from "@/components/kit/ThreadRunningSpinner"
 import { Button } from "@/components/kit/button"
 import { plural } from "@/lib/format"
@@ -21,12 +22,23 @@ import { isRuntimeTaskActive, useStore } from "@/state/store"
 
 const SECTION_LABEL = "px-3 pb-1 pt-3 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-muted-foreground/55"
 const EMPTY_RUNTIME_TASKS: RuntimeTask[] = []
+type ActivityRow = { kind: "heading"; id: string; title: string } | { kind: "task"; id: string; task: RuntimeTask }
+const rowKey = (row: ActivityRow) => row.id
+const estimateRow = (row: ActivityRow) => row.kind === "heading" ? 36 : isRuntimeTaskActive(row.task) && (row.task.capabilities.stop || row.task.capabilities.background) ? 94 : 64
+const compactNumber = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 })
+const memoryNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
 
-export function ActivityPane({ threadId }: { threadId: ThreadId }) {
+export function ActivityPane({ threadId, visible = true }: { threadId: ThreadId; visible?: boolean }) {
   const tasks = useStore((state) => state.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS)
   const active = useMemo(() => tasks.filter(isRuntimeTaskActive), [tasks])
-  const recent = useMemo(() => tasks.filter((task) => !isRuntimeTaskActive(task)).slice(0, 20), [tasks])
-  const now = useNow(active.length > 0)
+  const recent = useMemo(() => tasks.filter((task) => !isRuntimeTaskActive(task)), [tasks])
+  const now = useNow(visible && active.length > 0)
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null)
+  const viewport = useMemo(() => ({ current: scrollElement }), [scrollElement])
+  const rows = useMemo<ActivityRow[]>(() => [
+    ...(active.length ? [{ kind: "heading" as const, id: "heading:active", title: `Active · ${plural(active.length, "task")}` }, ...active.map(task => ({ kind: "task" as const, id: task.id, task }))] : []),
+    ...(recent.length ? [{ kind: "heading" as const, id: "heading:recent", title: `Recent · ${plural(recent.length, "task")}` }, ...recent.map(task => ({ kind: "task" as const, id: task.id, task }))] : []),
+  ], [active, recent])
 
   if (tasks.length === 0) {
     return (
@@ -43,36 +55,16 @@ export function ActivityPane({ threadId }: { threadId: ThreadId }) {
   }
 
   return (
-    <div className="h-full min-h-0 w-full overflow-y-auto font-system-ui">
-      {active.length > 0 && (
-        <section aria-labelledby="active-work-heading">
-          <h2 id="active-work-heading" className={SECTION_LABEL}>
-            Active · {plural(active.length, "task")}
-          </h2>
-          <div className="t-stagger px-1.5 pb-1.5">
-            {active.map((task) => (
-              <RuntimeTaskRow key={task.id} task={task} now={now} />
-            ))}
-          </div>
-        </section>
-      )}
-      {recent.length > 0 && (
-        <section aria-labelledby="recent-work-heading" className={cn(active.length > 0 && "border-t border-[color:var(--color-border-light)]")}>
-          <h2 id="recent-work-heading" className={SECTION_LABEL}>
-            Recent
-          </h2>
-          <div className="t-stagger px-1.5 pb-2">
-            {recent.map((task) => (
-              <RuntimeTaskRow key={task.id} task={task} now={now} />
-            ))}
-          </div>
-        </section>
-      )}
+    <div ref={setScrollElement} data-activity-scroll className="h-full min-h-0 w-full overflow-y-auto font-system-ui">
+      <VirtualRows items={rows} getKey={rowKey} estimateSize={estimateRow} viewport={viewport} anchor="start">
+        {(row) => row.kind === "heading" ? <h2 className={SECTION_LABEL}>{row.title}</h2>
+          : <div className="px-1.5"><RuntimeTaskRow task={row.task} now={isRuntimeTaskActive(row.task) ? now : 0} /></div>}
+      </VirtualRows>
     </div>
   )
 }
 
-function RuntimeTaskRow({ task, now }: { task: RuntimeTask; now: number }) {
+const RuntimeTaskRow = memo(function RuntimeTaskRow({ task, now }: { task: RuntimeTask; now: number }) {
   const [action, setAction] = useState<"stop" | "background" | null>(null)
   const active = isRuntimeTaskActive(task)
   const metrics = taskMetrics(task, now)
@@ -135,7 +127,7 @@ function RuntimeTaskRow({ task, now }: { task: RuntimeTask; now: number }) {
       </div>
     </article>
   )
-}
+})
 
 function TaskGlyph({ task }: { task: RuntimeTask }) {
   if (task.status === "failed") return <CircleAlertIcon className="size-3.5 text-destructive" />
@@ -159,7 +151,8 @@ function statusLabel(status: RuntimeTaskStatus, backgrounded: boolean): string {
 
 function taskMetrics(task: RuntimeTask, now: number): string {
   const parts: string[] = []
-  const elapsed = Math.max(0, (task.completed_at ? Date.parse(task.completed_at) : now) - Date.parse(task.started_at))
+  const endedAt = task.completed_at ?? (!isRuntimeTaskActive(task) ? task.updated_at : null)
+  const elapsed = Math.max(0, (endedAt ? Date.parse(endedAt) : now) - Date.parse(task.started_at))
   parts.push(formatDuration(task.stats.duration_ms ?? elapsed))
   if (task.stats.token_count) parts.push(formatCompact(task.stats.token_count, "tokens"))
   else if (task.usage) parts.push(formatCompact(task.usage.input_tokens + task.usage.output_tokens, "tokens"))
@@ -177,20 +170,26 @@ function formatDuration(ms: number): string {
 }
 
 function formatCompact(value: number, unit: string): string {
-  return `${new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value)} ${unit}`
+  return `${compactNumber.format(value)} ${unit}`
 }
 
 function formatMemory(kb: number): string {
   if (kb < 1024) return `${kb} KB`
-  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(kb / 1024)} MB`
+  return `${memoryNumber.format(kb / 1024)} MB`
 }
 
 function useNow(enabled: boolean): number {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (!enabled) return
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
+    let id: number | undefined
+    const update = () => {
+      window.clearInterval(id)
+      if (!document.hidden) id = window.setInterval(() => setNow(Date.now()), 1000)
+    }
+    update()
+    document.addEventListener("visibilitychange", update)
+    return () => { window.clearInterval(id); document.removeEventListener("visibilitychange", update) }
   }, [enabled])
   return now
 }

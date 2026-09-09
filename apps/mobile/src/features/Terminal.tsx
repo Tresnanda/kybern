@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Keyboard, ScrollView, TextInput, View } from "react-native";
+import { Keyboard, Linking, ScrollView, TextInput, View } from "react-native";
+import { connectorLoginOutput } from "../../../../packages/kybern-client/src/connectorLogin";
 import { Alert } from "../ui/Alert";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,6 +16,7 @@ import {
   Button,
   Empty,
   ErrorBanner,
+  Field,
   IconButton,
   T,
   Tap,
@@ -27,10 +29,12 @@ function base64(text: string) {
   for (const byte of bytes) raw += String.fromCharCode(byte);
   return btoa(raw);
 }
-export function Terminal({ threadId }: { threadId: string }) {
+export function Terminal({ threadId, initialTerminalId, connectorLogin = false }: { threadId: string; initialTerminalId?: string; connectorLogin?: boolean }) {
   const app = useApp();
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(initialTerminalId ?? "");
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [redirect, setRedirect] = useState("");
   const { colors, dark } = useTheme();
   const insets = useSafeAreaInsets();
   const [keyboard, setKeyboard] = useState(false);
@@ -74,12 +78,16 @@ export function Terminal({ threadId }: { threadId: string }) {
     if (!client) return;
     let alive = true;
     web.current?.injectJavaScript("window.resetTerminal(); true;");
+    const loginOutput = connectorLogin && selected === initialTerminalId ? connectorLoginOutput() : null;
     const off = client.onNotification("terminal.output", (raw) => {
       const event = raw as TerminalOutputNotification;
-      if (alive && event.terminal_id === selected)
+      if (alive && event.terminal_id === selected) {
         web.current?.injectJavaScript(
           `window.writeOutput(${JSON.stringify(event.data)}); true;`,
         );
+        const url = loginOutput?.(event.data);
+        if (url) setLoginUrl(url);
+      }
     });
     const exit = client.onNotification("terminal.exited", () => {
       if (alive) void reload().catch((e) => setError(errorText(e)));
@@ -97,7 +105,7 @@ export function Terminal({ threadId }: { threadId: string }) {
         .call("terminals.unsubscribe", { terminal_id: selected })
         .catch(() => {});
     };
-  }, [selected, ready, app.status, reload]);
+  }, [selected, ready, app.status, reload, connectorLogin, initialTerminalId]);
   useEffect(() => {
     if (ready)
       web.current?.injectJavaScript(
@@ -148,9 +156,16 @@ export function Terminal({ threadId }: { threadId: string }) {
     inputQueue.current = write;
     try {
       await write;
+      return true;
     } catch (e) {
       setError(errorText(e));
+      return false;
     }
+  }
+  async function completeLogin() {
+    setBusy(true);
+    try { if (await send(redirect.trim() + "\r")) setRedirect(""); }
+    finally { setBusy(false); }
   }
 
   function close() {
@@ -174,6 +189,12 @@ export function Terminal({ threadId }: { threadId: string }) {
   return (
     <View style={{ flex: 1, gap: 4 }}>
       <ErrorBanner error={error} />
+      {connectorLogin && selected === initialTerminalId && <View style={{ paddingHorizontal: 16, gap: 8 }}>
+        {loginUrl && <Button secondary onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
+        <T variant="caption" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>
+        <Field label="Sign-in redirect URL" hideLabel secureTextEntry autoCapitalize="none" autoCorrect={false} value={redirect} onChangeText={setRedirect} placeholder="Paste the redirect URL" />
+        <Button secondary busy={busy} disabled={!ready || !redirect.trim() || app.status !== "open"} onPress={() => void completeLogin()}>Complete sign-in</Button>
+      </View>}
       {terminals.length > 0 && (
         <View style={[styles.spread, { paddingHorizontal: 16 }]}>
           <ScrollView

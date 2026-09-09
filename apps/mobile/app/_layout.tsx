@@ -90,6 +90,8 @@ function Navigation() {
         <Stack.Screen name="tasks" options={{ title: "Tasks & agents" }} />
         <Stack.Screen name="file" options={{ title: "File" }} />
         <Stack.Screen name="workspace" options={{ title: "Workspace" }} />
+        <Stack.Screen name="integrations" options={{ title: "Connectors and plugins" }} />
+        <Stack.Screen name="artifact" options={{ title: "Artifact" }} />
         <Stack.Screen name="scan-pairing" options={{ title: "Scan QR code" }} />
         <Stack.Screen
           name="project-picker"

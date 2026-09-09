@@ -282,6 +282,9 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
               ),
           )}
           {row("Thread details", "slider.horizontal.3", () => navigate("More"))}
+          {row("Artifacts", "doc", () => navigate("Artifacts"))}
+          {row("Connectors and plugins", "puzzlepiece.extension", () => { afterClose.current = () => router.push({ pathname: "/integrations", params: { threadId } }); close(); })}
+          {row("Notes", "square.and.pencil", () => navigate("Notes"))}
           {busy && (
             <T variant="caption" tone="secondary" style={{ padding: 12 }}>
               Updating workspace…

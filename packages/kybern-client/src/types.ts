@@ -427,6 +427,9 @@ export type EventPayload =
   | { kind: "thread_archived" }
   | { kind: "message_queued"; message: QueuedMessage }
   | { kind: "message_removed"; message_id: MessageId }
+  | { kind: "message_queue_updated"; message: QueuedMessage }
+  | { kind: "message_steered"; message_id: MessageId; message: UserMessage }
+  | { kind: "thread_notes_updated"; notes: ThreadNotes }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "turn_resumed" }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
@@ -614,6 +617,7 @@ export interface ThreadsGetParams {
 export interface AsyncQuestionRequest { id: string; questions: { title: string; options: string[] }[] }
 export interface ThreadsAnswerParams { thread_id: ThreadId; request_id: string; answers: string[] }
 export interface ThreadsGetResult {
+  notes?: ThreadNotes;
   pending_questions?: AsyncQuestionRequest[];
   provider_commands?: ProviderCommand[];
   provider_usage?: ProviderUsage;
@@ -622,6 +626,11 @@ export interface ThreadsGetResult {
   next_before_seq?: EventSeq | null;
   pending_approvals: ApprovalRequest[];
   runtime_tasks?: RuntimeTask[];
+}
+
+export interface ThreadNotes {
+  text: string;
+  revision: number;
 }
 
 export interface ThreadsUpdateParams {
@@ -1049,6 +1058,10 @@ export interface QueuedMessage {
 
 export interface Methods {
   "queue.add": [QueuedMessage, Record<string, never>];
+  "queue.update": [QueuedMessage, Record<string, never>];
+  "threads.steer": [QueuedMessage, ThreadsSendResult];
+  "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
+  "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
   "queue.list": [{ thread_id?: ThreadId }, { messages: QueuedMessage[] }];
   "queue.remove": [
     { thread_id: ThreadId; id: MessageId },
@@ -1068,6 +1081,12 @@ export interface Methods {
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
   "skills.list": [SkillsListParams, SkillsListResult];
+  "threads.artifacts.list": [{ thread_id: ThreadId; before_seq?: number | null; limit?: number }, { artifacts: ArtifactTool[]; next_before_seq: number | null }];
+  "threads.artifacts.preview": [{ thread_id: ThreadId; path: string }, { ticket: string }];
+  "threads.artifacts.read": [{ thread_id: ThreadId; path: string }, FilesReadResult];
+  "integrations.list": [{ project_id: ProjectId; provider: ProviderKind }, IntegrationsCatalog];
+  "integrations.change": [{ project_id: ProjectId; provider: ProviderKind; id: string; kind: IntegrationKind; scope?: string | null; action: IntegrationAction }, IntegrationChangeResult];
+  "integrations.login": [{ thread_id: ThreadId; name: string }, TerminalInfo];
   "daemon.shutdown": [Empty, Empty];
   "projects.list": [Empty, ProjectsListResult];
   "projects.browse": [{ path?: string }, ProjectsBrowseResult];
@@ -1143,3 +1162,15 @@ export interface ProviderUsage {
   context?: { used_tokens: number; window_tokens: number };
   limits?: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
 }
+
+export type IntegrationKind = "plugin" | "connector";
+export type IntegrationAction = "install" | "uninstall" | "enable" | "disable" | "update";
+export interface Integration {
+  id: string; name: string; kind: IntegrationKind; description: string | null;
+  scope: string | null; installed: boolean; enabled: boolean; status: string;
+  actions: IntegrationAction[]; connect_url: string | null; can_login: boolean;
+}
+export interface IntegrationsCatalog { items: Integration[]; warnings: string[] }
+export interface IntegrationChangeResult { message: string; connections: Integration[] }
+
+export interface ArtifactTool { seq: number; at: DateTime; call: ToolCall; output: JsonValue | null; is_error: boolean }

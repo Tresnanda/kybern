@@ -219,7 +219,13 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
             sheetStyle,
           ]}
         >
-          <MorphingSurface open={open} onClosed={closed} style={{ flex: 1 }}>
+          <MorphingSurface
+            open={open}
+            onClosed={closed}
+            slideFromBottom
+            bottomInset={Math.max(insets.bottom, 12)}
+            style={{ flex: 1 }}
+          >
             <GestureDetector gesture={gesture}>
               <View collapsable={false}>
                 <AndroidHeader

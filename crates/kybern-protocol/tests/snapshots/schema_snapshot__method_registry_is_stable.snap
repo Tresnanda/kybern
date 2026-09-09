@@ -24,7 +24,11 @@ expression: names
 - threads.update
 - threads.archive
 - threads.send
+- threads.steer
+- threads.notes.get
+- threads.notes.set
 - queue.add
+- queue.update
 - queue.list
 - queue.remove
 - threads.release
@@ -62,6 +66,12 @@ expression: names
 - files.list
 - files.read
 - skills.list
+- integrations.list
+- threads.artifacts.list
+- threads.artifacts.read
+- threads.artifacts.preview
+- integrations.change
+- integrations.login
 - approvals.respond
 - approvals.list
 - events.subscribe

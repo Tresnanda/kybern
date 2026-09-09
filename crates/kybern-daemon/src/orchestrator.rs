@@ -732,8 +732,17 @@ impl Orchestrator {
             .try_read_owned()
             .map_err(|_| anyhow!("This agent is updating. Try sending again after the update finishes."))?;
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        if queued && !self.inner.store.queue_list(Some(thread_id))?.iter().any(|item| item.id == message_id) {
-            return Err(anyhow!("queued message was removed"));
+        if queued {
+            // Read under the command gate: the user may have edited this item
+            // since the queue worker selected it.
+            message = self
+                .inner
+                .store
+                .queue_list(Some(thread_id))?
+                .into_iter()
+                .find(|item| item.id == message_id)
+                .ok_or_else(|| anyhow!("queued message was removed"))?
+                .message;
         }
         self.resolve_attachments(&mut message);
         let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
@@ -816,6 +825,73 @@ impl Orchestrator {
         }
         self.emit(thread_id, None, EventPayload::MessageRemoved { message_id: id })?;
         Ok(())
+    }
+
+    pub fn update_queued(&self, message: methods::QueuedMessage) -> Result<()> {
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        if !self.inner.store.queue_list(Some(message.thread_id))?.iter().any(|item| item.id == message.id) {
+            return Err(anyhow!("This follow-up has already started or was removed. Send a new message instead."));
+        }
+        self.emit(message.thread_id, None, EventPayload::MessageQueueUpdated { message })?;
+        Ok(())
+    }
+
+    pub fn set_notes(&self, params: methods::ThreadNotesSetParams) -> Result<methods::ThreadNotes> {
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found. Open another conversation."))?;
+        if params.text.len() > 128 * 1024 {
+            return Err(anyhow!("These notes are too long. Keep them under 128 KB and try again."));
+        }
+        let current = self.inner.store.thread_notes(params.thread_id)?;
+        if current.text == params.text {
+            return Ok(current);
+        }
+        if current.revision != params.expected_revision {
+            return Err(anyhow!("Notes changed on another device. Copy your edits, reload the saved notes, and try again."));
+        }
+        let notes = methods::ThreadNotes { text: params.text, revision: current.revision + 1 };
+        self.emit(params.thread_id, None, EventPayload::ThreadNotesUpdated { notes: notes.clone() })?;
+        Ok(notes)
+    }
+
+    /// Deliver new user input within the current native turn. The turn gate also
+    /// serializes retries, so a lost RPC reply does not send the prompt twice.
+    pub async fn steer(&self, mut params: methods::QueuedMessage) -> Result<methods::ThreadsSendResult> {
+        self.resolve_attachments(&mut params.message);
+        let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
+            let Some((thread, turn_id, message)) = self.inner.store.steering_receipt(params.id)? else { return Ok(None) };
+            if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(&params.message)? {
+                return Err(anyhow!("Message id already belongs to another request."));
+            }
+            Ok(Some(methods::ThreadsSendResult { turn_id, message_id: params.id }))
+        };
+        if let Some(result) = receipt()? {
+            return Ok(result);
+        }
+        let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        if !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            return Err(anyhow!("This turn has ended. Send your message to start the next turn."));
+        }
+        let live = self
+            .inner
+            .sessions
+            .lock()
+            .await
+            .get(&params.thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("The agent is still starting. Try steering again in a moment, or queue this message."))?;
+        let turn = live.turn.lock().await;
+        if let Some(result) = receipt()? {
+            return Ok(result);
+        }
+        let active = turn
+            .as_ref()
+            .filter(|turn| !turn.completed)
+            .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
+        live.touch();
+        live.session.steer(&params.id.to_string(), &params.message).await?;
+        self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
+        Ok(methods::ThreadsSendResult { turn_id: active.id, message_id: params.id })
     }
 
     /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
@@ -2278,7 +2354,8 @@ mod tests {
             Ok(())
         }
 
-        async fn steer(&self, _message_id: &str, _message: &UserMessage) -> kybern_drivers::Result<()> {
+        async fn steer(&self, _message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+            self.messages.lock().await.push(message.clone());
             Ok(())
         }
 
@@ -2827,6 +2904,103 @@ mod tests {
             duration_ms: 1,
             anchors: TurnAnchors::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn steering_retries_preserve_the_running_turn_and_deliver_once() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _, messages) = fixture.park_recording(&thread, Instant::now()).await;
+        let (turn_id, _) = fixture.orchestrator.send(thread.id, UserMessage::text("initial request")).await.unwrap();
+        live.turn_ready.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let prompt = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("Steer this turn") };
+        let (first, retry) = tokio::join!(fixture.orchestrator.steer(prompt.clone()), fixture.orchestrator.steer(prompt.clone()));
+        assert_eq!(first.unwrap().turn_id, turn_id);
+        assert_eq!(retry.unwrap().message_id, prompt.id);
+        assert_eq!(messages.lock().await.len(), 2);
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert_eq!(events.iter().filter(|ev| matches!(ev.payload, EventPayload::TurnStarted { .. })).count(), 1);
+        assert_eq!(events.iter().filter(|ev| matches!(ev.payload, EventPayload::MessageSteered { .. })).count(), 1);
+        let transcript = kybern_store::project_transcript(&events);
+        assert_eq!(transcript.iter().filter(|entry| matches!(entry, TranscriptEntry::User { .. })).count(), 2);
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        assert_eq!(fixture.orchestrator.steer(prompt.clone()).await.unwrap().turn_id, turn_id, "retry after completion is acknowledged");
+        assert!(fixture.orchestrator.steer(methods::QueuedMessage { message: UserMessage::text("different"), ..prompt }).await.is_err());
+        assert!(
+            fixture
+                .orchestrator
+                .steer(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("late") })
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_edits_keep_order_and_dispatch_the_latest_saved_prompt() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _, messages) = fixture.park_recording(&thread, Instant::now()).await;
+        let first = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("old prompt") };
+        let second = methods::QueuedMessage { id: Uuid::now_v7(), message: UserMessage::text("second"), ..first.clone() };
+        fixture.orchestrator.enqueue(first.clone()).unwrap();
+        fixture.orchestrator.enqueue(second.clone()).unwrap();
+        let edited = methods::QueuedMessage { message: UserMessage::text("edited prompt"), ..first.clone() };
+        fixture.orchestrator.update_queued(edited.clone()).unwrap();
+        let queue = fixture.store.queue_list(Some(thread.id)).unwrap();
+        assert_eq!(queue.iter().map(|item| item.id).collect::<Vec<_>>(), vec![first.id, second.id]);
+        // Model a worker that selected the item immediately before it was edited.
+        fixture.orchestrator.send_with_id(thread.id, first.id, first.message, true).await.unwrap();
+        live.turn_ready.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(messages.lock().await[0].plain_text().starts_with("edited prompt\n\n<kybern_artifact_guidance>"));
+        assert!(fixture.store.events_for_thread(thread.id).unwrap().iter().any(|event| {
+            matches!(&event.payload, EventPayload::TurnStarted { message, .. } if message.plain_text() == "edited prompt")
+        }));
+        assert!(fixture.orchestrator.update_queued(edited).is_err());
+        assert_eq!(fixture.store.queue_list(Some(thread.id)).unwrap()[0].id, second.id);
+    }
+
+    #[tokio::test]
+    async fn notes_are_per_thread_and_conflicting_saves_preserve_the_saved_text() {
+        let fixture = Fixture::new();
+        let a = fixture.thread(ThreadStatus::Running);
+        let b = fixture.thread(ThreadStatus::Idle);
+        let params =
+            methods::ThreadNotesSetParams { thread_id: a.id, text: "Remember to test mobile\n☑ Notes".into(), expected_revision: 0 };
+        let saved = fixture.orchestrator.set_notes(params.clone()).unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(fixture.orchestrator.set_notes(params.clone()).unwrap(), saved, "retry is idempotent");
+        assert!(fixture.orchestrator.set_notes(methods::ThreadNotesSetParams { text: "stale edit".into(), ..params }).is_err());
+        assert_eq!(fixture.store.thread_notes(a.id).unwrap(), saved);
+        assert_eq!(fixture.store.thread_notes(b.id).unwrap(), methods::ThreadNotes::default());
+        let events = fixture.store.events_for_thread(a.id).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(kybern_store::project_transcript(&events).is_empty(), "notes are not prompts");
+        let cleared = fixture
+            .orchestrator
+            .set_notes(methods::ThreadNotesSetParams { thread_id: a.id, text: String::new(), expected_revision: 1 })
+            .unwrap();
+        assert_eq!(cleared.text, "");
+        assert_eq!(cleared.revision, 2);
+        assert!(
+            fixture
+                .orchestrator
+                .set_notes(methods::ThreadNotesSetParams { thread_id: a.id, text: "x".repeat(128 * 1024 + 1), expected_revision: 2 })
+                .is_err()
+        );
     }
 
     #[tokio::test]

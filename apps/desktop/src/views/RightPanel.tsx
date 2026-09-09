@@ -1,3 +1,4 @@
+import { ArtifactsPane } from "./Artifacts"
 // Right dock: a 46px tab strip of surface chips, a
 // collapse control, and panes kept mounted underneath. The Changes pane
 // combines the Environment card rows with the diff file list.
@@ -62,6 +63,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
             {adds + dels > 0 && <span key={`${adds}:${dels}`} className="t-pop inline-flex"><DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" /></span>}
           </DockTab>
           <DockTab active={tab === "terminal"} onClick={() => set({ rightTab: "terminal" })} icon={<TerminalIcon className="size-3.5 shrink-0 opacity-70" />} label="Terminal" />
+          <DockTab active={tab === "artifacts"} onClick={() => set({ rightTab: "artifacts" })} icon={<FoldersIcon className="size-3.5 shrink-0 opacity-70" />} label="Artifacts" />
           <DockTab active={tab === "explorer"} onClick={() => set({ rightTab: "explorer" })} icon={<FoldersIcon className="size-3.5 shrink-0 opacity-70" />} label="Explorer" />
         </div>
         <div
@@ -86,6 +88,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
                   <TerminalIcon className="size-3.5 shrink-0" />
                   <span>Terminal</span>
                 </MenuItem>
+                <MenuItem onClick={() => set({ rightTab: "artifacts" })}><FoldersIcon className="size-3.5 shrink-0" /><span>Artifacts</span></MenuItem>
                 <MenuItem onClick={() => set({ rightTab: "explorer" })}>
                   <FoldersIcon className="size-3.5 shrink-0" />
                   <span>Explorer</span>
@@ -105,7 +108,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         ) : (
           <>
             <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={tab === "activity"} aria-hidden={tab !== "activity"}>
-              <ActivityPane threadId={threadId} />
+              <ActivityPane key={threadId} threadId={threadId} visible={tab === "activity"} />
             </div>
             <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "changes" ? "z-[1]" : "z-0")} data-active={tab === "changes"} aria-hidden={tab !== "changes"}>
               <Changes key={threadId} threadId={threadId} active={tab === "changes"} />
@@ -113,6 +116,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
             <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "explorer" ? "z-[1]" : "z-0")} data-active={tab === "explorer"} aria-hidden={tab !== "explorer"}>
               {projectId && <ExplorerPane projectId={projectId} active={tab === "explorer"} />}
             </div>
+            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "artifacts" ? "z-[1]" : "z-0")} data-active={tab === "artifacts"} aria-hidden={tab !== "artifacts"}><ArtifactsPane key={threadId} threadId={threadId} active={tab === "artifacts"} /></div>
             <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={tab === "terminal"} aria-hidden={tab !== "terminal"}>
               <TerminalWorkspace threadId={threadId} active={tab === "terminal"} />
             </div>

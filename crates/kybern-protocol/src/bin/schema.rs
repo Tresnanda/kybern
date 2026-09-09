@@ -70,7 +70,11 @@ fn main() {
     method::<ThreadsUpdate>(&mut methods);
     method::<ThreadsArchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);
+    method::<ThreadsSteer>(&mut methods);
+    method::<ThreadNotesGet>(&mut methods);
+    method::<ThreadNotesSet>(&mut methods);
     method::<QueueAdd>(&mut methods);
+    method::<QueueUpdate>(&mut methods);
     method::<QueueList>(&mut methods);
     method::<QueueRemove>(&mut methods);
     method::<ThreadsRelease>(&mut methods);
@@ -108,6 +112,12 @@ fn main() {
     method::<FilesList>(&mut methods);
     method::<FilesRead>(&mut methods);
     method::<SkillsList>(&mut methods);
+    method::<IntegrationsList>(&mut methods);
+    method::<ArtifactsList>(&mut methods);
+    method::<ArtifactRead>(&mut methods);
+    method::<ArtifactPreview>(&mut methods);
+    method::<IntegrationChange>(&mut methods);
+    method::<IntegrationLogin>(&mut methods);
     method::<ApprovalsRespond>(&mut methods);
     method::<ApprovalsList>(&mut methods);
     method::<EventsSubscribe>(&mut methods);

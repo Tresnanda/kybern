@@ -504,3 +504,38 @@ test("mobile live projection removes a provisional summary when Claude resumes",
   assert.equal(state.blocks.filter((entry) => entry.kind === "user").length, 1)
   assert.equal(state.blocks.filter((entry) => entry.kind === "tool").length, 1)
 })
+
+
+test("steering adds chronological user input without replacing the original prompt", () => {
+  const prompt = { kind: "message_steered", message_id: "steered", message: { parts: [{ type: "text", text: "Also verify mobile" }] } }
+  const state = fold([start, prompt, prompt, done])
+  const [group] = groupTurns(state.blocks)
+  assert.equal(group.user.id, "u1")
+  assert.equal(group.work.filter(block => block.kind === "user").length, 1)
+  assert.equal(group.work.find(block => block.kind === "user").message.parts[0].text, "Also verify mobile")
+})
+
+test("notes hydrate and replay without inserting transcript rows or losing newer edits", () => {
+  const state = seedFromGet({ thread: { last_seq: 2 }, transcript: [], pending_approvals: [], notes: { text: "Saved", revision: 3 } })
+  const before = state.blocks
+  const stale = applyEvent(state, { seq: 3, at: AT, kind: "thread_notes_updated", notes: { text: "Old", revision: 2 } })
+  assert.equal(stale.notes.text, "Saved")
+  const next = applyEvent(stale, { seq: 4, at: AT, kind: "thread_notes_updated", notes: { text: "New", revision: 4 } })
+  assert.deepEqual(next.notes, { text: "New", revision: 4 })
+  assert.equal(next.blocks, before)
+})
+
+test("artifact publication requires native successful receipts and republishing retains the URL", async () => {
+  const { artifactView, publishArtifactPrompt, claudeArtifactUrl } = await import("../../packages/kybern-client/src/artifacts.ts");
+  const receipt = { seq: 42, at: "2026-09-09T00:00:00Z", call: { id: "a", name: "Artifact", input: { file_path: "artifacts/demo.html", title: "Demo" } }, output: { url: "https://claude.ai/public/artifacts/example" }, is_error: false };
+  assert.equal(artifactView(receipt).status, "published");
+  assert.equal(artifactView({ ...receipt, output: null }).status, "publishing");
+  assert.equal(artifactView({ ...receipt, is_error: true }).url, null);
+  assert.equal(artifactView({ ...receipt, call: { ...receipt.call, name: "Write" } }), null);
+  assert.equal(artifactView({ ...receipt, output: "https://claude.ai.attacker.test/fake" }).status, "completed");
+  for (const url of ["javascript:alert(1)", "https://user:secret@claude.ai/artifacts/a", "https://claude.ai:8443/artifacts/a", "https://claude.ai/login", "https://claude.ai/settings/connectors"]) assert.equal(claudeArtifactUrl(url), null);
+  const prompt = publishArtifactPrompt(artifactView(receipt));
+  assert.match(prompt, /https:\/\/claude.ai\/public\/artifacts\/example/);
+  assert.match(prompt, /Never force/);
+  assert.throws(() => publishArtifactPrompt({ path: null, url: null }));
+});

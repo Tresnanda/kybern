@@ -161,7 +161,9 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             }
         }
         match &ev.payload {
-            EventPayload::TurnStarted { message_id, message } | EventPayload::AsyncQuestionsAnswered { message_id, message, .. } => {
+            EventPayload::TurnStarted { message_id, message }
+            | EventPayload::MessageSteered { message_id, message }
+            | EventPayload::AsyncQuestionsAnswered { message_id, message, .. } => {
                 if out.iter().any(|entry| matches!(entry, TranscriptEntry::User { id, .. } if id == message_id)) { continue; }
                 let Some(turn_id) = turn_id else { continue };
                 last_turn_id = Some(turn_id);
@@ -404,6 +406,8 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             | EventPayload::ThreadCreated { .. }
             | EventPayload::ThreadUpdated { .. }
             | EventPayload::MessageQueued { .. }
+            | EventPayload::MessageQueueUpdated { .. }
+            | EventPayload::ThreadNotesUpdated { .. }
             | EventPayload::MessageRemoved { .. }
             | EventPayload::ThreadArchived
             | EventPayload::ProviderSessionBound { .. }

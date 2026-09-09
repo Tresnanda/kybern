@@ -151,3 +151,27 @@ test("a closed environment ignores late handshake responses", async () => {
   assert.equal(client.status, "closed")
   assert.equal(client.info, null)
 })
+
+
+test("unrelated task updates retain a settled turn's task selection", () => {
+  const one = { id: "one", origin_turn_id: "turn-a" }
+  const two = { id: "two", origin_turn_id: "turn-b" }
+  const select = stores.createTurnTasksSelector("thread", "turn-a")
+  const initial = select({ runtimeTasks: { thread: [one, two] } })
+  assert.deepEqual(initial, [one])
+  assert.equal(select({ runtimeTasks: { thread: [one, { ...two, title: "New metrics" }] } }), initial)
+  const changed = { ...one, title: "Changed" }
+  assert.deepEqual(select({ runtimeTasks: { thread: [changed, two] } }), [changed])
+  assert.deepEqual(select({ runtimeTasks: {} }), [])
+})
+
+import { promptText, replacePromptText } from "../../packages/kybern-client/src/prompts.ts"
+test("editing queued text retains structured attachments and context", () => {
+  const attachment = { type: "attachment", asset_id: "image", name: "Image", media_type: "image/png", size: 12 }
+  const mention = { type: "file_mention", path: "src/app.ts" }
+  const before = { parts: [{ type: "text", text: "First" }, attachment, mention, { type: "text", text: "Second" }] }
+  assert.equal(promptText(before), "First\nSecond")
+  const after = replacePromptText(before, "Edited\n☑")
+  assert.deepEqual(after.parts, [{ type: "text", text: "Edited\n☑" }, attachment, mention])
+  assert.equal(before.parts[0].text, "First")
+})

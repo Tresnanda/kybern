@@ -394,6 +394,30 @@ impl Store {
                 params![thread_id.to_string(), seq, at.to_rfc3339()],
             )?;
             match &payload {
+                EventPayload::ThreadNotesUpdated { notes } => {
+                    c.execute(
+                        "INSERT INTO thread_notes(thread_id, text, revision) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(thread_id) DO UPDATE SET text = excluded.text, revision = excluded.revision",
+                        params![thread_id.to_string(), notes.text, notes.revision],
+                    )?;
+                }
+                EventPayload::MessageSteered { message_id, message } => {
+                    c.execute(
+                        "INSERT INTO steered_messages(id, thread_id, turn_id, payload) VALUES (?1, ?2, ?3, ?4)",
+                        params![
+                            message_id.to_string(),
+                            thread_id.to_string(),
+                            turn_id.map(|id| id.to_string()),
+                            serde_json::to_string(message)?
+                        ],
+                    )?;
+                }
+                EventPayload::MessageQueueUpdated { message } => {
+                    c.execute(
+                        "UPDATE queued_messages SET payload = ?3 WHERE id = ?1 AND thread_id = ?2 AND pending = 1",
+                        params![message.id.to_string(), thread_id.to_string(), serde_json::to_string(message)?],
+                    )?;
+                }
                 EventPayload::MessageQueued { message } => {
                     c.execute(
                         "INSERT INTO queued_messages(id, thread_id, payload, seq) VALUES (?1, ?2, ?3, ?4)",
@@ -425,11 +449,68 @@ impl Store {
         })
     }
 
+    pub fn thread_notes(&self, thread_id: ThreadId) -> Result<methods::ThreadNotes> {
+        self.with(|c| {
+            Ok(c.query_row("SELECT text, revision FROM thread_notes WHERE thread_id = ?1", [thread_id.to_string()], |r| {
+                Ok(methods::ThreadNotes { text: r.get(0)?, revision: r.get(1)? })
+            })
+            .optional()?
+            .unwrap_or_default())
+        })
+    }
+
+    pub fn steering_receipt(&self, id: MessageId) -> Result<Option<(ThreadId, TurnId, UserMessage)>> {
+        self.with(|c| {
+            let row = c
+                .query_row("SELECT thread_id, turn_id, payload FROM steered_messages WHERE id = ?1", [id.to_string()], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                })
+                .optional()?;
+            row.map(|(thread, turn, message)| Ok((thread.parse()?, turn.parse()?, serde_json::from_str(&message)?))).transpose()
+        })
+    }
+
     pub fn queue_receipt(&self, id: MessageId) -> Result<Option<methods::QueuedMessage>> {
         self.with(|c| {
             let payload: Option<String> =
                 c.query_row("SELECT payload FROM queued_messages WHERE id = ?1", [id.to_string()], |r| r.get(0)).optional()?;
             payload.map(|payload| Ok(serde_json::from_str(&payload)?)).transpose()
+        })
+    }
+
+    /// Read only native Artifact calls and their receipts, never the full transcript.
+    pub fn artifact_calls(&self, thread_id: ThreadId, before: Option<EventSeq>, limit: u32) -> Result<Vec<methods::ArtifactTool>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT s.seq, s.at, s.payload, (
+                   SELECT c.payload FROM events c
+                   WHERE c.thread_id = s.thread_id AND c.turn_id IS s.turn_id AND c.seq > s.seq
+                     AND c.kind = 'tool_call_completed'
+                     AND json_extract(c.payload, '$.tool_call_id') = json_extract(s.payload, '$.call.id')
+                   ORDER BY c.seq DESC LIMIT 1
+                 ) FROM (
+                   SELECT seq, at, payload, thread_id, turn_id FROM events
+                   WHERE thread_id = ?1 AND kind = 'tool_call_started'
+                     AND json_extract(payload, '$.call.name') = 'Artifact'
+                     AND COALESCE(json_extract(payload, '$.call.input.action'), 'publish') = 'publish'
+                     AND seq < ?2 ORDER BY seq DESC LIMIT ?3
+                 ) s ORDER BY s.seq DESC",
+            )?;
+            let rows = statement
+                .query_map(params![thread_id.to_string(), before.unwrap_or(i64::MAX), limit.min(101)], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut result = Vec::new();
+            for (seq, at, start, completion) in rows {
+                let EventPayload::ToolCallStarted { call, .. } = serde_json::from_str(&start)? else { continue };
+                let (output, is_error) = match completion.map(|text| serde_json::from_str::<EventPayload>(&text)).transpose()? {
+                    Some(EventPayload::ToolCallCompleted { output, is_error, .. }) => (Some(output), is_error),
+                    _ => (None, false),
+                };
+                result.push(methods::ArtifactTool { seq, at: at.parse()?, call, output, is_error });
+            }
+            Ok(result)
         })
     }
 

@@ -2,6 +2,7 @@
 //!
 //! Adding a method means adding a struct pair here and an entry in `METHODS`.
 
+use crate::integrations::*;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -269,6 +270,8 @@ pub struct ThreadsGetParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
     #[serde(default)]
+    pub notes: ThreadNotes,
+    #[serde(default)]
     pub pending_questions: Vec<AsyncQuestionRequest>,
     #[serde(default)]
     pub provider_commands: Vec<crate::ProviderCommand>,
@@ -320,6 +323,24 @@ pub struct ThreadsSendResult {
 }
 method!(ThreadsSend, "threads.send", Some(Scope::OrchestrationOperate), ThreadsSendParams, ThreadsSendResult);
 
+/// A user-owned notepad, separate from the agent's conversation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadNotes {
+    pub text: String,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadNotesSetParams {
+    pub thread_id: ThreadId,
+    pub text: String,
+    /// Refuse to overwrite edits saved by another client.
+    pub expected_revision: i64,
+}
+method!(ThreadNotesGet, "threads.notes.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadNotes);
+method!(ThreadNotesSet, "threads.notes.set", Some(Scope::OrchestrationOperate), ThreadNotesSetParams, ThreadNotes);
+method!(ThreadsSteer, "threads.steer", Some(Scope::OrchestrationOperate), QueuedMessage, ThreadsSendResult);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsInterruptParams {
     pub thread_id: ThreadId,
@@ -357,6 +378,7 @@ pub struct QueueRemoveParams {
     pub id: MessageId,
 }
 method!(QueueAdd, "queue.add", Some(Scope::OrchestrationOperate), QueuedMessage, Empty);
+method!(QueueUpdate, "queue.update", Some(Scope::OrchestrationOperate), QueuedMessage, Empty);
 method!(QueueList, "queue.list", Some(Scope::OrchestrationRead), QueueListParams, QueueListResult);
 method!(QueueRemove, "queue.remove", Some(Scope::OrchestrationOperate), QueueRemoveParams, Empty);
 
@@ -939,6 +961,67 @@ pub struct EventsRangeResult {
 }
 method!(EventsRange, "events.range", Some(Scope::OrchestrationRead), EventsRangeParams, EventsRangeResult);
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IntegrationsListParams {
+    pub project_id: ProjectId,
+    pub provider: ProviderKind,
+}
+method!(IntegrationsList, "integrations.list", Some(Scope::OrchestrationRead), IntegrationsListParams, IntegrationsCatalog);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IntegrationChangeParams {
+    pub project_id: ProjectId,
+    pub provider: ProviderKind,
+    pub id: String,
+    pub kind: IntegrationKind,
+    pub scope: Option<String>,
+    pub action: IntegrationAction,
+}
+method!(IntegrationChange, "integrations.change", Some(Scope::OrchestrationOperate), IntegrationChangeParams, IntegrationChangeResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IntegrationLoginParams {
+    pub thread_id: ThreadId,
+    pub name: String,
+}
+method!(IntegrationLogin, "integrations.login", Some(Scope::TerminalOperate), IntegrationLoginParams, TerminalInfo);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactsListParams {
+    pub thread_id: ThreadId,
+    pub before_seq: Option<EventSeq>,
+    #[serde(default = "default_artifact_limit")]
+    pub limit: u32,
+}
+fn default_artifact_limit() -> u32 {
+    30
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactTool {
+    pub seq: EventSeq,
+    pub at: chrono::DateTime<chrono::Utc>,
+    pub call: ToolCall,
+    pub output: Option<serde_json::Value>,
+    pub is_error: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactsListResult {
+    pub artifacts: Vec<ArtifactTool>,
+    pub next_before_seq: Option<EventSeq>,
+}
+method!(ArtifactsList, "threads.artifacts.list", Some(Scope::OrchestrationRead), ArtifactsListParams, ArtifactsListResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactReadParams {
+    pub thread_id: ThreadId,
+    pub path: String,
+}
+method!(ArtifactRead, "threads.artifacts.read", Some(Scope::OrchestrationRead), ArtifactReadParams, FilesReadResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactPreviewResult {
+    pub ticket: String,
+}
+method!(ArtifactPreview, "threads.artifacts.preview", Some(Scope::OrchestrationRead), ArtifactReadParams, ArtifactPreviewResult);
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -976,7 +1059,11 @@ registry!(
     ThreadsUpdate,
     ThreadsArchive,
     ThreadsSend,
+    ThreadsSteer,
+    ThreadNotesGet,
+    ThreadNotesSet,
     QueueAdd,
+    QueueUpdate,
     QueueList,
     QueueRemove,
     ThreadsRelease,
@@ -1014,6 +1101,12 @@ registry!(
     FilesList,
     FilesRead,
     SkillsList,
+    IntegrationsList,
+    ArtifactsList,
+    ArtifactRead,
+    ArtifactPreview,
+    IntegrationChange,
+    IntegrationLogin,
     ApprovalsRespond,
     ApprovalsList,
     EventsSubscribe,

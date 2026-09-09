@@ -128,6 +128,27 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX queue_pending ON queued_messages(pending, seq);
     ",
+    // v7: synchronized user notes and durable steering receipts.
+    "
+    CREATE TABLE thread_notes (
+        thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        revision INTEGER NOT NULL
+    );
+    CREATE TABLE steered_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL,
+        payload TEXT NOT NULL
+    );
+    ",
+    // v8: page native Artifact calls without hydrating the conversation.
+    "
+    CREATE INDEX artifact_calls ON events(thread_id, seq DESC)
+      WHERE kind = 'tool_call_started' AND json_extract(payload, '$.call.name') = 'Artifact';
+    CREATE INDEX tool_completion_lookup ON events(thread_id, json_extract(payload, '$.tool_call_id'))
+      WHERE kind = 'tool_call_completed';
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

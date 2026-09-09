@@ -44,6 +44,27 @@ pub async fn list(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, Str
     Ok(tokio::task::spawn_blocking(move || scan(&cwd, provider, &env)).await?)
 }
 
+pub async fn plugin_skills(roots: Vec<(String, PathBuf)>) -> Result<Vec<SkillInfo>> {
+    Ok(tokio::task::spawn_blocking(move || {
+        let mut found = Vec::new();
+        let mut visited = HashSet::new();
+        let mut budget = Budget::default();
+        for (namespace, path) in roots {
+            let root = Root { path: path.join("skills"), scope: SkillScope::App, depth: MAX_DEPTH };
+            let start = found.len();
+            visit(&root.path, &root, 0, &mut visited, &mut budget, &mut found);
+            for skill in &mut found[start..] {
+                skill.name = format!("{namespace}:{}", skill.name);
+            }
+            if budget.entries >= MAX_ENTRIES || budget.bytes >= MAX_TOTAL_BYTES {
+                break;
+            }
+        }
+        found
+    })
+    .await?)
+}
+
 fn scan(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>) -> Vec<SkillInfo> {
     let home = BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
     let roots = roots(cwd, provider, env, home.as_deref());

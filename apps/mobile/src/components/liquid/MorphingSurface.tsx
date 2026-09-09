@@ -66,10 +66,14 @@ export function MorphingSurface({
   onClosed,
   children,
   style,
+  slideFromBottom = false,
+  bottomInset = 0,
 }: PropsWithChildren<{
   open: boolean;
   onClosed: () => void;
   style?: StyleProp<ViewStyle>;
+  slideFromBottom?: boolean;
+  bottomInset?: number;
 }>) {
   const { colors } = useTheme();
   const reduced = useReducedMotion();
@@ -98,6 +102,18 @@ export function MorphingSurface({
   const silhouette = useAnimatedStyle(() => {
     const p = reduced ? 1 : size.get();
     const c = reduced ? 1 : mass.get();
+    if (slideFromBottom) {
+      const remaining = 1 - Math.max(0, Math.min(1, p));
+      // A broad sheet rises first; its outline follows, softly releasing the
+      // narrower shoulders and stretched lower edge. Children never scale.
+      return {
+        width: bounds.width - 16 * remaining,
+        height: bounds.height + 24 * remaining,
+        borderRadius: 28 + 16 * remaining,
+        opacity: reduced ? fade.get() : 1,
+        transform: [{ translateX: 8 * remaining }, { translateY: 0 }],
+      };
+    }
     const width = 56 + (bounds.width - 56) * p;
     const height = 44 + (bounds.height - 44) * p;
     const round = Math.sin(Math.PI * Math.max(0, Math.min(1, p)));
@@ -120,7 +136,27 @@ export function MorphingSurface({
   const content = useAnimatedStyle(() => ({
     opacity: reduced
       ? fade.get()
-      : interpolate(size.get(), [0.7, 1], [0, 1], "clamp"),
+      : slideFromBottom
+        ? interpolate(mass.get(), [0, 0.18], [0, 1], "clamp")
+        : interpolate(size.get(), [0.7, 1], [0, 1], "clamp"),
+  }));
+  const rise = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateY: reduced
+          ? 0
+          : (bounds.height + bottomInset + 24) * (1 - mass.get()),
+      },
+    ],
+  }));
+  const fixedContent = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateX: reduced
+          ? 0
+          : -8 * (1 - Math.max(0, Math.min(1, size.get()))),
+      },
+    ],
   }));
   return (
     <View
@@ -133,32 +169,76 @@ export function MorphingSurface({
         );
       }}
     >
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          {
-            position: "absolute",
-            left: 0,
-            top: 0,
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.line,
-            boxShadow: "0 8px 36px #00000025",
-          },
-          silhouette,
-        ]}
-      />
-      <Animated.View
-        pointerEvents={open ? "auto" : "none"}
-        accessibilityElementsHidden={!open}
-        importantForAccessibility={open ? "auto" : "no-hide-descendants"}
-        style={[
-          { flexGrow: 1, flexShrink: 1, borderRadius: 28, overflow: "hidden" },
-          content,
-        ]}
-      >
-        {children}
-      </Animated.View>
+      {slideFromBottom ? (
+        <Animated.View style={[{ flex: 1 }, rise]}>
+          <Animated.View
+            style={[
+              {
+                position: "absolute",
+                left: 0,
+                top: 0,
+                backgroundColor: colors.surface,
+                borderWidth: 1,
+                borderColor: colors.line,
+                boxShadow: "0 8px 36px #00000025",
+                overflow: "hidden",
+              },
+              silhouette,
+            ]}
+          >
+            <Animated.View
+              pointerEvents={open ? "auto" : "none"}
+              accessibilityElementsHidden={!open}
+              importantForAccessibility={open ? "auto" : "no-hide-descendants"}
+              style={[
+                {
+                  position: "absolute",
+                  width: bounds.width,
+                  height: bounds.height,
+                },
+                fixedContent,
+                content,
+              ]}
+            >
+              {children}
+            </Animated.View>
+          </Animated.View>
+        </Animated.View>
+      ) : (
+        <>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              {
+                position: "absolute",
+                left: 0,
+                top: 0,
+                backgroundColor: colors.surface,
+                borderWidth: 1,
+                borderColor: colors.line,
+                boxShadow: "0 8px 36px #00000025",
+              },
+              silhouette,
+            ]}
+          />
+          <Animated.View
+            pointerEvents={open ? "auto" : "none"}
+            accessibilityElementsHidden={!open}
+            importantForAccessibility={open ? "auto" : "no-hide-descendants"}
+            style={[
+              {
+                flexGrow: 1,
+                flexShrink: 1,
+                borderRadius: 28,
+                overflow: "hidden",
+              },
+              content,
+            ]}
+          >
+            {children}
+          </Animated.View>
+        </>
+      )}
     </View>
   );
 }

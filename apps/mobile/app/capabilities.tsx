@@ -67,6 +67,7 @@ export default function Capabilities() {
   );
   return (
     <Page>
+      <Row title="Manage connectors and plugins" icon="puzzlepiece.extension" onPress={() => router.push({ pathname: "/integrations", params: { threadId, projectId, provider } })} />
       <Field
         label="Search"
         placeholder={

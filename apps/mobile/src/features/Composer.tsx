@@ -50,6 +50,7 @@ function contextLabel(part: ContentPart) {
 export const Composer = memo(function Composer({
   thread,
   onSend,
+  onSteer,
   onStop,
   disabled,
   prompt,
@@ -57,6 +58,7 @@ export const Composer = memo(function Composer({
 }: {
   thread?: Thread | null;
   onSend: (message: UserMessage) => Promise<void>;
+  onSteer?: (message: UserMessage) => Promise<void>;
   onStop?: () => void;
   disabled?: boolean;
   prompt?: string;
@@ -99,6 +101,7 @@ export const Composer = memo(function Composer({
     }
   }, [contextParts, thread?.id]);
   const [busy, setBusy] = useState(false);
+  const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const input = useRef<TextInput>(null);
@@ -112,6 +115,7 @@ export const Composer = memo(function Composer({
   }, [prompt]);
   const running =
     thread?.status === "running" || thread?.status === "awaiting-approval";
+  const steering = running && !!onSteer && promptMode === "steer";
   async function send() {
     if (busy || uploading || (!text.trim() && !attachments.length)) return;
     setBusy(true);
@@ -125,7 +129,7 @@ export const Composer = memo(function Composer({
             })
           ).skills
         : [];
-      await onSend({
+      await (steering ? onSteer! : onSend)({
         parts: [
           ...attachments,
           ...buildStructuredTextParts(text, new Set(), skillItems),
@@ -424,12 +428,21 @@ export const Composer = memo(function Composer({
           boxShadow: `0 3px 12px ${colors.backdrop.slice(0, 7)}08`,
         }}
       >
+        {running && onSteer && <View style={[styles.line, { gap: 6, paddingHorizontal: 8 }]}>
+          {(["queue", "steer"] as const).map((mode) => <Tap key={mode}
+            label={mode === "queue" ? "Queue follow-up" : "Steer now"}
+            selected={promptMode === mode}
+            disabled={busy} onPress={() => setPromptMode(mode)}
+            style={{ paddingHorizontal: 12, minHeight: 44, justifyContent: "center", borderRadius: 14, backgroundColor: promptMode === mode ? colors.background : "transparent" }}>
+            <T variant="caption" tone={promptMode === mode ? undefined : "secondary"}>{mode === "queue" ? "Queue follow-up" : "Steer now"}</T>
+          </Tap>)}
+        </View>}
         <TextInput
           underlineColorAndroid="transparent"
           ref={input}
           accessibilityLabel={running ? "Follow-up message" : "Message"}
           placeholder={
-            running ? "Add a follow-up…" : "Ask Kybern to build something…"
+            steering ? "Guide the current turn…" : running ? "Add a follow-up…" : "Ask Kybern to build something…"
           }
           placeholderTextColor={colors.muted}
           value={text}
@@ -476,8 +489,8 @@ export const Composer = memo(function Composer({
                 />
               )}
               <IconButton
-                name={running ? "arrow.turn.down.right" : "arrow.up"}
-                label={running ? "Queue follow-up" : "Send message"}
+                name={running && !steering ? "arrow.turn.down.right" : "arrow.up"}
+                label={steering ? "Steer now" : running ? "Queue follow-up" : "Send message"}
                 filled
                 onPress={() => void send()}
                 disabled={
@@ -495,7 +508,7 @@ export const Composer = memo(function Composer({
         <T variant="caption" tone="secondary">
           {uploading
             ? "Attaching files…"
-            : running
+            : steering ? "Steering…" : running
               ? "Queueing follow-up…"
               : "Sending…"}
         </T>

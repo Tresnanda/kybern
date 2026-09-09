@@ -215,6 +215,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .map_err(internal)?;
             let (transcript, next_before_seq) = kybern_store::transcript_page(transcript, p.transcript_limit, p.before_seq);
             ok(ThreadsGetResult {
+                notes: state.store.thread_notes(thread.id).map_err(internal)?,
                 thread,
                 transcript,
                 next_before_seq,
@@ -246,6 +247,17 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 if msg.contains("busy") { RpcError::new(codes::THREAD_BUSY, msg) } else { bad(e) }
             })?;
             ok(ThreadsSendResult { turn_id, message_id })
+        }
+        ThreadsSteer::NAME => ok(state.orchestrator.steer(parse(params)?).await.map_err(bad)?),
+        ThreadNotesGet::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| bad(anyhow::anyhow!("Thread not found.")))?;
+            ok(state.store.thread_notes(p.thread_id).map_err(internal)?)
+        }
+        ThreadNotesSet::NAME => ok(state.orchestrator.set_notes(parse(params)?).map_err(bad)?),
+        QueueUpdate::NAME => {
+            state.orchestrator.update_queued(parse(params)?).map_err(bad)?;
+            ok(Empty {})
         }
         QueueAdd::NAME => {
             state.orchestrator.enqueue(parse(params)?).map_err(bad)?;
@@ -438,6 +450,21 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             ok(crate::files::read_file(std::path::Path::new(&project.path), &p.path, p.max_bytes).await.map_err(bad)?)
         }
+        ArtifactsList::NAME => {
+            let p: ArtifactsListParams = parse(params)?;
+            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let limit = p.limit.clamp(1, 100) as usize;
+            let mut artifacts = state.store.artifact_calls(p.thread_id, p.before_seq, limit as u32 + 1).map_err(internal)?;
+            let more = artifacts.len() > limit;
+            artifacts.truncate(limit);
+            let next_before_seq = more.then(|| artifacts.last().unwrap().seq);
+            ok(ArtifactsListResult { artifacts, next_before_seq })
+        }
+        ArtifactRead::NAME => ok(crate::artifacts::read(state, parse(params)?).await.map_err(bad)?),
+        ArtifactPreview::NAME => ok(ArtifactPreviewResult { ticket: crate::artifacts::issue(state, parse(params)?).await.map_err(bad)? }),
+        IntegrationsList::NAME => ok(crate::integrations::list(state, parse(params)?).await.map_err(bad)?),
+        IntegrationChange::NAME => ok(crate::integrations::change(state, parse(params)?).await.map_err(bad)?),
+        IntegrationLogin::NAME => ok(crate::integrations::login(state, parse(params)?).await.map_err(bad)?),
         SkillsList::NAME => {
             let p: SkillsListParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
@@ -445,7 +472,19 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let provider_settings = state.settings.get().providers.get(&p.provider).cloned().unwrap_or_default();
             let binary = provider_settings.binary.as_ref().map(std::path::PathBuf::from);
             let skills = match p.provider {
-                ProviderKind::Codex => match kybern_drivers::codex::discover_skills(cwd, binary.as_ref()).await {
+                ProviderKind::ClaudeCode => {
+                    let mut skills = crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?;
+                    let context = kybern_drivers::ProbeContext {
+                        binary: binary.clone(),
+                        cwd: Some(cwd.to_path_buf()),
+                        env: provider_settings.env.clone(),
+                    };
+                    if let Ok(roots) = kybern_drivers::claude_integrations::skill_roots(&context).await {
+                        skills.extend(crate::skills::plugin_skills(roots).await.map_err(internal)?);
+                    }
+                    skills
+                }
+                ProviderKind::Codex => match kybern_drivers::codex::discover_skills(cwd, binary.as_ref(), &provider_settings.env).await {
                     Some(skills) => skills,
                     None => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
                 },

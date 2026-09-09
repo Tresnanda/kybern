@@ -56,7 +56,7 @@ export type Connection =
   | { state: "reconnecting"; detail?: string }
   | { state: "failed"; detail: string }
 
-export type RightTab = "activity" | "changes" | "terminal" | "explorer"
+export type RightTab = "activity" | "changes" | "terminal" | "explorer" | "artifacts"
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {
@@ -74,6 +74,8 @@ export interface TerminalTab {
   /** Stable daemon PTY; detaching a view leaves the process running. */
   terminalId?: string
   daemonStartedAt?: string
+  /** A provider sign-in process created before this tab was opened. */
+  connectorLogin?: boolean
 }
 
 export interface QueuedMessage {
@@ -123,7 +125,7 @@ export interface AppState {
   sessionsProjectId: ProjectId | null
   paletteOpen: boolean
   settingsOpen: boolean
-  settingsTab: "general" | "agents" | "appearance" | "usage" | "about"
+  settingsTab: "general" | "agents" | "integrations" | "appearance" | "usage" | "about"
   collapsedProjects: Record<ProjectId, boolean>
   /** Messages waiting for the current turn to finish, per thread. */
   queued: Record<ThreadId, QueuedMessage[]>
@@ -637,7 +639,9 @@ export function sortRuntimeTasks(input: RuntimeTask[]): RuntimeTask[] {
     for (const task of tasks) {
       const parent =
         task.parent_id && ids.has(task.parent_id) ? task.parent_id : null
-      children.set(parent, [...(children.get(parent) ?? []), task])
+      const siblings = children.get(parent)
+      if (siblings) siblings.push(task)
+      else children.set(parent, [task])
     }
     const compare = (left: RuntimeTask, right: RuntimeTask) => {
       const leftSeq = newestFirst ? left.updated_seq : left.started_seq
@@ -718,6 +722,21 @@ export function mergeRuntimeTasks(
       merged.set(task.id, task)
   }
   return sortRuntimeTasks([...merged.values()])
+}
+
+/** Keep settled turns subscribed only to work they launched. An unrelated
+ * process metric must not rebuild their work hierarchy or Markdown props. */
+export function createTurnTasksSelector(threadId: ThreadId, turnId: TurnId) {
+  let source: RuntimeTask[] | undefined
+  let selected: RuntimeTask[] = []
+  return (state: { runtimeTasks: Record<ThreadId, RuntimeTask[]> }) => {
+    const next = state.runtimeTasks[threadId]
+    if (next === source) return selected
+    source = next
+    const tasks = next?.filter((task) => task.origin_turn_id === turnId) ?? []
+    if (tasks.length !== selected.length || tasks.some((task, index) => task !== selected[index])) selected = tasks
+    return selected
+  }
 }
 
 export function summarizeRuntimeTasks(

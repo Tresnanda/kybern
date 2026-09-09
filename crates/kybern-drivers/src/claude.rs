@@ -133,6 +133,7 @@ impl AgentDriver for ClaudeDriver {
             cmd.args(["--effort", effort]);
         }
         cmd.env_remove("NODE_OPTIONS");
+        cmd.env("CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "0");
         for (k, v) in &config.env {
             cmd.env(k, v);
         }

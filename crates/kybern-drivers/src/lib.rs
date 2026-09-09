@@ -8,7 +8,9 @@
 pub mod binary;
 pub mod claude;
 mod claude_config;
+pub mod claude_integrations;
 pub mod codex;
+pub mod codex_integrations;
 pub mod cursor;
 mod ndjson;
 pub mod opencode;
@@ -239,7 +241,9 @@ pub trait AgentSession: Send + Sync {
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()>;
     /// Deliver explicit user input to the current turn without interrupting it.
     async fn steer(&self, _message_id: &str, _message: &UserMessage) -> Result<()> {
-        Err(DriverError::Unsupported("This harness does not support answering during a turn. Try again when it finishes.".into()))
+        Err(DriverError::Unsupported(
+            "This harness does not support input during a turn. Queue your message or try again when it finishes.".into(),
+        ))
     }
     /// Initiate native compaction; report completion through the usual turn events.
     async fn compact(&self) -> Result<()> {

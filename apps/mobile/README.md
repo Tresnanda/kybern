@@ -67,6 +67,42 @@ Provider capabilities and installed tools determine which actions are available.
 Handoff starts a new agent conversation from the source transcript in the project;
 it does not transfer a running agent process or an uncommitted worktree.
 
+## Connectors and artifacts
+
+Choose **Connectors and plugins** from a conversation’s menu, or **Manage
+connectors and plugins** from the capability picker. The selected computer owns
+the provider catalog and credentials. Claude sign-in opens its existing terminal;
+use the sign-in link and paste the redirect URL when prompted. Codex connector
+setup opens the provider’s browser page. Provider installation restrictions and
+plugin scopes are preserved.
+
+Choose **Artifacts** from the conversation menu to preview a generated file,
+request Claude publication, or reopen/republish a native publication. The HTML/SVG
+WebView receives only a short-lived preview URL and no daemon credentials.
+Source/preview switching retains the same document and interactive state.
+Local HTML/SVG previews block network access; live connectors, sharing, and
+version history belong to the hosted Claude page opened by **Share and versions**.
+Publishing runs as a regular Claude turn, so pending approvals remain visible in
+the conversation. These controls require a daemon with the integrations/artifacts
+RPCs; an older daemon reports an unsupported-method error.
+
+## Notes and follow-ups
+
+Open **Notes** from the conversation’s environment menu to keep reminders and
+things to do. Use **Save notes** to sync them with the desktop. Notes belong to
+the conversation and are not sent to the agent. Conflicting edits from another
+device preserve the local draft; copy it before choosing **Reload saved notes**.
+Unsaved mobile drafts survive navigation within the current app session.
+
+During a turn, **Queue follow-up** sends the prompt after the current work
+finishes. Queued prompts can be edited or removed; editing preserves their
+position and attached context. For Codex, **Steer now** delivers input within the
+current turn through its native steering API. Other providers retain queuing.
+Failed submissions retain the composer text. Stop remains a separate action.
+
+These features require the accompanying daemon changes as well as the new
+mobile JavaScript bundle. Updating only the phone does not update the daemon.
+
 ## Implementation
 
 - `app/`: native routes and screens.
@@ -185,7 +221,9 @@ minimum touch targets.
 Android menus, dialogs, and picker sheets use opaque themed surfaces, following
 the liquid-gooey motion model. Dialogs and sheets share the menu's mass and size
 springs; content stays unscaled, and dialog actions and navigation removal wait
-for the exit to finish. Sheets dismiss with Back, the close button, the backdrop, or a header drag.
+for the exit to finish. Picker sheets rise from below the display, with the panel's
+motion leading a small outline and corner adjustment. Sheets dismiss with Back,
+the close button, the backdrop, or a header drag.
 `src/ui/Alert.tsx` provides confirmations and editable prompts, `Toggle.tsx`
 provides the shaped toggle, and `AndroidNavigation.tsx` provides custom headers
 and sheets. Loading and pull-to-refresh visuals are custom too. Use these shared
@@ -203,6 +241,11 @@ commits. Completed paragraphs keep their native views, while completion, changes
 to existing text, reduced motion, backgrounding and offscreen rows catch up without
 a reveal delay. See [the mobile cadence check](perf/streaming-2026-09-09.md) for
 reproducible measurements and their limits.
+
+Recent conversations stay in a bounded memory cache while the app is open.
+Reopening an unchanged thread avoids another download; closed-thread updates and
+reconnects keep the cached text visible while a background request catches up.
+Switching computers clears the cache. See [cache and sheet verification](perf/cache-and-sheets-2026-09-09.md).
 
 ## EAS
 

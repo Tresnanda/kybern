@@ -4,6 +4,7 @@ import { AppState, Platform } from "react-native";
 import { createNativeSocket } from "./nativeSocket";
 import { setDraft } from "./draft";
 import { applyIndexEvent } from "./indexProjection";
+import { ThreadCache } from "./threadCache";
 import {
   KybernClient,
   httpBase,
@@ -67,7 +68,7 @@ let notifyTimer: ReturnType<typeof setTimeout> | undefined;
 const changedThreads = new Set<string>();
 let activityTimer: ReturnType<typeof setTimeout> | undefined;
 let refreshPromise: Promise<void> | null = null;
-const snapshots = new Map<string, ThreadState>();
+const snapshots = new ThreadCache<ThreadState>();
 const empty = emptyThreadState();
 const threadListeners = new Map<string, Set<() => void>>();
 const hydrating = new Map<string, ThreadEvent[]>();
@@ -88,7 +89,6 @@ function publish(patch: Partial<State>) {
   listeners.forEach((fn) => fn());
 }
 function publishThread(id: string, value: ThreadState) {
-  snapshots.delete(id);
   snapshots.set(id, value);
   trimSnapshots();
   changedThreads.add(id);
@@ -101,11 +101,10 @@ function publishThread(id: string, value: ThreadState) {
   }, 32);
 }
 function trimSnapshots() {
-  for (const id of snapshots.keys()) {
-    if (snapshots.size <= CACHED_THREADS) break;
-    if (!threadListeners.has(id) && !loads.has(id) && !historyLoads.has(id))
-      snapshots.delete(id);
-  }
+  snapshots.trim(
+    CACHED_THREADS,
+    (id) => threadListeners.has(id) || loads.has(id) || historyLoads.has(id),
+  );
 }
 export function useApp() {
   return useSyncExternalStore(
@@ -345,7 +344,8 @@ export function connect(id: string | null) {
   refreshPromise = null;
   client?.close();
   client = null;
-  snapshots.clear();
+  if (state.activeId === id) snapshots.invalidateAll();
+  else snapshots.clear();
   loads.clear();
   historyLoads.clear();
   hydrating.clear();
@@ -375,9 +375,8 @@ export function connect(id: string | null) {
     publish({ status, error: status === "open" ? null : (detail ?? null) });
     if (status !== "open") {
       subscriptionReady = false;
-      // Unobserved cached threads cannot reconcile events missed while offline.
-      for (const key of snapshots.keys())
-        if (!threadListeners.has(key)) snapshots.delete(key);
+      // Keep cached content visible; revalidate after the subscription resumes.
+      snapshots.invalidateAll();
     }
   });
   next.subscribeEvents(
@@ -387,9 +386,14 @@ export function connect(id: string | null) {
       hydrating.get(event.thread_id)?.push(event);
       historyLoads.get(event.thread_id)?.events.push(event);
       const snapshot = snapshots.get(event.thread_id);
-      if (snapshot?.loaded && threadListeners.has(event.thread_id))
+      if (
+        snapshot?.loaded &&
+        !snapshots.isStale(event.thread_id) &&
+        threadListeners.has(event.thread_id)
+      )
         publishThread(event.thread_id, applyEvent(snapshot, event));
-      else if (snapshot) snapshots.delete(event.thread_id);
+      else if (snapshot && !hydrating.has(event.thread_id))
+        snapshots.invalidate(event.thread_id);
       if (
         event.kind === "runtime_task_started" ||
         event.kind === "runtime_task_updated" ||
@@ -495,6 +499,8 @@ export async function loadThread(id: string) {
   if (loads.has(id)) return loads.get(id)!;
   historyLoads.delete(id);
   const epoch = generation;
+  const revision = snapshots.revision(id);
+  let superseded = false;
   const buffer: ThreadEvent[] = [];
   hydrating.set(id, buffer);
   const previous = snapshots.get(id);
@@ -515,18 +521,25 @@ export async function loadThread(id: string) {
           snapshots.get(id) ?? previous,
         );
       publishThread(id, snapshot);
+      superseded = !snapshots.markFresh(id, revision);
     })
     .finally(() => {
       if (epoch === generation) {
         loads.delete(id);
         hydrating.delete(id);
+        trimSnapshots();
+        // A reconnect may have acknowledged a new subscription while this old
+        // request was pending. Catch up once more without clearing visible rows.
+        if (superseded && subscriptionReady && threadListeners.has(id))
+          void ensureThread(id).catch((e) => publish({ error: errorText(e) }));
       }
     });
   loads.set(id, request);
   return request;
 }
 export async function ensureThread(id: string) {
-  if (!snapshots.get(id)?.loaded) await loadThread(id);
+  snapshots.touch(id);
+  if (!snapshots.get(id)?.loaded || snapshots.isStale(id)) await loadThread(id);
 }
 
 export async function loadEarlier(id: string) {

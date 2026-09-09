@@ -73,6 +73,20 @@ impl TerminalManager {
         rows: u16,
         command: Option<Vec<String>>,
     ) -> Result<Arc<Terminal>> {
+        self.create_with_env(requested_id, thread_id, cwd, cols, rows, command, &Default::default())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_env(
+        &self,
+        requested_id: Option<TerminalId>,
+        thread_id: Option<ThreadId>,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+        command: Option<Vec<String>>,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Arc<Terminal>> {
         let _create = self.create_lock.lock().unwrap();
         let id = requested_id.unwrap_or_else(Uuid::now_v7);
         if let Some(existing) = self.get(id) {
@@ -97,6 +111,9 @@ impl TerminalManager {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("KYBERN", "1");
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
         let child = pair.slave.spawn_command(cmd).with_context(|| format!("spawn {program}"))?;
         drop(pair.slave);
 

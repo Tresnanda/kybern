@@ -46,7 +46,7 @@ export const COMPOSER_STACKED_PANEL_LABEL_CLASS_NAME = "truncate font-medium tex
 
 /**
  * Queued follow-up preview rendered through the shared `ChatMarkdown` pipeline so it parses
- * exactly like assistant messages and the recap (mentions, inline code, emphasis, links).
+ * exactly like assistant messages (mentions, inline code, emphasis, links).
  * Keeps the queue label tone/weight and clamps to one row so raw prompts cannot expand the panel.
  */
 export const COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME = [
