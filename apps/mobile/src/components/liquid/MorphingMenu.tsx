@@ -38,7 +38,7 @@ export type MenuOrigin = {
 };
 import { MASS, SIZE } from "./motion";
 const SPEED = 2;
-const EXIT = {
+const ATTACHMENT_EXIT = {
   duration: 220,
   easing: Easing.bezier(0.4, 0, 0.2, 1),
   reduceMotion: ReduceMotion.System,
@@ -54,6 +54,7 @@ export function MorphingMenu({
   sourceIcon = "ellipsis",
   dismissLabel = "Dismiss thread menu",
   preferredWidth = 272,
+  closingMotion = "spring",
 }: {
   origin: MenuOrigin;
   open: boolean;
@@ -64,6 +65,7 @@ export function MorphingMenu({
   sourceIcon?: IconName;
   dismissLabel?: string;
   preferredWidth?: number;
+  closingMotion?: "spring" | "attachment";
 }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -119,29 +121,41 @@ export function MorphingMenu({
   const corners = useSharedValue(0);
   const fade = useSharedValue(0);
   const ready = shown && contentHeight > 0;
+  const attachmentExit = closingMotion === "attachment";
   useEffect(() => {
     if (!ready) return;
-    center.set(open ? withSpring(1, MASS) : withTiming(0, EXIT));
+    // The attachment menu needs a bounded return before opening its picker.
+    // Other menus retain their original leading-mass/following-size springs.
+    const boundedExit = !open && attachmentExit;
+    center.set(
+      boundedExit
+        ? withTiming(0, ATTACHMENT_EXIT)
+        : withSpring(open ? 1 : 0, MASS),
+    );
     corners.set(
       withTiming(open ? 1 : 0, {
-        duration: open ? 460 / SPEED : EXIT.duration,
-        easing: open ? Easing.bezier(0.3, 1.05, 0.4, 1) : EXIT.easing,
+        duration: boundedExit ? ATTACHMENT_EXIT.duration : 460 / SPEED,
+        easing: boundedExit
+          ? ATTACHMENT_EXIT.easing
+          : Easing.bezier(0.3, 1.05, 0.4, 1),
         reduceMotion: ReduceMotion.System,
       }),
     );
     size.set(
-      open
-        ? withSpring(1, SIZE)
-        : withTiming(0, EXIT, (finished) => {
+      boundedExit
+        ? withTiming(0, ATTACHMENT_EXIT, (finished) => {
             if (finished && !reduced) scheduleOnRN(onClosed);
+          })
+        : withSpring(open ? 1 : 0, SIZE, (finished) => {
+            if (finished && !open && !reduced) scheduleOnRN(onClosed);
           }),
     );
     fade.set(
       withTiming(
         open ? 1 : 0,
         {
-          duration: open || reduced ? 140 : EXIT.duration,
-          easing: EXIT.easing,
+          duration: boundedExit && !reduced ? ATTACHMENT_EXIT.duration : 140,
+          ...(attachmentExit ? { easing: ATTACHMENT_EXIT.easing } : {}),
           reduceMotion: ReduceMotion.Never,
         },
         (finished) => {
@@ -149,7 +163,7 @@ export function MorphingMenu({
         },
       ),
     );
-  }, [open, ready, reduced, center, size, corners, fade, onClosed]);
+  }, [open, ready, reduced, attachmentExit, center, size, corners, fade, onClosed]);
   const geometry = useDerivedValue(() => {
     const p = reduced ? 1 : size.get();
     const c = reduced ? 1 : center.get();
@@ -195,25 +209,27 @@ export function MorphingMenu({
     opacity: reduced
       ? fade.get()
       : Math.min(
-          open ? fade.get() : 1,
+          attachmentExit && open ? fade.get() : 1,
           interpolate(size.get(), [0.45, 0.9], [0, 1], "clamp"),
         ),
   }));
   const materialStyle = useAnimatedStyle(() => ({
-    // Keep the returning silhouette visible. Fade surface and shadow together
-    // only when it reaches the source, before the bounded exit unmounts it.
+    // Only the attachment return fades at its source before the bounded exit.
+    // Standard menus preserve the original material through spring completion.
     opacity: reduced
       ? fade.get()
-      : open
+      : open || !attachmentExit
         ? 1
         : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
   }));
   const dotStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? 0
-      : (open
-          ? fade.get()
-          : interpolate(size.get(), [0, 0.12], [0, 1], "clamp")) *
+      : (attachmentExit
+          ? open
+            ? fade.get()
+            : interpolate(size.get(), [0, 0.12], [0, 1], "clamp")
+          : 1) *
         interpolate(size.get(), [0, 0.25], [1, 0], "clamp"),
   }));
   const menuContents = (

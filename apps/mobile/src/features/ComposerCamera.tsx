@@ -15,6 +15,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   ReduceMotion,
+  Easing,
+  cancelAnimation,
   interpolate,
   useAnimatedStyle,
   useReducedMotion,
@@ -61,6 +63,7 @@ export function ComposerCamera({
   const outline = useSharedValue(0);
   const fade = useSharedValue(0);
   const flight = useSharedValue(0);
+  const dismissal = useSharedValue(0);
   const destination = useSharedValue<SendRect | null>(null);
   const previewWidth = Math.min(width - 24, 440);
   const previewHeight = Math.min(
@@ -97,22 +100,28 @@ export function ComposerCamera({
     if (locked.current) return;
     locked.current = true;
     setClosing(true);
-    position.set(withSpring(0, { duration: 300, dampingRatio: 1 }));
-    outline.set(
-      withSpring(0, { duration: 300, dampingRatio: 1 }, (done) => {
-        if (done && !reduced) scheduleOnRN(onClosed);
-      }),
-    );
+    cancelAnimation(position);
+    cancelAnimation(outline);
+    if (!reduced)
+      dismissal.set(
+        withTiming(
+          1,
+          { duration: 260, easing: Easing.bezier(0.32, 0.72, 0, 1) },
+          (done) => {
+            if (done) scheduleOnRN(onClosed);
+          },
+        ),
+      );
     fade.set(
       withTiming(
         0,
-        { duration: reduced ? 140 : 300, reduceMotion: ReduceMotion.Never },
+        { duration: 140, reduceMotion: ReduceMotion.Never },
         (done) => {
           if (done && reduced) scheduleOnRN(onClosed);
         },
       ),
     );
-  }, [position, outline, fade, reduced, onClosed]);
+  }, [position, outline, dismissal, fade, reduced, onClosed]);
   async function capture() {
     if (locked.current || !ready || !foreground) return;
     locked.current = true;
@@ -178,12 +187,15 @@ export function ComposerCamera({
     const s = reduced ? 1 : Math.max(0, outline.get());
     const w = origin.width + (preview.width - origin.width) * s;
     const h = origin.height + (preview.height - origin.height) * s;
+    const y =
+      origin.y + origin.height / 2 +
+      (preview.y + preview.height / 2 - origin.y - origin.height / 2) * p - h / 2;
     return {
       width: w,
       height: h,
       opacity: destination.get()
         ? 0
-        : reduced || (closing && photo)
+        : reduced || (closing && busy && photo)
           ? fade.get()
           : 1,
       borderRadius: 36 + Math.sin(Math.PI * Math.min(1, s)) * 12,
@@ -196,12 +208,7 @@ export function ComposerCamera({
             w / 2,
         },
         {
-          translateY:
-            origin.y +
-            origin.height / 2 +
-            (preview.y + preview.height / 2 - origin.y - origin.height / 2) *
-              p -
-            h / 2,
+          translateY: y + dismissal.get() * (height - y + 16),
         },
       ],
     };

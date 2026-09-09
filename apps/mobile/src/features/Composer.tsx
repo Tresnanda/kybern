@@ -578,6 +578,7 @@ export const Composer = memo(function Composer({
           placement="above"
           preferredWidth={224}
           sourceIcon="plus"
+          closingMotion="attachment"
           dismissLabel="Dismiss attachment menu"
           onClose={() => setAdding(false)}
           onClosed={finishAddClose}
@@ -868,7 +869,9 @@ export const Composer = memo(function Composer({
             ref={input}
             accessibilityLabel={running ? "Follow-up message" : "Message"}
             placeholder={
-              steering
+              departed && sendTransition.flight
+                ? ""
+                : steering
                 ? "Guide the current turn…"
                 : running
                   ? "Ask for follow-up changes…"

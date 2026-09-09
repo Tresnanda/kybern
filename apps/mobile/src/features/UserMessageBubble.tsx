@@ -51,18 +51,19 @@ export function UserMessageBubble({
     !!flight && matchesSend(flight, threadId, block.id, block.message);
   const measure = useCallback(async () => {
     if (!matching || !flight || flight.destination) return;
-    const bounds = await measureSendView(bubble.current);
-    if (!bounds || bounds.y + bounds.height <= 0 || bounds.y >= height) {
-      return;
-    }
+    // Measure the complete destination together. Serial bridge round trips
+    // sampled different keyboard frames and left the source waiting in midair.
+    const entries = [...parts.current];
+    const [bounds, surface, ...rects] = await Promise.all([
+      measureSendView(bubble.current),
+      measureSendView(textSurface.current),
+      ...entries.map(([, view]) => measureSendView(view)),
+    ]);
+    if (!bounds || bounds.y + bounds.height <= 0 || bounds.y >= height) return;
     const measured: Record<string, SendRect> = {};
-    await Promise.all(
-      [...parts.current].map(async ([key, view]) => {
-        const rect = await measureSendView(view);
-        if (rect) measured[key] = rect;
-      }),
-    );
-    const surface = await measureSendView(textSurface.current);
+    rects.forEach((rect, index) => {
+      if (rect) measured[entries[index]![0]] = rect;
+    });
     land(flight.id, {
       bubble: bounds,
       surface: surface ?? undefined,
@@ -72,10 +73,7 @@ export function UserMessageBubble({
   }, [matching, flight, height, land]);
   useEffect(() => {
     if (!matching) return;
-    const frame = requestAnimationFrame(() => {
-      void measure();
-    });
-    return () => cancelAnimationFrame(frame);
+    void measure();
   }, [matching, measure]);
   const images = block.message.parts
     .map((part, index) => ({ part, index }))
