@@ -1,0 +1,14 @@
+diff --git a/android/src/main/java/expo/modules/camera/ExpoCameraView.kt b/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
+index 999a22c6a679042e144acb6caa764c9929103966..a5737674eebbf15daa4f49b4c0975f73af545575 100644
+--- a/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
++++ b/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
+@@ -135,6 +135,9 @@ class ExpoCameraView(
+ 
+   private var previewView = PreviewView(context).apply {
+     elevation = 0f
++    // TextureView participates in its parent's clipping and transforms. The
++    // default SurfaceView can escape a rounded, animated camera panel.
++    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+   }
+   private val scope = CoroutineScope(
+     Dispatchers.Main + SupervisorJob() + CoroutineExceptionHandler { _, throwable ->

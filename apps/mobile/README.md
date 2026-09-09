@@ -182,6 +182,11 @@ An upload failure retains the captured photo for retry. A successful upload
 morphs the preview into its measured attachment thumbnail, which participates in
 the existing acknowledged-message send transition. Reduced motion uses fades.
 The photo picker dependency and permission copy require a new native build.
+Android's camera preview uses a small pinned `expo-camera` patch so the live
+preview respects the animated panel's rounded clipping. Keep the patch and
+`expo.autolinking.android.buildFromSource: ["expo-camera"]` together; prebuilt
+camera binaries do not include local source patches. This change requires a
+new APK and is not delivered by a JavaScript-only update.
 
 Settings opens a compact overview with dedicated pages for appearance, computers,
 thread defaults, agents, usage, background/updates, and access. Computer settings
