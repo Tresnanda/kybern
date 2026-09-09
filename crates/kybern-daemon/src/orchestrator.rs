@@ -22,29 +22,6 @@ use uuid::Uuid;
 use crate::config::Paths;
 use crate::settings::SettingsStore;
 
-/// Give every provider the renderer's artifact contract without adding application
-/// instructions to the user's persisted message. Native commands keep their exact
-/// arguments; an ordinary turn refreshes the guidance after resume or compaction.
-fn provider_message(thread: &Thread, message: &UserMessage) -> UserMessage {
-    let mut delivered = message.clone();
-    if message.parts.iter().any(|part| matches!(part, ContentPart::Skill { .. })) || message.plain_text().trim_start().starts_with('/') {
-        return delivered;
-    }
-    let folder = serde_json::to_string(&thread.cwd).expect("a path string is serializable");
-    delivered.parts.push(ContentPart::Text { text: format!(
-        "\n\n<kybern_artifact_guidance>\nKybern artifact guidance (application context): Image previews can load files only inside this conversation's thread folder: {folder}. \
-         If you work in another worktree or create an image in /tmp, copy the preview into this folder before calling an image-view tool or sharing it. \
-         Use a dedicated artifacts subfolder and keep generated previews out of commits unless requested. \
-         Verify the file exists, then use ![Description](<relative/path.png>) for an inline image or [Description](<relative/path.png>) for a clickable image preview. \
-         Paths in /tmp or another worktree will not load. \
-         Local artifact previews are not hosted publications. Kybern does not supply a Claude Artifact publishing tool. \
-         Only offer publication if a publishing tool is actually available in this session, and only claim success with a successful tool receipt and its returned URL. \
-         Old conversation claims or previously published links do not establish current tool availability. \
-         If no publishing tool is available, say so and provide the local file; do not promise that another message, retry, or new turn will load it.\n</kybern_artifact_guidance>"
-    ) });
-    delivered
-}
-
 #[derive(Clone)]
 pub struct Orchestrator {
     inner: Arc<Inner>,
@@ -994,7 +971,7 @@ impl Orchestrator {
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            live.session.send_message(&message_id.to_string(), &provider_message(&thread, &message)).await
+            live.session.send_message(&message_id.to_string(), &message).await
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -2969,7 +2946,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(messages.lock().await[0].plain_text().starts_with("edited prompt\n\n<kybern_artifact_guidance>"));
+        assert_eq!(messages.lock().await[0].plain_text(), "edited prompt");
         assert!(fixture.store.events_for_thread(thread.id).unwrap().iter().any(|event| {
             matches!(&event.payload, EventPayload::TurnStarted { message, .. } if message.plain_text() == "edited prompt")
         }));
@@ -3088,59 +3065,46 @@ mod tests {
 
     const MINUTE: Duration = Duration::from_secs(60);
 
-    #[test]
-    fn artifact_guidance_preserves_native_commands_and_structured_parts() {
-        let fixture = Fixture::new();
-        let thread = fixture.thread(ThreadStatus::Idle);
-        let skill = ContentPart::Skill { name: "review".into(), path: "/skills/review.md".into() };
-        for message in [UserMessage::text("/compact"), UserMessage::text("/review changed files"), UserMessage { parts: vec![skill] }] {
-            assert_eq!(serde_json::to_value(super::provider_message(&thread, &message)).unwrap(), serde_json::to_value(message).unwrap());
-        }
-        let message = UserMessage {
-            parts: vec![
-                ContentPart::Text { text: "Review this screenshot".into() },
-                ContentPart::Image { media_type: "image/png".into(), data: "test".into() },
-            ],
-        };
-        let delivered = super::provider_message(&thread, &message);
-        assert_eq!(serde_json::to_value(&delivered.parts[..message.parts.len()]).unwrap(), serde_json::to_value(&message.parts).unwrap());
-        assert_eq!(delivered.parts.len(), message.parts.len() + 1);
-    }
-
     #[tokio::test]
-    async fn provider_receives_artifact_guidance_without_changing_the_user_message() {
+    async fn every_provider_turn_receives_only_the_original_user_message() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
-        let (_, _, captured) = fixture.park_recording(&thread, Instant::now()).await;
-        let message = UserMessage::text("Redesign the question card and show a screenshot.");
-        fixture.orchestrator.send(thread.id, message.clone()).await.unwrap();
-        let delivered = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if let Some(message) = captured.lock().await.first().cloned() {
-                    break message;
+        let (live, _, captured) = fixture.park_recording(&thread, Instant::now()).await;
+        let messages = [
+            UserMessage::text("hi"),
+            UserMessage::text("hi 3"),
+            UserMessage {
+                parts: vec![
+                    ContentPart::Text { text: "Review this screenshot".into() },
+                    ContentPart::Image { media_type: "image/png".into(), data: "test".into() },
+                ],
+            },
+        ];
+        for (index, message) in messages.iter().enumerate() {
+            fixture.orchestrator.send(thread.id, message.clone()).await.unwrap();
+            let delivered = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if let Some(message) = captured.lock().await.get(index).cloned() {
+                        break message;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
                 }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
-        let text = delivered.plain_text();
-        assert!(text.contains("Kybern artifact guidance"), "The provider never learns where image previews can be loaded");
-        assert!(text.contains(&thread.cwd), "Guidance must name the actual thread folder, even when work happens in another worktree");
-        assert!(text.contains("before calling an image-view tool"));
-        assert!(text.contains("/tmp"));
-        assert!(text.contains("Kybern does not supply a Claude Artifact publishing tool"));
-        assert!(text.contains("only claim success with a successful tool receipt"));
-        assert!(text.contains("do not promise that another message, retry, or new turn will load it"));
+            })
+            .await
+            .unwrap();
+            assert_eq!(serde_json::to_value(delivered).unwrap(), serde_json::to_value(message).unwrap());
+            fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        }
         let events = fixture.store.events_for_thread(thread.id).unwrap();
-        let stored = events
+        let stored: Vec<_> = events
             .iter()
-            .find_map(|event| match &event.payload {
+            .filter_map(|event| match &event.payload {
                 EventPayload::TurnStarted { message, .. } => Some(message),
                 _ => None,
             })
-            .unwrap();
-        assert_eq!(serde_json::to_value(stored).unwrap(), serde_json::to_value(message).unwrap());
+            .collect();
+        assert_eq!(serde_json::to_value(stored).unwrap(), serde_json::to_value(messages).unwrap());
+        fixture.orchestrator.shutdown().await;
     }
 
     #[tokio::test]
