@@ -149,9 +149,10 @@ export function ComposerControls({
         onPress={() => openOptions("model")}
         style={[
           styles.line,
-          { flex: 1, minWidth: 0, paddingHorizontal: 8, gap: 0 },
+          { flex: 1, minWidth: 0, paddingHorizontal: 8, gap: 6 },
         ]}
       >
+        <ProviderMark kind={kind} size={16} />
         <T variant="caption" numberOfLines={1} style={{ flexShrink: 1 }}>
           {compactModel}
           {effortLabel ? (
