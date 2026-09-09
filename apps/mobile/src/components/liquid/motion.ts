@@ -19,7 +19,7 @@ export const SIZE = {
 // Sheets travel much farther than a menu. The leading position settles first;
 // the outline follows with a little recoil, without scaling its text.
 export const SHEET = {
-  duration: 300,
+  duration: 400,
   dampingRatio: 0.8,
   reduceMotion: ReduceMotion.System,
 };

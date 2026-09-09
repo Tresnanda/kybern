@@ -29,7 +29,7 @@ import { IconButton, T } from "./primitives";
 import { useTheme } from "./theme";
 import { SHEET } from "../components/liquid/motion";
 
-const DETENT = LinearTransition.springify().duration(300).dampingRatio(0.8);
+const DETENT = LinearTransition.springify().duration(400).dampingRatio(0.8);
 
 type ScreenLayoutProps = Parameters<
   NonNullable<ComponentProps<typeof Stack>["screenLayout"]>

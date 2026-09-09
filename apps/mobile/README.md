@@ -173,6 +173,16 @@ context usage, queue/stop controls, and session-specific commands. Permissions,
 model/reasoning, and usage open picker sheets without expanding the input: custom
 morphing surfaces on Android and native sheets on iOS.
 
+The composer's + menu offers Camera, Photos, Files, Plugins, and Project files.
+Photos opens the system photo library. Camera expands from the composer into a
+rounded bottom panel on both platforms, keeping the conversation visible above it.
+Capture and lens controls sit inside the preview, with Retake and Use photo after capture. Camera
+access is requested only from this flow; denied access links to system settings.
+An upload failure retains the captured photo for retry. A successful upload
+morphs the preview into its measured attachment thumbnail, which participates in
+the existing acknowledged-message send transition. Reduced motion uses fades.
+The photo picker dependency and permission copy require a new native build.
+
 Settings opens a compact overview with dedicated pages for appearance, computers,
 thread defaults, agents, usage, background/updates, and access. Computer settings
 load when their page is opened; appearance and saved connections work offline.

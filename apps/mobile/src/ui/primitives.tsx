@@ -9,6 +9,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
   type StyleProp,
   type TextInputProps,
   type TextProps,
@@ -60,10 +61,14 @@ export function Icon({
   color?: string;
 }) {
   const { colors } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  // Android SymbolView renders scalable Text inside fixed icon bounds.
+  // Keep the glyph at its requested size while surrounding labels scale.
+  const symbolSize = Platform.OS === "android" ? size / fontScale : size;
   return (
     <SymbolView
       name={{ ios: name, android: androidIcons[name], web: androidIcons[name] }}
-      size={size}
+      size={symbolSize}
       tintColor={color ?? colors.ink}
       weight="regular"
       style={{ width: size, height: size }}

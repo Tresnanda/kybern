@@ -27,6 +27,7 @@ import Animated, {
 import { scheduleOnRN } from "react-native-worklets";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Icon } from "../../ui/primitives";
+import type { IconName } from "../../ui/icons";
 import { useTheme } from "../../ui/theme";
 
 export type MenuOrigin = {
@@ -45,6 +46,9 @@ export function MorphingMenu({
   onClosed,
   children,
   placement = "below",
+  sourceIcon = "ellipsis",
+  dismissLabel = "Dismiss thread menu",
+  preferredWidth = 272,
 }: {
   origin: MenuOrigin;
   open: boolean;
@@ -52,6 +56,9 @@ export function MorphingMenu({
   onClosed: () => void;
   children: ReactNode;
   placement?: "above" | "below";
+  sourceIcon?: IconName;
+  dismissLabel?: string;
+  preferredWidth?: number;
 }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -59,7 +66,7 @@ export function MorphingMenu({
   const reduced = useReducedMotion();
   const [contentHeight, setContentHeight] = useState(0);
   const [shown, setShown] = useState(false);
-  const menuWidth = Math.min(width - 32, 272);
+  const menuWidth = Math.min(width - 32, preferredWidth);
   const menuX =
     placement === "above"
       ? Math.max(16, Math.min(origin.x, width - 16 - menuWidth))
@@ -176,7 +183,10 @@ export function MorphingMenu({
   const contentStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? fade.get()
-      : interpolate(size.get(), [0.45, 0.9], [0, 1], "clamp"),
+      : Math.min(
+          fade.get(),
+          interpolate(size.get(), [0.45, 0.9], [0, 1], "clamp"),
+        ),
   }));
   const materialStyle = useAnimatedStyle(() => ({
     opacity: reduced ? fade.get() : 1,
@@ -230,7 +240,7 @@ export function MorphingMenu({
           dotStyle,
         ]}
       >
-        <Icon name="ellipsis" />
+        <Icon name={sourceIcon} />
       </Animated.View>
       <Animated.View
         pointerEvents={open ? "auto" : "none"}
@@ -276,7 +286,7 @@ export function MorphingMenu({
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Dismiss thread menu"
+          accessibilityLabel={dismissLabel}
           onPress={onClose}
           style={StyleSheet.absoluteFill}
         />

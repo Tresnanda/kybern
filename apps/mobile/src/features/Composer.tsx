@@ -1,5 +1,7 @@
 import { buildStructuredTextParts } from "../../../../packages/kybern-client/src/composerTokens";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
+import { ComposerCamera } from "./ComposerCamera";
 import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
@@ -54,6 +56,7 @@ import {
 } from "../components/liquid/SendTransition";
 import {
   sendPartKey,
+  type SendRect,
   type SendReceipt,
   type SendSource,
 } from "../state/sendTransition";
@@ -107,6 +110,64 @@ export const Composer = memo(function Composer({
     transform: [{ scale: recoil.get() }],
   }));
   const addButton = useRef<View>(null);
+  const composerBounds = useRef<View>(null);
+  const attachmentScroll = useRef<ScrollView>(null);
+  const [cameraOrigin, setCameraOrigin] = useState<SendRect | null>(null);
+  const [landingAsset, setLandingAsset] = useState<string | null>(null);
+  const pendingLanding = useRef<{
+    key: string;
+    resolve: (rect: SendRect | null) => void;
+  } | null>(null);
+  const finishCamera = useCallback(() => {
+    setCameraOrigin(null);
+    setLandingAsset(null);
+  }, []);
+  useEffect(
+    () => () => {
+      pendingLanding.current?.resolve(null);
+      pendingLanding.current = null;
+    },
+    [],
+  );
+  async function openCamera() {
+    Keyboard.dismiss();
+    const rect = await measureSendView(composerBounds.current);
+    if (rect) setCameraOrigin(rect);
+  }
+  async function landPhoto(uri: string): Promise<SendRect | null> {
+    const part = await uploadAttachment({
+      uri,
+      name: `Photo-${Date.now()}.jpg`,
+      mimeType: "image/jpeg",
+    });
+    attachmentUris.current.set(part.asset_id, uri);
+    setLandingAsset(part.asset_id);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingLanding.current = null;
+        resolve(null);
+      }, 1000);
+      pendingLanding.current = {
+        key: sendPartKey(part, 0),
+        resolve: (rect) => {
+          clearTimeout(timer);
+          resolve(rect);
+        },
+      };
+      setAttachments((previous) => [...previous, part]);
+    });
+  }
+  function measureLanding() {
+    const pending = pendingLanding.current;
+    if (!pending) return;
+    void measureSendView(attachmentViews.current.get(pending.key) ?? null).then(
+      (rect) => {
+        if (!rect || pendingLanding.current !== pending) return;
+        pendingLanding.current = null;
+        pending.resolve(rect);
+      },
+    );
+  }
   const [addOrigin, setAddOrigin] = useState<MenuOrigin | null>(null);
   const afterAddClose = useRef<(() => void) | null>(null);
   const finishAddClose = useCallback(() => {
@@ -254,51 +315,95 @@ export const Composer = memo(function Composer({
       setBusy(false);
     }
   }
-  async function attach() {
+  async function uploadAttachment(asset: {
+    uri: string;
+    name: string;
+    mimeType?: string;
+    size?: number;
+  }): Promise<Extract<ContentPart, { type: "attachment" }>> {
     const env = activeEnvironment();
-    if (!env) return;
+    if (!env)
+      throw new Error("Connect your computer, then attach the file again.");
+    const file = new File(asset.uri);
+    if ((asset.size ?? file.size ?? 0) > 25 * 1024 * 1024)
+      throw new Error("Choose a file smaller than 25 MB.");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
-      const picked = await DocumentPicker.getDocumentAsync({
-        multiple: true,
-        copyToCacheDirectory: true,
+      const response = await expoFetch(`${httpBase(env.url)}/assets`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.token}`,
+          "content-type": asset.mimeType ?? "application/octet-stream",
+          "x-kybern-filename": encodeURIComponent(asset.name),
+        },
+        body: file,
+        signal: controller.signal,
       });
+      if (!response.ok)
+        throw new Error(
+          "Unable to attach this file. Check your connection and try again.",
+        );
+      const result = (await response.json()) as {
+        id: string;
+        name: string;
+        media_type: string;
+        size: number;
+      };
+      const current = activeEnvironment();
+      if (current?.url !== env.url || current.token !== env.token)
+        throw new Error(
+          "The connected computer changed. Attach the file again.",
+        );
+      return {
+        type: "attachment",
+        asset_id: result.id,
+        name: result.name,
+        media_type: result.media_type,
+        size: result.size,
+      };
+    } catch (e) {
+      if (controller.signal.aborted)
+        throw new Error(
+          "Upload timed out. Check your connection and try again.",
+        );
+      throw e;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  async function attach(photos = false) {
+    try {
+      const picked = photos
+        ? await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            allowsMultipleSelection: true,
+            quality: 1,
+          })
+        : await DocumentPicker.getDocumentAsync({
+            multiple: true,
+            copyToCacheDirectory: true,
+          });
       if (picked.canceled) return;
       setUploading(true);
       setError("");
       for (const asset of picked.assets) {
-        if ((asset.size ?? 0) > 25 * 1024 * 1024)
-          throw new Error("Choose a file smaller than 25 MB.");
-        const file = new File(asset.uri);
-        const response = await expoFetch(`${httpBase(env.url)}/assets`, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${env.token}`,
-            "content-type": asset.mimeType ?? "application/octet-stream",
-            "x-kybern-filename": encodeURIComponent(asset.name),
-          },
-          body: file,
+        const part = await uploadAttachment({
+          uri: asset.uri,
+          name:
+            "name" in asset
+              ? asset.name
+              : (asset.fileName ?? `Photo-${Date.now()}.jpg`),
+          mimeType: asset.mimeType,
+          size:
+            "size" in asset
+              ? asset.size
+              : "fileSize" in asset
+                ? asset.fileSize
+                : undefined,
         });
-        if (!response.ok)
-          throw new Error(
-            "Unable to attach this file. Check your connection and try again.",
-          );
-        const result = (await response.json()) as {
-          id: string;
-          name: string;
-          media_type: string;
-          size: number;
-        };
-        attachmentUris.current.set(result.id, asset.uri);
-        setAttachments((prev) => [
-          ...prev,
-          {
-            type: "attachment",
-            asset_id: result.id,
-            name: result.name,
-            media_type: result.media_type,
-            size: result.size,
-          },
-        ]);
+        attachmentUris.current.set(part.asset_id, asset.uri);
+        setAttachments((previous) => [...previous, part]);
       }
     } catch (e) {
       setError(errorText(e));
@@ -416,51 +521,86 @@ export const Composer = memo(function Composer({
       }}
     >
       <ErrorBanner error={error} />
+      {cameraOrigin && (
+        <ComposerCamera
+          origin={cameraOrigin}
+          onAttach={landPhoto}
+          onClosed={finishCamera}
+        />
+      )}
       {addOrigin && (
         <MorphingMenu
           origin={addOrigin}
           open={adding}
           placement="above"
+          preferredWidth={224}
+          sourceIcon="plus"
+          dismissLabel="Dismiss attachment menu"
           onClose={() => setAdding(false)}
           onClosed={finishAddClose}
         >
-          <Tap
-            label="Attach a file"
-            onPress={() =>
-              chooseAddAction(() => {
-                void attach();
-              })
-            }
-            style={[styles.line, { paddingHorizontal: 12 }]}
-          >
-            <Icon name="paperclip" size={18} />
-            <T variant="label">Attach a file</T>
-          </Tap>
-          <Tap
-            label="Mention a project file"
-            onPress={() =>
-              chooseAddAction(() => {
-                router.push({
-                  pathname: "/workspace",
-                  params: thread
-                    ? { threadId: thread.id, tab: "Files" }
-                    : { projectId: draft.projectId, tab: "Files" },
-                });
-              })
-            }
-            style={[styles.line, { paddingHorizontal: 12 }]}
-          >
-            <Icon name="folder" size={18} />
-            <T variant="label">Mention a project file</T>
-          </Tap>
-          <Tap
-            label="Skills, plugins, and commands"
-            onPress={() => chooseAddAction(() => openCapabilities())}
-            style={[styles.line, { paddingHorizontal: 12 }]}
-          >
-            <Icon name="sparkles" size={18} />
-            <T variant="label">Skills, plugins & commands</T>
-          </Tap>
+          {(
+            [
+              {
+                label: "Camera",
+                icon: "camera",
+                action: () => {
+                  void openCamera();
+                },
+              },
+              {
+                label: "Photos",
+                icon: "photo",
+                action: () => {
+                  void attach(true);
+                },
+              },
+              {
+                label: "Files",
+                icon: "paperclip",
+                action: () => {
+                  void attach();
+                },
+              },
+              {
+                label: "Plugins",
+                icon: "puzzlepiece.extension",
+                action: () => openCapabilities("Plugins"),
+              },
+              {
+                label: "Project files",
+                icon: "folder",
+                action: () =>
+                  router.push({
+                    pathname: "/workspace",
+                    params: thread
+                      ? { threadId: thread.id, tab: "Files" }
+                      : { projectId: draft.projectId, tab: "Files" },
+                  }),
+              },
+            ] as const
+          ).map((item) => (
+            <Tap
+              key={item.label}
+              label={item.label}
+              onPress={() => chooseAddAction(item.action)}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                gap: 16,
+                minHeight: 48,
+                paddingVertical: 10,
+                paddingHorizontal: 14,
+                borderRadius: 22,
+              }}
+            >
+              <Icon name={item.icon} size={20} />
+              <T variant="label" style={{ flexShrink: 1, fontWeight: "400" }}>
+                {item.label}
+              </T>
+            </Tap>
+          ))}
         </MorphingMenu>
       )}
       {trigger && triggerKey !== dismissed && !disabled && (
@@ -490,7 +630,9 @@ export const Composer = memo(function Composer({
       )}
 
       <Animated.View
-        layout={reduced ? undefined : COMPOSER_REFLOW}
+        ref={composerBounds}
+        collapsable={false}
+        layout={reduced || landingAsset ? undefined : COMPOSER_REFLOW}
         style={[
           composerMotion,
           {
@@ -504,8 +646,19 @@ export const Composer = memo(function Composer({
         ]}
       >
         {attachments.length > 0 && (
-          <Animated.View layout={reduced ? undefined : COMPOSER_REFLOW}>
+          <Animated.View
+            layout={reduced || landingAsset ? undefined : COMPOSER_REFLOW}
+          >
             <ScrollView
+              ref={attachmentScroll}
+              onContentSizeChange={() => {
+                if (pendingLanding.current) {
+                  attachmentScroll.current?.scrollToEnd({ animated: false });
+                  requestAnimationFrame(() =>
+                    requestAnimationFrame(measureLanding),
+                  );
+                }
+              }}
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ gap: 8, padding: 4 }}
@@ -521,8 +674,17 @@ export const Composer = memo(function Composer({
                 return (
                   <Animated.View
                     key={key}
-                    layout={reduced ? undefined : COMPOSER_REFLOW}
-                    entering={ATTACH_ENTER}
+                    style={{
+                      opacity:
+                        part.type === "attachment" &&
+                        part.asset_id === landingAsset
+                          ? 0
+                          : 1,
+                    }}
+                    layout={
+                      reduced || landingAsset ? undefined : COMPOSER_REFLOW
+                    }
+                    entering={landingAsset ? undefined : ATTACH_ENTER}
                     exiting={ATTACH_EXIT}
                   >
                     <Tap
@@ -555,7 +717,11 @@ export const Composer = memo(function Composer({
                           <Image
                             source={source}
                             accessibilityLabel={contextLabel(part)}
-                            style={{ width: 72, height: 72, borderRadius: 16 }}
+                            style={{
+                              width: 72,
+                              height: 72,
+                              borderRadius: 16,
+                            }}
                             resizeMode="contain"
                           />
                         ) : (

@@ -3,7 +3,9 @@
     "name": "Kybern",
     "slug": "kybern-mobile",
     "version": "0.1.1",
-    "runtimeVersion": { "policy": "fingerprint" },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
     "updates": {
       "url": "https://u.expo.dev/8a6031c9-5d00-4377-9114-546bd7736a9d",
       "checkAutomatically": "ON_LOAD",
@@ -25,9 +27,7 @@
     },
     "android": {
       "package": "dev.kybern.mobile",
-      "permissions": [
-        "android.permission.CAMERA"
-      ]
+      "permissions": ["android.permission.CAMERA"]
     },
     "plugins": [
       "expo-router",
@@ -37,7 +37,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Scan a Kybern pairing QR code to connect your computer.",
+          "cameraPermission": "Take photos to attach to messages and scan Kybern pairing codes.",
           "recordAudioAndroid": false,
           "microphonePermission": false
         }
@@ -46,6 +46,14 @@
         "expo-navigation-bar",
         {
           "enforceContrast": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose photos to attach to your messages.",
+          "cameraPermission": "Take photos to attach to messages and scan Kybern pairing codes.",
+          "microphonePermission": false
         }
       ]
     ],
