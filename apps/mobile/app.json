@@ -21,7 +21,7 @@
         "CADisableMinimumFrameDurationOnPhone": true,
         "NSLocalNetworkUsageDescription": "Connect to Kybern on your computer.",
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
+          "NSAllowsArbitraryLoads": true
         }
       }
     },
