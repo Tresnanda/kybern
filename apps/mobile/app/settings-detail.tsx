@@ -32,7 +32,7 @@ import {
 } from "../src/ui/primitives";
 import { useTheme, type Appearance } from "../src/ui/theme";
 
-const titles: Record<string, string> = {
+export const titles: Record<string, string> = {
   appearance: "Appearance",
   computers: "Computers",
   defaults: "Thread defaults",
@@ -41,10 +41,10 @@ const titles: Record<string, string> = {
   system: "Background & updates",
   access: "Access",
 };
-export default function SettingsDetail() {
-  const { category = "appearance" } = useLocalSearchParams<{
-    category: string;
-  }>();
+// The category body, reused by the full-screen route (compact) and the settings
+// master-detail (wide). It renders only its groups so each host supplies its own
+// scroll container and header.
+export function SettingsBody({ category }: { category: string }) {
   const app = useApp();
   const { colors, appearance, setAppearance } = useTheme();
   const [loadedEnvironment, setLoadedEnvironment] = useState<string | null>(
@@ -155,8 +155,7 @@ export default function SettingsDetail() {
       />
     );
   return (
-    <Page>
-      <Stack.Screen options={{ title: titles[category] ?? "Settings" }} />
+    <>
       {category === "appearance" && (
         <Group title="Appearance">
           <View
@@ -614,6 +613,18 @@ export default function SettingsDetail() {
             onPress={() => router.push("/connect")}
           />
         )}
+    </>
+  );
+}
+
+export default function SettingsDetail() {
+  const { category = "appearance" } = useLocalSearchParams<{
+    category: string;
+  }>();
+  return (
+    <Page>
+      <Stack.Screen options={{ title: titles[category] ?? "Settings" }} />
+      <SettingsBody category={category} />
     </Page>
   );
 }

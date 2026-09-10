@@ -68,6 +68,7 @@ export const androidIcons = {
   "puzzlepiece.extension": "extension",
   "qrcode.viewfinder": "qr_code_scanner",
   "sidebar.left": "left_panel_open",
+  "sidebar.right": "right_panel_open",
   "slider.horizontal.3": "tune",
   sparkle: "auto_awesome",
   sparkles: "auto_awesome",

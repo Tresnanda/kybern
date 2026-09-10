@@ -29,7 +29,7 @@ function base64(text: string) {
   for (const byte of bytes) raw += String.fromCharCode(byte);
   return btoa(raw);
 }
-export function Terminal({ threadId, initialTerminalId, connectorLogin = false }: { threadId: string; initialTerminalId?: string; connectorLogin?: boolean }) {
+export function Terminal({ threadId, initialTerminalId, connectorLogin = false, embedded = false }: { threadId: string; initialTerminalId?: string; connectorLogin?: boolean; embedded?: boolean }) {
   const app = useApp();
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [selected, setSelected] = useState(initialTerminalId ?? "");
@@ -328,7 +328,8 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false }
               gap: 8,
               paddingHorizontal: 12,
               paddingTop: 8,
-              paddingBottom: keyboard ? 8 : Math.max(12, insets.bottom),
+              paddingBottom:
+                keyboard || embedded ? 8 : Math.max(12, insets.bottom),
             }}
           >
             <ScrollView

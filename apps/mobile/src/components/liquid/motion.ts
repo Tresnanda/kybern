@@ -23,6 +23,14 @@ export const SHEET = {
   dampingRatio: 0.8,
   reduceMotion: ReduceMotion.System,
 };
+// Split-view panes (sidebar, inspector) that grow/shrink their column width.
+// Snappier than a sheet and near-critically damped: a structural surface should
+// arrive settled, not wobble. Interruptible — grab it mid-travel and it reverses.
+export const PANE = {
+  duration: 340,
+  dampingRatio: 0.85,
+  reduceMotion: ReduceMotion.System,
+};
 export const SHEET_OUTLINE = {
   duration: 550,
   dampingRatio: 0.8,

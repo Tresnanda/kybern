@@ -16,8 +16,10 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApprovalPanel, AsyncQuestions } from "../../src/features/Approvals";
 import { Composer } from "../../src/features/Composer";
+import { InspectorColumn } from "../../src/features/Inspector";
 import { TranscriptBlock } from "../../src/features/Transcript";
 import { WorkspaceMenu, WorkspacePill } from "../../src/features/WorkspaceMenu";
+import { useLayout } from "../../src/state/layout";
 import {
   errorText,
   loadThread,
@@ -133,6 +135,14 @@ export default function ThreadScreen() {
   const outgoing =
     sendMotion.outgoing?.threadId === id ? sendMotion.outgoing : null;
   const { colors, dark } = useTheme();
+  const {
+    regular,
+    sidebarOpen,
+    toggleSidebar,
+    inspectorOpen,
+    inspectorTab,
+    toggleInspector,
+  } = useLayout();
   const insets = useSafeAreaInsets();
   const blurTarget = useRef<View>(null);
   const [footerHeight, setFooterHeight] = useState(230);
@@ -221,6 +231,16 @@ export default function ThreadScreen() {
   useEffect(() => {
     if (outgoing) jump();
   }, [outgoing?.id, jump]);
+  // When a turn ends, completed work folds into a single row and the iOS list can
+  // strand its native scroll anchor at the top. If the reader was following the
+  // output, re-pin them to the end so they land on the final answer, not row one.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    const running =
+      thread?.status === "running" || thread?.status === "awaiting-approval";
+    if (wasRunning.current && !running && following) jump();
+    wasRunning.current = running;
+  }, [thread?.status, following, jump]);
   const steeringAttempt = useRef<{ signature: string; id: string } | null>(
     null,
   );
@@ -266,10 +286,27 @@ export default function ThreadScreen() {
     if (historyGate.claim(snapshot.nextBeforeSeq, geometry.distance, geometry.height,
       focused && userScrolled.current && !snapshot.loadingEarlier && !historyError && app.status === "open")) earlier();
   };
+  // Stable identities so a re-render from a sidebar/inspector toggle does not
+  // hand the list new style objects and reset its scroll offset.
+  const listContentStyle = useMemo(
+    () => ({
+      paddingHorizontal: 24,
+      paddingBottom: footerHeight + 16,
+      paddingTop: headerHeight + 16,
+      width: "100%" as const,
+      maxWidth: 760,
+      alignSelf: "center" as const,
+    }),
+    [headerHeight, footerHeight],
+  );
+  const listIndicatorInsets = useMemo(
+    () => ({ top: headerHeight, bottom: footerHeight }),
+    [headerHeight, footerHeight],
+  );
   return (
     <ChatFileContext value={fileContext}><KeyboardAvoidingView
       behavior="padding"
-      style={{ flex: 1, backgroundColor: colors.background }}
+      style={{ flex: 1, flexDirection: "row", backgroundColor: colors.background }}
     >
       <View style={{ flex: 1 }}>
         <BlurTargetView ref={blurTarget} style={{ flex: 1 }}>
@@ -308,20 +345,10 @@ export default function ThreadScreen() {
                 Platform.OS === "ios" || !following ? anchorOptions : false
               }
               contentInsetAdjustmentBehavior="never"
-              scrollIndicatorInsets={{
-                top: headerHeight,
-                bottom: footerHeight,
-              }}
+              scrollIndicatorInsets={listIndicatorInsets}
               keyboardDismissMode="interactive"
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{
-                paddingHorizontal: 24,
-                paddingBottom: footerHeight + 16,
-                paddingTop: headerHeight + 16,
-                width: "100%",
-                maxWidth: 760,
-                alignSelf: "center",
-              }}
+              contentContainerStyle={listContentStyle}
               onScrollBeginDrag={() => {
                 userScrolled.current = true;
                 setFollowing(false);
@@ -445,13 +472,23 @@ export default function ThreadScreen() {
               gap: 4,
             }}
           >
-            <IconButton
-              name="chevron.left"
-              label="Back"
-              onPress={() =>
-                router.canGoBack() ? router.back() : router.replace("/")
-              }
-            />
+            {regular ? (
+              !sidebarOpen ? (
+                <IconButton
+                  name="sidebar.left"
+                  label="Show sidebar"
+                  onPress={toggleSidebar}
+                />
+              ) : null
+            ) : (
+              <IconButton
+                name="chevron.left"
+                label="Back"
+                onPress={() =>
+                  router.canGoBack() ? router.back() : router.replace("/")
+                }
+              />
+            )}
             <Tap
               label="Open thread settings"
               onPress={() =>
@@ -470,6 +507,14 @@ export default function ThreadScreen() {
                 {thread?.worktree ? ` · ${thread.worktree.branch}` : ""}
               </T>
             </Tap>
+            {regular && (
+              <IconButton
+                name="sidebar.right"
+                label={inspectorOpen ? "Hide inspector" : "Show inspector"}
+                filled={inspectorOpen}
+                onPress={() => toggleInspector(inspectorTab)}
+              />
+            )}
             <WorkspaceMenu thread={thread} />
           </View>
           {app.status !== "open" && (
@@ -514,6 +559,7 @@ export default function ThreadScreen() {
           <View style={{ height: Math.max(12, insets.bottom) }} />
         </View>
       </View>
+      <InspectorColumn threadId={id} />
     </KeyboardAvoidingView></ChatFileContext>
   );
 }
