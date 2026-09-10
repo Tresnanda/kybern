@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  expo-camera@57.0.4: 3f483ce640cb470d67f426cdcf4b49cae87226aae6596a927e2c9306d71dd9a9
+  expo-camera@57.0.4: c93785de06a04f0bfb02b898544c2b7269f301ee91b77f21243f750d45d0bfe0
 
 importers:
 
@@ -25,7 +25,7 @@ importers:
         version: 57.0.2(expo@57.0.21)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
       expo-camera:
         specifier: 57.0.4
-        version: 57.0.4(patch_hash=3f483ce640cb470d67f426cdcf4b49cae87226aae6596a927e2c9306d71dd9a9)(@types/emscripten@1.41.6)(expo@57.0.21)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+        version: 57.0.4(patch_hash=c93785de06a04f0bfb02b898544c2b7269f301ee91b77f21243f750d45d0bfe0)(@types/emscripten@1.41.6)(expo@57.0.21)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
       expo-clipboard:
         specifier: 57.0.1
         version: 57.0.1(expo@57.0.21)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
@@ -4690,7 +4690,7 @@ snapshots:
       react: 19.2.3
       react-native: 0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1)
 
-  expo-camera@57.0.4(patch_hash=3f483ce640cb470d67f426cdcf4b49cae87226aae6596a927e2c9306d71dd9a9)(@types/emscripten@1.41.6)(expo@57.0.21)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3):
+  expo-camera@57.0.4(patch_hash=c93785de06a04f0bfb02b898544c2b7269f301ee91b77f21243f750d45d0bfe0)(@types/emscripten@1.41.6)(expo@57.0.21)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3):
     dependencies:
       barcode-detector: 3.2.2(@types/emscripten@1.41.6)
       expo: 57.0.21(27d0352499f6949e67236f69e482fdf1)

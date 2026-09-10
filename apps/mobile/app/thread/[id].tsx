@@ -11,7 +11,7 @@ import {
 } from "@legendapp/list/react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApprovalPanel, AsyncQuestions } from "../../src/features/Approvals";
@@ -301,7 +301,12 @@ export default function ThreadScreen() {
               recycleItems={false}
               maintainScrollAtEnd={following ? followOptions : false}
               maintainScrollAtEndThreshold={0.05}
-              maintainVisibleContentPosition={following ? false : anchorOptions}
+              // iOS keeps a native anchor across mounting transactions. Toggling
+              // it during a drag changes native child retention and can reuse a
+              // stale virtual-list anchor, sending the scroll offset to the top.
+              maintainVisibleContentPosition={
+                Platform.OS === "ios" || !following ? anchorOptions : false
+              }
               contentInsetAdjustmentBehavior="never"
               scrollIndicatorInsets={{
                 top: headerHeight,

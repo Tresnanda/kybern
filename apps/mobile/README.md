@@ -194,6 +194,19 @@ preview respects the animated panel's rounded clipping. Keep the patch and
 camera binaries do not include local source patches. This change requires a
 new APK and is not delivered by a JavaScript-only update.
 
+On iPad, the same patch enables camera access during multitasking when
+AVFoundation reports support, before starting the capture session. This keeps
+the camera usable in a narrow window and Stage Manager as well as full-screen.
+Keep `expo.autolinking.ios.buildFromSource: ["expo-camera"]` enabled too: the
+precompiled framework does not contain this fix. Install a new signed iOS build
+for camera changes; an EAS Update cannot change the native capture session.
+The iOS attachment menu waits for the native modal's `onDismiss` before opening
+Photos, Files, or Camera. An animation completion alone is too early to present
+the next native screen. `tests/menu-dismissal.test.mjs` covers this handoff,
+including Reduce Motion and Android's separate dismissal behavior.
+See the [physical iPad verification](perf/ipad-attachments-2026-09-10.md) for
+the distinct causes, release-build checks, and device-test limits.
+
 Settings opens a compact overview with dedicated pages for appearance, computers,
 thread defaults, agents, usage, background/updates, and access. Computer settings
 load when their page is opened; appearance and saved connections work offline.
@@ -229,6 +242,9 @@ uses LegendList with an initial position at the end, stable row identities, and
 preserved expansion state. Recent history loads first (60 projected entries);
 earlier pages load as the reader scrolls up. Older daemons return full history and
 remain supported. The Latest control does not change bottom content padding.
+On iOS, native scroll anchoring stays enabled while switching between following
+and browsing, preventing intermittent jumps to the start of loaded history.
+See the [physical iPad scroll check](perf/ipad-scroll-2026-09-10.md).
 Completed turns show the final answer, with preceding narration, reasoning, and
 tool results behind an expandable "Worked for…" row. Running turns stay in order;
 pending approvals, errors, and continuing background work remain visible. Expanded

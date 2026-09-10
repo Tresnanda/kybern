@@ -12,3 +12,19 @@ index 999a22c6a679042e144acb6caa764c9929103966..a5737674eebbf15daa4f49b4c0975f73
    }
    private val scope = CoroutineScope(
      Dispatchers.Main + SupervisorJob() + CoroutineExceptionHandler { _, throwable ->
+diff --git a/ios/Current/CameraSessionManager.swift b/ios/Current/CameraSessionManager.swift
+--- a/ios/Current/CameraSessionManager.swift
++++ b/ios/Current/CameraSessionManager.swift
+@@ -404,6 +404,12 @@ class CameraSessionManager: NSObject, DeviceDiscoveryDelegate {
+     let photoOutput = AVCapturePhotoOutput()
+     photoOutput.isLivePhotoCaptureEnabled = false
+     session.beginConfiguration()
++    // iPad windowing interrupts camera capture unless the session opts in.
++    // Enable it only where AVFoundation supports it, before startRunning.
++    if #available(iOS 16.0, *), session.isMultitaskingCameraAccessSupported {
++      session.isMultitaskingCameraAccessEnabled = true
++    }
++
+     if session.canAddOutput(photoOutput) {
+       session.addOutput(photoOutput)
+       self.photoOutput = photoOutput

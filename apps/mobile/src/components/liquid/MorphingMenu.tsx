@@ -3,7 +3,7 @@
 // https://github.com/Jakubantalik/Libraries.dev/tree/main/packages/liquid-gooey
 import MaskedView from "@react-native-masked-view/masked-view";
 import { BlurView } from "expo-blur";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Modal,
   Platform,
@@ -78,6 +78,19 @@ export function MorphingMenu({
   const reduced = useReducedMotion();
   const [contentHeight, setContentHeight] = useState(0);
   const [shown, setShown] = useState(false);
+  const [visible, setVisible] = useState(true);
+  const didClose = useRef(false);
+  const finishDismissal = useCallback(() => {
+    if (didClose.current) return;
+    didClose.current = true;
+    onClosed();
+  }, [onClosed]);
+  const finishAnimation = useCallback(() => {
+    // A completed shape animation does not mean UIKit has dismissed the modal.
+    // Keep it mounted until onDismiss so the next picker gets a live presenter.
+    if (Platform.OS === "ios") setVisible(false);
+    else finishDismissal();
+  }, [finishDismissal]);
   const menuWidth = Math.min(width - 32, preferredWidth);
   const menuX =
     placement === "above"
@@ -167,10 +180,10 @@ export function MorphingMenu({
     size.set(
       boundedExit
         ? withTiming(0, ATTACHMENT_EXIT, (finished) => {
-            if (finished && !reduced) scheduleOnRN(onClosed);
+            if (finished && !reduced) scheduleOnRN(finishAnimation);
           })
         : withSpring(open ? 1 : 0, SIZE, (finished) => {
-            if (finished && !open && !reduced) scheduleOnRN(onClosed);
+            if (finished && !open && !reduced) scheduleOnRN(finishAnimation);
           }),
     );
     fade.set(
@@ -182,7 +195,7 @@ export function MorphingMenu({
           reduceMotion: ReduceMotion.Never,
         },
         (finished) => {
-          if (finished && !open && reduced) scheduleOnRN(onClosed);
+          if (finished && !open && reduced) scheduleOnRN(finishAnimation);
         },
       ),
     );
@@ -195,7 +208,7 @@ export function MorphingMenu({
     size,
     corners,
     fade,
-    onClosed,
+    finishAnimation,
   ]);
   const geometry = useDerivedValue(() => {
     const p = reduced ? 1 : size.get();
@@ -341,13 +354,14 @@ export function MorphingMenu({
   return (
     <Modal
       transparent
-      visible
+      visible={visible}
       animationType="none"
       hardwareAccelerated
       statusBarTranslucent
       navigationBarTranslucent
       onShow={() => setShown(true)}
       onRequestClose={onClose}
+      onDismiss={finishDismissal}
     >
       <View
         style={{ flex: 1 }}
