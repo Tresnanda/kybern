@@ -206,6 +206,7 @@ test("desktop history paging freezes the sequence and preserves live text and ro
   assert.equal(requested.transcript_limit, 60)
   const pending = runtime.loadEarlier("t")
   assert.equal(runtime.loadEarlier("t"), pending)
+  assert.equal(requested.transcript_limit, 120)
   assert.equal(requested.before_seq, 10)
   assert.equal(requested.through_seq, 10)
   client.event(event(11, { kind: "assistant_text_delta", message_id: "m", delta: " world" }))

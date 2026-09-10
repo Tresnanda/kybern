@@ -991,6 +991,12 @@ export interface FilesReadParams {
   max_bytes?: number;
 }
 
+export interface ThreadFileReadParams {
+  thread_id: ThreadId;
+  path: string;
+  max_bytes?: number;
+}
+
 export interface FilesReadResult {
   content: string;
   truncated: boolean;
@@ -1088,6 +1094,7 @@ export interface Methods {
   "files.search": [FilesSearchParams, FilesSearchResult];
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
+  "threads.files.read": [ThreadFileReadParams, FilesReadResult];
   "skills.list": [SkillsListParams, SkillsListResult];
   "threads.artifacts.list": [{ thread_id: ThreadId; before_seq?: number | null; limit?: number }, { artifacts: ArtifactTool[]; next_before_seq: number | null }];
   "threads.artifacts.preview": [{ thread_id: ThreadId; path: string }, { ticket: string }];

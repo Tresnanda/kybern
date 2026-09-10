@@ -1,0 +1,30 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ThreadFileReadParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreadFileReadParams",
+  "description": "Read a linked file inside the conversation's workspace, including its worktree.",
+  "type": "object",
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "path": {
+      "description": "Relative to the thread cwd, or an absolute path inside it.",
+      "type": "string"
+    },
+    "max_bytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 524288
+    }
+  },
+  "required": [
+    "thread_id",
+    "path"
+  ]
+}

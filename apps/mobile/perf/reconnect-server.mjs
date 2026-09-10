@@ -20,6 +20,7 @@ push({ role: "tool_call", call: { id: "active", name: "run_command", input: { co
 push({ role: "assistant", id: "live", text: "## Connection check\n\nThe completed steps are grouped above. This message stays visible while the connection recovers.\n\n| Check | Result |\n| --- | --- |\n| History | Preserved |\n| Details | Expandable |", complete: false });
 const inline = process.env.KYBERN_FIXTURE_INLINE === "1";
 const models = process.env.KYBERN_FIXTURE_MODELS === "1";
+const history = process.env.KYBERN_FIXTURE_HISTORY === "1";
 const skills = [
   { name: "better-ui", path: "/skills/better-ui/SKILL.md", scope: "user", enabled: true },
   { name: "mobile-ios-design", path: "/skills/mobile-ios-design/SKILL.md", scope: "user", enabled: true },
@@ -48,6 +49,17 @@ if (models) {
   thread.model = "opus";
   thread.effort = "medium";
 }
+if (history) {
+  thread.status = "idle";
+  thread.title = "File links and earlier history";
+  transcript.length = 0;
+  for (let i = 1; i <= 100; i++) {
+    const turn_id = `history-${i}`;
+    push({ role: "user", id: `u-${i}`, turn_id, message: { parts: [{ type: "text", text: `Question ${i}` }] } });
+    push({ role: "assistant", id: `a-${i}`, turn_id, text: `## Reply ${i}\n\n` + "Keep this paragraph in place while earlier messages arrive. ".repeat(3) + "\n\n[Open prompt](2026-09-10-hermes-prompt.md) · [Missing file](missing.md)", complete: true });
+    push({ role: "turn_summary", turn_id, stop_reason: "completed", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, cost_usd: null, duration_ms: 1000, terminal_message_id: `a-${i}` });
+  }
+}
 const providers = models
   ? Object.entries({ "claude-code": "Claude Code", codex: "Codex", cursor: "Cursor", pi: "Pi", omp: "Oh My Pi", opencode: "OpenCode" }).map(([kind, display_name]) => ({
     kind, display_name, available: true, supported_permission_modes: ["supervised"], supports_fork: false,
@@ -56,6 +68,8 @@ const providers = models
   }))
   : [{ kind: "codex", display_name: "Codex", available: true, supported_permission_modes: ["supervised"], supports_fork: false, supports_model_switch: false, instances: ["default"], models: [] }];
 const submitted = [];
+const historyRequests = [];
+let failHistory = false;
 const events = [];
 const counts = {};
 let socketCount = 0;
@@ -68,8 +82,9 @@ const server = http.createServer((req, res) => {
     transcript.at(-1).text += delta;
     events.push({ ...base, thread_id: thread.id, seq: ++thread.last_seq, kind: "assistant_text_delta", message_id: "live", delta });
     res.end("{}");
+  } else if (req.method === "POST" && req.url === "/fail-history") { failHistory = true; res.end("{}");
   } else if (req.url === "/pair") res.end(JSON.stringify({ token: "local-fixture-only", environment_id: environment }));
-  else if (req.url === "/stats") res.end(JSON.stringify({ counts, socketCount, head: thread.last_seq, submitted }));
+  else if (req.url === "/stats") res.end(JSON.stringify({ counts, socketCount, head: thread.last_seq, submitted, historyRequests }));
   else { res.statusCode = 404; res.end("{}"); }
 });
 const wss = new WebSocketServer({ server });
@@ -90,10 +105,27 @@ wss.on("connection", socket => {
         return;
       }
       case "threads.get": {
-        const response = JSON.stringify({ jsonrpc: "2.0", id, result: snapshot() });
-        setTimeout(() => { if (socket.readyState === 1) socket.send(response); }, 1800);
+        let page = snapshot();
+        if (history) {
+          const eligible = transcript.filter(row => params.before_seq == null || row.seq < params.before_seq);
+          const rows = eligible.slice(-(params.transcript_limit ?? eligible.length));
+          page = { ...page, transcript: rows, next_before_seq: rows.length < eligible.length ? rows[0].seq : null };
+          historyRequests.push({ ...params, entries: rows.length, at: Date.now() });
+          if (params.before_seq && failHistory) {
+            failHistory = false;
+            setTimeout(() => send({ jsonrpc: "2.0", id, error: { code: -32603, message: "Connection interrupted. Try again." } }), 600);
+            return;
+          }
+        }
+        const response = JSON.stringify({ jsonrpc: "2.0", id, result: page });
+        setTimeout(() => { if (socket.readyState === 1) socket.send(response); }, history ? 600 : 1800);
         return;
       }
+      case "threads.files.read":
+        submitted.push({ method, params });
+        if (params.path === "missing.md") { send({ jsonrpc: "2.0", id, error: { code: -32602, message: "File not found. Check the path or ask the agent to recreate it." } }); return; }
+        result = { content: params.path.endsWith(".ts") ? "export const connected = true;\n".repeat(30) : "# Hermes prompt\n\nOpened from the connected conversation workspace.\n\n[Related source](docs/My%20File.ts:12)\n\n| Check | Result |\n| --- | --- |\n| File links | Open here |\n| History | Loads while scrolling |", binary: false, truncated: false, size: 240 };
+        break;
       case "projects.list": result = { projects: [project] }; break;
       case "threads.list": result = { threads: [thread], activity: [] }; break;
       case "providers.list": result = { providers }; break;

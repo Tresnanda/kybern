@@ -65,6 +65,7 @@ expression: names
 - files.search
 - files.list
 - files.read
+- threads.files.read
 - skills.list
 - integrations.list
 - threads.artifacts.list

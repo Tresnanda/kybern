@@ -126,7 +126,7 @@ async function run() {
   check(!focused.isConnected, "Blur releases offscreen row")
 
   await railItem(0)
-  check(document.body.textContent?.includes("Load earlier messages"), "Earlier history control is available")
+  check(document.body.textContent?.includes("Scroll up for earlier messages"), "Earlier history control is available")
   await railItem(200)
   const anchor = turn("turn-100")!
   const readingTop = anchor.getBoundingClientRect().top
@@ -139,7 +139,7 @@ async function run() {
   publish([...older, ...blocks])
   await sleep(200)
   check(Math.abs(turn("turn-100")!.getBoundingClientRect().top - readingTop) < 2, "Prepending history preserves the visible anchor")
-  check(!document.body.textContent?.includes("Load earlier messages"), "Exhausted history removes the control")
+  check(!document.body.textContent?.includes("Scroll up for earlier messages"), "Exhausted history removes the control")
   results.prepend = true
   // Keep the original fixture indices for the remaining navigation checks.
   publish(blocks.slice(3))

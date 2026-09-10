@@ -1,5 +1,9 @@
 import * as Clipboard from "expo-clipboard";
-import { memo, useMemo } from "react";
+import { memo, useContext, useMemo } from "react";
+import { router } from "expo-router";
+import { chatLink } from "../../../../packages/kybern-client/src/chatLinks";
+import { ChatFileContext } from "../state/chatFileContext";
+import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
 import { IconButton, T, styles } from "./primitives";
 import { useTheme } from "./theme";
@@ -10,6 +14,7 @@ export function openLink(url: string) {
 }
 function Inline({ text }: { text: string }) {
   const { colors } = useTheme();
+  const fileContext = useContext(ChatFileContext);
   return (
     <>
       {text
@@ -40,7 +45,15 @@ function Inline({ text }: { text: string }) {
               <Text
                 key={i}
                 accessibilityRole="link"
-                onPress={() => openLink(link[2]!)}
+                onPress={() => {
+                  const target = chatLink(link[2]!, fileContext?.basePath);
+                  if (target.kind === "external") openLink(target.url);
+                  else if (target.kind === "file" && fileContext) router.push({
+                    pathname: "/file",
+                    params: { threadId: fileContext.threadId, projectId: fileContext.projectId, path: target.path, scope: fileContext.scope ?? "thread", ...(target.line ? { line: String(target.line) } : {}) },
+                  });
+                  else if (target.kind !== "anchor") Alert.alert("Unable to open link", target.kind === "file" ? "Open this file from its conversation." : "This link cannot be opened.");
+                }}
                 style={{
                   textDecorationLine: "underline",
                   color: colors.accent,

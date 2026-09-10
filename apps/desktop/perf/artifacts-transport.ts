@@ -30,3 +30,13 @@ export async function fetchThreadImage(_thread: string, path: string, signal: Ab
   const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="), (char) => char.charCodeAt(0))
   return new Blob([bytes], { type: "image/png" })
 }
+
+export const fileRequests: { thread_id: string; path: string }[] = []
+export const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
+export function activeRuntime() { return { rpc: () => ({ call: async (method: string, params: { thread_id: string; path: string }) => {
+  if (method !== "threads.files.read") throw new Error(`Unexpected file method ${method}`)
+  fileRequests.push(params)
+  if (params.path === "missing.md") throw new Error("File not found. Check the path or ask the agent to recreate it.")
+  if (params.path === "retry.md" && fileRequests.filter(p => p.path === "retry.md").length === 1) throw new Error("Connection interrupted. Retry to reopen this file.")
+  return { content: params.path.endsWith(".ts") ? "export const linked = true;\n".repeat(30) : "# Hermes prompt\n\nOpened from the connected workspace.\n\n[Related file](docs/related.ts:12)", binary: false, truncated: false, size: 100 }
+} }) } }

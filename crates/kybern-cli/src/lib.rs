@@ -296,6 +296,8 @@ enum Cmd {
     },
     /// Print a project file
     Cat { project: String, path: String },
+    /// Read a linked file relative to a conversation workspace.
+    ThreadCat { thread: String, path: String },
     /// Commit everything in a thread's working directory.
     Commit {
         thread: String,
@@ -913,6 +915,17 @@ pub async fn run() -> Result<()> {
                 match e.kind {
                     FileEntryKind::Directory => println!("{}/", e.name),
                     FileEntryKind::File => println!("{}  {}", e.name, e.size.unwrap_or(0)),
+                }
+            }
+        }
+        Cmd::ThreadCat { thread, path } => {
+            let r = client.call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.parse()?, path, max_bytes: 512 * 1024 }).await?;
+            if r.binary {
+                eprintln!("binary file, {} bytes", r.size);
+            } else {
+                print!("{}", r.content);
+                if r.truncated {
+                    eprintln!("\n[file truncated]");
                 }
             }
         }

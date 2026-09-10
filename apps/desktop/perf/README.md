@@ -24,6 +24,9 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [chat file links and earlier history](chat-files-history-2026-09-10.md) for
+connected-workspace previews and bounded automatic history prefetch.
+
 See [connectors and artifact verification](integrations-2026-09-09.md) for native
 provider controls, isolated previews, and the iOS simulator check.
 
@@ -80,6 +83,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Activity task sorting, retained history, hidden timers | `node scripts/check-rendering.mjs activity` |
 | Notes, queued prompt editing, and steering controls | `node scripts/check-rendering.mjs prompts` |
 | Saved-session picker, search, pagination, keyboard navigation | `node scripts/check-rendering.mjs sessions` |
+| Earlier-history prefetch, retry, prepend anchoring | `node scripts/check-rendering.mjs history` |
 | Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |
 
 For indicator changes, also run the matrix appearance/visibility comparison

@@ -112,6 +112,7 @@ fn main() {
     method::<FilesSearch>(&mut methods);
     method::<FilesList>(&mut methods);
     method::<FilesRead>(&mut methods);
+    method::<ThreadFileRead>(&mut methods);
     method::<SkillsList>(&mut methods);
     method::<IntegrationsList>(&mut methods);
     method::<ArtifactsList>(&mut methods);

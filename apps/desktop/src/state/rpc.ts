@@ -1,3 +1,4 @@
+import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging"
 import { writeProviderCache } from "./providerCache"
 // Owns the daemon connection: boots the client, subscribes to every thread's
 // events, folds them into the store, and exposes typed actions for the views.
@@ -288,14 +289,14 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     historyLoads.set(id, record)
     useStore.getState().updateTranscript(id, (state) => ({ ...state, loadingEarlier: true }))
     record.promise = rpc().call("threads.get", {
-      thread_id: id, transcript_limit: 60, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
+      thread_id: id, transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
     }).then((page) => {
       if (!isCurrentHydration(generation) || historyLoads.get(id) !== record) return
       const replay = record.buffer.after(base.lastSeq)
       if (!replay) throw new Error("Thread is updating too quickly. Try loading earlier messages again.")
       useStore.getState().updateTranscript(id, (current) => prependThreadHistory(base, page, replay, current))
     }).catch((error) => {
-      if (isCurrentHydration(generation)) toast.error("Unable to load earlier messages", { description: errorText(error) })
+      if (isCurrentHydration(generation)) throw error
     }).finally(() => {
       if (historyLoads.get(id) === record) {
         historyLoads.delete(id)

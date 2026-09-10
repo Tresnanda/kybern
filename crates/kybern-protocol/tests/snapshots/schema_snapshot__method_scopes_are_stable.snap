@@ -128,6 +128,8 @@ expression: scopes
   - "orchestration:read"
 - - files.read
   - "orchestration:read"
+- - threads.files.read
+  - "orchestration:read"
 - - skills.list
   - "orchestration:read"
 - - integrations.list

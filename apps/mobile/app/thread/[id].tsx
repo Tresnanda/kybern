@@ -1,3 +1,5 @@
+import { createHistoryPagingGate, HISTORY_PREFETCH_SCREENS } from "../../../../packages/kybern-client/src/historyPaging";
+import { ChatFileContext } from "../../src/state/chatFileContext";
 import { QueuedPrompts } from "../../src/features/QueuedPrompts";
 import { BlurTargetView } from "expo-blur";
 import { ProgressiveBlur } from "../../src/components/ui/progressive-blur";
@@ -161,6 +163,8 @@ export default function ThreadScreen() {
   }, [outgoing?.id, outgoingRows.received, sendMotion.received]);
   const list = useRef<LegendListRef>(null);
   const userScrolled = useRef(false);
+  const historyGate = useMemo(() => createHistoryPagingGate(), [id]);
+  const scrollGeometry = useRef({ distance: Infinity, height: 0 });
   const nearEnd = useRef(true);
   useEffect(() => {
     setFollowing(true);
@@ -180,6 +184,7 @@ export default function ThreadScreen() {
     });
   }, []);
   const thread = app.threads.find((t) => t.id === id) ?? snapshot.thread;
+  const fileContext = useMemo(() => ({ threadId: id, projectId: thread?.project_id }), [id, thread?.project_id]);
   const project = app.projects.find((p) => p.id === thread?.project_id);
   const queued = app.queue.filter((q) => q.thread_id === id);
   useFocusEffect(
@@ -256,8 +261,13 @@ export default function ThreadScreen() {
     setHistoryError("");
     void loadEarlier(id).catch((e) => setHistoryError(errorText(e)));
   };
+  const prefetchEarlier = () => {
+    const geometry = scrollGeometry.current;
+    if (historyGate.claim(snapshot.nextBeforeSeq, geometry.distance, geometry.height,
+      focused && userScrolled.current && !snapshot.loadingEarlier && !historyError && app.status === "open")) earlier();
+  };
   return (
-    <KeyboardAvoidingView
+    <ChatFileContext value={fileContext}><KeyboardAvoidingView
       behavior="padding"
       style={{ flex: 1, backgroundColor: colors.background }}
     >
@@ -310,6 +320,7 @@ export default function ThreadScreen() {
               onScrollBeginDrag={() => {
                 userScrolled.current = true;
                 setFollowing(false);
+                prefetchEarlier();
               }}
               onScrollEndDrag={() => {
                 setFollowing(nearEnd.current);
@@ -318,9 +329,10 @@ export default function ThreadScreen() {
                 setFollowing(nearEnd.current);
               }}
               onScroll={(e) => {
+                const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+                scrollGeometry.current = { distance: contentOffset.y, height: layoutMeasurement.height };
                 if (!userScrolled.current) return;
-                const { contentOffset, contentSize, layoutMeasurement } =
-                  e.nativeEvent;
+                prefetchEarlier();
                 const near =
                   contentSize.height -
                     contentOffset.y -
@@ -331,30 +343,19 @@ export default function ThreadScreen() {
                 setAway(!near);
               }}
               scrollEventThrottle={16}
-              onStartReached={() => {
-                if (
-                  userScrolled.current &&
-                  snapshot.nextBeforeSeq !== null &&
-                  !historyError
-                )
-                  earlier();
+              onLayout={(event) => { scrollGeometry.current.height = event.nativeEvent.layout.height; }}
+              onStartReached={({ distanceFromStart }) => {
+                scrollGeometry.current.distance = distanceFromStart;
+                prefetchEarlier();
               }}
-              onStartReachedThreshold={0.3}
+              onStartReachedThreshold={HISTORY_PREFETCH_SCREENS}
               ListHeaderComponent={
                 snapshot.nextBeforeSeq !== null ? (
-                  <View style={{ paddingVertical: 12 }}>
-                    <Tap
-                      label="Load earlier messages"
-                      disabled={snapshot.loadingEarlier}
-                      onPress={earlier}
-                    >
-                      <T variant="caption" tone="secondary">
-                        {snapshot.loadingEarlier
-                          ? "Loading earlier messages…"
-                          : "Load earlier messages"}
-                      </T>
-                    </Tap>
-                    <ErrorBanner error={historyError} onRetry={earlier} />
+                  <View style={{ paddingVertical: 12, minHeight: 44 }}>
+                    {historyError ? <ErrorBanner error={historyError} onRetry={earlier} /> :
+                      <T variant="caption" tone="secondary" accessibilityLiveRegion="polite">
+                        {snapshot.loadingEarlier ? "Loading earlier messages…" : "Scroll up for earlier messages"}
+                      </T>}
                   </View>
                 ) : null
               }
@@ -508,6 +509,6 @@ export default function ThreadScreen() {
           <View style={{ height: Math.max(12, insets.bottom) }} />
         </View>
       </View>
-    </KeyboardAvoidingView>
+    </KeyboardAvoidingView></ChatFileContext>
   );
 }

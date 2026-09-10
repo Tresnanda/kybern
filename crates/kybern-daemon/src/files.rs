@@ -178,6 +178,20 @@ pub async fn list_dir(root: &Path, rel: &str) -> Result<Vec<kybern_protocol::met
     Ok(entries)
 }
 
+/// Resolve chat links against the thread cwd. Canonical containment also rejects
+/// symlinks escaping the workspace; the existing file browser policy still applies.
+pub async fn read_thread_file(root: &Path, source: &str, max_bytes: u64) -> Result<kybern_protocol::methods::FilesReadResult> {
+    let root = tokio::fs::canonicalize(root).await?;
+    let candidate = root.join(source);
+    let path = tokio::fs::canonicalize(candidate)
+        .await
+        .map_err(|_| anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it."))?;
+    let relative = path
+        .strip_prefix(&root)
+        .map_err(|_| anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))?;
+    read_file(&root, &relative.to_string_lossy(), max_bytes.clamp(1, 1024 * 1024)).await
+}
+
 /// Read up to `max_bytes` of a project file; binary files return no content.
 pub async fn read_file(root: &Path, rel: &str, max_bytes: u64) -> Result<kybern_protocol::methods::FilesReadResult> {
     use std::io::Read;

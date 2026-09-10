@@ -883,6 +883,17 @@ pub struct FilesReadResult {
 }
 method!(FilesRead, "files.read", Some(Scope::OrchestrationRead), FilesReadParams, FilesReadResult);
 
+/// Read a linked file inside the conversation's workspace, including its worktree.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileReadParams {
+    pub thread_id: ThreadId,
+    /// Relative to the thread cwd, or an absolute path inside it.
+    pub path: String,
+    #[serde(default = "default_files_read_max")]
+    pub max_bytes: u64,
+}
+method!(ThreadFileRead, "threads.files.read", Some(Scope::OrchestrationRead), ThreadFileReadParams, FilesReadResult);
+
 // ---- skills ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1103,6 +1114,7 @@ registry!(
     FilesSearch,
     FilesList,
     FilesRead,
+    ThreadFileRead,
     SkillsList,
     IntegrationsList,
     ArtifactsList,

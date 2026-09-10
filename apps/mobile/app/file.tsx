@@ -1,7 +1,8 @@
 import * as Clipboard from "expo-clipboard";
 import { Stack, router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
-import { ScrollView, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChatFileContext } from "../src/state/chatFileContext";
+import { ScrollView, View, useWindowDimensions } from "react-native";
 import type { FilesReadResult } from "../src/state/protocol";
 import { errorText, rpc } from "../src/state/runtime";
 import { addContext } from "../src/state/draft";
@@ -19,13 +20,18 @@ import {
 import { useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
 export default function FileScreen() {
-  const { projectId, threadId, path } = useLocalSearchParams<{
+  const { projectId, threadId, path, scope, line } = useLocalSearchParams<{
     projectId: string;
     threadId?: string;
     path: string;
+    scope?: string;
+    line?: string;
   }>();
   const [file, setFile] = useState<FilesReadResult>();
-  const [raw, setRaw] = useState(false);
+  const [raw, setRaw] = useState(!!line);
+  const scroll = useRef<ScrollView>(null);
+  const { fontScale } = useWindowDimensions();
+  const fileContext = useMemo(() => threadId ? { threadId, projectId, basePath: path, scope: scope === "thread" ? "thread" as const : "project" as const } : null, [threadId, projectId, path, scope]);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const { colors } = useTheme();
@@ -35,19 +41,21 @@ export default function FileScreen() {
     let alive = true;
     setError("");
     setFile(undefined);
-    void rpc("files.read", { project_id: projectId, path, max_bytes: 128000 })
+    void (async () => scope === "thread" && threadId
+      ? rpc("threads.files.read", { thread_id: threadId, path, max_bytes: 128000 })
+      : rpc("files.read", { project_id: projectId, path, max_bytes: 128000 }))()
       .then((data) => {
         if (alive) setFile(data);
       })
       .catch((e) => {
-        if (alive) setError(errorText(e));
+        if (alive) setError((e as { code?: number }).code === -32601 ? "Update Kybern on the connected computer to open chat file links." : errorText(e));
       });
     return () => {
       alive = false;
     };
-  }, [projectId, path, retry]);
+  }, [projectId, threadId, scope, path, retry]);
   return (
-    <View style={{ flex: 1 }}>
+    <ChatFileContext value={fileContext}><View style={{ flex: 1 }}>
       <Stack.Screen
         options={{
           title: path.split("/").at(-1) ?? "File",
@@ -63,7 +71,7 @@ export default function FileScreen() {
       />
       <View style={{ paddingHorizontal: 20, paddingVertical: 10, gap: 12 }}>
         <T variant="caption" tone="secondary" selectable>
-          {path}
+          {path}{line ? ` · Line ${line}` : ""}
         </T>
         {markdown && (
           <View
@@ -92,6 +100,11 @@ export default function FileScreen() {
         )}
       </View>
       <ScrollView
+        ref={scroll}
+        onContentSizeChange={() => {
+          const target = Number(line);
+          if (file && raw && Number.isSafeInteger(target) && target > 0) scroll.current?.scrollTo({ y: Math.max(0, (target - 1) * 21 * fontScale), animated: false });
+        }}
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 24 }}
       >
@@ -136,6 +149,6 @@ export default function FileScreen() {
           Add to message
         </Button>
       </View>
-    </View>
+    </View></ChatFileContext>
   );
 }

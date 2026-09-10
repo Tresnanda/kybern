@@ -1,3 +1,4 @@
+import { useEarlierHistory } from "@/lib/useEarlierHistory"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
@@ -64,7 +65,7 @@ import {
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
-import { errorText, loadDiff, loadFileDiff, loadEarlier, revertTo } from "@/state/rpc"
+import { errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
@@ -228,6 +229,7 @@ export function Transcript({
   surfaceMode?: "single" | "split"
 }) {
   const state = useStore((s) => s.transcripts[threadId])
+  const connected = useStore((s) => s.connection.state === "open")
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
@@ -318,6 +320,7 @@ export function Transcript({
       },
     }
   }, [groups, navigationItems, historyOffset])
+  const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
@@ -370,12 +373,13 @@ export function Transcript({
           ) : (
             <TranscriptStateRoot key={threadId}><VirtualRows items={virtualGroups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
               {(g, i) => g ? <div data-turn-id={turnKey(g, i - historyOffset)}><Turn group={g} threadId={threadId} isLast={i === virtualGroups.length - 1} onOpenAgentActivity={openAgentActivity} /></div> : (
-                <div className={cn(ROW, "pb-4")}>
-                  <button type="button" disabled={state.loadingEarlier} aria-busy={state.loadingEarlier}
-                    onClick={() => void loadEarlier(threadId)}
-                    className="rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait">
-                    {state.loadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
-                  </button>
+                <div className={cn(ROW, "py-2")}>
+                  <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
+                    {earlier.error ? <>
+                      <span>Unable to load earlier messages. {earlier.error}</span>
+                      <button type="button" onClick={() => void earlier.retry()} className="rounded-md bg-muted/50 px-2 py-1.5 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Retry</button>
+                    </> : <span>{state.loadingEarlier ? "Loading earlier messages…" : "Scroll up for earlier messages"}</span>}
+                  </div>
                 </div>
               )}
             </VirtualRows></TranscriptStateRoot>

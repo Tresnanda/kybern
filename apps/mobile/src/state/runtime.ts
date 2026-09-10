@@ -1,3 +1,4 @@
+import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging";
 import * as SecureStore from "expo-secure-store";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
@@ -585,7 +586,7 @@ export async function loadEarlier(id: string) {
   publishThread(id, { ...base, loadingEarlier: true });
   record.promise = rpc("threads.get", {
     thread_id: id,
-    transcript_limit: RECENT_ENTRIES,
+    transcript_limit: EARLIER_HISTORY_ENTRIES,
     before_seq: base.nextBeforeSeq,
     through_seq: base.lastSeq,
   })

@@ -718,7 +718,13 @@ async fn measure_remote_history_pages() {
             .unwrap();
     }
     let client = host.client().await;
-    for (name, limit) in [("recent-cold", Some(60)), ("recent-warm", Some(60)), ("full-warm", None), ("recent-warm-repeat", Some(60))] {
+    for (name, limit) in [
+        ("recent-cold", Some(60)),
+        ("recent-warm", Some(60)),
+        ("earlier-warm", Some(120)),
+        ("full-warm", None),
+        ("recent-warm-repeat", Some(60)),
+    ] {
         let start = std::time::Instant::now();
         let result = client
             .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: limit, before_seq: None, through_seq: None })
@@ -730,4 +736,74 @@ async fn measure_remote_history_pages() {
             json!({"workload": name, "rpc_ms": elapsed.as_secs_f64() * 1000.0, "response_bytes": serde_json::to_vec(&result).unwrap().len(), "entries": result.transcript.len()})
         );
     }
+}
+
+#[tokio::test]
+async fn chat_file_links_read_the_connected_thread_workspace() {
+    let host = Host::start().await;
+    let mut thread = host.thread();
+    let worktree = host.root.join("worktree");
+    std::fs::create_dir_all(worktree.join("docs")).unwrap();
+    std::fs::write(host.root.join("2026-09-10-hermes-prompt.md"), "wrong project copy").unwrap();
+    let content = "# Hermes prompt\n\nRead this from the conversation workspace.";
+    std::fs::write(worktree.join("2026-09-10-hermes-prompt.md"), content).unwrap();
+    std::fs::write(worktree.join("docs/My File.ts"), "const connected = true;\n").unwrap();
+    std::fs::write(worktree.join("binary.bin"), b"\0binary").unwrap();
+    std::fs::write(worktree.join(".env"), "PRIVATE=fixture").unwrap();
+    thread.cwd = worktree.to_string_lossy().into_owned();
+    host.state.store.thread_upsert(&thread).unwrap();
+    let client = host.client().await;
+    for path in [
+        "2026-09-10-hermes-prompt.md".to_string(),
+        "./docs/../2026-09-10-hermes-prompt.md".into(),
+        worktree.join("2026-09-10-hermes-prompt.md").to_string_lossy().into_owned(),
+    ] {
+        let file = client.call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path, max_bytes: 128000 }).await.unwrap();
+        assert_eq!(file.content, content);
+        assert!(!file.truncated);
+    }
+    let code = client
+        .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: "docs/My File.ts".into(), max_bytes: 5 })
+        .await
+        .unwrap();
+    assert_eq!(code.content, "const");
+    assert!(code.truncated);
+    assert!(
+        client
+            .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: "binary.bin".into(), max_bytes: 128000 })
+            .await
+            .unwrap()
+            .binary
+    );
+    for path in ["../2026-09-10-hermes-prompt.md", ".env", "missing.md"] {
+        assert!(
+            client
+                .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: path.into(), max_bytes: 128000 })
+                .await
+                .is_err()
+        );
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(host.root.join("2026-09-10-hermes-prompt.md"), worktree.join("escape.md")).unwrap();
+        assert!(
+            client
+                .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: "escape.md".into(), max_bytes: 128000 })
+                .await
+                .is_err()
+        );
+    }
+    let other = Host::start().await;
+    assert!(
+        other
+            .client()
+            .await
+            .call::<ThreadFileRead>(ThreadFileReadParams {
+                thread_id: thread.id,
+                path: "2026-09-10-hermes-prompt.md".into(),
+                max_bytes: 128000
+            })
+            .await
+            .is_err()
+    );
 }

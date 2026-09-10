@@ -13,7 +13,7 @@ import { cachedMarkdown, cacheMarkdown, nextMarkdownConsumer, parseMarkdown, rel
 import { useTheme } from "@/components/theme-context"
 import { copyText } from "@/lib/hooks"
 import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
-import { openExternal } from "@/lib/tauri"
+import { ChatFileLink } from "./ChatFileLink"
 import { cn } from "@/lib/utils"
 import { IconSwap, StreamWords } from "@/components/kybern/motion"
 import type { InlineTokenKind } from "@/components/kybern/InlineToken"
@@ -197,18 +197,7 @@ function MarkdownCode({ children, node }: { children?: ReactNode; node?: { posit
 // Stable component types preserve code-block state and highlighting across deltas.
 const BASE_COMPONENTS: import("react-markdown").Components = {
   img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
-  a: ({ href, children }) => href && localImageLink(href) ? <ResponseImage source={href} label={extractText(children) || "Image preview"} linkLabel={children} /> : (
-    <a
-      href={href}
-      className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline"
-      onClick={(e) => {
-        e.preventDefault()
-        if (href) void openExternal(href)
-      }}
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => href && localImageLink(href) ? <ResponseImage source={href} label={extractText(children) || "Image preview"} linkLabel={children} /> : <ChatFileLink href={href}>{children}</ChatFileLink>,
   pre: MarkdownCode,
   table: ({ children }) => <div className="chat-markdown-table" role="region" aria-label="Table" tabIndex={0}><table>{children}</table></div>,
 }

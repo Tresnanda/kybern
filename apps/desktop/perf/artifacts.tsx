@@ -1,13 +1,14 @@
+import { ThemeProviderContext } from "../src/components/theme-context"
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { ResponseImage } from "../src/components/kybern/ResponseImage"
 import { Markdown } from "../src/components/kybern/Markdown"
 import { ImageThreadContext } from "../src/lib/imageThread"
-import { external, fetched, requests } from "./artifacts-transport"
+import { external, fetched, requests, fileRequests } from "./artifacts-transport"
 import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const view = createRoot(document.getElementById("root")!)
-function render(text: string) { flushSync(() => view.render(<ImageThreadContext value="thread-1"><Markdown text={text} /></ImageThreadContext>)) }
+function render(text: string) { flushSync(() => view.render(<ThemeProviderContext value={{ theme: document.documentElement.classList.contains("dark") ? "dark" : "light", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><ImageThreadContext value="thread-1"><Markdown text={text} /></ImageThreadContext></ThemeProviderContext>)) }
 function check(condition: unknown, message: string) { if (!condition) throw new Error(message) }
 async function waitFor(condition: () => unknown, message: string) {
   const deadline = performance.now() + 5000
@@ -122,6 +123,34 @@ async function run() {
   await sleep(60)
   document.querySelector<HTMLAnchorElement>("a")!.click()
   check(external.length === 1 && external[0] === "https://example.com/docs", "External link routing changed")
+  for (const theme of ["light", "dark"]) {
+    document.documentElement.classList.toggle("dark", theme === "dark")
+    for (const destination of ["2026-09-10-hermes-prompt.md", "<docs/My File.md>", "/workspace/docs/prompt.md", "file:///workspace/docs/prompt.md"]) {
+      render(`[Open prompt](${destination})`)
+      await sleep(60)
+      document.querySelector<HTMLAnchorElement>("#root a")!.click()
+      await waitFor(() => document.querySelector('[role="dialog"] h1')?.textContent === "Hermes prompt", `Linked Markdown is formatted in the file preview: ${destination}; ${document.body.innerText}`)
+      check(fileRequests.at(-1)?.thread_id === "thread-1", "File reads are bound to the conversation")
+      check(external.length === 1, "File references never reach the external URL opener")
+      const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+      const source = Array.from(dialog.querySelectorAll("button")).find(b => b.textContent === "Show source")!
+      source.click()
+      await waitFor(() => dialog.querySelector("pre code")?.textContent?.includes("# Hermes prompt"), "Raw source stays accessible")
+      dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click()
+      await waitFor(() => !document.querySelector('[role="dialog"]'), "File preview closes")
+    }
+  }
+  render("[Retry file](retry.md)")
+  await sleep(60)
+  document.querySelector<HTMLAnchorElement>("#root a")!.click()
+  await waitFor(() => document.querySelector('[role="dialog"] [role="alert"]'), "File failure stays inside its preview")
+  Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(b => b.textContent === "Retry")!.click()
+  await waitFor(() => document.querySelector('[role="dialog"] h1')?.textContent === "Hermes prompt", "Retry opens the file without losing the conversation")
+  document.querySelector<HTMLAnchorElement>('[role="dialog"] a')!.click()
+  await waitFor(() => fileRequests.at(-1)?.path === "docs/related.ts", "Nested file links resolve beside the source")
+  await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"] code')).some(code => code.textContent?.includes("export const linked")), "Linked source is readable")
+  flushSync(() => view.render(null))
+  await sleep(250)
   root.style.cssText = "width:640px;max-width:100%;padding:24px"
   render("| Agent | Where Kybern gets skills |\n| --- | --- |\n| Codex | Asks Codex for its effective catalog, preserving precedence and plugin namespaces. |\n| Claude | Scans project and home directories. |\n\n![Dark question](artifacts/sized-dark-portrait.png)\n\n![Light question](artifacts/sized-light-landscape.png)")
   await waitFor(() => root.querySelectorAll("img").length === 2, "Final previews did not mount")

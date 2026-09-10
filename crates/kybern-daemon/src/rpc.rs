@@ -437,6 +437,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             ok(crate::files::read_file(std::path::Path::new(&project.path), &p.path, p.max_bytes).await.map_err(bad)?)
         }
+        ThreadFileRead::NAME => {
+            let p: ThreadFileReadParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::files::read_thread_file(std::path::Path::new(&thread.cwd), &p.path, p.max_bytes).await.map_err(bad)?)
+        }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
             state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;

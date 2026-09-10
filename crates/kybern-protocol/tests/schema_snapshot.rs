@@ -75,3 +75,8 @@ fn replay_ready_schema_is_stable() {
         serde_json::from_value(serde_json::json!({"subscription_id": uuid::Uuid::nil(), "head_seq": 7})).unwrap();
     assert!(!legacy.replay_ready);
 }
+
+#[test]
+fn thread_file_read_schema_is_stable() {
+    insta::assert_json_snapshot!(schema_for!(ThreadFileReadParams));
+}
