@@ -1,0 +1,24 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(EventsReadyNotification)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EventsReadyNotification",
+  "description": "Sent after all subscription replay events through `head_seq` have been queued.\nLive events for the connection cannot overtake this notification.",
+  "type": "object",
+  "properties": {
+    "subscription_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "head_seq": {
+      "type": "integer",
+      "format": "int64"
+    }
+  },
+  "required": [
+    "subscription_id",
+    "head_seq"
+  ]
+}

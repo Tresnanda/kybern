@@ -151,7 +151,7 @@ impl ConnectionCtx {
             return;
         }
         let subscription_id = self.subscribe(params.thread_id, head_seq).await;
-        let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq }).unwrap();
+        let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq, replay_ready: true }).unwrap();
         if self.out.send(ServerFrame::Response(RpcResponse::ok(request_id, result))).await.is_err() {
             return;
         }
@@ -160,7 +160,16 @@ impl ConnectionCtx {
         {
             let _ =
                 self.out.send(ServerFrame::Notification(RpcNotification::new("events.lagged", serde_json::json!({ "dropped": 0 })))).await;
+            return;
         }
+        let ready = kybern_protocol::EventsReadyNotification { subscription_id, head_seq };
+        let _ = self
+            .out
+            .send(ServerFrame::Notification(RpcNotification::new(
+                kybern_protocol::EVENTS_READY_NOTIFICATION,
+                serde_json::to_value(ready).unwrap(),
+            )))
+            .await;
     }
 
     /// Forward a terminal's output to this connection until it exits or is unsubscribed.

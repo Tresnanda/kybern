@@ -30,6 +30,7 @@ import {
 } from "../src/ui/primitives";
 import { ProviderMark } from "../src/ui/ProviderMark";
 import { useTheme } from "../src/ui/theme";
+import { modelChoices } from "../../../packages/kybern-client/src/models";
 
 const permissions: { value: PermissionMode; title: string; detail: string }[] =
   [
@@ -82,13 +83,10 @@ export default function Configure() {
   const [section, setSection] = useState("");
   const [modelQuery, setModelQuery] = useState("");
   const provider = app.providers.find((p) => p.kind === options.provider);
-  const visibleModels = [
-    { id: "", display_name: "Agent default", default_effort: "" },
-    ...(provider?.models ?? []),
-  ].filter((m) =>
-    `${m.display_name} ${m.id}`
-      .toLowerCase()
-      .includes(modelQuery.trim().toLowerCase()),
+  const { models: visibleModels, customId } = modelChoices(
+    provider?.models ?? [],
+    options.model,
+    modelQuery,
   );
   const project = app.projects.find((p) => p.id === options.projectId);
   const patch = (value: Partial<DraftOptions>) => {
@@ -161,9 +159,15 @@ export default function Configure() {
       } else if (threadId) {
         await rpc("threads.update", {
           thread_id: threadId,
-          model: options.model,
-          effort: options.effort,
-          permission_mode: options.permission,
+          ...(options.model !== (thread?.model ?? "")
+            ? { model: options.model }
+            : {}),
+          ...(options.effort !== (thread?.effort ?? "")
+            ? { effort: options.effort }
+            : {}),
+          ...(options.permission !== thread?.permission_mode
+            ? { permission_mode: options.permission }
+            : {}),
         });
         await Promise.all([refresh(), loadThread(threadId)]);
         router.back();
@@ -294,8 +298,8 @@ export default function Configure() {
         {section === "model" && (
           <>
             <Field
-              label="Search models"
-              placeholder="Search by name or model ID"
+              label="Find or enter a model"
+              placeholder="Search models or enter an exact ID"
               value={modelQuery}
               onChangeText={setModelQuery}
               autoCapitalize="none"
@@ -303,25 +307,33 @@ export default function Configure() {
               clearButtonMode="while-editing"
               returnKeyType="search"
             />
-            {!visibleModels.length && (
+            {!visibleModels.length && !customId && (
               <T variant="caption" tone="secondary">
                 No models match your search.
               </T>
             )}
             {visibleModels.map((m) =>
               choose(m.display_name, m.id, options.model === m.id, () =>
-                patch({ model: m.id, effort: m.default_effort ?? "" }),
+                patch({
+                  model: m.id,
+                  ...(!m.custom &&
+                  (!thread || handoff || provider?.supports_effort_switch)
+                    ? { effort: m.default_effort ?? "" }
+                    : {}),
+                }),
               ),
             )}
-            {!provider?.models?.length && (
-              <Field
-                label="Model ID"
-                placeholder="Use a model supported by this agent"
-                value={options.model}
-                onChangeText={(model) => patch({ model })}
-                autoCapitalize="none"
-              />
-            )}
+            {customId &&
+              choose(
+                `Use “${customId}”`,
+                "custom-model",
+                false,
+                () => {
+                  patch({ model: customId });
+                  setModelQuery("");
+                },
+                "Custom model ID",
+              )}
           </>
         )}
       </Group>

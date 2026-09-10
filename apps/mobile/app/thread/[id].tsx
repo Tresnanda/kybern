@@ -77,19 +77,17 @@ const TranscriptRow = memo(function TranscriptRow({
       <View
         style={{
           marginBottom: 12,
-          borderBottomWidth: 1,
-          borderColor: colors.line,
         }}
       >
         <Tap
-          label={`Worked for ${workDuration(row.durationMs)}. ${row.expanded ? "Hide" : "Show"} work`}
+          label={`${row.expanded ? "Hide" : "Show"} work. ${row.label ?? `Worked for ${workDuration(row.durationMs)}`}`}
           expanded={row.expanded}
           onPress={() => onToggleWork(row.turnId)}
           style={[styles.line, { gap: 8, paddingVertical: 8 }]}
         >
           <Icon name="hammer" size={14} color={colors.secondary} />
           <T variant="caption" tone="secondary" style={{ flex: 1 }}>
-            Worked for {workDuration(row.durationMs)}
+            {row.label ?? `Worked for ${workDuration(row.durationMs)}`}
           </T>
           <Icon
             name={row.expanded ? "chevron.up" : "chevron.down"}

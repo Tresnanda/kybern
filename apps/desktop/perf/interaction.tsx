@@ -42,9 +42,12 @@ function visible(element: HTMLElement | null) {
 async function railItem(index: number) {
   const nav = rail()
   check(nav, "Rail is available")
-  nav.scrollTop = index * 12
+  // Start a keyboard gesture from a mounted rail button, as a user would.
+  // Moving scrollTop first can unmount the previously focused button and race blur.
+  const keyboardTarget = nav.querySelector<HTMLButtonElement>("button")!
+  keyboardTarget.focus({ preventScroll: true })
   // Keyboard navigation also mounts targets well beyond the current tick range.
-  nav.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }))
+  keyboardTarget.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }))
   await waitFor(() => !!nav.querySelector('[data-rail-index="0"]') && (document.activeElement as HTMLElement | null)?.dataset.railIndex === "0", "First rail item focused")
   await sleep(30)
   if (index === 401) nav.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
@@ -62,9 +65,10 @@ async function railItem(index: number) {
   await sleep(220)
   return button
 }
+let nextBeforeSeq: number | null = 1
 function publish(next: Block[]) {
   blocks = next
-  useStore.getState().set({ transcripts: { ...useStore.getState().transcripts, fixture: { ...emptyThreadState(), loaded: true, blocks } } })
+  useStore.getState().set({ transcripts: { ...useStore.getState().transcripts, fixture: { ...emptyThreadState(), loaded: true, blocks, nextBeforeSeq } } })
 }
 async function run() {
   document.documentElement.classList.add("dark")
@@ -121,6 +125,8 @@ async function run() {
   await sleep(100)
   check(!focused.isConnected, "Blur releases offscreen row")
 
+  await railItem(0)
+  check(document.body.textContent?.includes("Load earlier messages"), "Earlier history control is available")
   await railItem(200)
   const anchor = turn("turn-100")!
   const readingTop = anchor.getBoundingClientRect().top
@@ -128,10 +134,12 @@ async function run() {
   await sleep(180)
   check(Math.abs(anchor.getBoundingClientRect().top - readingTop) < 2, "New output preserves history reading position")
   results.readingPosition = true
+  nextBeforeSeq = null
   const older = [user("older"), assistant("older"), end("older")]
   publish([...older, ...blocks])
   await sleep(200)
   check(Math.abs(turn("turn-100")!.getBoundingClientRect().top - readingTop) < 2, "Prepending history preserves the visible anchor")
+  check(!document.body.textContent?.includes("Load earlier messages"), "Exhausted history removes the control")
   results.prepend = true
   // Keep the original fixture indices for the remaining navigation checks.
   publish(blocks.slice(3))
@@ -208,6 +216,16 @@ async function run() {
   detail.scrollTop = detail.scrollHeight
   await waitFor(() => [...detail.querySelectorAll("[data-work-entry-display-text]")].some(el => el.textContent?.endsWith("file-799.ts")), "Last agent activity is reachable")
   results.agentActivity = true
+  const liveTools = heavy.filter(block => block.kind === "tool").map(block => ({ ...block, turnId: "live-tools" }));
+  useStore.getState().set({ transcripts: { ...useStore.getState().transcripts, liveTools: { ...emptyThreadState(), loaded: true, blocks: [user("live-tools"), ...liveTools] } } })
+  flushSync(() => controls.thread("liveTools"))
+  const liveDisclosure = () => Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => /Read 800/.test(button.textContent ?? ""))
+  await waitFor(() => !!liveDisclosure(), "Live tools collapse before the turn ends")
+  check(turn("live-tools")!.querySelectorAll("[data-work-entry-display-text]").length === 0, "Collapsed live tool bodies are unmounted")
+  liveDisclosure()!.click()
+  await waitFor(() => turn("live-tools")!.querySelectorAll("[data-work-entry-display-text]").length > 0, "Live tools expand")
+  check(turn("live-tools")!.querySelectorAll("[data-work-entry-display-text]").length < 100, "Expanded live tools remain virtualized")
+  results.liveGrouping = true
   report({ ...results, pass: true })
 }
 function report(value: unknown) {

@@ -191,39 +191,26 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             thread.last_seq = through_seq;
             let store = state.store.clone();
             let id = p.thread_id;
-            let (transcript, pending_approvals, runtime_tasks, provider_usage, provider_commands, pending_questions) =
-                tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let projection = state
+                .thread_projections
+                .get_or_build((id, through_seq), move || {
                     let events = store.events_for_thread_through(id, through_seq)?;
-                    Ok((
-                        kybern_store::project_transcript(&events),
-                        store.approvals_pending(Some(id))?,
-                        kybern_store::project_runtime_tasks(&events),
-                        kybern_store::project_provider_usage(&events),
-                        events
-                            .iter()
-                            .rev()
-                            .find_map(|event| match &event.payload {
-                                EventPayload::ProviderCommandsUpdated { commands } => Some(commands.clone()),
-                                _ => None,
-                            })
-                            .unwrap_or_default(),
-                        kybern_store::project_pending_questions(&events),
-                    ))
+                    Ok(crate::thread_projection::ThreadProjection::from_events(&events))
                 })
                 .await
-                .map_err(internal)?
                 .map_err(internal)?;
-            let (transcript, next_before_seq) = kybern_store::transcript_page(transcript, p.transcript_limit, p.before_seq);
+            let (transcript, next_before_seq) = kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            let pending_approvals = state.store.approvals_pending(Some(id)).map_err(internal)?;
             ok(ThreadsGetResult {
                 notes: state.store.thread_notes(thread.id).map_err(internal)?,
                 thread,
                 transcript,
                 next_before_seq,
                 pending_approvals,
-                runtime_tasks,
-                provider_usage,
-                provider_commands,
-                pending_questions,
+                runtime_tasks: projection.runtime_tasks.clone(),
+                provider_usage: projection.provider_usage.clone(),
+                provider_commands: projection.provider_commands.clone(),
+                pending_questions: projection.pending_questions.clone(),
             })
         }
         ThreadsUpdate::NAME => {

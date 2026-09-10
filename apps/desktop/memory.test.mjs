@@ -18,7 +18,7 @@ registerHooks({ resolve(specifier, context, next) {
       status = 'open'; info = null;
       constructor() { globalThis.memoryClient = this }
       onStatus(callback) { this.statusCallback = callback }
-      subscribeEvents(params, callback) { this.event = callback }
+      subscribeEvents(params, callback, subscribed, ready) { this.event = callback; this.subscribed = subscribed; this.ready = ready }
       connect() { this.statusCallback('open') }
       close() { this.status = 'closed' }
       call(method, params) { return this.reply(method, params) }
@@ -138,4 +138,85 @@ test("runtime snapshot replay survives live deltas, navigation, and disconnect d
   finish(snapshot(11)); await pending
   assert.equal(store.getState().transcripts.t.loaded, false)
   assert.equal(store.getState().transcripts.t.blocks.length, 0)
+})
+
+
+test("desktop reopen and completed reconnect replay reuse cached content; legacy hosts refresh", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("reconnect-runtime")
+  store.getState().set({ selected: { kind: "thread", id: "t" } })
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  let downloads = 0, head = 10
+  const thread = () => ({ id: "t", project_id: "p", status: "idle", last_seq: head })
+  client.reply = async (method) => {
+    if (method === "threads.get") {
+      downloads++
+      return { thread: thread(), transcript: [{ role: "assistant", id: "m", turn_id: "turn", text: "hello", thinking: "", complete: false, seq: 10 }], pending_approvals: [] }
+    }
+    if (method === "threads.list") return { threads: [thread()] }
+    if (method === "projects.list") return { projects: [{ id: "p" }] }
+    if (method === "providers.list") return { providers: [] }
+    if (method === "queue.list") return { messages: [] }
+    return { checkpoints: [] }
+  }
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+  client.subscribed(10, { resumed: false, supported: true }); await settle()
+  assert.equal(downloads, 1)
+  await runtime.loadThread("t")
+  assert.equal(downloads, 1, "reopen does not download an unchanged thread")
+  store.getState().set({ selected: { kind: "none" } })
+  client.event(event(++head, { kind: "assistant_text_delta", message_id: "m", delta: " while closed" }))
+  store.getState().set({ selected: { kind: "thread", id: "t" } })
+  await runtime.loadThread("t")
+  assert.equal(downloads, 1)
+  assert.equal(store.getState().transcripts.t.blocks[0].text, "hello while closed")
+  client.status = "reconnecting"; client.statusCallback("reconnecting")
+  client.status = "open"; client.statusCallback("open")
+  client.subscribed(12, { resumed: true, supported: true }); await settle()
+  assert.equal(downloads, 1)
+  client.event(event(++head, { kind: "assistant_text_delta", message_id: "m", delta: " after reconnect" }))
+  const before = store.getState().transcripts.t.blocks
+  client.ready(head, true); await settle()
+  assert.equal(downloads, 1)
+  assert.equal(store.getState().transcripts.t.blocks, before)
+  assert.equal(before[0].text, "hello while closed after reconnect")
+  client.subscribed(head, { resumed: true, supported: false }); await settle()
+  assert.equal(downloads, 2, "older hosts retain snapshot fallback")
+  runtime.disconnect()
+})
+
+
+test("desktop history paging freezes the sequence and preserves live text and row identities", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("history-runtime")
+  store.getState().set({ selected: { kind: "thread", id: "t" } })
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  let requested, finish
+  client.reply = (method, params) => {
+    if (method !== "threads.get") return Promise.resolve({ checkpoints: [] })
+    requested = params
+    if (params.before_seq) return new Promise(resolve => { finish = resolve })
+    return Promise.resolve({ thread: { id: "t", last_seq: 10 }, next_before_seq: 10, transcript: [{ role: "assistant", id: "m", turn_id: "turn", text: "Hello", complete: false, seq: 10 }], pending_approvals: [] })
+  }
+  await runtime.loadThread("t")
+  assert.equal(requested.transcript_limit, 60)
+  const pending = runtime.loadEarlier("t")
+  assert.equal(runtime.loadEarlier("t"), pending)
+  assert.equal(requested.before_seq, 10)
+  assert.equal(requested.through_seq, 10)
+  client.event(event(11, { kind: "assistant_text_delta", message_id: "m", delta: " world" }))
+  const live = store.getState().transcripts.t.blocks[0]
+  finish({ thread: { id: "t", last_seq: 10 }, transcript: [{ role: "user", id: "u", turn_id: "turn", seq: 1, message: { parts: [{ type: "text", text: "Earlier prompt" }] } }], pending_approvals: [] })
+  await pending
+  const current = store.getState().transcripts.t
+  assert.equal(current.nextBeforeSeq, null)
+  assert.equal(current.loadingEarlier, false)
+  assert.equal(current.blocks[0].kind, "user")
+  assert.equal(current.blocks[1], live)
+  assert.equal(current.blocks[1].text, "Hello world")
+  runtime.disconnect()
 })

@@ -66,3 +66,12 @@ fn wire_examples_roundtrip() {
     let legacy_diff_params: ThreadsDiffParams = serde_json::from_value(serde_json::json!({ "thread_id": uuid::Uuid::nil() })).unwrap();
     assert!(legacy_diff_params.include_patch);
 }
+
+#[test]
+fn replay_ready_schema_is_stable() {
+    insta::assert_json_snapshot!("events_subscribe_result", schema_for!(EventsSubscribeResult));
+    insta::assert_json_snapshot!("events_ready_notification", schema_for!(EventsReadyNotification));
+    let legacy: EventsSubscribeResult =
+        serde_json::from_value(serde_json::json!({"subscription_id": uuid::Uuid::nil(), "head_seq": 7})).unwrap();
+    assert!(!legacy.replay_ready);
+}

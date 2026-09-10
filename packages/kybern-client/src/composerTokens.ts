@@ -56,13 +56,13 @@ export function structuredSegments(value: string, mentionedPaths: ReadonlySet<st
 /** Every recognised `@file`, `@plugin` and `$skill` token in `value`, sorted by position. */
 export function structuredTokens(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[]): StructuredToken[] {
   const tokens: StructuredToken[] = []
-  const mentionPattern = /(^|\s)@([^\s]+)(?=\s|$)/g
-  let mentionMatch: RegExpExecArray | null
-  while ((mentionMatch = mentionPattern.exec(value))) {
-    const path = mentionMatch[2]!
-    if (!mentionedPaths.has(path)) continue
-    const start = mentionMatch.index + mentionMatch[1]!.length
-    tokens.push({ start, end: start + path.length + 1, part: { type: "file_mention", path } })
+  for (const path of [...mentionedPaths].sort((a, b) => b.length - a.length)) {
+    const pattern = new RegExp(`(^|\\s)@${escapeRegExp(path)}(?=[\\s,.;:!?]|$)`, "g")
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(value))) {
+      const start = match.index + match[1]!.length
+      tokens.push({ start, end: start + path.length + 1, part: { type: "file_mention", path } })
+    }
   }
 
   const skills = new Map<string, SkillInfo>()
@@ -89,7 +89,7 @@ export function structuredTokens(value: string, mentionedPaths: ReadonlySet<stri
   }
   const orderedSkills = [...skills.values()].sort((left, right) => right.name.length - left.name.length)
   for (const item of orderedSkills) {
-    const pattern = new RegExp(`(^|\\s)\\$${escapeRegExp(item.name)}(?=\\s|$)`, "gi")
+    const pattern = new RegExp(`(^|\\s)\\$${escapeRegExp(item.name)}(?=[\\s,.;:!?]|$)`, "gi")
     let match: RegExpExecArray | null
     while ((match = pattern.exec(value))) {
       const start = match.index + match[1]!.length

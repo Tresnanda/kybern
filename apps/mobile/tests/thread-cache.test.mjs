@@ -104,3 +104,24 @@ test("eviction follows visits, protects visible and pending work, and clears sta
   assert.equal(cache.size, 0);
   assert.equal(cache.isStale("a"), false);
 });
+
+
+test("only complete snapshots become fresh after replay and a second interruption retains the barrier", () => {
+  const cache = new ThreadCache();
+  cache.set("fresh", { text: "before" });
+  cache.set("stale", { text: "old" }); cache.invalidate("stale");
+  cache.beginReplay();
+  assert(cache.canReplay("fresh"));
+  assert(!cache.canReplay("stale"));
+  assert(cache.isStale("fresh"));
+  cache.set("fresh", { text: "caught up" });
+  cache.beginReplay();
+  assert(cache.canReplay("fresh"));
+  cache.finishReplay();
+  assert(!cache.isStale("fresh"));
+  assert(cache.isStale("stale"));
+  cache.beginReplay(); cache.invalidate("fresh"); cache.finishReplay();
+  assert(cache.isStale("fresh"), "rewind or a failed refresh still requires a snapshot");
+  cache.clear();
+  assert(!cache.canReplay("fresh"));
+});

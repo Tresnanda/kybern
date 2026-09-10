@@ -24,6 +24,7 @@ export function ComposerSuggestions({
   onAction,
   onPick,
   onDismiss,
+  onCatalog,
 }: {
   trigger: ComposerTrigger;
   projectId: string;
@@ -33,6 +34,7 @@ export function ComposerSuggestions({
   onAction: (name: string) => void;
   onPick: (part: ContentPart) => void;
   onDismiss: () => void;
+  onCatalog: (skills: SkillInfo[]) => void;
 }) {
   const { colors } = useTheme();
   const [skillsLoading, setSkillsLoading] = useState(true);
@@ -52,6 +54,7 @@ export function ComposerSuggestions({
       .then((r) => {
         if (alive) {
           setSkills(r.skills.filter((s) => s.enabled));
+          onCatalog(r.skills);
           setSkillsLoading(false);
         }
       })
@@ -64,7 +67,7 @@ export function ComposerSuggestions({
     return () => {
       alive = false;
     };
-  }, [projectId, provider]);
+  }, [projectId, provider, onCatalog]);
   useEffect(() => {
     let alive = true;
     setFiles([]);

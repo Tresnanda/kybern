@@ -67,6 +67,12 @@ Provider capabilities and installed tools determine which actions are available.
 Handoff starts a new agent conversation from the source transcript in the project;
 it does not transfer a running agent process or an uncommitted worktree.
 
+The model picker accepts custom IDs as well as discovered models. Open **Model**,
+enter the exact ID in **Find or enter a model**, then choose **Use “…”**. The same
+choice is available in thread setup and handoff. Selected custom IDs remain visible
+even when the agent's catalog does not list them. Kybern sends the ID unchanged;
+the connected harness determines which models are available to its account.
+
 ## Connectors and artifacts
 
 Choose **Connectors and plugins** from a conversation’s menu, or **Manage
@@ -261,9 +267,16 @@ a reveal delay. See [the mobile cadence check](perf/streaming-2026-09-09.md) for
 reproducible measurements and their limits.
 
 Recent conversations stay in a bounded memory cache while the app is open.
-Reopening an unchanged thread avoids another download; closed-thread updates and
-reconnects keep the cached text visible while a background request catches up.
-Switching computers clears the cache. See [cache and sheet verification](perf/cache-and-sheets-2026-09-09.md).
+Reopening a cached thread avoids another download. Loaded closed threads receive
+live events too. Updated daemons signal when reconnect replay is complete, so the
+app can validate cached content without fetching it again. Older daemons, missing
+cache entries, and changed history fall back to snapshot requests. Switching
+computers or restarting the app clears this session cache. See
+[remote connection verification](../desktop/perf/remote-connections-2026-09-10.md).
+
+During a running turn, consecutive successful completed tools fold into an
+expandable work row. Narration, active tools, errors, approvals, and agent launches
+stay visible. Expanding work uses individual virtual rows.
 
 ## EAS
 

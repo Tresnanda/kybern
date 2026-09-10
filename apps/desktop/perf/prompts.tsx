@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { useState } from "react"
 import { flushSync } from "react-dom"
 import { Composer } from "../src/views/Composer"
 import { QueuedPanel } from "../src/views/Thread"
@@ -8,7 +9,7 @@ import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/them
 import { useStore } from "../src/state/store"
 import { emptyThreadState } from "../src/state/transcript"
 import { transport } from "./prompts-rpc"
-import type { UserMessage } from "../src/protocol"
+import type { ProviderStatus, UserMessage } from "../src/protocol"
 import "../src/index.css"
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -31,6 +32,32 @@ function theme(variant: "light" | "dark") {
 }
 const sent: { mode: string; message: UserMessage }[] = []
 let failSteer = false
+const modelChanges: { model: string | undefined; effort: string | undefined }[] = []
+let failModel = false
+const claude: ProviderStatus = { kind: "claude-code", display_name: "Claude Code", available: true, instances: ["default"], supported_permission_modes: ["supervised"], supports_fork: true, supports_model_switch: true, supports_effort_switch: false, models: [{ id: "opus", display_name: "Claude Opus", default_effort: "medium" }] }
+export function ModelComposer({ emptyCatalog = false }: { emptyCatalog?: boolean }) {
+  const [model, setModel] = useState("opus")
+  return <div data-model-composer><Composer provider={{ kind: "claude-code", instance: "default" }} providers={[emptyCatalog ? { ...claude, models: [] } : claude]}
+    model={model} mode="supervised" onModeChange={() => {}} onSend={() => {}}
+    onModelChange={async (model, effort) => {
+      if (failModel) throw new Error("Model was rejected. Try another ID.")
+      modelChanges.push({ model, effort })
+      setModel(model ?? "")
+    }} /></div>
+}
+async function openCustomModel() {
+  document.querySelector<HTMLButtonElement>('[data-model-composer] [aria-label="Change model and reasoning"]')!.click()
+  await waitFor(() => !!document.querySelector('[role="menuitem"][aria-haspopup="menu"]'), "Model submenu is available")
+  document.querySelector<HTMLElement>('[role="menuitem"][aria-haspopup="menu"]')!.click()
+  await waitFor(() => !![...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(el => el.textContent?.includes("Use custom model")), "Custom model action is available")
+  ;[...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(el => el.textContent?.includes("Use custom model"))!.click()
+  await waitFor(() => !!document.querySelector('[role="dialog"] input'), "Custom model dialog opens")
+  return document.querySelector<HTMLInputElement>('[role="dialog"] input')!
+}
+function writeModel(element: HTMLInputElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(element, value)
+  element.dispatchEvent(new Event("input", { bubbles: true }))
+}
 const root = createRoot(document.getElementById("root")!)
 const attachment = { type: "attachment" as const, asset_id: "image", name: "mock.png", media_type: "image/png", size: 20 }
 async function run() {
@@ -46,6 +73,7 @@ async function run() {
             onSend={message => { sent.push({ mode: "queue", message }) }}
             onSteer={message => { if (failSteer) throw new Error("Try steering again."); sent.push({ mode: "steer", message }) }} />
           <QueuedPanel threadId="fixture" />
+          <ModelComposer emptyCatalog={variant === "dark"} />
         </div>
       </div>
     </ThemeProviderContext>))
@@ -95,12 +123,49 @@ async function run() {
     failSteer = false
     button("Steer now").click()
     await waitFor(() => sent.at(-1)?.mode === "steer" && composer.value === "", "Steering submits separately from queue")
+    write(composer, "Queue with Enter even when the button says steer")
+    await sleep(30)
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+    await waitFor(() => sent.at(-1)?.mode === "queue" && composer.value === "", "Enter always queues during work")
+    write(composer, "Steer using the platform shortcut")
+    await sleep(30)
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...(/Mac/.test(navigator.userAgent) ? { metaKey: true } : { ctrlKey: true }) }))
+    await waitFor(() => sent.at(-1)?.mode === "steer" && composer.value === "", "Platform modifier steers during work")
+    write(composer, "Keep composing")
+    await sleep(30)
+    const count = sent.length
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, shiftKey: true }))
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }))
+    await sleep(30)
+    check(sent.length === count && composer.value === "Keep composing", "Newlines and IME confirmation do not send")
     check(!!document.querySelector('[aria-label="Stop generation"]'), "Stop remains independently available")
+    const modelInput = await openCustomModel()
+    writeModel(modelInput, "   ")
+    await sleep(30)
+    check(button("Use model").disabled, "Blank custom IDs cannot be submitted")
+    writeModel(modelInput, "claude opus")
+    await sleep(30)
+    check(button("Use model").disabled, "Whitespace inside a model ID is rejected")
+    writeModel(modelInput, "  claude-opus-4-8  ")
+    await sleep(30)
+    failModel = true
+    button("Use model").click()
+    await sleep(60)
+    check(modelInput.value === "  claude-opus-4-8  " && !!document.querySelector('[role="dialog"]'), "Rejected model changes retain the custom ID")
+    failModel = false
+    button("Use model").click()
+    await waitFor(() => modelChanges.at(-1)?.model === "claude-opus-4-8" && !document.querySelector('[role="dialog"]'), "Custom model applies without catalog membership")
+    check(modelChanges.at(-1)?.effort === undefined, "Custom model does not change live effort")
+    check(document.querySelector('[data-model-composer] [aria-label="Change model and reasoning"]')!.textContent!.includes("claude-opus-4-8"), "The exact custom ID remains visible")
+    const reopened = await openCustomModel()
+    check(reopened.value === "claude-opus-4-8", "Reopening preserves the custom selection")
+    button("Cancel").click()
+    await waitFor(() => !document.querySelector('[role="dialog"]'), "Cancel closes without another change")
   }
   await sleep(700)
   const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="queued-follow-up-row"]')]
   check(rows.every(row => Number(getComputedStyle(row).opacity) === 1 && getComputedStyle(row).filter === "none"), "Queued rows finish entering")
-  report({ pass: true, themes: ["light", "dark"], notesConflict: true, failedSaveRetention: true, queueEditAttachments: true, steeringAndQueue: true })
+  report({ pass: true, themes: ["light", "dark"], notesConflict: true, failedSaveRetention: true, queueEditAttachments: true, steeringAndQueue: true, keyboardDelivery: true, customModels: true, emptyModelCatalog: true })
 }
 function report(value: unknown) {
   (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(value))

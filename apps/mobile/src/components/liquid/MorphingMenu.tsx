@@ -15,6 +15,9 @@ import {
 } from "react-native";
 import Animated, {
   Easing,
+  measure,
+  type AnimatedRef,
+  useFrameCallback,
   ReduceMotion,
   interpolate,
   useAnimatedStyle,
@@ -46,6 +49,7 @@ const ATTACHMENT_EXIT = {
 
 export function MorphingMenu({
   origin,
+  anchorRef,
   open,
   onClose,
   onClosed,
@@ -57,6 +61,7 @@ export function MorphingMenu({
   closingMotion = "spring",
 }: {
   origin: MenuOrigin;
+  anchorRef?: AnimatedRef<View>;
   open: boolean;
   onClose: () => void;
   onClosed: () => void;
@@ -90,6 +95,24 @@ export function MorphingMenu({
     placement === "above"
       ? Math.max(insets.top + 4, origin.y - menuHeight - 8)
       : belowY;
+  // A native modal can dismiss the keyboard underneath it. Follow the actual
+  // trigger rather than keeping the screen coordinates captured before opening.
+  const anchorOffset = useSharedValue({ x: 0, y: 0 });
+  useFrameCallback(() => {
+    if (!anchorRef) return;
+    const anchor = measure(anchorRef);
+    if (anchor)
+      anchorOffset.set({
+        x: anchor.pageX - origin.x,
+        y: anchor.pageY - origin.y,
+      });
+  });
+  const anchorStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: anchorOffset.get().x },
+      { translateY: anchorOffset.get().y },
+    ],
+  }));
   const destinationHeight = useSharedValue(0);
   const measured = useRef(false);
   useEffect(() => {
@@ -163,7 +186,17 @@ export function MorphingMenu({
         },
       ),
     );
-  }, [open, ready, reduced, attachmentExit, center, size, corners, fade, onClosed]);
+  }, [
+    open,
+    ready,
+    reduced,
+    attachmentExit,
+    center,
+    size,
+    corners,
+    fade,
+    onClosed,
+  ]);
   const geometry = useDerivedValue(() => {
     const p = reduced ? 1 : size.get();
     const c = reduced ? 1 : center.get();
@@ -229,8 +262,7 @@ export function MorphingMenu({
           ? open
             ? fade.get()
             : interpolate(size.get(), [0, 0.12], [0, 1], "clamp")
-          : 1) *
-        interpolate(size.get(), [0, 0.25], [1, 0], "clamp"),
+          : 1) * interpolate(size.get(), [0, 0.25], [1, 0], "clamp"),
   }));
   const menuContents = (
     <>
@@ -329,45 +361,72 @@ export function MorphingMenu({
           style={StyleSheet.absoluteFill}
         />
         <Animated.View
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, materialStyle]}
+          pointerEvents="box-none"
+          style={[StyleSheet.absoluteFill, anchorStyle]}
         >
           <Animated.View
-            style={[
-              {
-                position: "absolute",
-                top: 0,
-                left: 0,
-                boxShadow: "0 8px 36px #00000025",
-                borderWidth: 0.5,
-                borderColor: colors.line,
-              },
-              shape,
-            ]}
-          />
-        </Animated.View>
-        {Platform.OS === "android" ? (
-          <Animated.View
-            style={[
-              { position: "absolute", top: 0, left: 0, overflow: "hidden" },
-              shape,
-            ]}
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, materialStyle]}
           >
             <Animated.View
               style={[
-                { position: "absolute", top: 0, left: 0, width, height },
-                inversePosition,
+                {
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  boxShadow: "0 8px 36px #00000025",
+                  borderWidth: 0.5,
+                  borderColor: colors.line,
+                },
+                shape,
+              ]}
+            />
+          </Animated.View>
+          {Platform.OS === "android" ? (
+            <Animated.View
+              style={[
+                { position: "absolute", top: 0, left: 0, overflow: "hidden" },
+                shape,
               ]}
             >
-              {menuContents}
+              <Animated.View
+                style={[
+                  { position: "absolute", top: 0, left: 0, width, height },
+                  inversePosition,
+                ]}
+              >
+                {menuContents}
+              </Animated.View>
             </Animated.View>
-          </Animated.View>
-        ) : (
-          <MaskedView
-            androidRenderingMode="software"
-            pointerEvents="box-none"
-            style={blurRegion}
-            maskElement={
+          ) : (
+            <MaskedView
+              androidRenderingMode="software"
+              pointerEvents="box-none"
+              style={blurRegion}
+              maskElement={
+                <View
+                  style={{
+                    position: "absolute",
+                    left: -blurLeft,
+                    top: -blurTop,
+                    width,
+                    height,
+                  }}
+                >
+                  <Animated.View
+                    style={[
+                      {
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        backgroundColor: "black",
+                      },
+                      shape,
+                    ]}
+                  />
+                </View>
+              }
+            >
               <View
                 style={{
                   position: "absolute",
@@ -377,33 +436,11 @@ export function MorphingMenu({
                   height,
                 }}
               >
-                <Animated.View
-                  style={[
-                    {
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      backgroundColor: "black",
-                    },
-                    shape,
-                  ]}
-                />
+                {menuContents}
               </View>
-            }
-          >
-            <View
-              style={{
-                position: "absolute",
-                left: -blurLeft,
-                top: -blurTop,
-                width,
-                height,
-              }}
-            >
-              {menuContents}
-            </View>
-          </MaskedView>
-        )}
+            </MaskedView>
+          )}
+        </Animated.View>
       </View>
     </Modal>
   );

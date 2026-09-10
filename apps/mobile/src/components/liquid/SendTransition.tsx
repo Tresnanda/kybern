@@ -8,13 +8,14 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
-import { AppState, StyleSheet, View } from "react-native";
+import { AppState, Keyboard, StyleSheet, View } from "react-native";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, {
   measure,
   type AnimatedRef,
   interpolate,
   useAnimatedStyle,
+  useDerivedValue,
   useReducedMotion,
   useSharedValue,
   useFrameCallback,
@@ -35,7 +36,7 @@ import {
   DRAFT_SEND_THREAD,
 } from "../../state/sendTransition";
 import { useTheme } from "../../ui/theme";
-import { sendEndpointOffset, sendTravel } from "./sendGeometry";
+import { sendEndpointOffset, sendProgress, sendTravel } from "./sendGeometry";
 
 export function measureSendView(view: View | null): Promise<SendRect | null> {
   return new Promise((resolve) => {
@@ -63,7 +64,8 @@ type Destination = {
 };
 type PendingFlight = SendFlight & {
   destination?: Destination;
-  keyboardAtSend: number;
+  dismissKeyboard?: boolean;
+  keyboardAtSend?: number;
 };
 type MotionContext = {
   flight: PendingFlight | null;
@@ -136,8 +138,10 @@ export function SendTransitionProvider({ children }: PropsWithChildren) {
           receipt: { threadId: targetThread, messageId: key },
           message,
           sources,
+          dismissKeyboard: true,
           keyboardAtSend: keyboard.height.get(),
         });
+      else Keyboard.dismiss();
       return id;
     },
     [reduced, keyboard.height],
@@ -196,11 +200,13 @@ export function SendTransitionProvider({ children }: PropsWithChildren) {
       )
         return;
       setFlight({
-        id: ++serial.current, receipt, message, sources,
-        keyboardAtSend: keyboard.height.get(),
+        id: ++serial.current,
+        receipt,
+        message,
+        sources,
       });
     },
-    [reduced, keyboard.height],
+    [reduced],
   );
   const land = useCallback((id: number, destination: Destination) => {
     setFlight((current) =>
@@ -210,10 +216,23 @@ export function SendTransitionProvider({ children }: PropsWithChildren) {
     );
   }, []);
   useEffect(() => {
+    if (!flight?.dismissKeyboard || flight.destination) return;
+    // If virtualization cannot supply a target promptly, reveal the ordinary
+    // outgoing row and dismiss rather than holding the keyboard or a ghost.
+    const timer = setTimeout(() => {
+      Keyboard.dismiss();
+      finish(flight.id);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [flight?.id, flight?.destination, flight?.dismissKeyboard, finish]);
+  useEffect(() => {
     if (!flight) return;
     // A queued, unmounted, disconnected, or offscreen destination never leaves
     // a hidden row behind. No history row owns a permanent animation state.
-    const timer = setTimeout(() => finish(flight.id), 1600);
+    const timer = setTimeout(() => {
+      if (flight.dismissKeyboard) Keyboard.dismiss();
+      finish(flight.id);
+    }, 1600);
     return () => clearTimeout(timer);
   }, [flight?.id, finish]);
   useEffect(() => {
@@ -281,23 +300,29 @@ function Flight({
   origin: { x: number; y: number };
   finish: (id: number) => void;
 }) {
-  const progress = useSharedValue(0);
-  const shape = useSharedValue(0);
+  const elapsed = useSharedValue(0);
   const settled = useSharedValue(false);
-  const finished = useSharedValue(false);
+  const completionQueued = useSharedValue(false);
   const targetPosition = useSharedValue({ x: 0, y: 0 });
   const stableFrames = useSharedValue(0);
   const previousKeyboard = useSharedValue(0);
   const keyboard = useReanimatedKeyboardAnimation();
   const { colors } = useTheme();
   const destination = flight.destination;
-  const keyboardAtSend = flight.keyboardAtSend;
+  const keyboardAtSend = flight.keyboardAtSend ?? 0;
+  const progress = useDerivedValue(() =>
+    sendProgress(
+      elapsed.get(),
+      keyboardAtSend,
+      flight.dismissKeyboard ? keyboard.height.get() : keyboardAtSend,
+    ),
+  );
   const bubbleRef = destination?.bubbleRef;
   const bubbleRect = destination?.bubble;
   // One geometry read per frame, only while a send is in flight. All parts
   // share the bubble's displacement as the keyboard and list move underneath.
   useFrameCallback(() => {
-    if (!bubbleRef || !bubbleRect || finished.get()) return;
+    if (!bubbleRef || !bubbleRect) return;
     const target = measure(bubbleRef);
     if (!target) return;
     const next = {
@@ -313,8 +338,15 @@ function Flight({
     stableFrames.set(stable ? stableFrames.get() + 1 : 0);
     previousKeyboard.set(keyboardHeight);
     targetPosition.set(next);
-    if (settled.get() && stableFrames.get() >= 2) {
-      finished.set(true);
+    // RN may be busy when this is queued. Keep measuring the visible overlay
+    // until React actually removes it, including any final keyboard/list shift.
+    if (
+      !completionQueued.get() &&
+      settled.get() &&
+      progress.get() >= 0.999 &&
+      stableFrames.get() >= 2
+    ) {
+      completionQueued.set(true);
       scheduleOnRN(finish, flight.id);
     }
   });
@@ -323,27 +355,26 @@ function Flight({
     const offset = sendEndpointOffset(
       progress.get(),
       keyboardAtSend,
-      keyboard.height.get(),
+      flight.dismissKeyboard ? keyboard.height.get() : keyboardAtSend,
       target.x,
       target.y,
     );
     return {
-      transform: [
-        { translateX: offset.x },
-        { translateY: offset.y },
-      ],
+      transform: [{ translateX: offset.x }, { translateY: offset.y }],
     };
   });
   useEffect(() => {
     if (!destination) return;
-    const timing = { duration: 360, easing: Easing.bezier(0.77, 0, 0.175, 1) };
-    progress.set(withTiming(1, timing));
-    shape.set(
+    // Start both motions from the measured source, before the keyboard moves.
+    // A fast departure makes the detachment visible on the first frames.
+    if (flight.dismissKeyboard) Keyboard.dismiss();
+    const timing = { duration: 280, easing: Easing.bezier(0.23, 1, 0.32, 1) };
+    elapsed.set(
       withTiming(1, timing, (done) => {
         if (done) settled.set(true);
       }),
     );
-  }, [destination, progress, shape, settled]);
+  }, [destination, flight.dismissKeyboard, elapsed, settled]);
   const textSurface = destination?.surface;
   const sourceText = flight.sources.text?.rect;
   const background = useAnimatedStyle(() => {
@@ -400,7 +431,7 @@ function Flight({
             target={target}
             origin={origin}
             progress={progress}
-            shape={shape}
+            shape={progress}
           />
         );
       })}
@@ -433,7 +464,8 @@ function FlyingPart({
       opacity: source ? 1 : p,
       transform: [
         {
-          translateX: (from.x + from.width / 2 - to.x - to.width / 2) * (1 - travel.x),
+          translateX:
+            (from.x + from.width / 2 - to.x - to.width / 2) * (1 - travel.x),
         },
         {
           translateY:
@@ -577,8 +609,14 @@ function FlyingImage({
 }) {
   const style = useAnimatedStyle(() => {
     const travel = sendTravel(progress.get());
-    const width = Math.max(1, from.width + (to.width - from.width) * shape.get());
-    const height = Math.max(1, from.height + (to.height - from.height) * shape.get());
+    const width = Math.max(
+      1,
+      from.width + (to.width - from.width) * shape.get(),
+    );
+    const height = Math.max(
+      1,
+      from.height + (to.height - from.height) * shape.get(),
+    );
     return {
       // Follow the image's center as it grows, so its size change does not
       // introduce a second trajectory on top of the right-first flight.
@@ -586,12 +624,16 @@ function FlyingImage({
       height,
       borderRadius: 16 + (24 - 16) * Math.min(1, shape.get()),
       transform: [
-        { translateX:
-          (to.x + to.width / 2 - from.x - from.width / 2) * travel.x +
-          (from.width - width) / 2 },
-        { translateY:
-          (to.y + to.height / 2 - from.y - from.height / 2) * travel.y +
-          (from.height - height) / 2 },
+        {
+          translateX:
+            (to.x + to.width / 2 - from.x - from.width / 2) * travel.x +
+            (from.width - width) / 2,
+        },
+        {
+          translateY:
+            (to.y + to.height / 2 - from.y - from.height / 2) * travel.y +
+            (from.height - height) / 2,
+        },
       ],
     };
   });

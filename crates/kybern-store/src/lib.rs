@@ -6,7 +6,7 @@
 mod projection;
 mod schema;
 mod transcript_page;
-pub use transcript_page::transcript_page;
+pub use transcript_page::{transcript_page, transcript_page_ref};
 
 pub use projection::{
     project_pending_questions, project_provider_usage, project_runtime_tasks, project_thread_activity, project_transcript,

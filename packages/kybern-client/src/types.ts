@@ -15,6 +15,7 @@
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_PORT = 4173;
 export const EVENT_NOTIFICATION = "event";
+export const EVENTS_READY_NOTIFICATION = "events.ready";
 export const EVENTS_LAGGED_NOTIFICATION = "events.lagged";
 
 // ---- ids ----
@@ -786,6 +787,13 @@ export interface EventsSubscribeParams {
 }
 
 export interface EventsSubscribeResult {
+  subscription_id: SubscriptionId;
+  head_seq: EventSeq;
+  /** Available on daemons that send events.ready after replay. */
+  replay_ready?: boolean;
+}
+
+export interface EventsReadyNotification {
   subscription_id: SubscriptionId;
   head_seq: EventSeq;
 }

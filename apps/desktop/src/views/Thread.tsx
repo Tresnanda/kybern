@@ -259,7 +259,7 @@ export function ThreadView({
               model={thread.model}
               effort={thread.effort}
               surfaceMode={splitPaneId ? "split" : "single"}
-              onModelChange={(model, effort) => updateThread(threadId, { model, effort }).catch((e) => toast.error("Unable to change model", { description: errorText(e) }))}
+              onModelChange={(model, effort) => updateThread(threadId, { model, effort })}
               projectId={thread.project_id}
               commands={commands}
               onDigit={(n) => answer(n)}

@@ -29,7 +29,7 @@ import {
   type UserMessage,
 } from "@/protocol"
 
-import { applyEvent, compactThreadState, seedFromGet } from "./transcript"
+import { applyEvent, compactThreadState, seedFromGet, prependThreadHistory } from "./transcript"
 import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
@@ -50,10 +50,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const fileDiffLoads = new Map<string, Promise<Diff>>()
   const gitStatusLoads = new Map<ThreadId, Promise<GitStatus | null>>()
   const threadLoads = new Map<ThreadId, Promise<void>>()
+  const historyLoads = new Map<ThreadId, { promise: Promise<void>; buffer: ReturnType<typeof createSnapshotReplay> }>()
   const providerLoads = new Map<string, Promise<ProviderStatus[]>>()
   const snapshots = new Map<ThreadId, ReturnType<typeof createSnapshotReplay>>()
   let disposed = false
   let hydrationGeneration = 0
+  let canReuseSnapshots = false
+  const reusableSnapshots = new Set<ThreadId>()
   const uploads = new AbortController()
 
   function rpc(): KybernClient {
@@ -72,6 +75,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     )
     client.onStatus((status, detail) => {
       const s = useStore.getState()
+      if (status !== "open") {
+        canReuseSnapshots = false
+        hydrationGeneration++
+      }
       if (status === "open") {
         s.set({ connection: { state: "open" }, info: client?.info ?? null })
       } else if (status === "reconnecting") {
@@ -85,9 +92,20 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         })
       }
     })
-    client.subscribeEvents({}, onEvent, () => {
+    client.subscribeEvents({}, onEvent, (_headSeq, replay) => {
       const generation = ++hydrationGeneration
+      if (replay.resumed && replay.supported) {
+        canReuseSnapshots = false
+        return
+      }
+      // Old daemons and fresh subscriptions need authoritative snapshots.
+      reusableSnapshots.clear()
+      canReuseSnapshots = true
       void loadWorkspace(generation)
+    }, (_headSeq, resumed) => {
+      if (!resumed || disposed) return
+      canReuseSnapshots = true
+      void loadWorkspace(++hydrationGeneration)
     })
     client.connect()
   }
@@ -183,15 +201,21 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     return !disposed && generation === hydrationGeneration && client?.status === "open"
   }
 
-  function loadThread(id: ThreadId): Promise<void> {
+  function loadThread(id: ThreadId, force = false): Promise<void> {
     const pending = threadLoads.get(id)
     if (pending) return pending
+    if (!force && canReuseSnapshots && reusableSnapshots.has(id) && useStore.getState().transcripts[id]?.loaded)
+      return Promise.resolve()
 
+    historyLoads.delete(id)
     const request = (async () => {
       try {
         const generation = hydrationGeneration
+        const requested = Math.max(60, useStore.getState().transcripts[id]?.blocks.length ?? 0)
         let res: Awaited<ReturnType<typeof getSnapshot>> | undefined
-        async function getSnapshot() { return rpc().call("threads.get", { thread_id: id }) }
+        async function getSnapshot() {
+          return rpc().call("threads.get", { thread_id: id, ...(requested <= 500 ? { transcript_limit: requested } : {}) })
+        }
         let events: ThreadEvent[] | null = null
         for (let attempt = 0; attempt < 3; attempt++) {
           const buffer = createSnapshotReplay()
@@ -222,6 +246,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           for (const event of replay) next = applyEvent(next, event)
           return isThreadVisible(useStore.getState(), id) ? next : compactThreadState(next)
         })
+        const cached = useStore.getState().transcripts
+        for (const cachedId of reusableSnapshots)
+          if (!cached[cachedId]?.loaded) reusableSnapshots.delete(cachedId)
+        if (cached[id]?.loaded) reusableSnapshots.add(id)
         if (isThreadVisible(store, id)) void loadCheckpoints(id)
       } catch (error) {
         if (disposed) return
@@ -248,6 +276,33 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       if (threadLoads.get(id) === request) { threadLoads.delete(id); snapshots.delete(id) }
     })
     return request
+  }
+
+  function loadEarlier(id: ThreadId): Promise<void> {
+    const pending = historyLoads.get(id)
+    if (pending) return pending.promise
+    const base = useStore.getState().transcripts[id]
+    if (!base?.loaded || base.nextBeforeSeq == null || threadLoads.has(id) || rpc().status !== "open") return Promise.resolve()
+    const generation = hydrationGeneration
+    const record = { promise: Promise.resolve(), buffer: createSnapshotReplay() }
+    historyLoads.set(id, record)
+    useStore.getState().updateTranscript(id, (state) => ({ ...state, loadingEarlier: true }))
+    record.promise = rpc().call("threads.get", {
+      thread_id: id, transcript_limit: 60, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
+    }).then((page) => {
+      if (!isCurrentHydration(generation) || historyLoads.get(id) !== record) return
+      const replay = record.buffer.after(base.lastSeq)
+      if (!replay) throw new Error("Thread is updating too quickly. Try loading earlier messages again.")
+      useStore.getState().updateTranscript(id, (current) => prependThreadHistory(base, page, replay, current))
+    }).catch((error) => {
+      if (isCurrentHydration(generation)) toast.error("Unable to load earlier messages", { description: errorText(error) })
+    }).finally(() => {
+      if (historyLoads.get(id) === record) {
+        historyLoads.delete(id)
+        useStore.getState().updateTranscript(id, (state) => ({ ...state, loadingEarlier: false }))
+      }
+    })
+    return record.promise
   }
 
   function refreshProviders(projectId?: ProjectId): Promise<ProviderStatus[]> {
@@ -305,8 +360,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   function onEvent(ev: ThreadEvent) {
     if (disposed) return
     snapshots.get(ev.thread_id)?.add(ev)
+    historyLoads.get(ev.thread_id)?.buffer.add(ev)
     const s = useStore.getState()
     if (ev.kind === "approval_resolved") toast.dismiss(`agent-input:${ev.approval_id}`)
+    if (ev.kind === "workspace_reverted") reusableSnapshots.delete(ev.thread_id)
     if (
       ev.kind === "message_queued" ||
       ev.kind === "message_queue_updated" ||
@@ -700,7 +757,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       thread_id: threadId,
       turn_id: turnId,
     })
-    void loadThread(threadId)
+    void loadThread(threadId, true)
     void loadDiff(threadId)
     return r
   }
@@ -766,6 +823,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   function disconnect() {
     disposed = true
     snapshots.clear()
+    historyLoads.clear()
+    reusableSnapshots.clear()
     useStore.getState().releaseCachedData()
     hydrationGeneration++
     uploads.abort()
@@ -776,6 +835,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     disconnect,
     rpc,
     loadThread,
+    loadEarlier,
     refreshProviders,
     loadDiff,
     loadFileDiff,
@@ -818,6 +878,7 @@ export async function boot(): Promise<void> {
 }
 export const rpc: EnvironmentRuntime["rpc"] = (...args) =>
   activeRuntime().rpc(...args)
+export const loadEarlier: EnvironmentRuntime["loadEarlier"] = (...args) => activeRuntime().loadEarlier(...args)
 export const loadThread: EnvironmentRuntime["loadThread"] = (...args) =>
   activeRuntime().loadThread(...args)
 export const refreshProviders: EnvironmentRuntime["refreshProviders"] = (

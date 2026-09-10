@@ -7,12 +7,14 @@ import type { ProviderUsage } from "@/protocol"
 // Stacked panels (queued follow-ups, approval card, empty-landing tray) render
 // through `above`, inside the same column frame.
 
-import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Fragment, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { HiOutlineHandRaised } from "react-icons/hi2"
 import { toast } from "sonner"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/kit/button"
+import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, dialogFieldLabelClassName } from "@/components/kit/dialog"
+import { Input } from "@/components/kit/input"
 import { ComposerColumnFrame } from "@/components/kit/chat/ComposerColumnFrame"
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
@@ -39,7 +41,7 @@ import { Kbd } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { buildStructuredTextParts, structuredSegments } from "@/lib/composerTokens"
-import { PROVIDER_LABEL, basename } from "@/lib/format"
+import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
 import { CentralIcon } from "@/lib/kit/central-icons"
 import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
   SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
@@ -49,6 +51,7 @@ import { InlineToken } from "@/components/kybern/InlineToken"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
+import { customModelId, modelChoices } from "../../../../packages/kybern-client/src/models"
 
 export interface ComposerHandle {
   focus: () => void
@@ -93,7 +96,7 @@ export interface ComposerProps {
   onProviderChange?: (p: ProviderInstance) => void
   model?: string | null
   effort?: string | null
-  onModelChange?: (model: string | undefined, effort: string | undefined) => void
+  onModelChange?: (model: string | undefined, effort: string | undefined) => Promise<void> | void
   /** Enables @ file mentions. */
   projectId?: ProjectId
   /** Slash commands offered at a word boundary. */
@@ -120,15 +123,6 @@ const MODES: { mode: PermissionMode; label: string; description: string; icon: R
 ]
 
 /** "claude-fable-5-1" -> "Claude Fable 5.1" when the catalog has no entry. */
-function prettyModel(id: string): string {
-  return id
-    .replace(/^.*\//, "")
-    .split("-")
-    .map((w) => (/^\d+$/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
-    .join(" ")
-    .replace(/(\d) (\d)/g, "$1.$2")
-}
-
 // The textarea and its highlight layer share these metrics exactly so the
 // painted tokens sit under the same glyphs the user is editing.
 const EDITOR_METRICS_CLASS =
@@ -271,6 +265,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue")
   const steering = running && !!onSteer && promptMode === "steer"
   const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
+  const [customModel, setCustomModel] = useState<string | null>(null)
+  const [changingModel, setChangingModel] = useState(false)
+  const customModelFieldId = useId()
   const [dragOver, setDragOver] = useState(false)
   const [fileResult, setFileResult] = useState<{ query: string; files: string[] }>({ query: "", files: [] })
   const [skillCatalog, setSkillCatalog] = useState<{ key: string; skills: SkillInfo[] }>({ key: "", skills: [] })
@@ -506,11 +503,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     return parts
   }
 
-  const submit = async () => {
+  const submit = async (delivery: "queue" | "steer" = promptMode) => {
     if (!canSend) return
     setSending(true)
     try {
-      await (steering ? onSteer! : onSend)({ parts: buildParts() })
+      await (running && delivery === "steer" && onSteer ? onSteer : onSend)({ parts: buildParts() })
       if (props.draftKey) ownerStore.getState().set((state) => {
         const composerDrafts = { ...state.composerDrafts }
         delete composerDrafts[props.draftKey!]
@@ -567,6 +564,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return
+    const steerShortcut = running && (isMac ? e.metaKey : e.ctrlKey)
     if (menuOpen && menuItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault()
@@ -578,7 +577,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         setMenuIndex((i) => (i - 1 + menuItems.length) % menuItems.length)
         return
       }
-      if (e.key === "Enter" || e.key === "Tab") {
+      if ((e.key === "Enter" && !e.shiftKey && !steerShortcut) || e.key === "Tab") {
         e.preventDefault()
         pick(menuIndex)
         return
@@ -598,7 +597,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      void submit()
+      void submit(running ? (steerShortcut ? "steer" : "queue") : promptMode)
     }
   }
 
@@ -608,13 +607,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
   const models = status?.models ?? []
-  const current =
-    models.find((m) => (model ? m.id === model : m.is_default)) ??
-    (model ? models.find((m) => m.id.startsWith(model) || model.startsWith(m.id)) : undefined)
-  const modelLabel = current?.display_name ?? (model ? prettyModel(model) : null)
+  const current = models.find((m) => (model ? m.id === model : m.is_default))
+  const modelLabel = current?.display_name ?? (model || null)
+  const modelOptions = modelChoices(models, model).models.filter((m) => m.id)
   const efforts = current?.efforts?.length ? current.efforts : (status?.supported_efforts ?? [])
   const effortLabel = effort ?? current?.default_effort ?? null
-  const canPickModel = !!onModelChange && (models.length > 0 || efforts.length > 0)
+  const canPickModel = !!onModelChange
+  const customId = customModelId(customModel ?? "")
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch && models.length === 0
   const canPickProvider = !!onProviderChange
   const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
@@ -630,6 +629,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       : skill
         ? "No matching skills"
         : "No matching commands or skills"
+
+  async function changeModel(nextModel: string | undefined, nextEffort: string | undefined) {
+    if (changingModel) return false
+    setChangingModel(true)
+    try {
+      await onModelChange?.(nextModel, nextEffort)
+      return true
+    } catch (error) {
+      toast.error("Unable to change model", { description: errorText(error) })
+      return false
+    } finally {
+      setChangingModel(false)
+    }
+  }
 
   const reloadModels = async () => {
     if (!provider || modelCatalogLoading) return
@@ -975,7 +988,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       {efforts.length > 0 && canPickModel && (
                         <MenuGroup className={canReloadModels ? "mt-1" : undefined}>
                           <MenuGroupLabel>Effort</MenuGroupLabel>
-                          <MenuRadioGroup value={effortLabel ?? ""} onValueChange={(v) => onModelChange?.(current?.id ?? model ?? undefined, v as string)}>
+                          <MenuRadioGroup value={effortLabel ?? ""} onValueChange={(v) => void changeModel(current?.id ?? model ?? undefined, v as string)}>
                             {efforts.map((e) => (
                               <MenuRadioItem key={e} value={e}>
                                 <span className="capitalize">{e}</span>
@@ -985,7 +998,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           </MenuRadioGroup>
                         </MenuGroup>
                       )}
-                      {models.length > 0 && canPickModel && (
+                      {canPickModel && (
                         <>
                           {efforts.length > 0 && <MenuSeparator />}
                           <MenuGroup>
@@ -995,13 +1008,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 <span className="truncate">{modelLabel ?? "Model"}</span>
                               </MenuSubTrigger>
                               <ComposerPickerMenuSubPopup fixedWidth className="[--available-height:min(20rem,55vh)]">
-                                <MenuRadioGroup value={current?.id ?? ""} onValueChange={(v) => onModelChange?.(v as string, models.find((m) => m.id === v)?.default_effort ?? undefined)}>
-                                  {models.map((m) => (
+                                <MenuRadioGroup value={model ?? current?.id ?? ""} onValueChange={(v) => void changeModel(v as string, models.find((m) => m.id === v)?.default_effort ?? undefined)}>
+                                  {modelOptions.map((m) => (
                                     <MenuRadioItem key={m.id} value={m.id}>
                                       <span className="truncate">{m.display_name}</span>
                                     </MenuRadioItem>
                                   ))}
                                 </MenuRadioGroup>
+                                {modelOptions.length > 0 && <MenuSeparator />}
+                                <MenuItem onClick={() => setCustomModel(model ?? "")}>
+                                  <PlusIcon className="size-3" />
+                                  <span>Use custom model…</span>
+                                </MenuItem>
                               </ComposerPickerMenuSubPopup>
                             </MenuSub>
                           </MenuGroup>
@@ -1009,7 +1027,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       )}
                       {canPickProvider && (
                         <>
-                          {(models.length > 0 || efforts.length > 0 || canReloadModels) && <MenuSeparator />}
+                          {(canPickModel || efforts.length > 0 || canReloadModels) && <MenuSeparator />}
                           <MenuGroup>
                             <MenuGroupLabel>Agent</MenuGroupLabel>
                             <MenuRadioGroup value={provider.kind} onValueChange={(v) => onProviderChange?.({ kind: v as ProviderStatus["kind"], instance: "default" })}>
@@ -1030,7 +1048,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
                 {running && (
                   <div className="flex items-center gap-0.5">
-                    <Button variant="subtle" size="chip" disabled={!canSend} onClick={() => void submit()}>
+                    <Button variant="subtle" size="chip" disabled={!canSend} title={steering ? `${mod}+Enter to steer` : "Enter to queue"} onClick={() => void submit()}>
                       {sending ? "Sending…" : steering ? "Steer now" : "Queue"}
                     </Button>
                     {onSteer && <Menu>
@@ -1040,10 +1058,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       <ComposerPickerMenuPopup align="end" side="top" className="w-60">
                         <MenuGroup>
                           <MenuItem onClick={() => setPromptMode("queue")}>
-                            <div><div>Queue follow-up{!steering ? " ✓" : ""}</div><div className="text-xs text-muted-foreground">Send after the current work finishes</div></div>
+                            <div><div>Queue follow-up{!steering ? " ✓" : ""}</div><div className="text-xs text-muted-foreground">Send after the current work finishes · Enter</div></div>
                           </MenuItem>
                           <MenuItem onClick={() => setPromptMode("steer")}>
-                            <div><div>Steer now{steering ? " ✓" : ""}</div><div className="text-xs text-muted-foreground">Guide the current turn immediately</div></div>
+                            <div><div>Steer now{steering ? " ✓" : ""}</div><div className="text-xs text-muted-foreground">Guide the current turn immediately · {mod}+Enter</div></div>
                           </MenuItem>
                         </MenuGroup>
                       </ComposerPickerMenuPopup>
@@ -1111,6 +1129,29 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           )}
         </div>
       </div>
+      <Dialog open={customModel !== null} onOpenChange={(open) => { if (!open) setCustomModel(null) }}>
+        <DialogPopup className="max-w-sm">
+          <form onSubmit={(event) => {
+            event.preventDefault()
+            if (!customId) return
+            void changeModel(customId, undefined).then((saved) => { if (saved) setCustomModel(null) })
+          }}>
+            <DialogHeader>
+              <DialogTitle>Use custom model</DialogTitle>
+              <DialogDescription>Enter the exact model ID accepted by {provider ? PROVIDER_LABEL[provider.kind] : "your agent"}.</DialogDescription>
+            </DialogHeader>
+            <DialogPanel className="flex flex-col gap-2 pt-2">
+              <label htmlFor={customModelFieldId} className={dialogFieldLabelClassName}>Model ID</label>
+              <Input id={customModelFieldId} autoFocus disabled={changingModel} autoComplete="off" autoCapitalize="none" spellCheck={false}
+                placeholder="Enter a model ID" value={customModel ?? ""} onChange={(event) => setCustomModel(event.target.value)} />
+            </DialogPanel>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setCustomModel(null)}>Cancel</Button>
+              <Button type="submit" disabled={!customId || changingModel}>{changingModel ? "Applying…" : "Use model"}</Button>
+            </DialogFooter>
+          </form>
+        </DialogPopup>
+      </Dialog>
     </ComposerColumnFrame>
   )
 })

@@ -4,6 +4,8 @@ import {
   PROTOCOL_VERSION,
   EVENT_NOTIFICATION,
   EVENTS_LAGGED_NOTIFICATION,
+  EVENTS_READY_NOTIFICATION,
+  type EventsReadyNotification,
   codes,
   type DaemonInfo,
   type EventNotification,
@@ -58,13 +60,21 @@ type Pending = {
 };
 type StatusHandler = (status: ConnectionStatus, detail?: string) => void;
 export type EventHandler = (event: ThreadEvent) => void;
+export interface ReplayState {
+  /** A previous delivery cursor was used, rather than a new live-only subscription. */
+  resumed: boolean;
+  /** The server will signal replay completion with events.ready. */
+  supported: boolean;
+}
 interface EventSubscription {
   params: EventsSubscribeParams;
   handler: EventHandler;
   lastSeq: number | undefined;
   remoteId: SubscriptionId | undefined;
   generation: number;
-  onSubscribed?: (headSeq: number) => void;
+  onSubscribed?: (headSeq: number, replay: ReplayState) => void;
+  onReady?: (headSeq: number, resumed: boolean) => void;
+  ready: { headSeq: number; resumed: boolean } | undefined;
 }
 export interface Subscription {
   unsubscribe(): void;
@@ -90,6 +100,9 @@ export class KybernClient {
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private openTimer: ReturnType<typeof setTimeout> | undefined;
   private opening: AbortController | undefined;
+  // Discovery starts provider processes. Share concurrent requests and reuse
+  // recent results across pickers and sends, scoped to this verified endpoint.
+  private skills = new Map<string, { expires: number; value: Promise<unknown> }>();
 
   constructor(endpoint: Endpoint, options: ClientOptions = {}) {
     this.endpoint = endpoint;
@@ -114,6 +127,7 @@ export class KybernClient {
     this.generation++;
     clearTimeout(this.reconnectTimer);
     this.dropSocket(new ConnectionClosedError(reason));
+    this.skills.clear();
     this.subscriptions.clear();
     this.byRemoteId.clear();
     this.setStatus("closed", reason);
@@ -141,6 +155,23 @@ export class KybernClient {
     method: M,
     params: ParamsOf<M>,
   ): Promise<ResultOf<M>> {
+    if (method === "skills.list" && this._status === "open") {
+      const input = params as ParamsOf<"skills.list">;
+      const key = JSON.stringify([input.project_id, input.provider]);
+      const cached = this.skills.get(key);
+      if (cached && cached.expires > Date.now())
+        return cached.value as Promise<ResultOf<M>>;
+      const entry = { expires: Infinity, value: this.callRaw(method, params) };
+      this.skills.delete(key);
+      this.skills.set(key, entry);
+      while (this.skills.size > 24) this.skills.delete(this.skills.keys().next().value!);
+      void entry.value.then(() => { entry.expires = Date.now() + 60_000; }, () => {
+        if (this.skills.get(key) === entry) this.skills.delete(key);
+      });
+      return entry.value as Promise<ResultOf<M>>;
+    }
+    // Configuration/installation changes must be visible on the next open.
+    if (method === "settings.update" || method === "integrations.change") this.skills.clear();
     return this.callRaw(method, params) as Promise<ResultOf<M>>;
   }
 
@@ -185,12 +216,15 @@ export class KybernClient {
   subscribeEvents(
     params: EventsSubscribeParams,
     handler: EventHandler,
-    onSubscribed?: (headSeq: number) => void,
+    onSubscribed?: (headSeq: number, replay: ReplayState) => void,
+    onReady?: (headSeq: number, resumed: boolean) => void,
   ): Subscription {
     const sub: EventSubscription = {
       params,
       handler,
       onSubscribed,
+      onReady,
+      ready: undefined,
       lastSeq: params.after_seq,
       remoteId: undefined,
       generation: 0,
@@ -372,6 +406,7 @@ export class KybernClient {
     this.byRemoteId.clear();
     for (const sub of this.subscriptions) {
       sub.remoteId = undefined;
+      sub.ready = undefined;
       sub.generation++;
     }
   }
@@ -425,6 +460,17 @@ export class KybernClient {
           sub.lastSeq = params.event.seq;
           sub.handler(params.event);
         }
+      } else if (frame.method === EVENTS_READY_NOTIFICATION) {
+        const ready = frame.params as EventsReadyNotification;
+        const sub = ready && this.byRemoteId.get(ready.subscription_id);
+        if (sub?.ready && ready.head_seq === sub.ready.headSeq) {
+          const { resumed } = sub.ready;
+          sub.ready = undefined;
+          // For a filtered subscription there may be no event at the global
+          // head. The barrier still advances its safe reconnect cursor.
+          sub.lastSeq = Math.max(sub.lastSeq ?? 0, ready.head_seq);
+          sub.onReady?.(ready.head_seq, resumed);
+        }
       } else if (frame.method === EVENTS_LAGGED_NOTIFICATION) {
         for (const sub of this.subscriptions) void this.issueSubscribe(sub);
       }
@@ -436,6 +482,8 @@ export class KybernClient {
   private async issueSubscribe(sub: EventSubscription) {
     const generation = ++sub.generation;
     const socket = this.ws;
+    const resumed = sub.lastSeq !== undefined;
+    sub.ready = undefined;
     if (sub.remoteId) {
       this.byRemoteId.delete(sub.remoteId);
       void this.call("events.unsubscribe", {
@@ -446,7 +494,7 @@ export class KybernClient {
     try {
       const result = await this.call("events.subscribe", {
         ...sub.params,
-        ...(sub.lastSeq === undefined ? {} : { after_seq: sub.lastSeq }),
+        after_seq: sub.lastSeq,
       });
       if (
         !this.subscriptions.has(sub) ||
@@ -464,7 +512,8 @@ export class KybernClient {
       // A live-only subscription starts at its acknowledged head even if no
       // new events arrive before the first disconnect.
       sub.lastSeq ??= result.head_seq;
-      sub.onSubscribed?.(result.head_seq);
+      if (result.replay_ready) sub.ready = { headSeq: result.head_seq, resumed };
+      sub.onSubscribed?.(result.head_seq, { resumed, supported: result.replay_ready === true });
     } catch (error) {
       if (
         this.ws !== socket ||
@@ -477,9 +526,14 @@ export class KybernClient {
         error instanceof RpcCallError &&
         error.code === codes.INVALID_PARAMS
       ) {
-        this.fail(
-          "This environment’s event history changed. Restart Kybern to reload its current state",
-        );
+        if (sub.lastSeq !== undefined) {
+          // A restored database can move the event head backwards. Start a
+          // live-only subscription and let callers replace their stale snapshots.
+          sub.lastSeq = undefined;
+          void this.issueSubscribe(sub);
+        } else {
+          this.fail("Unable to subscribe to this environment. Update Kybern and reconnect");
+        }
       } else {
         this.retry("Unable to synchronize this environment");
       }

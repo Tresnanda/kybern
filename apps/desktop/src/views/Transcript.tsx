@@ -64,7 +64,7 @@ import {
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
-import { errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
+import { errorText, loadDiff, loadFileDiff, loadEarlier, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
@@ -231,6 +231,10 @@ export function Transcript({
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
+  const historyOffset = state?.nextBeforeSeq != null ? 1 : 0
+  const virtualGroups = useMemo<readonly (TurnGroup | null)[]>(() => historyOffset ? [null, ...groups] : groups, [groups, historyOffset])
+  const virtualKey = useCallback((group: TurnGroup | null, index: number) => group ? turnKey(group, index - historyOffset) : "history-control", [historyOffset])
+  const virtualEstimate = useCallback((group: TurnGroup | null) => group ? estimateTurnSize(group) : 48, [])
   const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
   const selectedActivity = agentActivityTrail.at(-1)
   const runtimeTasks = useStore((s) => selectedActivity?.threadId === threadId ? s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS : EMPTY_RUNTIME_TASKS)
@@ -277,7 +281,7 @@ export function Transcript({
       items: navigationItems,
       scrollToEnd() { rows.current?.scrollToEnd() },
       activeId(scroll) {
-        const index = rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0
+        const index = (rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0) - historyOffset
         const candidates = byTurn.get(index) ?? []
         const group = groups[index]
         if (!group) return ""
@@ -299,7 +303,7 @@ export function Transcript({
         const scroll = viewport.current
         if (!item || !scroll) return
         cancelAnimationFrame(navigationFrame.current)
-        rows.current?.scrollToIndex(item.turnIndex, { align: "start" })
+        rows.current?.scrollToIndex(item.turnIndex + historyOffset, { align: "start" })
         let attempts = 0
         const refine = () => {
           const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
@@ -313,7 +317,7 @@ export function Transcript({
         navigationFrame.current = requestAnimationFrame(refine)
       },
     }
-  }, [groups, navigationItems])
+  }, [groups, navigationItems, historyOffset])
   const [following, setFollowing] = useState(true)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
@@ -364,8 +368,16 @@ export function Transcript({
               <p className="text-sm text-muted-foreground/30">Send a message to start the conversation.</p>
             </div>
           ) : (
-            <TranscriptStateRoot key={threadId}><VirtualRows items={groups} getKey={turnKey} estimateSize={estimateTurnSize} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
-              {(g, i) => <div data-turn-id={turnKey(g, i)}><Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} /></div>}
+            <TranscriptStateRoot key={threadId}><VirtualRows items={virtualGroups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
+              {(g, i) => g ? <div data-turn-id={turnKey(g, i - historyOffset)}><Turn group={g} threadId={threadId} isLast={i === virtualGroups.length - 1} onOpenAgentActivity={openAgentActivity} /></div> : (
+                <div className={cn(ROW, "pb-4")}>
+                  <button type="button" disabled={state.loadingEarlier} aria-busy={state.loadingEarlier}
+                    onClick={() => void loadEarlier(threadId)}
+                    className="rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait">
+                    {state.loadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
+                  </button>
+                </div>
+              )}
             </VirtualRows></TranscriptStateRoot>
           )}
         </MessageScroller>
@@ -924,7 +936,7 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
 function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, tone = "muted", liveTextId = null, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; tone?: WorkTone; liveTextId?: string | null; onOpenAgentActivity: OpenAgentActivity }) {
   const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
   const hierarchy = buildWorkHierarchy(blocks)
-  return <WorkRows blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
+  return <WorkRows compact blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
 }
 
 type WorkTone = "bright" | "muted"
@@ -996,11 +1008,10 @@ function ToolGroupRow({
       />
     ))
   return (
-    <div className="py-1">
-      <button
+    <Collapsible open={open} onOpenChange={setOpen} className="py-1">
+      <CollapsibleTrigger
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
         className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
       >
         <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
@@ -1010,8 +1021,8 @@ function ToolGroupRow({
           {summary.label}
         </span>
         <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
-      </button>
-      <DisclosureRegion open={open} contentClassName="ms-5 mt-0.5 space-y-0.5 ps-0.5">
+      </CollapsibleTrigger>
+      <CollapsiblePanel><div className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
         <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{(block) => (
           <ToolRow
             key={block.id}
@@ -1022,8 +1033,8 @@ function ToolGroupRow({
             onOpenAgentActivity={onOpenAgentActivity}
           />
         )}</VirtualRows>
-      </DisclosureRegion>
-    </div>
+      </div></CollapsiblePanel>
+    </Collapsible>
   )
 }
 

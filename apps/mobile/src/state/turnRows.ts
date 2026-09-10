@@ -11,6 +11,7 @@ export type TurnRow =
       key: string;
       turnId: string;
       durationMs: number;
+      label?: string;
       expanded: boolean;
     };
 
@@ -19,6 +20,11 @@ export function workDuration(milliseconds: number) {
   return seconds < 60
     ? `${seconds}s`
     : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function launchesAgent(block: Extract<Block, { kind: "tool" }>) {
+  const leaf = block.call.name.split(/__|[/:.]/).at(-1)!.toLowerCase().replace(/[^a-z]/g, "");
+  return ["task", "agent", "subagent", "delegate", "spawnagent"].includes(leaf);
 }
 
 function staysVisible(block: Block) {
@@ -51,7 +57,7 @@ export function createTurnRows() {
     for (const group of groupTurns(blocks)) {
       const expanded = expandedTurns.has(group.turnId);
       const previous = cache.get(group.turnId);
-      if (previous?.group === group && previous.expanded === expanded) {
+      if (group.end && previous?.group === group && previous.expanded === expanded) {
         next.set(group.turnId, previous);
         result.push(...previous.rows);
         continue;
@@ -66,11 +72,29 @@ export function createTurnRows() {
         });
       if (group.user) add(group.user);
       // A paginated running turn may not have its user message loaded yet.
-      // Only its completion record can make it eligible for folding.
+      // Group completed tool runs in place; narration and unfinished work stay visible.
       if (!group.end) {
-        [...group.work, ...group.images]
-          .sort((a, b) => a.seq - b.seq)
-          .forEach((block) => add(block));
+        let tools: Block[] = [];
+        const flush = () => {
+          if (tools.length < 2) tools.forEach((block) => add(block));
+          else {
+            const key = `${group.turnId}:tools:${tools[0]!.id}`;
+            const open = expandedTurns.has(key);
+            rows.push({ kind: "work", key, turnId: key, durationMs: 0,
+              label: `${tools.length} completed steps`, expanded: open });
+            if (open) tools.forEach((block) => add(block, true));
+          }
+          tools = [];
+        };
+        const taskCalls = new Set(group.work.flatMap((block) =>
+          block.kind === "runtime_task" && block.task.tool_call_id
+            ? [block.task.tool_call_id] : []));
+        for (const block of [...group.work, ...group.images].sort((a, b) => a.seq - b.seq)) {
+          if (block.kind === "tool" && block.complete && !block.isError &&
+              !taskCalls.has(block.call.id) && !launchesAgent(block)) tools.push(block);
+          else { flush(); add(block); }
+        }
+        flush();
       } else {
         const work = group.work.filter((block) => !staysVisible(block));
         group.work.filter(staysVisible).forEach((block) => add(block));

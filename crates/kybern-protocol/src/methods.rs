@@ -934,6 +934,9 @@ pub struct EventsSubscribeResult {
     pub subscription_id: SubscriptionId,
     /// Latest persisted seq at subscribe time. Replay covers up to and including this.
     pub head_seq: EventSeq,
+    /// This daemon sends `events.ready` after replay, before live delivery resumes.
+    #[serde(default)]
+    pub replay_ready: bool,
 }
 method!(EventsSubscribe, "events.subscribe", Some(Scope::OrchestrationRead), EventsSubscribeParams, EventsSubscribeResult);
 

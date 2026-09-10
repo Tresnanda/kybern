@@ -1,3 +1,4 @@
+import { partToken } from "../../../../packages/kybern-client/src/composerTokens.ts";
 import type { ContentPart, SkillInfo } from "./protocol";
 /** Preserve the provider's native skill/plugin distinction on the wire. */
 export function capabilityPart(skill: SkillInfo): ContentPart {
@@ -45,4 +46,28 @@ export function replaceComposerTrigger(
   const next =
     text.slice(0, trigger.start) + insertion + text.slice(trigger.end);
   return { text: next, caret: trigger.start + insertion.length };
+}
+
+/** Picker choices occupy editable text at the caret, retaining the suffix. */
+export function insertComposerPart(
+  text: string,
+  selection: { start: number; end: number },
+  part: ContentPart,
+  replaceTrigger = true,
+) {
+  const literal = part.type === "text" ? part.text : partToken(part);
+  if (literal === null) return { text, caret: selection.end };
+  const trigger = replaceTrigger ? composerTrigger(text, selection) : null;
+  const start = Math.min(trigger?.start ?? selection.start, text.length);
+  const end = Math.min(trigger?.end ?? selection.end, text.length);
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const prefix = before && !/\s$/.test(before) ? " " : "";
+  const suffix = /\s$/.test(literal) || /^\s/.test(after) ? "" : " ";
+  const insertion = prefix + literal + suffix;
+  return {
+    text: before + insertion + after,
+    caret:
+      before.length + insertion.length + (!suffix && /^ /.test(after) ? 1 : 0),
+  };
 }

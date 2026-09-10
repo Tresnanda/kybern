@@ -3,6 +3,7 @@ import {
   Image,
   Modal,
   ScrollView,
+  Text,
   View,
   useWindowDimensions,
 } from "react-native";
@@ -20,6 +21,7 @@ import type { Block } from "../state/transcript";
 import { useTheme } from "../ui/theme";
 import { T, Tap, IconButton } from "../ui/primitives";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { groupInlineParts, inlineTextRuns } from "../state/inlineMessage";
 import { MessagePart, imageSource } from "./MessagePart";
 
 export function UserMessageBubble({
@@ -30,7 +32,7 @@ export function UserMessageBubble({
   threadId: string;
 }) {
   const { colors } = useTheme();
-  const { height, width } = useWindowDimensions();
+  const { height, width, fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [viewing, setViewing] = useState<number | null>(null);
   const textSurface = useRef<View>(null);
@@ -171,16 +173,40 @@ export function UserMessageBubble({
               gap: 8,
             }}
           >
-            {body.map(({ part, index }) => (
+            {groupInlineParts(body).map(({ inline, entries }) => (
               <View
-                key={index}
+                key={entries[0]!.index}
                 collapsable={false}
-                ref={(view) => register(index, view)}
+                ref={(view) => {
+                  for (const { index } of entries) register(index, view);
+                }}
               >
-                <MessagePart
-                  part={part}
-                  localUri={localUris.current.get(index)}
-                />
+                {inline ? (
+                  <T key={fontScale} selectable>
+                    {inlineTextRuns(entries.map(({ part }) => part)).map(
+                      (run, index) => (
+                        <Text
+                          key={index}
+                          style={
+                            run.highlighted
+                              ? {
+                                  color: colors.accent,
+                                  backgroundColor: colors.accentSoft,
+                                }
+                              : undefined
+                          }
+                        >
+                          {run.text}
+                        </Text>
+                      ),
+                    )}
+                  </T>
+                ) : (
+                  <MessagePart
+                    part={entries[0]!.part}
+                    localUri={localUris.current.get(entries[0]!.index)}
+                  />
+                )}
               </View>
             ))}
           </View>

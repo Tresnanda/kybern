@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { View } from "react-native";
+import { Keyboard, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { router } from "expo-router";
 import { setDraft, useDraft } from "../state/draft";
@@ -26,6 +26,7 @@ import {
 import { ProviderMark } from "../ui/ProviderMark";
 import { useTheme } from "../ui/theme";
 import type { ThreadState } from "../state/transcript";
+import { modelChoices } from "../../../../packages/kybern-client/src/models";
 const selectUsage = (state: ThreadState) => state.providerUsage;
 
 const modes: { value: PermissionMode; label: string; detail: string }[] = [
@@ -194,13 +195,10 @@ export function ComposerOptions({
   const [choosing, setChoosing] = useState<"agent" | "effort" | null>(null);
   const [error, setError] = useState("");
   const [modelQuery, setModelQuery] = useState("");
-  const visibleModels = [
-    { id: "", display_name: "Agent default", default_effort: "" },
-    ...(provider?.models ?? []),
-  ].filter((m) =>
-    `${m.display_name} ${m.id}`
-      .toLowerCase()
-      .includes(modelQuery.trim().toLowerCase()),
+  const { models: visibleModels, customId } = modelChoices(
+    provider?.models ?? [],
+    model,
+    modelQuery,
   );
   async function update(patch: {
     model?: string;
@@ -397,8 +395,8 @@ export function ComposerOptions({
             <View>
               <Group title="Choose a model">
                 <Field
-                  label="Search models"
-                  placeholder="Search by name or model ID"
+                  label="Find or enter a model"
+                  placeholder="Search models or enter an exact ID"
                   value={modelQuery}
                   onChangeText={setModelQuery}
                   autoCapitalize="none"
@@ -406,7 +404,7 @@ export function ComposerOptions({
                   clearButtonMode="while-editing"
                   returnKeyType="search"
                 />
-                {!visibleModels.length && (
+                {!visibleModels.length && !customId && (
                   <T
                     variant="caption"
                     tone="secondary"
@@ -431,7 +429,10 @@ export function ComposerOptions({
                       onPress={() =>
                         void update({
                           model: m.id,
-                          effort: m.default_effort ?? "",
+                          ...(!m.custom &&
+                          (!thread || provider?.supports_effort_switch)
+                            ? { effort: m.default_effort ?? "" }
+                            : {}),
                         })
                       }
                       style={[
@@ -453,6 +454,29 @@ export function ComposerOptions({
                       )}
                     </Tap>
                   ))}
+                  {customId && (
+                    <Tap
+                      label={`Use ${customId}`}
+                      disabled={busy}
+                      onPress={() => {
+                        void update({ model: customId }).then((saved) => {
+                          if (saved) {
+                            setModelQuery("");
+                            Keyboard.dismiss();
+                          }
+                        });
+                      }}
+                      style={[styles.spread, { padding: 16, minHeight: 52 }]}
+                    >
+                      <View style={{ flex: 1, gap: 3 }}>
+                        <T variant="label">Use “{customId}”</T>
+                        <T variant="caption" tone="secondary">
+                          Custom model ID
+                        </T>
+                      </View>
+                      <Icon name="plus" size={16} />
+                    </Tap>
+                  )}
                 </View>
               </Group>
             </View>

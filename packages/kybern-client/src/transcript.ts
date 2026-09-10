@@ -82,6 +82,8 @@ export interface ThreadState {
   providerUsage?: ProviderUsage
   lastSeq: number
   loaded: boolean
+  nextBeforeSeq?: number | null
+  loadingEarlier?: boolean
 }
 
 export const emptyThreadState = (): ThreadState => ({
@@ -91,6 +93,8 @@ export const emptyThreadState = (): ThreadState => ({
   checkpoints: [],
   lastSeq: 0,
   loaded: false,
+  nextBeforeSeq: null,
+  loadingEarlier: false,
 })
 
 export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadState {
@@ -105,7 +109,28 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
     checkpoints: prev?.checkpoints ?? [],
     lastSeq: res.thread.last_seq,
     loaded: true,
+    nextBeforeSeq: res.next_before_seq ?? null,
+    loadingEarlier: false,
   }
+}
+
+/** Merge an older page at its frozen sequence, then replay in-flight updates. */
+export function prependThreadHistory(base: ThreadState, page: ThreadsGetResult, events: ThreadEvent[], visible: ThreadState = base): ThreadState {
+  const key = (block: Block) => `${block.kind}:${block.id}`
+  const byId = new Map(base.blocks.map((block) => [key(block), block]))
+  for (const block of seedFromGet(page).blocks) {
+    const current = byId.get(key(block))
+    // A previously unloaded beginning repairs a partial live row.
+    if (!current || current.seq > block.seq) byId.set(key(block), block)
+  }
+  let next = { ...base, blocks: [...byId.values()].sort((a, b) => a.seq - b.seq), nextBeforeSeq: page.next_before_seq ?? null, loadingEarlier: false }
+  for (const event of events) next = { ...applyEvent(next, event), nextBeforeSeq: next.nextBeforeSeq, loadingEarlier: false }
+  const currentById = new Map(visible.blocks.map((block) => [key(block), block]))
+  next.blocks = next.blocks.map((block) => {
+    const current = currentById.get(key(block))
+    return current && (current === block || JSON.stringify(current) === JSON.stringify(block)) ? current : block
+  })
+  return next
 }
 
 /** Preserve controls and sequence metadata, but make missing history explicit. */
@@ -416,7 +441,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     default:
       break
   }
-  return { notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded }
+  return { notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded, nextBeforeSeq: state.nextBeforeSeq, loadingEarlier: state.loadingEarlier }
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {

@@ -87,16 +87,17 @@ function fixture(expected = "machine-a", actual = expected) {
   return { client, sockets }
 }
 
-test("restored event history stops reconnecting and requests a fresh workspace", async () => {
+test("restored event history starts a new subscription for snapshot recovery", async () => {
   const { client, sockets } = fixture()
   client.subscribeEvents({ after_seq: 200 }, () => {})
   client.connect(); sockets[0].open(); await tick()
   const request = sockets[0].sent.find((r) => r.method === "events.subscribe")
   sockets[0].frame({ jsonrpc: "2.0", id: request.id, error: { code: -32602, message: "cursor ahead of history" } })
   await tick()
-  assert.equal(client.status, "failed")
-  await client.checkConnection()
-  assert.equal(sockets.length, 1)
+  assert.equal(client.status, "open")
+  const fresh = sockets[0].sent.filter((r) => r.method === "events.subscribe").at(-1)
+  assert.equal(fresh.params.after_seq, undefined)
+  assert.notEqual(fresh.id, request.id)
   client.close()
 })
 
@@ -174,4 +175,45 @@ test("editing queued text retains structured attachments and context", () => {
   const after = replacePromptText(before, "Edited\n☑")
   assert.deepEqual(after.parts, [{ type: "text", text: "Edited\n☑" }, attachment, mention])
   assert.equal(before.parts[0].text, "First")
+})
+
+
+test("replay readiness follows all events, handles empty filtered replay and ignores stale barriers", async () => {
+  const { client, sockets } = fixture()
+  const delivered = [], ready = [], subscriptions = []
+  try {
+    client.subscribeEvents({ thread_id: "a", after_seq: 3 }, event => delivered.push(event.seq),
+      (head, replay) => subscriptions.push({ head, ...replay }),
+      (head, resumed) => ready.push({ head, resumed, delivered: [...delivered] }))
+    client.connect(); sockets[0].open(); await tick()
+    const subscribe = sockets[0].sent.find(r => r.method === "events.subscribe")
+    sockets[0].reply(subscribe, { subscription_id: "one", head_seq: 9, replay_ready: true }); await tick()
+    assert.deepEqual(subscriptions, [{ head: 9, resumed: true, supported: true }])
+    assert.deepEqual(ready, [])
+    const barrier = (id, seq) => sockets[0].frame({ jsonrpc: "2.0", method: "events.ready", params: { subscription_id: id, head_seq: seq } })
+    barrier("stale", 9); barrier("one", 8)
+    assert.deepEqual(ready, [])
+    sockets[0].frame({ jsonrpc: "2.0", method: "event", params: { subscription_id: "one", event: { seq: 5, thread_id: "a" } } })
+    barrier("one", 9); barrier("one", 9)
+    assert.deepEqual(ready, [{ head: 9, resumed: true, delivered: [5] }])
+    sockets[0].interrupt(); await client.checkConnection(); sockets[1].open(); await tick()
+    const resumed = sockets[1].sent.find(r => r.method === "events.subscribe")
+    assert.equal(resumed.params.after_seq, 9)
+    sockets[1].reply(resumed, { subscription_id: "two", head_seq: 12, replay_ready: true }); await tick()
+    sockets[1].frame({ jsonrpc: "2.0", method: "events.ready", params: { subscription_id: "two", head_seq: 12 } })
+    assert.equal(ready.at(-1).head, 12)
+    assert.deepEqual(ready.at(-1).delivered, [5])
+  } finally { client.close() }
+})
+
+test("old daemons advertise snapshot fallback without pretending replay has completed", async () => {
+  const { client, sockets } = fixture()
+  let state, ready = false
+  try {
+    client.subscribeEvents({}, () => {}, (_head, replay) => { state = replay }, () => { ready = true })
+    client.connect(); sockets[0].open(); await tick()
+    sockets[0].reply(sockets[0].sent.find(r => r.method === "events.subscribe"), { subscription_id: "old", head_seq: 12 }); await tick()
+    assert.deepEqual(state, { resumed: false, supported: false })
+    assert.equal(ready, false)
+  } finally { client.close() }
 })

@@ -30,3 +30,4 @@ pub const DEFAULT_PORT: u16 = 4173;
 
 /// Notification method used to deliver subscription events.
 pub const EVENT_NOTIFICATION: &str = "event";
+pub const EVENTS_READY_NOTIFICATION: &str = "events.ready";

@@ -68,6 +68,7 @@ let notifyTimer: ReturnType<typeof setTimeout> | undefined;
 const changedThreads = new Set<string>();
 let activityTimer: ReturnType<typeof setTimeout> | undefined;
 let refreshPromise: Promise<void> | null = null;
+let providerRefreshPromise: Promise<void> | null = null;
 const snapshots = new ThreadCache<ThreadState>();
 const empty = emptyThreadState();
 const threadListeners = new Map<string, Set<() => void>>();
@@ -342,8 +343,10 @@ export function connect(id: string | null) {
   changedThreads.clear();
   indexEvents = null;
   refreshPromise = null;
+  providerRefreshPromise = null;
   client?.close();
   client = null;
+  snapshots.cancelReplay();
   if (state.activeId === id) snapshots.invalidateAll();
   else snapshots.clear();
   loads.clear();
@@ -375,8 +378,8 @@ export function connect(id: string | null) {
     publish({ status, error: status === "open" ? null : (detail ?? null) });
     if (status !== "open") {
       subscriptionReady = false;
-      // Keep cached content visible; revalidate after the subscription resumes.
-      snapshots.invalidateAll();
+      // Only a completed replay may validate a snapshot after a disconnect.
+      snapshots.beginReplay();
     }
   });
   next.subscribeEvents(
@@ -388,8 +391,7 @@ export function connect(id: string | null) {
       const snapshot = snapshots.get(event.thread_id);
       if (
         snapshot?.loaded &&
-        !snapshots.isStale(event.thread_id) &&
-        threadListeners.has(event.thread_id)
+        (!snapshots.isStale(event.thread_id) || snapshots.canReplay(event.thread_id))
       )
         publishThread(event.thread_id, applyEvent(snapshot, event));
       else if (snapshot && !hydrating.has(event.thread_id))
@@ -413,18 +415,22 @@ export function connect(id: string | null) {
       if (indexEvents) indexEvents.push(event);
       const nextIndex = applyIndexEvent(state, event);
       if (nextIndex !== state) publish(nextIndex);
-      if (
-        event.kind === "workspace_reverted" &&
-        threadListeners.has(event.thread_id)
-      )
-        void loadThread(event.thread_id).catch((e) =>
-          publish({ error: errorText(e) }),
-        );
+      if (event.kind === "workspace_reverted") {
+        snapshots.invalidate(event.thread_id);
+        if (threadListeners.has(event.thread_id))
+          void loadThread(event.thread_id).catch((e) => publish({ error: errorText(e) }));
+      }
     },
-    () => {
+    (_headSeq, replay) => {
       if (generation !== thisGeneration) return;
-      // Hydrate only after the live subscription is acknowledged, closing the
-      // snapshot/subscription race on initial connection and reconnect.
+      if (replay.resumed && replay.supported) {
+        subscriptionReady = false;
+        snapshots.beginReplay();
+        return;
+      }
+      // Initial connections and older daemons use the snapshot/replay fallback.
+      snapshots.cancelReplay();
+      snapshots.invalidateAll();
       subscriptionReady = true;
       if (!appliedDefaults) {
         appliedDefaults = true;
@@ -455,6 +461,18 @@ export function connect(id: string | null) {
             if (generation === thisGeneration) publish({ error: errorText(e) });
           });
     },
+    (_headSeq, resumed) => {
+      if (generation !== thisGeneration || !resumed) return;
+      snapshots.finishReplay();
+      subscriptionReady = true;
+      void refresh().catch((e) => {
+        if (generation === thisGeneration) publish({ error: errorText(e) });
+      });
+      for (const id of threadListeners.keys())
+        if (id) void ensureThread(id).catch((e) => {
+          if (generation === thisGeneration) publish({ error: errorText(e) });
+        });
+    },
   );
   next.connect();
 }
@@ -462,13 +480,22 @@ export async function refresh() {
   if (!subscriptionReady) return;
   if (refreshPromise) return refreshPromise;
   const epoch = generation;
+  // Provider probing can start external processes; never gate the workspace on it.
+  if (!providerRefreshPromise) {
+    providerRefreshPromise = rpc("providers.list", {}).then((result) => {
+      if (epoch === generation) publish({ providers: result.providers });
+    }).catch((e) => {
+      if (epoch === generation) publish({ error: errorText(e) });
+    }).finally(() => {
+      if (epoch === generation) providerRefreshPromise = null;
+    });
+  }
   const events: ThreadEvent[] = [];
   indexEvents = events;
   refreshPromise = (async () => {
-    const [projects, threads, providers, approvals, queue] = await Promise.all([
+    const [projects, threads, approvals, queue] = await Promise.all([
       rpc("projects.list", {}),
       rpc("threads.list", { include_archived: true }),
-      rpc("providers.list", {}),
       rpc("approvals.list", {}),
       rpc("queue.list", {}),
     ]);
@@ -477,7 +504,6 @@ export async function refresh() {
         ...state,
         projects: projects.projects,
         threads: threads.threads,
-        providers: providers.providers,
         approvals: approvals.approvals,
         queue: queue.messages,
         activity: threads.activity ?? [],

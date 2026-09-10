@@ -31,6 +31,7 @@ pub struct Inner {
     pub terminals: TerminalManager,
     pub settings: SettingsStore,
     pub provider_catalogs: ProviderCatalogCache,
+    pub thread_projections: crate::thread_projection::ThreadProjectionCache,
     pub harness_updates: crate::harness_updates::HarnessUpdates,
     pub daemon_updates: crate::self_update::DaemonUpdates,
     /// Started by the desktop app, whose bundle owns this binary.
@@ -102,6 +103,7 @@ impl AppState {
                 terminals: TerminalManager::default(),
                 settings,
                 provider_catalogs: ProviderCatalogCache::default(),
+                thread_projections: crate::thread_projection::ThreadProjectionCache::default(),
                 harness_updates,
                 daemon_updates,
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),

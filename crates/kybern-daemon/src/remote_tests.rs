@@ -152,7 +152,15 @@ async fn subscription_ack_precedes_all_replayed_events() {
     let subscription = first["result"]["subscription_id"].clone();
     let live = host.state.store.event_append(thread.id, None, EventPayload::ThreadUpdated { thread }).unwrap();
     host.state.events.send(live).unwrap();
+    assert_eq!(first["result"]["replay_ready"], true);
     for seq in 1..=601 {
+        if seq == 601 {
+            let message = tokio::time::timeout(Duration::from_secs(3), socket.next()).await.unwrap().unwrap().unwrap().into_text().unwrap();
+            let ready: serde_json::Value = serde_json::from_str(&message).unwrap();
+            assert_eq!(ready["method"], EVENTS_READY_NOTIFICATION);
+            assert_eq!(ready["params"]["subscription_id"], subscription);
+            assert_eq!(ready["params"]["head_seq"], 600);
+        }
         let message = tokio::time::timeout(Duration::from_secs(3), socket.next()).await.unwrap().unwrap().unwrap().into_text().unwrap();
         let frame: serde_json::Value = serde_json::from_str(&message).unwrap();
         assert_eq!(frame["params"]["subscription_id"], subscription);
@@ -635,4 +643,91 @@ async fn integration_mutations_require_operation_scopes_before_provider_executio
     assert!(change.to_string().contains("scope"), "{change}");
     let login = client.call::<IntegrationLogin>(IntegrationLoginParams { thread_id: thread.id, name: "fixture".into() }).await.unwrap_err();
     assert!(login.to_string().contains("scope"), "{login}");
+}
+
+#[tokio::test]
+async fn cached_history_pages_match_full_history_and_keep_their_sequence_barrier() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    for index in 0..240 {
+        host.state
+            .store
+            .event_append(
+                thread.id,
+                Some(thread.id),
+                EventPayload::ProviderNotice {
+                    data: None,
+                    level: NoticeLevel::Info,
+                    text: format!("Entry {index}: {}", "readable tool output ".repeat(100)),
+                },
+            )
+            .unwrap();
+    }
+    let client = host.client().await;
+    let params = ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), before_seq: None, through_seq: None };
+    let recent = client.call::<ThreadsGet>(params.clone()).await.unwrap();
+    assert_eq!(recent.transcript.len(), 60);
+    let barrier = recent.thread.last_seq;
+    let full =
+        client.call::<ThreadsGet>(ThreadsGetParams { transcript_limit: None, through_seq: Some(barrier), ..params.clone() }).await.unwrap();
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            Some(thread.id),
+            EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: "New live entry".into() },
+        )
+        .unwrap();
+    let mut collected = recent.transcript;
+    let mut cursor = recent.next_before_seq;
+    while let Some(before_seq) = cursor {
+        let older = client
+            .call::<ThreadsGet>(ThreadsGetParams { before_seq: Some(before_seq), through_seq: Some(barrier), ..params.clone() })
+            .await
+            .unwrap();
+        assert_eq!(older.thread.last_seq, barrier);
+        cursor = older.next_before_seq;
+        let mut entries = older.transcript;
+        entries.append(&mut collected);
+        collected = entries;
+    }
+    assert_eq!(serde_json::to_value(collected).unwrap(), serde_json::to_value(full.transcript).unwrap());
+    let current = client.call::<ThreadsGet>(params).await.unwrap();
+    assert!(current.thread.last_seq > barrier);
+    assert!(matches!(current.transcript.last(), Some(TranscriptEntry::Notice { text, .. }) if text == "New live entry"));
+}
+
+/// Local wire workload; not a physical-device, WAN, CPU or energy benchmark.
+#[tokio::test]
+#[ignore]
+async fn measure_remote_history_pages() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    for index in 0..2000 {
+        host.state
+            .store
+            .event_append(
+                thread.id,
+                Some(thread.id),
+                EventPayload::ProviderNotice {
+                    data: None,
+                    level: NoticeLevel::Info,
+                    text: format!("Entry {index}: {}", "readable output ".repeat(400)),
+                },
+            )
+            .unwrap();
+    }
+    let client = host.client().await;
+    for (name, limit) in [("recent-cold", Some(60)), ("recent-warm", Some(60)), ("full-warm", None), ("recent-warm-repeat", Some(60))] {
+        let start = std::time::Instant::now();
+        let result = client
+            .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: limit, before_seq: None, through_seq: None })
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+        eprintln!(
+            "{}",
+            json!({"workload": name, "rpc_ms": elapsed.as_secs_f64() * 1000.0, "response_bytes": serde_json::to_vec(&result).unwrap().len(), "entries": result.transcript.len()})
+        );
+    }
 }

@@ -21,6 +21,7 @@ mod settings;
 mod skills;
 mod state;
 mod terminal;
+mod thread_projection;
 mod thumbnail;
 mod ws;
 

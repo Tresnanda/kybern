@@ -1,4 +1,5 @@
 use kybern_protocol::{EventSeq, TranscriptEntry};
+use std::borrow::Borrow;
 
 fn seq(entry: &TranscriptEntry) -> EventSeq {
     match entry {
@@ -19,24 +20,42 @@ fn seq(entry: &TranscriptEntry) -> EventSeq {
 /// can never skip a row. The initial page also includes unfinished older rows so
 /// live deltas always have their beginning. Full-history callers retain ordering.
 pub fn transcript_page(
-    mut entries: Vec<TranscriptEntry>,
+    entries: Vec<TranscriptEntry>,
     limit: Option<u32>,
     before: Option<EventSeq>,
 ) -> (Vec<TranscriptEntry>, Option<EventSeq>) {
+    page_entries(entries, limit, before)
+}
+
+/// A cached projection only clones the requested rows, not the entire history.
+pub fn transcript_page_ref(
+    entries: &[TranscriptEntry],
+    limit: Option<u32>,
+    before: Option<EventSeq>,
+) -> (Vec<TranscriptEntry>, Option<EventSeq>) {
+    let (page, cursor) = page_entries(entries.iter().collect(), limit, before);
+    (page.into_iter().cloned().collect(), cursor)
+}
+
+fn page_entries<T: Borrow<TranscriptEntry>>(
+    mut entries: Vec<T>,
+    limit: Option<u32>,
+    before: Option<EventSeq>,
+) -> (Vec<T>, Option<EventSeq>) {
     let Some(limit) = limit else { return (entries, None) };
     if let Some(before) = before {
-        entries.retain(|entry| seq(entry) < before);
+        entries.retain(|entry| seq(entry.borrow()) < before);
     }
-    entries.sort_by_key(seq);
+    entries.sort_by_key(|entry| seq(entry.borrow()));
     let mut start = entries.len().saturating_sub(limit.max(1) as usize);
-    while start > 0 && seq(&entries[start - 1]) == seq(&entries[start]) {
+    while start > 0 && seq(entries[start - 1].borrow()) == seq(entries[start].borrow()) {
         start -= 1;
     }
-    let cursor = (start > 0).then(|| seq(&entries[start]));
+    let cursor = (start > 0).then(|| seq(entries[start].borrow()));
     let mut page = entries.split_off(start);
     if before.is_none() {
         entries.retain(|entry| {
-            matches!(entry, TranscriptEntry::Assistant { complete: false, .. } | TranscriptEntry::ToolCall { complete: false, .. })
+            matches!(entry.borrow(), TranscriptEntry::Assistant { complete: false, .. } | TranscriptEntry::ToolCall { complete: false, .. })
         });
         entries.append(&mut page);
         page = entries;

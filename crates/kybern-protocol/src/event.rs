@@ -186,3 +186,11 @@ pub struct EventNotification {
     pub subscription_id: SubscriptionId,
     pub event: ThreadEvent,
 }
+
+/// Sent after all subscription replay events through `head_seq` have been queued.
+/// Live events for the connection cannot overtake this notification.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EventsReadyNotification {
+    pub subscription_id: SubscriptionId,
+    pub head_seq: EventSeq,
+}

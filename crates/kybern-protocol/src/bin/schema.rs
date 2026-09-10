@@ -28,6 +28,7 @@ fn main() {
     add::<RpcError>(&mut types, "RpcError");
     add::<ThreadEvent>(&mut types, "ThreadEvent");
     add::<EventNotification>(&mut types, "EventNotification");
+    add::<EventsReadyNotification>(&mut types, "EventsReadyNotification");
     add::<Thread>(&mut types, "Thread");
     add::<Project>(&mut types, "Project");
     add::<TranscriptEntry>(&mut types, "TranscriptEntry");

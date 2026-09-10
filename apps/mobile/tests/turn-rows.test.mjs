@@ -208,3 +208,30 @@ test("large expanded work stays as individual virtual rows and folding omits its
   assert.equal(workDuration(83000), "1m 23s");
   assert.equal(workDuration(0), "1s");
 });
+
+
+test("live completed steps fold between narration without hiding failures or approvals", () => {
+  const project = createTurnRows();
+  const tools = Array.from({ length: 1000 }, (_, i) => ({ ...tool, id: `step-${i}`, seq: i + 3 }));
+  const failed = { ...tool, id: "failed", seq: 1004, isError: true };
+  const active = { ...tool, id: "active", seq: 1005, complete: false };
+  const history = [user, narration, ...tools, failed, active];
+  const rows = project(history, new Set());
+  const disclosure = rows.find((row) => row.kind === "work");
+  assert.equal(disclosure.label, "1000 completed steps");
+  assert.deepEqual(content(rows), [user, narration, failed, active]);
+  const opened = project(history, new Set([disclosure.turnId]));
+  assert.equal(content(opened).length, history.length);
+  assert.equal(new Set(opened.map((row) => row.key)).size, opened.length);
+  assert.equal(project(history, new Set()).length, rows.length);
+});
+
+
+test("live agent launches and task-linked tools stay outside automatic groups", () => {
+  const launch = { ...tool, id: "launch", call: { ...tool.call, name: "collaboration.spawn_agent" } };
+  const linked = { ...tool, id: "linked", call: { ...tool.call, id: "linked" } };
+  const task = { ...base, kind: "runtime_task", id: "task", seq: 5,
+    task: { id: "task", kind: "agent", status: "running", tool_call_id: "linked" } };
+  const history = [user, tool, launch, linked, task];
+  assert.deepEqual(content(createTurnRows()(history, new Set())), history);
+});

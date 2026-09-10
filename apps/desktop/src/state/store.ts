@@ -231,7 +231,7 @@ export function createEnvironmentStore(
     receiveEvent: (event) => {
       const current = get()
       current.updateTranscript(event.thread_id, (state) =>
-        isThreadVisible(current, event.thread_id) ? applyEvent(state, event) : applyBackgroundEvent(state, event))
+        state.loaded || isThreadVisible(current, event.thread_id) ? applyEvent(state, event) : applyBackgroundEvent(state, event))
     },
     releaseCachedData: () => set((state) => ({
       transcripts: Object.fromEntries(Object.entries(state.transcripts).map(([id, transcript]) => [id, compactThreadState(transcript)])),

@@ -1,4 +1,8 @@
-import { buildStructuredTextParts } from "../../../../packages/kybern-client/src/composerTokens";
+import {
+  buildStructuredTextParts,
+  partToken,
+  structuredSegments,
+} from "../../../../packages/kybern-client/src/composerTokens";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { ComposerCamera } from "./ComposerCamera";
@@ -6,8 +10,17 @@ import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { fetch as expoFetch } from "expo/fetch";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Image, Keyboard, ScrollView, TextInput, View } from "react-native";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Image,
+  Keyboard,
+  Platform,
+  ScrollView,
+  TextInput,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import {
   clearContext,
   setDraft,
@@ -18,9 +31,15 @@ import {
   httpBase,
   type ContentPart,
   type Thread,
+  type SkillInfo,
   type UserMessage,
 } from "../state/protocol";
-import { composerTrigger, replaceComposerTrigger } from "../state/capabilities";
+import {
+  composerTrigger,
+  replaceComposerTrigger,
+  insertComposerPart,
+} from "../state/capabilities";
+import { inlineTokenSources, isInlinePart } from "../state/inlineMessage";
 import { ComposerSuggestions } from "./ComposerSuggestions";
 import { ComposerControls } from "./ComposerControls";
 import {
@@ -45,6 +64,7 @@ import Animated, {
   FadeOut,
   LinearTransition,
   useAnimatedStyle,
+  useAnimatedRef,
   useReducedMotion,
   useSharedValue,
   withSequence,
@@ -98,6 +118,7 @@ export const Composer = memo(function Composer({
   onPromptConsumed?: () => void;
 }) {
   const { colors } = useTheme();
+  const { width: windowWidth, fontScale } = useWindowDimensions();
   const reduced = useReducedMotion();
   const sendTransition = useSendTransition();
   const inputBounds = useRef<View>(null);
@@ -113,7 +134,7 @@ export const Composer = memo(function Composer({
   const composerMotion = useAnimatedStyle(() => ({
     transform: [{ scale: recoil.get() }],
   }));
-  const addButton = useRef<View>(null);
+  const addButton = useAnimatedRef<View>();
   const composerBounds = useRef<View>(null);
   const attachmentScroll = useRef<ScrollView>(null);
   const [cameraOrigin, setCameraOrigin] = useState<SendRect | null>(null);
@@ -188,6 +209,15 @@ export const Composer = memo(function Composer({
   const draft = useDraft();
   const [text, setText] = useState("");
   const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const [requestedSelection, setRequestedSelection] = useState<{
+    start: number;
+    end: number;
+  }>();
+  const moveCaret = useCallback((caret: number) => {
+    const next = { start: caret, end: caret };
+    setSelection(next);
+    setRequestedSelection(next);
+  }, []);
   const [dismissed, setDismissed] = useState("");
   const commands = useThreadValue(thread?.id ?? "", selectCommands);
   const trigger = composerTrigger(text, selection);
@@ -196,30 +226,74 @@ export const Composer = memo(function Composer({
     : "";
   const [adding, setAdding] = useState(false);
   const [attachments, setAttachments] = useState<ContentPart[]>([]);
+  const [selectedParts, setSelectedParts] = useState<ContentPart[]>([]);
+  const [skillCatalog, setSkillCatalog] = useState<SkillInfo[]>([]);
+  const tokenSources = useMemo(
+    () => inlineTokenSources(selectedParts),
+    [selectedParts],
+  );
+  const segments = useMemo(
+    () =>
+      structuredSegments(text, tokenSources.mentions, [
+        ...skillCatalog,
+        ...tokenSources.skills,
+      ]),
+    [text, tokenSources, skillCatalog],
+  );
+  const inputScrollY = useSharedValue(0);
+  const highlightMotion = useAnimatedStyle(() => ({
+    transform: [{ translateY: -inputScrollY.get() }],
+  }));
+  const androidHighlight =
+    Platform.OS === "android" &&
+    segments.some((segment) => segment.kind === "token");
+  // Android keeps a native editor; styling uses a separate paint layer.
+  // Paint its inline styling in a scroll-synchronized, noninteractive layer.
+  const highlightedText = (
+    <Text key={fontScale} style={type.body}>
+      {segments.map((segment, index) => (
+        <Text
+          key={index}
+          style={{
+            color: segment.kind === "token" ? colors.accent : colors.ink,
+            backgroundColor:
+              segment.kind === "token" ? colors.accentSoft : "transparent",
+          }}
+        >
+          {segment.text}
+        </Text>
+      ))}
+    </Text>
+  );
   const replaceTrigger = useRef(false);
   const contextParts = useContextParts(thread?.id ?? "new");
   useEffect(() => {
-    if (contextParts.length) {
-      setAttachments((prev) => [
-        ...prev,
-        ...contextParts.filter((part) => part.type !== "text"),
-      ]);
-      const command = contextParts
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("\n");
-      if (command || replaceTrigger.current) {
-        const replace = replaceTrigger.current;
-        setText((previous) => {
-          const clean = replace
-            ? previous.replace(/(?:^|\s)[$@/][\w.-]*$/, "").trimEnd()
-            : previous;
-          return command ? (clean ? `${clean}\n${command}` : command) : clean;
-        });
-        replaceTrigger.current = false;
-      }
-      clearContext(thread?.id ?? "new");
+    if (!contextParts.length) return;
+    setAttachments((prev) => [
+      ...prev,
+      ...contextParts.filter((part) => !isInlinePart(part)),
+    ]);
+    const inline = contextParts.filter(isInlinePart);
+    setSelectedParts((prev) => [
+      ...prev,
+      ...inline.filter((part) => partToken(part) !== null),
+    ]);
+    let next = { text, caret: selection.end };
+    for (const [index, part] of inline.entries()) {
+      next = insertComposerPart(
+        next.text,
+        index === 0 ? selection : { start: next.caret, end: next.caret },
+        part,
+        index === 0 && replaceTrigger.current,
+      );
     }
-  }, [contextParts, thread?.id]);
+    if (inline.length) {
+      setText(next.text);
+      moveCaret(next.caret);
+    }
+    replaceTrigger.current = false;
+    clearContext(thread?.id ?? "new");
+  }, [contextParts, thread?.id, text, selection, moveCaret]);
   const [busy, setBusy] = useState(false);
   const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue");
   const [uploading, setUploading] = useState(false);
@@ -255,9 +329,10 @@ export const Composer = memo(function Composer({
     const visualMessage: UserMessage = {
       parts: [
         ...sentAttachments,
-        ...(sentText.trim()
-          ? [{ type: "text" as const, text: sentText.trim() }]
-          : []),
+        ...buildStructuredTextParts(sentText, tokenSources.mentions, [
+          ...skillCatalog,
+          ...tokenSources.skills,
+        ]),
       ],
     };
     const structured = /(?:^|\s)[$@]/.test(sentText);
@@ -304,12 +379,13 @@ export const Composer = memo(function Composer({
           visualMessage,
           sources,
         );
-        // Snapshot first, then clear and dismiss in the same render. The native
-        // keyboard drives layout while the outgoing overlay owns the message.
+        // Snapshot first, then clear. The overlay owns the outgoing content
+        // while the destination mounts and the keyboard begins closing.
         setDeparted(true);
         setText("");
         setAttachments([]);
-        Keyboard.dismiss();
+        // The flight dismisses the keyboard when its destination is ready,
+        // so detachment and keyboard movement begin together.
         if (!reduced)
           recoil.set(
             withSequence(
@@ -329,7 +405,10 @@ export const Composer = memo(function Composer({
       const message: UserMessage = {
         parts: [
           ...sentAttachments,
-          ...buildStructuredTextParts(sentText, new Set(), skillItems),
+          ...buildStructuredTextParts(sentText, tokenSources.mentions, [
+            ...skillItems,
+            ...tokenSources.skills,
+          ]),
         ],
       };
       const receipt = await (steering ? onSteer! : onSend)(message);
@@ -341,6 +420,7 @@ export const Composer = memo(function Composer({
         setText("");
         setAttachments([]);
       }
+      setSelectedParts([]);
       attachmentUris.current.clear();
       lastPrompt.current = "";
       onPromptConsumed?.();
@@ -349,7 +429,7 @@ export const Composer = memo(function Composer({
         sendTransition.cancel(outgoingId);
         setText(sentText);
         setAttachments(sentAttachments);
-        setSelection({ start: sentText.length, end: sentText.length });
+        moveCaret(sentText.length);
       }
       setError(errorText(e));
     } finally {
@@ -502,7 +582,7 @@ export const Composer = memo(function Composer({
     if (trigger) {
       const next = replaceComposerTrigger(text, trigger);
       setText(next.text);
-      setSelection({ start: next.caret, end: next.caret });
+      moveCaret(next.caret);
     }
     if (name === "attach") {
       void attach();
@@ -574,6 +654,7 @@ export const Composer = memo(function Composer({
       {addOrigin && (
         <MorphingMenu
           origin={addOrigin}
+          anchorRef={addButton}
           open={adding}
           placement="above"
           preferredWidth={224}
@@ -712,16 +793,15 @@ export const Composer = memo(function Composer({
           )}
           actions={actions}
           onAction={runAction}
+          onCatalog={setSkillCatalog}
           onDismiss={() => setDismissed(triggerKey)}
           onPick={(part) => {
-            const next = replaceComposerTrigger(
-              text,
-              trigger,
-              part.type === "text" ? part.text : "",
-            );
+            const next = insertComposerPart(text, selection, part);
             setText(next.text);
-            setSelection({ start: next.caret, end: next.caret });
-            if (part.type !== "text")
+            moveCaret(next.caret);
+            if (partToken(part) !== null)
+              setSelectedParts((previous) => [...previous, part]);
+            else if (part.type !== "text")
               setAttachments((previous) => [...previous, part]);
             input.current?.focus();
           }}
@@ -735,6 +815,7 @@ export const Composer = memo(function Composer({
           composerMotion,
           {
             borderRadius: 24,
+            overflow: "hidden",
             backgroundColor: colors.surface,
             borderWidth: 1,
             borderColor: colors.line,
@@ -755,9 +836,15 @@ export const Composer = memo(function Composer({
                   );
                 }
               }}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: 8, padding: 4 }}
+              keyboardShouldPersistTaps="always"
+              style={{ maxHeight: 160, flexGrow: 0 }}
+              contentContainerStyle={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 8,
+                padding: 4,
+              }}
             >
               {attachments.map((part, index) => {
                 const key = sendPartKey(part, index);
@@ -808,7 +895,12 @@ export const Composer = memo(function Composer({
                         style={
                           source
                             ? { width: 72, height: 72 }
-                            : { ...styles.line, paddingHorizontal: 12 }
+                            : {
+                                ...styles.line,
+                                paddingLeft: 12,
+                                paddingRight: 28,
+                                maxWidth: Math.min(300, windowWidth - 72),
+                              }
                         }
                       >
                         {source ? (
@@ -834,7 +926,13 @@ export const Composer = memo(function Composer({
                               }
                               size={14}
                             />
-                            <T variant="caption">{contextLabel(part)}</T>
+                            <T
+                              variant="caption"
+                              numberOfLines={1}
+                              style={{ flexShrink: 1 }}
+                            >
+                              {contextLabel(part)}
+                            </T>
                           </>
                         )}
                       </View>
@@ -863,7 +961,11 @@ export const Composer = memo(function Composer({
           </View>
         )}
 
-        <View ref={inputBounds} collapsable={false}>
+        <View
+          ref={inputBounds}
+          collapsable={false}
+          style={{ overflow: "hidden" }}
+        >
           <TextInput
             underlineColorAndroid="transparent"
             ref={input}
@@ -872,21 +974,32 @@ export const Composer = memo(function Composer({
               departed && sendTransition.flight
                 ? ""
                 : steering
-                ? "Guide the current turn…"
-                : running
-                  ? "Ask for follow-up changes…"
-                  : "Ask Kybern to build something…"
+                  ? "Guide the current turn…"
+                  : running
+                    ? "Ask for follow-up changes…"
+                    : "Ask Kybern to build something…"
             }
             placeholderTextColor={colors.muted}
-            value={text}
+            value={Platform.OS === "android" ? text : undefined}
+            selection={requestedSelection}
+            onScroll={(event) =>
+              inputScrollY.set(event.nativeEvent.contentOffset.y)
+            }
             onChangeText={(value) => {
               if (sendLock.current) return;
+              setRequestedSelection(undefined);
               setText(value);
               setDismissed("");
             }}
-            onSelectionChange={(event) =>
-              setSelection(event.nativeEvent.selection)
-            }
+            onSelectionChange={(event) => {
+              const next = event.nativeEvent.selection;
+              setSelection(next);
+              if (
+                next.start === requestedSelection?.start &&
+                next.end === requestedSelection.end
+              )
+                setRequestedSelection(undefined);
+            }}
             onContentSizeChange={(event) => {
               inputContentHeight.current = Math.max(
                 22,
@@ -899,7 +1012,8 @@ export const Composer = memo(function Composer({
             style={[
               type.body,
               {
-                color: colors.ink,
+                color: androidHighlight ? "transparent" : colors.ink,
+                textAlignVertical: "top",
                 minHeight: 44,
                 maxHeight: 180,
                 paddingHorizontal: 9,
@@ -907,13 +1021,35 @@ export const Composer = memo(function Composer({
                 paddingBottom: 8,
               },
             ]}
-          />
+          >
+            {Platform.OS === "android" ? undefined : highlightedText}
+          </TextInput>
+          {androidHighlight && (
+            <Animated.View
+              pointerEvents="none"
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={[
+                {
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  paddingHorizontal: 9,
+                  paddingVertical: 8,
+                },
+                highlightMotion,
+              ]}
+            >
+              {highlightedText}
+            </Animated.View>
+          )}
         </View>
         <ComposerControls
           thread={thread}
           disabled={disabled}
           leading={
-            <View ref={addButton} collapsable={false}>
+            <Animated.View ref={addButton} collapsable={false}>
               <IconButton
                 name="plus"
                 label={adding ? "Close attachment menu" : "Add to message"}
@@ -931,7 +1067,7 @@ export const Composer = memo(function Composer({
                 }}
                 disabled={disabled || uploading || busy}
               />
-            </View>
+            </Animated.View>
           }
           trailing={
             <View style={[styles.line, { gap: 0 }]}>

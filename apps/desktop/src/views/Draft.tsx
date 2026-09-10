@@ -132,7 +132,7 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
             providers={allProviders}
             model={choice?.model}
             effort={choice?.effort}
-            onModelChange={(model, effort) => provider && setModelStored((m) => ({ ...m, [provider.kind]: { model, effort } }))}
+            onModelChange={(model, effort) => { if (provider) setModelStored((m) => ({ ...m, [provider.kind]: { model, effort } })) }}
             projectId={projectId}
             commands={commands}
             sendDisabled={!provider}

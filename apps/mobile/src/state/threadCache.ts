@@ -2,6 +2,29 @@
 export class ThreadCache<T> extends Map<string, T> {
   private stale = new Map<string, number>();
   private epoch = 0;
+  private replay: Map<string, string> | null = null;
+
+  /** Retain only snapshots that were complete before delivery was interrupted. */
+  beginReplay() {
+    if (this.replay) return;
+    const fresh = [...this.keys()].filter((id) => !this.isStale(id));
+    this.invalidateAll();
+    this.replay = new Map(fresh.map((id) => [id, this.revision(id)]));
+  }
+
+  canReplay(id: string) {
+    return this.has(id) && this.replay?.get(id) === this.revision(id);
+  }
+
+  finishReplay() {
+    for (const [id, revision] of this.replay ?? [])
+      if (this.has(id)) this.markFresh(id, revision);
+    this.replay = null;
+  }
+
+  cancelReplay() {
+    this.replay = null;
+  }
 
   touch(id: string) {
     if (!this.has(id)) return;
@@ -45,11 +68,13 @@ export class ThreadCache<T> extends Map<string, T> {
   }
 
   override delete(id: string) {
+    this.replay?.delete(id);
     this.stale.delete(id);
     return super.delete(id);
   }
 
   override clear() {
+    this.replay = null;
     this.epoch++;
     this.stale.clear();
     super.clear();
