@@ -140,6 +140,17 @@ async function run() {
     check(sent.length === count && composer.value === "Keep composing", "Newlines and IME confirmation do not send")
     check(!!document.querySelector('[aria-label="Stop generation"]'), "Stop remains independently available")
     const modelInput = await openCustomModel()
+    const modelDialog = modelInput.closest<HTMLElement>('[data-slot="dialog-popup"]')!
+    for (const width of [384, 320]) {
+      modelDialog.style.maxWidth = `${width}px`
+      await sleep(200)
+      const surface = modelDialog.getBoundingClientRect()
+      for (const control of [modelInput, button("Cancel"), button("Use model")]) {
+        const rect = control.getBoundingClientRect()
+        check(rect.top >= surface.top && rect.bottom <= surface.bottom && rect.left >= surface.left && rect.right <= surface.right, `Custom model controls stay inside the dialog at ${width}px`)
+      }
+    }
+    modelDialog.style.removeProperty("max-width")
     writeModel(modelInput, "   ")
     await sleep(30)
     check(button("Use model").disabled, "Blank custom IDs cannot be submitted")
@@ -165,6 +176,8 @@ async function run() {
   await sleep(700)
   const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="queued-follow-up-row"]')]
   check(rows.every(row => Number(getComputedStyle(row).opacity) === 1 && getComputedStyle(row).filter === "none"), "Queued rows finish entering")
+  await openCustomModel()
+  await sleep(250)
   report({ pass: true, themes: ["light", "dark"], notesConflict: true, failedSaveRetention: true, queueEditAttachments: true, steeringAndQueue: true, keyboardDelivery: true, customModels: true, emptyModelCatalog: true })
 }
 function report(value: unknown) {

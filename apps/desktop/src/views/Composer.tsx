@@ -1131,7 +1131,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       </div>
       <Dialog open={customModel !== null} onOpenChange={(open) => { if (!open) setCustomModel(null) }}>
         <DialogPopup className="max-w-sm">
-          <form onSubmit={(event) => {
+          <form className="flex min-h-0 flex-col" onSubmit={(event) => {
             event.preventDefault()
             if (!customId) return
             void changeModel(customId, undefined).then((saved) => { if (saved) setCustomModel(null) })
