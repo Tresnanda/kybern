@@ -54,6 +54,8 @@ struct LiveSession {
     /// Set once the daemon decided to close this process on purpose, so the
     /// provider's exit is not reported as a failure.
     released: AtomicBool,
+    /// Forced stop owns cleanup and discards late provider events.
+    stop_cleanup: AtomicBool,
     /// The turn currently executing, if any.
     turn: Mutex<Option<ActiveTurn>>,
     /// A settled Claude turn can receive native background-task continuations.
@@ -93,6 +95,8 @@ impl SessionActivityTime {
 
 struct ActiveTurn {
     id: TurnId,
+    /// Distinguishes repeated native continuations of the same persisted turn.
+    response_id: Uuid,
     /// Time after the harness was ready; retained for provider-reported turn duration fallback.
     started: std::time::Instant,
     /// Time immediately before `TurnStarted` was persisted, for end-to-end startup timing.
@@ -940,6 +944,7 @@ impl Orchestrator {
             let mut turn = live.turn.lock().await;
             live.continuation.lock().await.take();
             *turn = Some(ActiveTurn {
+                response_id: Uuid::now_v7(),
                 id: turn_id,
                 started: std::time::Instant::now(),
                 startup_started,
@@ -994,14 +999,90 @@ impl Orchestrator {
     }
 
     pub async fn interrupt(&self, thread_id: ThreadId) -> Result<()> {
-        let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
-        match live {
-            Some(live) => {
-                live.touch();
-                Ok(live.session.interrupt().await?)
+        self.interrupt_with_grace(thread_id, Duration::from_secs(5)).await
+    }
+
+    async fn interrupt_with_grace(&self, thread_id: ThreadId, grace: Duration) -> Result<()> {
+        let live = self.inner.sessions.lock().await.get(&thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
+        let response_id = live.turn.lock().await.as_ref().map(|turn| turn.response_id);
+        let Some(response_id) = response_id else {
+            return Ok(live.session.interrupt().await?);
+        };
+        live.touch();
+        let this = self.clone();
+        // The RPC connection may disappear while stopping. Cleanup still owns
+        // the deadline, including a provider that never acknowledges interrupt.
+        tokio::spawn(async move {
+            let stopped = async {
+                live.session.interrupt().await?;
+                loop {
+                    if live.is_released() || live.turn.lock().await.as_ref().is_none_or(|turn| turn.response_id != response_id) {
+                        return Ok::<_, kybern_drivers::DriverError>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            };
+            if !matches!(tokio::time::timeout(grace, stopped).await, Ok(Ok(()))) {
+                this.force_interrupt(thread_id, &live, response_id).await?;
             }
-            None => Err(anyhow!("thread has no live session")),
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn force_interrupt(&self, thread_id: ThreadId, live: &Arc<LiveSession>, response_id: Uuid) -> Result<()> {
+        let done = {
+            let mut sessions = self.inner.sessions.lock().await;
+            let turn = live.turn.lock().await;
+            if !sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, live))
+                || live.is_released()
+                || turn.as_ref().is_none_or(|turn| turn.response_id != response_id)
+            {
+                return Ok(());
+            }
+            let (done, waiting) = tokio::sync::watch::channel(());
+            self.inner.releasing.lock().await.insert(thread_id, waiting);
+            live.mark_released();
+            live.stop_cleanup.store(true, Ordering::Relaxed);
+            sessions.remove(&thread_id);
+            done
+        };
+        let result = async {
+            // close() terminates the owned process tree if graceful EOF fails.
+            // Keep the resume barrier until both process and turn are settled.
+            live.session.close().await?;
+            live.continuation.lock().await.take();
+            self.interrupt_runtime_tasks(thread_id, live, "Stopped because the provider did not finish interrupting").await;
+            self.process_driver_event(
+                thread_id,
+                live,
+                DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Interrupted,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 0,
+                    anchors: TurnAnchors::default(),
+                },
+                true,
+            )
+            .await?;
+            self.emit(
+                thread_id,
+                None,
+                EventPayload::ProviderNotice {
+                    level: NoticeLevel::Warning,
+                    text: "The agent did not finish stopping, so Kybern closed its process. Send a message to resume the conversation."
+                        .into(),
+                    data: None,
+                },
+            )?;
+            Ok::<_, anyhow::Error>(())
         }
+        .await;
+        self.inner.releasing.lock().await.remove(&thread_id);
+        drop(done);
+        result
     }
 
     pub async fn stop_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
@@ -1481,6 +1562,7 @@ impl Orchestrator {
             session,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(None),
             continuation: Mutex::new(None),
             turn_ready: tokio::sync::Notify::new(),
@@ -1706,6 +1788,11 @@ impl Orchestrator {
         // An idle session retired for an update must not remove its replacement.
         {
             let mut sessions = self.inner.sessions.lock().await;
+            // Forced interruption owns task and turn settlement. Other exits
+            // (including shutdown/archive) still need the cleanup below.
+            if live.stop_cleanup.load(Ordering::Relaxed) {
+                return;
+            }
             if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, &live)) {
                 sessions.remove(&thread_id);
             }
@@ -1724,6 +1811,10 @@ impl Orchestrator {
     }
 
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
+        self.process_driver_event(thread_id, live, ev, false).await
+    }
+
+    async fn process_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent, retiring: bool) -> Result<()> {
         live.touch();
         let starts_response = match &ev {
             DriverEvent::ResponseStarted => true,
@@ -1736,6 +1827,9 @@ impl Orchestrator {
         };
         let mut turn_guard = loop {
             let mut guard = live.turn.lock().await;
+            if live.stop_cleanup.load(Ordering::Relaxed) && !retiring {
+                return Ok(());
+            }
             let mut waiting_for_start = false;
             if starts_response && guard.is_none() && !live.is_released() {
                 let mut continuation = live.continuation.lock().await;
@@ -1749,6 +1843,7 @@ impl Orchestrator {
                         && let Some(mut turn) = continuation.take()
                     {
                         turn.completed = false;
+                        turn.response_id = Uuid::now_v7();
                         turn.messages.clear();
                         turn.active_messages.clear();
                         turn.terminal_message_id = None;
@@ -2326,6 +2421,7 @@ mod tests {
     struct TestSession {
         closes: Arc<AtomicUsize>,
         messages: Arc<Mutex<Vec<UserMessage>>>,
+        hang_interrupt: bool,
     }
 
     #[async_trait::async_trait]
@@ -2341,6 +2437,9 @@ mod tests {
         }
 
         async fn interrupt(&self) -> kybern_drivers::Result<()> {
+            if self.hang_interrupt {
+                std::future::pending::<()>().await;
+            }
             Ok(())
         }
 
@@ -2510,7 +2609,9 @@ mod tests {
             session: Box::new(TestSession::default()),
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(Some(ActiveTurn {
+                response_id: Uuid::now_v7(),
                 id: turn_id,
                 started: std::time::Instant::now(),
                 startup_started: std::time::Instant::now(),
@@ -2839,9 +2940,10 @@ mod tests {
             let closes = Arc::new(AtomicUsize::new(0));
             let messages = Arc::new(Mutex::new(Vec::new()));
             let live = Arc::new(LiveSession {
-                session: Box::new(TestSession { closes: closes.clone(), messages: messages.clone() }),
+                session: Box::new(TestSession { closes: closes.clone(), messages: messages.clone(), ..Default::default() }),
                 last_activity: std::sync::Mutex::new(SessionActivityTime { monotonic: last_activity, wall: SystemTime::now() }),
                 released: AtomicBool::new(false),
+                stop_cleanup: AtomicBool::new(false),
                 turn: Mutex::new(None),
                 continuation: Mutex::new(None),
                 turn_ready: tokio::sync::Notify::new(),
@@ -2885,6 +2987,192 @@ mod tests {
             duration_ms: 1,
             anchors: TurnAnchors::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn interrupt_ack_without_a_result_must_settle_the_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, closes) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("wait for task output")).await.unwrap();
+        live.turn_ready.notified().await;
+        // The provider acknowledges interrupt but never emits a terminal event.
+        fixture.orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(50)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fixture.store.thread_get(thread.id).unwrap().unwrap().status != ThreadStatus::Idle {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("an acknowledged stop must not leave the thread stuck running");
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert!(live.turn.lock().await.is_none());
+        assert!(!fixture.has_session(&thread).await);
+        assert!(
+            fixture
+                .store
+                .events_for_thread(thread.id)
+                .unwrap()
+                .iter()
+                .any(|event| { matches!(event.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. }) })
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupt_without_ack_survives_rpc_cancellation() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (mut live, closes) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+        Arc::get_mut(&mut live).unwrap().session =
+            Box::new(TestSession { closes: closes.clone(), hang_interrupt: true, ..Default::default() });
+        fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+        fixture.orchestrator.send(thread.id, UserMessage::text("stuck provider")).await.unwrap();
+        live.turn_ready.notified().await;
+        let orchestrator = fixture.orchestrator.clone();
+        let request = tokio::spawn(async move { orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(50)).await });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        request.abort();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fixture.store.thread_get(thread.id).unwrap().unwrap().status != ThreadStatus::Idle {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert!(!fixture.has_session(&thread).await);
+    }
+
+    #[tokio::test]
+    async fn interrupt_deadline_does_not_close_a_new_continuation() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, closes) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("monitor")).await.unwrap();
+        live.turn_ready.notified().await;
+        let old_response = live.turn.lock().await.as_ref().unwrap().response_id;
+        let orchestrator = fixture.orchestrator.clone();
+        let request = tokio::spawn(async move { orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(50)).await });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
+        assert_ne!(live.turn.lock().await.as_ref().unwrap().response_id, old_response);
+        request.await.unwrap().unwrap();
+        // Also exercise a watchdog already entering its final claim.
+        fixture.orchestrator.force_interrupt(thread.id, &live, old_response).await.unwrap();
+        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        assert!(fixture.has_session(&thread).await);
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Interrupted)).await.unwrap();
+        fixture.orchestrator.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn interrupt_settles_a_provisional_result_after_tasks_stop() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, closes) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("wait for background work")).await.unwrap();
+        live.turn_ready.notified().await;
+        let task = generic_runtime_task(&ToolCall {
+            id: "task-1".into(),
+            name: "task".into(),
+            input: json!({"description":"Explore"}),
+            parent_id: None,
+        })
+        .unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage { input_tokens: 42, ..Usage::default() },
+                    cost_usd: Some(0.2),
+                    duration_ms: 20,
+                    anchors: TurnAnchors::default(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(live.turn.lock().await.as_ref().unwrap().pending_completion.is_some());
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status("tool:task-1", RuntimeTaskStatus::Stopped)),
+            )
+            .await
+            .unwrap();
+        assert!(live.tasks.lock().await.values().all(|task| task.status == RuntimeTaskStatus::Stopped));
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+        fixture.orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(50)).await.unwrap();
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(events.iter().any(|event| matches!(&event.payload,
+            EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: Some(cost), .. }
+            if usage.input_tokens == 42 && (*cost - 0.2).abs() < 1e-10
+        )));
+        let count = events.len();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().len(), count, "retired output cannot reopen the turn");
+    }
+
+    #[tokio::test]
+    async fn interrupt_fallback_resolves_approvals_and_active_tasks() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("background work awaiting permission")).await.unwrap();
+        live.turn_ready.notified().await;
+        let task = generic_runtime_task(&ToolCall {
+            id: "task-1".into(),
+            name: "task".into(),
+            input: json!({"description":"Explore"}),
+            parent_id: None,
+        })
+        .unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::PermissionRequest {
+                    request_id: "permission-1".into(),
+                    tool_call_id: Some("tool-1".into()),
+                    tool_name: "Bash".into(),
+                    input: json!({"command":"sleep 30"}),
+                    summary: "Allow this command".into(),
+                    suggestions: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::AwaitingApproval);
+        let approval = *live.pending.lock().await.keys().next().unwrap();
+        fixture.orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(50)).await.unwrap();
+        assert!(live.pending.lock().await.is_empty());
+        assert!(fixture.store.approval_get(approval).unwrap().unwrap().1);
+        assert!(live.tasks.lock().await.values().all(|task| task.status == RuntimeTaskStatus::Interrupted));
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+        // The old pump must not report this deliberately closed turn as failed.
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        drop(tx);
+        fixture.orchestrator.clone().pump(thread.id, live, rx).await;
+        assert!(
+            !fixture
+                .store
+                .events_for_thread(thread.id)
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::TurnFailed { .. }))
+        );
     }
 
     #[tokio::test]
@@ -3114,6 +3402,7 @@ mod tests {
         let (live, _) = fixture.park(&thread, Instant::now()).await;
         let turn_id = Uuid::now_v7();
         *live.turn.lock().await = Some(ActiveTurn {
+            response_id: Uuid::now_v7(),
             id: turn_id,
             started: Instant::now(),
             startup_started: Instant::now(),
@@ -3459,6 +3748,7 @@ mod tests {
         let with_turn = fixture.thread(ThreadStatus::Idle);
         let (turn_live, turn_closes) = fixture.park(&with_turn, started).await;
         *turn_live.turn.lock().await = Some(ActiveTurn {
+            response_id: Uuid::now_v7(),
             id: Uuid::now_v7(),
             started,
             startup_started: started,

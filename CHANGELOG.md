@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.6
+
+- Recover stuck agent turns when an interrupt is acknowledged without a final result or the provider stops responding. After a five-second cancellation deadline, close the stuck session and allow the conversation to resume.
+- Settle outstanding tasks and approvals during forced stops, preserve recorded usage, and prevent late events or stale stop requests from affecting newer responses.
+
 ## 0.2.5
 
 - Keep Claude background agents and processes in the same running turn across follow-up work, and prevent premature or duplicate completion notifications.
