@@ -2717,7 +2717,7 @@ dependencies = [
 
 [[package]]
 name = "kybern"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "kybern-cli",
@@ -2726,7 +2726,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-cli"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-client"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2765,7 +2765,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-daemon"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2798,7 +2798,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-desktop"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "block2",
@@ -2829,7 +2829,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-drivers"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -2852,7 +2852,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-git"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "kybern-protocol",
@@ -2864,7 +2864,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-protocol"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "chrono",
  "insta",
@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "kybern-store"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "chrono",
