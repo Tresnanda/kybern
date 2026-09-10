@@ -24,6 +24,7 @@ import {
   Field,
 } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
+import { useLayout } from "../state/layout";
 import { useTheme } from "../ui/theme";
 import type { ThreadState } from "../state/transcript";
 import { modelChoices } from "../../../../packages/kybern-client/src/models";
@@ -85,6 +86,7 @@ export function ComposerControls({
   const compactModel = modelLabel.replace(/^GPT[- ]?/i, "");
   const permissionLabel =
     modes.find((item) => item.value === mode)?.label ?? mode;
+  const { regular } = useLayout();
   function openOptions(section: "model" | "permissions" | "usage") {
     router.push({
       pathname: "/composer-options",
@@ -144,13 +146,21 @@ export function ComposerControls({
           </Svg>
         </Tap>
       )}
+      {/* On tablet the model chip sits at the trailing edge next to Send; on the
+          phone it fills the middle. */}
+      {regular && <View style={{ flex: 1 }} />}
       <Tap
         label={`${modelLabel}${effort ? `, ${effort} effort` : ""}. Change model and reasoning`}
         disabled={disabled}
         onPress={() => openOptions("model")}
         style={[
           styles.line,
-          { flex: 1, minWidth: 0, paddingHorizontal: 8, gap: 6 },
+          {
+            minWidth: 0,
+            paddingHorizontal: 8,
+            gap: 6,
+            ...(regular ? { flexShrink: 1 } : { flex: 1 }),
+          },
         ]}
       >
         <ProviderMark kind={kind} size={16} />

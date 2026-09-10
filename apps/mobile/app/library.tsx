@@ -4,9 +4,16 @@ import Animated, {
 } from "react-native-reanimated";
 import { PullRefresh } from "../src/ui/PullRefresh";
 import { threadHasActivity } from "../src/state/runtime";
+import {
+  filterThreads,
+  relativeTime,
+  THREAD_FILTERS,
+  type ThreadFilter,
+} from "../src/state/threadList";
+import { useLayout } from "../src/state/layout";
 import * as Haptics from "expo-haptics";
 import { router, Stack } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, RefreshControl, TextInput, View } from "react-native";
 import { Alert } from "../src/ui/Alert";
 import { type Thread, PROVIDER_DISPLAY_NAME } from "../src/state/protocol";
@@ -24,42 +31,28 @@ import {
 import { ProviderMark } from "../src/ui/ProviderMark";
 import { type, useTheme } from "../src/ui/theme";
 
-function relativeTime(at: string) {
-  const minutes = Math.max(0, (Date.now() - Date.parse(at)) / 60000);
-  return minutes < 1
-    ? "Now"
-    : minutes < 60
-      ? `${Math.floor(minutes)}m`
-      : minutes < 1440
-        ? `${Math.floor(minutes / 60)}h`
-        : `${Math.floor(minutes / 1440)}d`;
-}
 export default function Library() {
   const app = useApp();
   const { colors } = useTheme();
+  const { regular } = useLayout();
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("All");
+  const [filter, setFilter] = useState<ThreadFilter>("All");
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  // On a wide layout the persistent sidebar is the thread list; this route is
+  // redundant, so bounce back to the detail instead of showing a duplicate.
+  useEffect(() => {
+    if (regular) router.replace("/");
+  }, [regular]);
   const rows = useMemo(
     () =>
-      app.threads
-        .filter(
-          (t) =>
-            (filter === "Archived"
-              ? t.status === "archived"
-              : t.status !== "archived") &&
-            (filter !== "Working" || threadHasActivity(t, app.activity)) &&
-            (filter !== "Pinned" || t.pinned) &&
-            `${t.title} ${app.projects.find((p) => p.id === t.project_id)?.name}`
-              .toLowerCase()
-              .includes(query.toLowerCase()),
-        )
-        .sort(
-          (a, b) =>
-            Number(b.pinned) - Number(a.pinned) ||
-            b.updated_at.localeCompare(a.updated_at),
-        ),
+      filterThreads({
+        threads: app.threads,
+        projects: app.projects,
+        activity: app.activity,
+        query,
+        filter,
+      }),
     [app.threads, app.projects, app.activity, query, filter],
   );
   const offset = useSharedValue(0);
@@ -192,7 +185,7 @@ export default function Library() {
                   flexWrap: "wrap",
                 }}
               >
-                {["All", "Working", "Pinned", "Archived"].map((f) => (
+                {THREAD_FILTERS.map((f) => (
                   <Tap
                     key={f}
                     label={f}

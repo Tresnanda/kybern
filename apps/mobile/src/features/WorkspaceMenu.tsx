@@ -9,6 +9,7 @@ import {
 } from "../components/liquid/MorphingMenu";
 import type { Diff, GitStatus, Thread } from "../state/protocol";
 import { activeEnvironment, errorText, refresh, rpc } from "../state/runtime";
+import { type InspectorTab, useLayout } from "../state/layout";
 import {
   ErrorBanner,
   Icon,
@@ -20,8 +21,17 @@ import {
 } from "../ui/primitives";
 import { useTheme } from "../ui/theme";
 
+// Workspace menu tabs that have a live inspector pane on wide layouts, so the
+// menu can reveal them in the dock instead of pushing a full-screen route.
+const INSPECTOR_TAB: Record<string, InspectorTab> = {
+  Changes: "changes",
+  Files: "files",
+  Terminal: "terminal",
+};
+
 export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
   const { colors } = useTheme();
+  const { regular, openInspector } = useLayout();
   const trigger = useRef<View>(null);
   const afterClose = useRef<(() => void) | null>(null);
   const [origin, setOrigin] = useState<MenuOrigin | null>(null);
@@ -61,8 +71,11 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
   const adds = diff?.files.reduce((n, f) => n + f.additions, 0);
   const dels = diff?.files.reduce((n, f) => n + f.deletions, 0);
   function navigate(tab: string) {
-    afterClose.current = () =>
-      router.push({ pathname: "/workspace", params: { threadId, tab } });
+    const inspectorTab = INSPECTOR_TAB[tab];
+    afterClose.current =
+      regular && inspectorTab
+        ? () => openInspector(inspectorTab)
+        : () => router.push({ pathname: "/workspace", params: { threadId, tab } });
     close();
   }
   async function run(action: () => Promise<unknown>) {
@@ -305,6 +318,7 @@ export function WorkspacePill({
   onJumpToLatest?: () => void;
 }) {
   const { colors } = useTheme();
+  const { regular } = useLayout();
   const pill = {
     borderRadius: 24,
     backgroundColor: colors.surface,
@@ -315,45 +329,55 @@ export function WorkspacePill({
   return (
     <View
       style={{
-        alignSelf: "stretch",
+        width: "100%",
+        maxWidth: 760,
+        alignSelf: "center",
         alignItems: "center",
-        marginStart: 20,
         flexDirection: "row",
-        marginEnd: 20,
+        paddingHorizontal: 20,
         gap: 8,
       }}
     >
-      {(
-        [
-          ["Files", "folder"],
-          ["Terminal", "terminal"],
-        ] as const
-      ).map(([tab, icon]) => (
-        <Tap
-          key={tab}
-          label={`Open ${tab.toLowerCase()}`}
-          onPress={() =>
-            router.push({ pathname: "/workspace", params: { threadId, tab } })
-          }
-          style={[styles.line, pill]}
-        >
-          <Icon name={icon} size={16} />
-        </Tap>
-      ))}
-      <Tap
-        label={`Open tasks and agents${activeTasks ? `, ${activeTasks} active` : ""}`}
-        onPress={() =>
-          router.push({ pathname: "/tasks", params: { threadId } })
-        }
-        style={[styles.line, pill]}
-      >
-        <Icon name="person.2" size={16} />
-        {activeTasks > 0 && (
-          <T variant="caption" tone="accent">
-            {activeTasks}
-          </T>
-        )}
-      </Tap>
+      {/* On wide layouts these live in the inspector dock; the header toggle and
+          its tabs replace the floating pills. Keep them on the phone stack. */}
+      {!regular && (
+        <>
+          {(
+            [
+              ["Files", "folder"],
+              ["Terminal", "terminal"],
+            ] as const
+          ).map(([tab, icon]) => (
+            <Tap
+              key={tab}
+              label={`Open ${tab.toLowerCase()}`}
+              onPress={() =>
+                router.push({
+                  pathname: "/workspace",
+                  params: { threadId, tab },
+                })
+              }
+              style={[styles.line, pill]}
+            >
+              <Icon name={icon} size={16} />
+            </Tap>
+          ))}
+          <Tap
+            label={`Open tasks and agents${activeTasks ? `, ${activeTasks} active` : ""}`}
+            onPress={() =>
+              router.push({ pathname: "/tasks", params: { threadId } })
+            }
+            style={[styles.line, pill]}
+          >
+            <Icon name="person.2" size={16} />
+            {activeTasks > 0 && (
+              <T variant="caption" tone="accent">
+                {activeTasks}
+              </T>
+            )}
+          </Tap>
+        </>
+      )}
       <View style={{ flex: 1 }} />
       {onJumpToLatest && (
         <Tap

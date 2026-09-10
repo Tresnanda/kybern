@@ -4,6 +4,7 @@ import { ScrollView } from "react-native";
 import { useTheme } from "../src/ui/theme";
 import { ComposerOptions } from "../src/features/ComposerControls";
 import { errorText, loadThread, useApp, useThread } from "../src/state/runtime";
+import { useLayout } from "../src/state/layout";
 import { ErrorBanner, IconButton, Page, T, Tap } from "../src/ui/primitives";
 
 export default function ComposerOptionsScreen() {
@@ -12,6 +13,7 @@ export default function ComposerOptionsScreen() {
     section?: string;
   }>();
   const { colors } = useTheme();
+  const { regular } = useLayout();
   const section =
     requested === "permissions" || requested === "usage" ? requested : "model";
   const app = useApp();
@@ -34,8 +36,11 @@ export default function ComposerOptionsScreen() {
                 : threadId
                   ? "Model & reasoning"
                   : "Agent & model",
-          sheetAllowedDetents:
-            section === "model"
+          // On tablet iOS centers a form sheet as a card; a full-height detent
+          // fills the screen top-to-bottom so it reads as grounded, not floating.
+          sheetAllowedDetents: regular
+            ? [1]
+            : section === "model"
               ? [0.75, 1]
               : section === "permissions"
                 ? [0.65, 1]

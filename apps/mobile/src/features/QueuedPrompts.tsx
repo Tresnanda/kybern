@@ -6,7 +6,7 @@ import { errorText, rpc, useApp } from "../state/runtime";
 import { ErrorBanner, Field, IconButton, styles, T, Tap } from "../ui/primitives";
 
 export function QueuedPrompts({ items }: { items: QueuedMessage[] }) {
-  return <ScrollView style={{ maxHeight: 200 }} contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+  return <ScrollView style={{ maxHeight: 200, width: "100%", maxWidth: 760, alignSelf: "center" }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
     <T variant="caption" tone="secondary">Queued · {items.length}</T>
     {items.map(item => <QueuedPrompt key={item.id} item={item} />)}
   </ScrollView>;

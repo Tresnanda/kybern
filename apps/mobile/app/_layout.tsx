@@ -1,13 +1,32 @@
 import { Stack } from "expo-router";
 import { NavigationBar } from "expo-navigation-bar";
 import * as SystemUI from "expo-system-ui";
-import { Platform, View } from "react-native";
+import { Platform, useWindowDimensions, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { useEffect, type ReactNode } from "react";
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
-import { useReducedMotion } from "react-native-reanimated";
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 import { boot } from "../src/state/runtime";
+import {
+  hydrateLayout,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SPLIT_MIN_WIDTH,
+  useLayout,
+} from "../src/state/layout";
+import { PANE } from "../src/components/liquid/motion";
+import { Sidebar } from "../src/features/Sidebar";
 import { ThemeProvider, useTheme } from "../src/ui/theme";
 
 import {
@@ -30,11 +49,160 @@ const androidSheet =
       }
     : {};
 
+// The split shell. To keep the sidebar collapse/reveal buttery, the detail is a
+// FIXED-width layer that only ever slides (a transform) — never resizes — so the
+// heavy conversation never re-runs Yoga mid-animation. The sidebar is an
+// absolute layer that slides in from the left over the (empty) detail margin, and
+// a drag handle on the seam resizes it. Below the split width, children render
+// full-screen exactly as the phone stack does.
+function Shell({ children }: { children: ReactNode }) {
+  const { colors } = useTheme();
+  const { regular, sidebarOpen, sidebarWidth, setSidebarWidth } = useLayout();
+  const { width: screenWidth } = useWindowDimensions();
+  // In the phone stack the detail fills the screen; in the split it leaves room
+  // for the rail. Either way the detail keeps the same tree slot, so the native
+  // navigator never remounts when a window crosses the split width.
+  const detailWidth = regular
+    ? Math.max(360, screenWidth - sidebarWidth)
+    : screenWidth;
+
+  const split = useSharedValue(regular ? 1 : 0);
+  const open = useSharedValue(regular && sidebarOpen ? 1 : 0);
+  const liveWidth = useSharedValue(sidebarWidth);
+  const startWidth = useSharedValue(sidebarWidth);
+  useEffect(() => {
+    split.value = withSpring(regular ? 1 : 0, PANE);
+  }, [regular, split]);
+  useEffect(() => {
+    open.value = withSpring(regular && sidebarOpen ? 1 : 0, PANE);
+  }, [regular, sidebarOpen, open]);
+  useEffect(() => {
+    liveWidth.value = withSpring(sidebarWidth, PANE);
+  }, [sidebarWidth, liveWidth]);
+
+  const sidebarStyle = useAnimatedStyle(() => ({
+    width: liveWidth.value,
+    transform: [{ translateX: (open.value - 1) * liveWidth.value }],
+  }));
+  // Compact: detail fills the screen (no shift). Split, closed: centered. Split,
+  // open: sits just right of the sidebar.
+  const detailStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: split.value * liveWidth.value * (0.5 + 0.5 * open.value) },
+    ],
+  }));
+  const handleStyle = useAnimatedStyle(() => ({
+    opacity: open.value,
+    transform: [{ translateX: liveWidth.value * open.value }],
+  }));
+
+  const resize = Gesture.Pan()
+    .activeOffsetX([-8, 8])
+    .onStart(() => {
+      startWidth.value = liveWidth.value;
+    })
+    .onUpdate((e) => {
+      const raw = startWidth.value + e.translationX;
+      // Rubber-band past the clamp so the edge resists instead of walling.
+      liveWidth.value =
+        raw < SIDEBAR_MIN_WIDTH
+          ? SIDEBAR_MIN_WIDTH - (SIDEBAR_MIN_WIDTH - raw) * 0.2
+          : raw > SIDEBAR_MAX_WIDTH
+            ? SIDEBAR_MAX_WIDTH + (raw - SIDEBAR_MAX_WIDTH) * 0.2
+            : raw;
+    })
+    .onEnd(() => {
+      const w = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, liveWidth.value),
+      );
+      liveWidth.value = withSpring(w, PANE);
+      scheduleOnRN(setSidebarWidth, w);
+    });
+
+  return (
+    <View
+      style={{
+        flex: 1,
+        overflow: "hidden",
+        backgroundColor: colors.background,
+      }}
+    >
+      <Animated.View
+        style={[
+          {
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: detailWidth,
+            backgroundColor: colors.background,
+          },
+          detailStyle,
+        ]}
+      >
+        {children}
+      </Animated.View>
+      {regular && (
+        <>
+          <Animated.View
+            style={[
+              {
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: 0,
+                backgroundColor: colors.background,
+                borderRightWidth: 0.5,
+                borderColor: colors.line,
+              },
+              sidebarStyle,
+            ]}
+          >
+            <Sidebar />
+          </Animated.View>
+          <GestureDetector gesture={resize}>
+            <Animated.View
+              pointerEvents={sidebarOpen ? "auto" : "none"}
+              style={[
+                { position: "absolute", top: 0, bottom: 0, left: -12, width: 24 },
+                handleStyle,
+              ]}
+            >
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <View
+                  style={{
+                    width: 4,
+                    height: 46,
+                    borderRadius: 2,
+                    backgroundColor: colors.line,
+                  }}
+                />
+              </View>
+            </Animated.View>
+          </GestureDetector>
+        </>
+      )}
+    </View>
+  );
+}
+
 function Navigation() {
   const { colors, dark } = useTheme();
   const reduced = useReducedMotion();
+  const { width } = useWindowDimensions();
+  // On tablet iOS centers a form sheet; a full-height detent fills the screen so
+  // it reads as grounded rather than a card floating in the middle.
+  const sheetDetents = width >= SPLIT_MIN_WIDTH ? [1] : [0.75, 1];
   useEffect(() => {
     void boot();
+    hydrateLayout();
   }, []);
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(colors.background);
@@ -43,6 +211,7 @@ function Navigation() {
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <StatusBar style={dark ? "light" : "dark"} />
       <NavigationBar style={dark ? "light" : "dark"} />
+      <Shell>
       <Stack
         screenLayout={
           Platform.OS === "android" ? androidScreenLayout : undefined
@@ -91,7 +260,7 @@ function Navigation() {
           options={{
             title: "Thread setup",
             presentation: "formSheet",
-            sheetAllowedDetents: [0.75, 1],
+            sheetAllowedDetents: sheetDetents,
             sheetGrabberVisible: true,
             ...androidSheet,
           }}
@@ -110,7 +279,7 @@ function Navigation() {
           options={{
             title: "Choose project",
             presentation: "formSheet",
-            sheetAllowedDetents: [0.75, 1],
+            sheetAllowedDetents: sheetDetents,
             sheetGrabberVisible: true,
             ...androidSheet,
           }}
@@ -121,7 +290,7 @@ function Navigation() {
           options={{
             title: "Add to message",
             presentation: "formSheet",
-            sheetAllowedDetents: [0.75, 1],
+            sheetAllowedDetents: sheetDetents,
             sheetGrabberVisible: true,
             ...androidSheet,
           }}
@@ -130,7 +299,7 @@ function Navigation() {
           name="composer-options"
           options={{
             presentation: "formSheet",
-            sheetAllowedDetents: [0.75, 1],
+            sheetAllowedDetents: sheetDetents,
             sheetGrabberVisible: true,
             ...androidSheet,
           }}
@@ -143,6 +312,7 @@ function Navigation() {
         <Stack.Screen name="sessions" options={{ title: "Resume a session" }} />
         <Stack.Screen name="pair" options={{ headerShown: false }} />
       </Stack>
+      </Shell>
       <DialogHost />
     </View>
   );

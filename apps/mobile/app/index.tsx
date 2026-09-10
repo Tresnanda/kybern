@@ -9,6 +9,7 @@ import { Composer } from "../src/features/Composer";
 import { setDraft, useDraft } from "../src/state/draft";
 import { type UserMessage } from "../src/state/protocol";
 import { ensureThread, refresh, rpc, useApp } from "../src/state/runtime";
+import { useLayout } from "../src/state/layout";
 import { Brand } from "../src/ui/Brand";
 import { Button, Icon, IconButton, T, Tap, styles } from "../src/ui/primitives";
 import { useTheme } from "../src/ui/theme";
@@ -20,6 +21,7 @@ export default function Home() {
   const app = useApp();
   const draft = useDraft();
   const { colors } = useTheme();
+  const { regular, sidebarOpen, toggleSidebar } = useLayout();
   const insets = useSafeAreaInsets();
   const sendMotion = useSendTransition();
   const [focused, setFocused] = useState(true);
@@ -35,12 +37,15 @@ export default function Home() {
       : null;
   useEffect(() => {
     if (focused && outgoing?.receipt && sendMotion.flight?.id !== outgoing.id)
-      router.push({
+      // On a wide layout the home screen is the detail pane, so swap it in place
+      // rather than pushing another entry onto the detail stack.
+      (regular ? router.navigate : router.push)({
         pathname: "/thread/[id]",
         params: { id: outgoing.receipt.threadId, created: "1" },
       });
   }, [
     focused,
+    regular,
     outgoing?.receipt?.threadId,
     outgoing?.id,
     sendMotion.flight?.id,
@@ -96,31 +101,54 @@ export default function Home() {
       behavior="padding"
       style={{ flex: 1, backgroundColor: colors.background }}
     >
-      <View
-        style={{
-          paddingTop: insets.top + 8,
-          paddingHorizontal: 18,
-          paddingBottom: 8,
-          ...styles.spread,
-        }}
-      >
-        <IconButton
-          name="sidebar.left"
-          label="Open threads"
-          onPress={() => router.push("/library")}
-        />
-        <View style={[styles.line, { gap: 9 }]}>
-          <Brand size={21} />
-          <T variant="heading" style={{ fontSize: 19 }}>
-            kybern
-          </T>
+      {regular ? (
+        // The sidebar already carries the brand, threads, and settings, so the
+        // split-view home is a clean canvas — just a way back to the rail when
+        // it is collapsed.
+        <View
+          style={{
+            paddingTop: insets.top + 8,
+            paddingHorizontal: 12,
+            paddingBottom: 4,
+            minHeight: 40,
+            flexDirection: "row",
+          }}
+        >
+          {!sidebarOpen && (
+            <IconButton
+              name="sidebar.left"
+              label="Show sidebar"
+              onPress={toggleSidebar}
+            />
+          )}
         </View>
-        <IconButton
-          name="gearshape"
-          label="Open settings"
-          onPress={() => router.push("/settings")}
-        />
-      </View>
+      ) : (
+        <View
+          style={{
+            paddingTop: insets.top + 8,
+            paddingHorizontal: 18,
+            paddingBottom: 8,
+            ...styles.spread,
+          }}
+        >
+          <IconButton
+            name="sidebar.left"
+            label="Open threads"
+            onPress={() => router.push("/library")}
+          />
+          <View style={[styles.line, { gap: 9 }]}>
+            <Brand size={21} />
+            <T variant="heading" style={{ fontSize: 19 }}>
+              kybern
+            </T>
+          </View>
+          <IconButton
+            name="gearshape"
+            label="Open settings"
+            onPress={() => router.push("/settings")}
+          />
+        </View>
+      )}
       <ScrollView
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
@@ -250,7 +278,15 @@ export default function Home() {
           </View>
         )}
       </ScrollView>
-      <View style={{ paddingHorizontal: 28, ...styles.spread }}>
+      <View
+        style={{
+          width: "100%",
+          maxWidth: 760,
+          alignSelf: "center",
+          paddingHorizontal: 20,
+          ...styles.spread,
+        }}
+      >
         <Tap
           label={project ? `Change project, ${project.name}` : "Add a project"}
           onPress={() =>

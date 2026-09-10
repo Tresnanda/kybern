@@ -96,6 +96,7 @@ export function Tap({
   static?: boolean;
 }>) {
   const [pressed, setPressed] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const reduced = useReducedMotion();
   return (
     <Pressable
@@ -108,6 +109,9 @@ export function Tap({
       onLongPress={onLongPress}
       onPressIn={() => setPressed(true)}
       onPressOut={() => setPressed(false)}
+      // Trackpad/pointer feedback on iPad; touch devices never fire these.
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
       hitSlop={Platform.OS === "android" ? 2 : undefined}
       pressRetentionOffset={16}
     >
@@ -117,7 +121,7 @@ export function Tap({
             minHeight: 44,
             minWidth: 44,
             justifyContent: "center",
-            opacity: disabled ? 0.38 : pressed ? 0.72 : 1,
+            opacity: disabled ? 0.38 : pressed ? 0.72 : hovered ? 0.9 : 1,
             transform: [{ scale: pressed && !reduced && !isStatic ? 0.96 : 1 }],
             transitionProperty: ["transform", "opacity"],
             transitionDuration: 120,
