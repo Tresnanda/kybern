@@ -3,3 +3,6 @@ packages: []
 allowBuilds:
   esbuild: true
   msw: false
+
+patchedDependencies:
+  '@tauri-apps/api@2.11.1': patches/@tauri-apps__api@2.11.1.patch

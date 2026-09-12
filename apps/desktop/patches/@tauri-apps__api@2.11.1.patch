@@ -1,0 +1,116 @@
+diff --git a/event.cjs b/event.cjs
+index 06142ddde4ddbd61f542df8f85025b5361bf87d3..efb4b0af1aa2e6505652d2f7cfd1361d4b756b58 100644
+--- a/event.cjs
++++ b/event.cjs
+@@ -41,8 +41,10 @@ exports.TauriEvent = void 0;
+  * @param eventId Event identifier
+  * @returns
+  */
+-async function _unlisten(event, eventId) {
+-    window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
++async function _unlisten(event, eventId, handlerId) {
++    // The listen reply can arrive before the native registration eval. Retain
++    // our callback ID instead of looking it up in that not-yet-ready registry.
++    window.__TAURI_INTERNALS__.unregisterCallback(handlerId);
+     await core.invoke('plugin:event|unlisten', {
+         event,
+         eventId
+@@ -75,12 +77,17 @@ async function listen(event, handler, options) {
+     const target = typeof (options === null || options === void 0 ? void 0 : options.target) === 'string'
+         ? { kind: 'AnyLabel', label: options.target }
+         : ((_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: 'Any' });
++    const handlerId = core.transformCallback(handler);
+     return core.invoke('plugin:event|listen', {
+         event,
+         target,
+-        handler: core.transformCallback(handler)
++        handler: handlerId
+     }).then((eventId) => {
+-        return async () => _unlisten(event, eventId);
++        let cleanup;
++        return () => cleanup !== null && cleanup !== void 0 ? cleanup : (cleanup = _unlisten(event, eventId, handlerId));
++    }, (error) => {
++        window.__TAURI_INTERNALS__.unregisterCallback(handlerId);
++        throw error;
+     });
+ }
+ /**
+@@ -110,10 +117,18 @@ async function listen(event, handler, options) {
+  * @since 1.0.0
+  */
+ async function once(event, handler, options) {
+-    return listen(event, (eventData) => {
+-        void _unlisten(event, eventData.id);
++    let unlisten;
++    let fired = false;
++    const cleanup = await listen(event, (eventData) => {
++        if (fired) return;
++        fired = true;
++        if (unlisten) void unlisten();
+         handler(eventData);
+     }, options);
++    unlisten = cleanup;
++    // An event can also arrive before the listen reply supplies its cleanup.
++    if (fired) void cleanup();
++    return cleanup;
+ }
+ /**
+  * Emits an event to all {@link EventTarget|targets}.
+diff --git a/event.js b/event.js
+index 248546d8aa136ace0e895b0591fa47cc935816a6..1761ead1e8e07c40395d5fc72cf02d01fa0216a4 100644
+--- a/event.js
++++ b/event.js
+@@ -39,8 +39,10 @@ var TauriEvent;
+  * @param eventId Event identifier
+  * @returns
+  */
+-async function _unlisten(event, eventId) {
+-    window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
++async function _unlisten(event, eventId, handlerId) {
++    // The listen reply can arrive before the native registration eval. Retain
++    // our callback ID instead of looking it up in that not-yet-ready registry.
++    window.__TAURI_INTERNALS__.unregisterCallback(handlerId);
+     await invoke('plugin:event|unlisten', {
+         event,
+         eventId
+@@ -73,12 +75,17 @@ async function listen(event, handler, options) {
+     const target = typeof (options === null || options === void 0 ? void 0 : options.target) === 'string'
+         ? { kind: 'AnyLabel', label: options.target }
+         : ((_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: 'Any' });
++    const handlerId = transformCallback(handler);
+     return invoke('plugin:event|listen', {
+         event,
+         target,
+-        handler: transformCallback(handler)
++        handler: handlerId
+     }).then((eventId) => {
+-        return async () => _unlisten(event, eventId);
++        let cleanup;
++        return () => cleanup !== null && cleanup !== void 0 ? cleanup : (cleanup = _unlisten(event, eventId, handlerId));
++    }, (error) => {
++        window.__TAURI_INTERNALS__.unregisterCallback(handlerId);
++        throw error;
+     });
+ }
+ /**
+@@ -108,10 +115,18 @@ async function listen(event, handler, options) {
+  * @since 1.0.0
+  */
+ async function once(event, handler, options) {
+-    return listen(event, (eventData) => {
+-        void _unlisten(event, eventData.id);
++    let unlisten;
++    let fired = false;
++    const cleanup = await listen(event, (eventData) => {
++        if (fired) return;
++        fired = true;
++        if (unlisten) void unlisten();
+         handler(eventData);
+     }, options);
++    unlisten = cleanup;
++    // An event can also arrive before the listen reply supplies its cleanup.
++    if (fired) void cleanup();
++    return cleanup;
+ }
+ /**
+  * Emits an event to all {@link EventTarget|targets}.
