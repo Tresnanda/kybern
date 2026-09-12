@@ -3,6 +3,7 @@
 
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { useReducedMotion } from "motion/react";
+import { flushSync } from "react-dom";
 import {
   type ComponentPropsWithRef,
   type Ref,
@@ -102,6 +103,7 @@ export interface MessageNavigationModel {
   activeId: (viewport: HTMLElement) => string;
   scrollToItem: (id: string) => void;
   scrollToEnd: () => void;
+  cancelScroll?: () => void;
 }
 
 export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
@@ -169,7 +171,11 @@ export function MessageScroller({
   const viewportRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(followOutput);
+  const lastScrollTopRef = useRef(0);
+  const resumeFollowingRef = useRef(true);
+  const touchYRef = useRef<number | null>(null);
   const programmaticScrollRef = useRef(false);
+  const navigationNeedsCancelRef = useRef(false);
   const scrollTimerRef = useRef<number | undefined>(undefined);
   const frameRef = useRef<number | undefined>(undefined);
   const railFrameRef = useRef<number | undefined>(undefined);
@@ -185,6 +191,8 @@ export function MessageScroller({
     onScroll: onViewportScroll,
     onWheel: onViewportWheel,
     onTouchStart: onViewportTouchStart,
+    onTouchMove: onViewportTouchMove,
+    onPointerDown: onViewportPointerDown,
     onKeyDown: onViewportKeyDown,
     ...restViewportProps
   } = viewportProps ?? {};
@@ -339,6 +347,7 @@ export function MessageScroller({
     if (!viewport) return;
 
     programmaticScrollRef.current = true;
+    navigationNeedsCancelRef.current = true;
     if (navigationModelRef.current) {
       navigationModelRef.current.scrollToEnd();
     } else if (typeof viewport.scrollTo === "function") {
@@ -354,19 +363,36 @@ export function MessageScroller({
 
   const handleScroll = useCallback(() => {
     const viewport = viewportRef.current;
-    if (!viewport || programmaticScrollRef.current) return;
+    if (!viewport) return;
+    const top = Math.max(0, viewport.scrollTop);
+    const previous = lastScrollTopRef.current;
+    lastScrollTopRef.current = top;
+    if (programmaticScrollRef.current) return;
 
     const distance =
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     // Once the reader leaves, resume only at the actual bottom. Reusing the
     // near-end tolerance here pulled small upward gestures back during output.
-    setFollowing(distance <= (followingRef.current ? followThreshold : 1));
+    // WebKit can echo a scroll event after layout without user movement. In a
+    // short conversation that event is also "at bottom"; resuming on it would
+    // undo an upward gesture as soon as more work arrives. Resume only after
+    // actual downward movement, including scrollbar, keyboard, and touch input.
+    if (followingRef.current) setFollowing(distance <= followThreshold);
+    else if (resumeFollowingRef.current && top > previous) setFollowing(distance <= 1);
     scheduleActiveRailItem();
   }, [followThreshold, setFollowing, scheduleActiveRailItem]);
 
   const leaveLiveEdge = useCallback((stopFollowing = true) => {
     programmaticScrollRef.current = false;
-    if (stopFollowing) setFollowing(false);
+    lastScrollTopRef.current = Math.max(0, viewportRef.current?.scrollTop ?? 0);
+    resumeFollowingRef.current = !stopFollowing;
+    // Wheel/touch updates use a lower React priority than provider deltas. End
+    // anchoring must stop before a synchronous transcript update can arrive.
+    if (stopFollowing && followingRef.current) flushSync(() => setFollowing(false));
+    if (navigationNeedsCancelRef.current) {
+      navigationNeedsCancelRef.current = false;
+      navigationModelRef.current?.cancelScroll?.();
+    }
   }, [setFollowing]);
 
   useLayoutEffect(() => {
@@ -376,7 +402,10 @@ export function MessageScroller({
     }
 
     setFollowing(true);
-    frameRef.current = requestAnimationFrame(() => scrollToEnd("auto"));
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = undefined;
+      if (followingRef.current) scrollToEnd("auto");
+    });
     return () => {
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
     };
@@ -474,6 +503,7 @@ export function MessageScroller({
 
       setFollowing(false);
       programmaticScrollRef.current = true;
+      navigationNeedsCancelRef.current = true;
       if (navigationModel) {
         navigationModel.scrollToItem(item.id);
         if (scrollTimerRef.current) window.clearTimeout(scrollTimerRef.current);
@@ -516,12 +546,28 @@ export function MessageScroller({
         onViewportWheel?.(event);
       }}
       onTouchStart={(event) => {
+        touchYRef.current = event.touches[0]?.clientY ?? null;
         leaveLiveEdge(false);
         onViewportTouchStart?.(event);
+      }}
+      onTouchMove={(event) => {
+        const y = event.touches[0]?.clientY;
+        if (y !== undefined && touchYRef.current !== null) {
+          if (y > touchYRef.current) leaveLiveEdge();
+          else if (y < touchYRef.current) resumeFollowingRef.current = true;
+        }
+        touchYRef.current = y ?? null;
+        onViewportTouchMove?.(event);
+      }}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) leaveLiveEdge(false);
+        onViewportPointerDown?.(event);
       }}
       onKeyDown={(event) => {
         if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
           leaveLiveEdge();
+        } else if (["ArrowDown", "PageDown", "End"].includes(event.key)) {
+          resumeFollowingRef.current = true;
         }
         onViewportKeyDown?.(event);
       }}

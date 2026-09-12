@@ -9,11 +9,13 @@
 export function mergeSequencedSnapshot<K extends string, T extends { id: K; last_seq: number }>(
   current: Readonly<Record<K, T>>,
   snapshot: readonly T[],
+  cursors?: Readonly<Partial<Record<K, { lastSeq: number }>>>,
 ): Record<K, T> {
   const merged: Record<K, T> = { ...current }
   for (const incoming of snapshot) {
     const existing = current[incoming.id]
-    merged[incoming.id] = existing && existing.last_seq > incoming.last_seq ? existing : incoming
+    const sequence = Math.max(existing?.last_seq ?? 0, cursors?.[incoming.id]?.lastSeq ?? 0)
+    merged[incoming.id] = existing && sequence > incoming.last_seq ? existing : incoming
   }
   return merged
 }

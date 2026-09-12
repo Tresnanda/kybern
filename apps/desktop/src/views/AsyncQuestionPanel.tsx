@@ -13,7 +13,7 @@ export function AsyncQuestionPanel({ threadId, request, count }: { threadId: Thr
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const ready = request.questions.every((_, index) => answers[index]?.trim())
-  return <ComposerStackedPanel className="question-panel overflow-hidden !rounded-b-xl border-b">
+  return <ComposerStackedPanel className="question-panel t-panel-enter overflow-hidden">
     <form className="question-panel-form" aria-label="Answer agent questions" aria-busy={busy} onSubmit={async (event) => {
       event.preventDefault()
       if (busy || !ready) return

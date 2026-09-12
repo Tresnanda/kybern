@@ -1005,9 +1005,6 @@ impl Orchestrator {
     async fn interrupt_with_grace(&self, thread_id: ThreadId, grace: Duration) -> Result<()> {
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
         let response_id = live.turn.lock().await.as_ref().map(|turn| turn.response_id);
-        let Some(response_id) = response_id else {
-            return Ok(live.session.interrupt().await?);
-        };
         live.touch();
         let this = self.clone();
         // The RPC connection may disappear while stopping. Cleanup still owns
@@ -1016,7 +1013,10 @@ impl Orchestrator {
             let stopped = async {
                 live.session.interrupt().await?;
                 loop {
-                    if live.is_released() || live.turn.lock().await.as_ref().is_none_or(|turn| turn.response_id != response_id) {
+                    if live.is_released()
+                        || live.turn.lock().await.as_ref().map(|turn| turn.response_id) != response_id
+                        || (response_id.is_none() && !live.tasks.lock().await.values().any(|task| task.status.is_active()))
+                    {
                         return Ok::<_, kybern_drivers::DriverError>(());
                     }
                     tokio::time::sleep(Duration::from_millis(25)).await;
@@ -1031,13 +1031,13 @@ impl Orchestrator {
         Ok(())
     }
 
-    async fn force_interrupt(&self, thread_id: ThreadId, live: &Arc<LiveSession>, response_id: Uuid) -> Result<()> {
+    async fn force_interrupt(&self, thread_id: ThreadId, live: &Arc<LiveSession>, response_id: Option<Uuid>) -> Result<()> {
         let done = {
             let mut sessions = self.inner.sessions.lock().await;
             let turn = live.turn.lock().await;
             if !sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, live))
                 || live.is_released()
-                || turn.as_ref().is_none_or(|turn| turn.response_id != response_id)
+                || turn.as_ref().map(|turn| turn.response_id) != response_id
             {
                 return Ok(());
             }
@@ -1053,6 +1053,7 @@ impl Orchestrator {
             // Keep the resume barrier until both process and turn are settled.
             live.session.close().await?;
             live.continuation.lock().await.take();
+            self.restore_active_runtime_tasks(thread_id, live).await?;
             self.interrupt_runtime_tasks(thread_id, live, "Stopped because the provider did not finish interrupting").await;
             self.process_driver_event(
                 thread_id,
@@ -1778,15 +1779,34 @@ impl Orchestrator {
         }
     }
 
+    /// Only call while retiring the current session behind the resume barrier.
+    /// A prior broken transport may have left durable work absent from the
+    /// current handle's task map. Include it in the same terminal projection.
+    async fn restore_active_runtime_tasks(&self, thread_id: ThreadId, live: &Arc<LiveSession>) -> Result<()> {
+        let stored = self.inner.store.runtime_tasks_for_thread(thread_id)?;
+        let mut tasks = live.tasks.lock().await;
+        for task in stored.into_iter().filter(|task| task.status.is_active()) {
+            tasks.entry(task.id.clone()).or_insert(task);
+        }
+        Ok(())
+    }
+
     /// Translate driver events into thread events until the provider exits.
     async fn pump(self, thread_id: ThreadId, live: Arc<LiveSession>, mut events: tokio::sync::mpsc::Receiver<DriverEvent>) {
         while let Some(ev) = events.recv().await {
+            // Exited is terminal even when the public driver handle retains a
+            // sender. Waiting for channel EOF would keep that handle (and its
+            // background tasks) alive forever, notably with Pi/OMP.
+            let exited = matches!(ev, DriverEvent::Exited { .. });
             if let Err(e) = self.handle_driver_event(thread_id, &live, ev).await {
                 tracing::error!(%thread_id, error = %e, "failed to persist driver event");
             }
+            if exited {
+                break;
+            }
         }
         // An idle session retired for an update must not remove its replacement.
-        {
+        let cleanup_barrier = {
             let mut sessions = self.inner.sessions.lock().await;
             // Forced interruption owns task and turn settlement. Other exits
             // (including shutdown/archive) still need the cleanup below.
@@ -1794,8 +1814,19 @@ impl Orchestrator {
                 return;
             }
             if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, &live)) {
+                let (done, waiting) = tokio::sync::watch::channel(());
+                self.inner.releasing.lock().await.insert(thread_id, waiting);
+                live.mark_released();
                 sessions.remove(&thread_id);
+                Some(done)
+            } else {
+                None
             }
+        };
+        if cleanup_barrier.is_some()
+            && let Err(error) = self.restore_active_runtime_tasks(thread_id, &live).await
+        {
+            tracing::error!(%thread_id, %error, "failed to recover tasks from the exited provider");
         }
         self.interrupt_runtime_tasks(thread_id, &live, "Provider exited before this work finished").await;
         let turn = live.turn.lock().await.take();
@@ -1808,6 +1839,10 @@ impl Orchestrator {
                 let _ = self.update_thread(t);
             }
         }
+        if cleanup_barrier.is_some() {
+            self.inner.releasing.lock().await.remove(&thread_id);
+        }
+        drop(cleanup_barrier);
     }
 
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
@@ -2422,6 +2457,7 @@ mod tests {
         closes: Arc<AtomicUsize>,
         messages: Arc<Mutex<Vec<UserMessage>>>,
         hang_interrupt: bool,
+        broken_interrupt: bool,
     }
 
     #[async_trait::async_trait]
@@ -2437,6 +2473,9 @@ mod tests {
         }
 
         async fn interrupt(&self) -> kybern_drivers::Result<()> {
+            if self.broken_interrupt {
+                return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe).into());
+            }
             if self.hang_interrupt {
                 std::future::pending::<()>().await;
             }
@@ -2904,12 +2943,16 @@ mod tests {
         }
 
         fn thread(&self, status: ThreadStatus) -> Thread {
+            self.thread_with_provider(status, ProviderKind::ClaudeCode)
+        }
+
+        fn thread_with_provider(&self, status: ThreadStatus, provider: ProviderKind) -> Thread {
             let now = chrono::Utc::now();
             let thread = Thread {
                 id: Uuid::now_v7(),
                 project_id: self.project.id,
                 title: "Fixture".into(),
-                provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+                provider: ProviderInstance::default_for(provider),
                 model: None,
                 effort: None,
                 permission_mode: PermissionMode::Supervised,
@@ -2990,6 +3033,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_exit_reaps_idle_background_work_without_waiting_for_sender_drop() {
+        for code in [0, 1] {
+            let fixture = Fixture::new();
+            let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Omp);
+            let (live, _) = fixture.park(&thread, Instant::now()).await;
+            fixture.orchestrator.send(thread.id, UserMessage::text("start background work")).await.unwrap();
+            live.turn_ready.notified().await;
+            let task = generic_runtime_task(&ToolCall {
+                id: "bg_5".into(),
+                name: "Bash".into(),
+                input: json!({"command":"sleep 30", "run_in_background":true}),
+                parent_id: None,
+            })
+            .unwrap();
+            fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+            // OMP's terminal result can leave provider-owned work alive.
+            fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+            assert!(live.turn.lock().await.is_none());
+            assert!(fixture.store.runtime_tasks_for_thread(thread.id).unwrap().iter().any(|task| task.status.is_active()));
+            if code != 0 {
+                live.tasks.lock().await.clear();
+            }
+
+            // Pi/OMP retain the sender in the public session handle even after
+            // the reader emits Exited. EOF on this channel will never arrive.
+            let (tx, rx) = tokio::sync::mpsc::channel(8);
+            tx.send(DriverEvent::Exited { code: Some(code), error: (code != 0).then(|| "process died".into()) }).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), fixture.orchestrator.clone().pump(thread.id, live, rx))
+                .await
+                .expect("Exited must retire the session even while its sender is retained");
+            assert!(!fixture.has_session(&thread).await);
+            let tasks = fixture.store.runtime_tasks_for_thread(thread.id).unwrap();
+            assert!(tasks.iter().all(|task| task.status == RuntimeTaskStatus::Interrupted && task.completed_at.is_some()));
+            assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+            drop(tx);
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_interrupt_reconciles_unattached_tasks_on_broken_or_stalled_transport() {
+        for hangs in [false, true] {
+            let fixture = Fixture::new();
+            let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Omp);
+            let (mut live, closes) = fixture.park(&thread, Instant::now()).await;
+            fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+            Arc::get_mut(&mut live).unwrap().session =
+                Box::new(TestSession { closes: closes.clone(), hang_interrupt: hangs, broken_interrupt: !hangs, ..Default::default() });
+            fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+            fixture.orchestrator.send(thread.id, UserMessage::text("background process")).await.unwrap();
+            live.turn_ready.notified().await;
+            fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+            let task = generic_runtime_task(&ToolCall {
+                id: "bg_5".into(),
+                name: "Bash".into(),
+                input: json!({"command":"sleep 30", "run_in_background":true}),
+                parent_id: None,
+            })
+            .unwrap();
+            fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+            live.tasks.lock().await.clear();
+            fixture.orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(20)).await.unwrap();
+            assert_eq!(closes.load(Ordering::SeqCst), 1);
+            assert!(!fixture.has_session(&thread).await);
+            assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+            let tasks = fixture.store.runtime_tasks_for_thread(thread.id).unwrap();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].status, RuntimeTaskStatus::Interrupted);
+            assert!(tasks[0].completed_at.is_some());
+            assert!(fixture.orchestrator.inner.releasing.lock().await.is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn interrupt_ack_without_a_result_must_settle_the_turn() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
@@ -3060,7 +3176,7 @@ mod tests {
         assert_ne!(live.turn.lock().await.as_ref().unwrap().response_id, old_response);
         request.await.unwrap().unwrap();
         // Also exercise a watchdog already entering its final claim.
-        fixture.orchestrator.force_interrupt(thread.id, &live, old_response).await.unwrap();
+        fixture.orchestrator.force_interrupt(thread.id, &live, Some(old_response)).await.unwrap();
         assert_eq!(closes.load(Ordering::SeqCst), 0);
         assert!(fixture.has_session(&thread).await);
         fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Interrupted)).await.unwrap();

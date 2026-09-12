@@ -485,6 +485,19 @@ html[data-full-translucency][data-window-material="translucent"] :is([data-slot=
 
 /* Questions share the composer's surface, UI type, and alignment. Keep the
    question prominent and the action reachable when a request needs scrolling. */
+.thread-composer,
+.thread-composer > .composer-above {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+.thread-composer > .chat-composer-shell { flex-shrink: 0; }
+.question-panel:not(.composer-panel-section),
+.composer-approval-panel:not(.composer-panel-section) {
+  border-bottom-width: 1px;
+  border-bottom-left-radius: calc(var(--composer-radius) - 1px);
+  border-bottom-right-radius: calc(var(--composer-radius) - 1px);
+}
 .question-panel-form {
   display: flex;
   flex-direction: column;

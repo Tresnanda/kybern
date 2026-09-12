@@ -1,15 +1,32 @@
 // FILE: ComposerStackedPanel.tsx
 // Purpose: Shared chrome for panels stacked above the composer input.
 // Layer: Chat composer layout primitive
-// Exports: ComposerStackedPanel and divider token for inner stacked-panel rows.
+// Exports: ComposerPanelStack, ComposerStackedPanel and the inner-row divider.
 
-import { type HTMLAttributes, type ReactNode, type Ref } from "react";
+import { createContext, useContext, type HTMLAttributes, type ReactNode, type Ref } from "react";
 
 import { cn } from "@/lib/utils";
 import { ComposerStackedHeaderFrame } from "@/components/kit/chat/ComposerColumnFrame";
 import { COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles";
 
 export { COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles";
+
+const ComposerPanelStackContext = createContext(false);
+
+/** One outline and glass layer for attached panels, regardless of their order.
+ *  Close the bottom edge when a blocking question replaces the input. */
+export function ComposerPanelStack({ children, closed = false }: { children: ReactNode; closed?: boolean }) {
+  return (
+    <ComposerPanelStackContext value={true}>
+      <ComposerStackedHeaderFrame
+        className={cn(COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME, "composer-panel-stack")}
+        data-closed={closed ? "true" : undefined}
+      >
+        {children}
+      </ComposerStackedHeaderFrame>
+    </ComposerPanelStackContext>
+  );
+}
 
 interface ComposerStackedPanelProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
@@ -32,9 +49,13 @@ export function ComposerStackedPanel({
   borderless: borderlessProp,
   ...rest
 }: ComposerStackedPanelProps) {
+  const inStack = useContext(ComposerPanelStackContext);
   const attachedToPrevious = attachedToPreviousProp ?? false;
   const passthroughSideMargins = passthroughSideMarginsProp ?? false;
   const borderless = borderlessProp ?? false;
+  if (inStack) {
+    return <div ref={ref} className={cn("composer-panel-section", className)} {...rest}>{children}</div>;
+  }
   return (
     <ComposerStackedHeaderFrame
       ref={ref}

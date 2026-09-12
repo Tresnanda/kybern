@@ -203,6 +203,28 @@ async function run() {
   await sleep(300)
   check(Math.abs(viewport().scrollTop - smallScrollTop) < 2, "A small upward scroll is not pulled back to the live edge")
   results.smallScrollAway = true
+  for (const gesture of ["wheel", "keyboard", "scrollbar", "touch"]) {
+    const view = viewport()
+    view.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -80 }))
+    view.scrollTop -= 80
+    await sleep(60)
+    if (gesture === "wheel") view.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 80 }))
+    if (gesture === "keyboard") view.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End" }))
+    if (gesture === "scrollbar") view.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
+    if (gesture === "touch") {
+      for (const [type, clientY] of [["touchstart", 200], ["touchmove", 100]] as const) {
+        const event = new Event(type, { bubbles: true })
+        Object.defineProperty(event, "touches", { value: [{ clientY }] })
+        view.dispatchEvent(event)
+      }
+    }
+    view.scrollTop = view.scrollHeight
+    await sleep(100)
+    publish(blocks.map(block => block.id === "answer-heavy" && block.kind === "assistant" ? { ...block, text: block.text + "\n\n" + "Following resumed. ".repeat(50) } : block))
+    await sleep(300)
+    check(view.scrollHeight - view.scrollTop - view.clientHeight < 60, `${gesture} movement back to the bottom resumes following`)
+    results[`resume-${gesture}`] = true
+  }
   const launch: Block = { kind: "tool", id: "agent-parent", turnId: "agent-turn", at, seq: ++seq, origin, call: { id: "agent-parent", name: "Task", input: { description: "Review files", prompt: "Inspect the project files" }, parent_id: null }, stream: "", output: "The agent finished reviewing.", isError: false, complete: true }
   const childTools = heavy.filter((block): block is Extract<Block, { kind: "tool" }> => block.kind === "tool").map(block => ({ ...block, id: "child-" + block.id, turnId: "agent-turn", call: { ...block.call, id: "child-" + block.call.id, parent_id: "agent-parent" } }))
   useStore.getState().set({ transcripts: { ...useStore.getState().transcripts, agents: { ...emptyThreadState(), loaded: true, blocks: [user("agent-turn"), launch, ...childTools, assistant("agent-turn"), end("agent-turn")] } } })

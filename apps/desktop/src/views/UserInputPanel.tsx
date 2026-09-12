@@ -63,7 +63,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
     } catch (error) { setError(errorText(error)) }
   }
 
-  return <ComposerStackedPanel className="question-panel overflow-hidden !rounded-b-xl border-b">
+  return <ComposerStackedPanel className="question-panel t-panel-enter overflow-hidden">
     <form onSubmit={onSubmit} className="question-panel-form question-panel-form-blocking" aria-label="Answer agent request" aria-busy={busy}>
       <div className="question-panel-header">
         <h2>{questions.length ? questions.length > 1 ? "Questions" : "Question" : "Input needed"}</h2>

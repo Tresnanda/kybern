@@ -665,7 +665,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   return (
     <ComposerColumnFrame className={cn(className, surfaceMode === "split" && "split-chat-composer")}>
-      <div>{above}</div>
+      <div className="composer-above">{above}</div>
       <div
         className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, menuOpen && "overflow-visible", hideInput && "hidden")}
         onDragOver={(e) => {

@@ -247,6 +247,7 @@ export function createEnvironmentStore(
           lastSeq: currentThread?.last_seq ?? 0,
         }
         let next = f(prev)
+        const threadChanged = next.thread !== prev.thread
         // Event payloads can contain the thread projection from immediately
         // before that event was assigned a sequence. Keep the client projection
         // at the fold's actual high-water mark so an in-flight snapshot cannot
@@ -255,8 +256,11 @@ export function createEnvironmentStore(
           next = { ...next, thread: advanceSequence(next.thread, next.lastSeq) }
         }
         if (next === prev) return {}
+        // Keep the event cursor in the transcript. Publishing a new sidebar /
+        // composer thread for every token invalidates the entire thread shell.
+        // Real metadata changes and hydrated snapshots still publish immediately.
         const threads =
-          next.thread && next.thread !== prev.thread
+          next.thread && threadChanged
             ? { ...s.threads, [id]: next.thread }
             : s.threads
         return { transcripts: { ...s.transcripts, [id]: next }, threads }
@@ -591,6 +595,20 @@ export function forgetEnvironmentStore(environmentId: string) {
 }
 
 // ---- selectors ----
+
+/** One cached project list per mounted sidebar section. Transcript deltas keep
+ * the metadata table stable, so they need no workspace-wide sort or allocation. */
+export function createProjectThreadsSelector(projectId: ProjectId) {
+  let previous: AppState["threads"] | undefined
+  let result: Thread[] = []
+  return (state: AppState) => {
+    if (state.threads !== previous) {
+      previous = state.threads
+      result = selectThreadsForProject(state, projectId)
+    }
+    return result
+  }
+}
 
 export const selectThreadsForProject = (
   s: AppState,

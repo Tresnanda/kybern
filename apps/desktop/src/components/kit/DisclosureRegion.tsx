@@ -4,10 +4,12 @@
 // Exports: DisclosureRegion
 // Depends on: disclosureMotion helpers
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   DISCLOSURE_INNER_CLASS,
+  DISCLOSURE_TRANSITION_MS,
+  DISCLOSURE_CLEANUP_BUFFER_MS,
   disclosureContentClassName,
   disclosureShellClassName,
 } from "@/lib/kit/disclosureMotion";
@@ -19,6 +21,13 @@ export function DisclosureRegion(props: {
   contentClassName?: string;
 }) {
   const { open, children, className, contentClassName } = props;
+  const [mounted, setMounted] = useState(open);
+  if (open && !mounted) setMounted(true);
+  useEffect(() => {
+    if (open || !mounted) return;
+    const timer = window.setTimeout(() => setMounted(false), DISCLOSURE_TRANSITION_MS + DISCLOSURE_CLEANUP_BUFFER_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, mounted]);
 
   return (
     <div
@@ -27,7 +36,7 @@ export function DisclosureRegion(props: {
       inert={!open}
     >
       <div className={DISCLOSURE_INNER_CLASS}>
-        <div className={disclosureContentClassName(open, contentClassName)}>{children}</div>
+        {mounted && <div className={disclosureContentClassName(open, contentClassName)}>{children}</div>}
       </div>
     </div>
   );

@@ -10,14 +10,21 @@ import { shouldCommitReveal, smoothAdvance, type SmoothState } from "./smoothStr
  * only runs for text arriving live. See `smoothStream.ts` for the pacing model.
  */
 export function useSmoothStream(target: string, live: boolean, complete = false): string {
-  const [shownLen, setShownLen] = useState(() => (live ? 0 : target.length))
+  // A virtual row may mount with a long, already-read live trace. Start at the
+  // received prefix; only later deltas need pacing, never that existing text.
+  const [reveal, setReveal] = useState(() => ({ live, length: target.length }))
+  // Pausing returns the whole target, so resuming must not resurrect the old
+  // reveal cursor. Synchronize React's cursor as well as the loop bookkeeping,
+  // including text received while a disclosure was closed.
+  if (reveal.live !== live) setReveal({ live, length: target.length })
   // Loop bookkeeping and the latest inputs, read only inside effects / the rAF
   // callback so a flurry of deltas never restarts (and re-times) the animation.
-  const loop = useRef<{ state: SmoothState; raf: number; last: number; emitted: number; lastEmit: number }>({
-    state: { shown: live ? 0 : target.length, vel: 0 },
+  const loop = useRef<{ live: boolean; state: SmoothState; raf: number; last: number; emitted: number; lastEmit: number }>({
+    live,
+    state: { shown: target.length, vel: 0 },
     raf: 0,
     last: 0,
-    emitted: live ? 0 : target.length,
+    emitted: target.length,
     lastEmit: 0,
   })
   const latest = useRef({ target, complete })
@@ -33,12 +40,19 @@ export function useSmoothStream(target: string, live: boolean, complete = false)
   useEffect(() => {
     const l = loop.current
     if (!live) {
+      l.live = false
       if (l.raf) cancelAnimationFrame(l.raf)
       l.raf = 0
       l.state = { shown: target.length, vel: 0 }
       l.emitted = target.length
       l.lastEmit = 0
       return
+    }
+    if (!l.live) {
+      l.live = true
+      l.state = { shown: target.length, vel: 0 }
+      l.emitted = target.length
+      l.lastEmit = 0
     }
     if (l.state.shown > target.length) l.state = { shown: 0, vel: 0 } // shrank: restart
     if (l.raf || l.state.shown >= target.length) return
@@ -52,7 +66,7 @@ export function useSmoothStream(target: string, live: boolean, complete = false)
       if (shouldCommitReveal(l.emitted, next, t.length, l.lastEmit ? now - l.lastEmit : Infinity)) {
         l.emitted = next
         l.lastEmit = now
-        setShownLen(next)
+        setReveal({ live: true, length: next })
       }
       l.raf = l.state.shown < t.length ? requestAnimationFrame(tick) : 0
     }
@@ -67,8 +81,8 @@ export function useSmoothStream(target: string, live: boolean, complete = false)
     }
   }, [])
 
-  if (!live) return target
-  return target.slice(0, Math.min(shownLen, target.length))
+  if (!live || reveal.live !== live) return target
+  return target.slice(0, Math.min(reveal.length, target.length))
 }
 
 /** Keeps a scroll container pinned to the bottom while the user has not scrolled up. */

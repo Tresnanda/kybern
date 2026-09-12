@@ -18,7 +18,7 @@ import { Button } from "@/components/kit/button"
 import { IconButton } from "@/components/kit/icon-button"
 import { ComposerChoiceRow } from "@/components/kit/chat/ComposerChoiceRow"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
-import { ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat/ComposerStackedPanel"
+import { ComposerPanelStack, ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat/ComposerStackedPanel"
 import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/kit/chat/ComposerStackedPanelContent"
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/kit/menu"
 import { PROVIDER_LABEL, basename, mod, toolLine } from "@/lib/format"
@@ -125,6 +125,7 @@ export function ThreadView({
   const running = thread?.status === "running" || thread?.status === "awaiting-approval"
   const approval = pending[0] ?? null
   const connector = approval ? connectorApproval(approval) : null
+  const hideInput = !!approval && isUserInput(approval) && !connector
 
   const answer = (n: number): boolean => {
     if (!approval || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
@@ -232,15 +233,16 @@ export function ThreadView({
         <EnvironmentPanel threadId={threadId} open={envOpen} />
         <div
           ref={overlay}
-          className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-10 pb-3 sm:pb-4", CHAT_COLUMN_GUTTER, ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)}
+          className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-full flex-col pb-3 sm:pb-4", CHAT_COLUMN_GUTTER, ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)}
           style={{
             paddingRight: envOpen
               ? `calc(${ENVIRONMENT_DOCKED_CONTENT_INSET_PX}px + var(--thread-chat-gutter, ${CHAT_COLUMN_GUTTER_PX}px))`
               : undefined,
           }}
         >
-          <div className="pointer-events-auto">
+          <div className="pointer-events-auto flex min-h-0 flex-col">
             <Composer
+              className="thread-composer"
               showProviderUsage
               providerUsage={providerUsage}
               draftKey={`thread:${threadId}`}
@@ -248,7 +250,7 @@ export function ThreadView({
               placeholder={placeholder}
               running={running}
               hideFooter={!!approval}
-              hideInput={!!approval && isUserInput(approval) && !connector}
+              hideInput={hideInput}
               onStop={() => void interrupt(threadId)}
               onSend={onSend}
               onSteer={onSteer}
@@ -264,16 +266,14 @@ export function ThreadView({
               commands={commands}
               onDigit={(n) => answer(n)}
               above={
-                <>
+                <ComposerPanelStack closed={hideInput}>
                   {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
-                  {!approval && questions[0] && <div className="t-panel-enter pb-2"><AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} /></div>}
+                  {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
-                    <div key={approval.id} className="t-panel-enter pb-2">
-                      {connector ? <ConnectorApprovalPanel approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel approval={approval} count={pending.length} onChoose={answer} />}
-                    </div>
+                    connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
                   )}
-                </>
+                </ComposerPanelStack>
               }
             />
           </div>
@@ -305,7 +305,7 @@ function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
 
 export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
-  return <ComposerStackedPanel className="flex max-h-64 flex-col overflow-y-auto">
+  return <ComposerStackedPanel className="composer-queue-panel flex max-h-64 flex-col overflow-y-auto">
     <div className="px-3 pt-2 text-xs text-muted-foreground">Queued · {queued.length}</div>
     {queued.map((q, i) => <QueuedRow key={q.id} item={{ ...q, thread_id: threadId }} divided={i > 0} />)}
   </ComposerStackedPanel>
@@ -391,7 +391,7 @@ function permissionBody(input: JsonValue): string {
 export function ApprovalPanel({ approval, count, onChoose }: { approval: ApprovalRequest; count: number; onChoose: (n: number) => void }) {
   const { prompt, detail } = approvalPrompt(approval)
   return (
-    <div className="chat-composer-surface t-border-beam overflow-hidden border border-[color:var(--surface-border)] px-3.5 py-3 shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] transition-colors duration-200 dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]">
+    <ComposerStackedPanel className="composer-approval-panel t-border-beam t-panel-enter px-3.5 py-3">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
           {prompt}
@@ -410,7 +410,7 @@ export function ApprovalPanel({ approval, count, onChoose }: { approval: Approva
         <ComposerChoiceRow shortcut={3} label="Decline" description="Reject and let the agent continue" tone="destructive" onSelect={() => onChoose(3)} />
         <ComposerChoiceRow shortcut={4} label="Cancel turn" description="Stop the current turn" onSelect={() => onChoose(4)} />
       </div>
-    </div>
+    </ComposerStackedPanel>
   )
 }
 
@@ -419,7 +419,7 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
   const canPersist = connector.persist.includes("session")
   const prompt = connector.app ? `Allow ${connector.connector} to use ${connector.app}?` : connector.message || `Allow ${connector.connector}?`
   return (
-    <div className="chat-composer-surface t-border-beam overflow-hidden border border-[color:var(--surface-border)] px-3.5 py-3 shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] transition-colors duration-200 dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]">
+    <ComposerStackedPanel className="composer-approval-panel t-border-beam t-panel-enter px-3.5 py-3">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
           {prompt}
@@ -440,7 +440,7 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
         <ComposerChoiceRow shortcut={3} label="Don’t allow" description="Refuse and let the agent continue" tone="destructive" onSelect={() => onChoose(3)} />
         <ComposerChoiceRow shortcut={4} label="Cancel turn" description="Stop the current turn" onSelect={() => onChoose(4)} />
       </div>
-    </div>
+    </ComposerStackedPanel>
   )
 }
 

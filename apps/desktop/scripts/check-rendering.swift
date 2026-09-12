@@ -49,6 +49,9 @@ final class Bench: NSObject, WKScriptMessageHandler {
   let json = (message.body as? String)?.data(using: .utf8)
   let result = json.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
   if result?["stage"] != nil {
+   if result?["process"] as? Bool == true, web.responds(to: NSSelectorFromString("_webProcessIdentifier")), let pid = web.value(forKey: "_webProcessIdentifier") as? Int {
+    print("{\"webPid\":\(pid)}")
+   }
    if result?["memory"] as? Bool == true, web.responds(to: NSSelectorFromString("_webProcessIdentifier")), let pid = web.value(forKey: "_webProcessIdentifier") as? Int {
     let process = Process(); let pipe = Pipe()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
@@ -57,7 +60,8 @@ final class Bench: NSObject, WKScriptMessageHandler {
     let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     process.waitUntilExit()
     let footprint = output.components(separatedBy: "\n").filter { $0.hasPrefix("Physical footprint:") }.first ?? "unavailable"
-    let record: [String: Any] = ["sample": result!["stage"]!, "footprint": footprint, "pid": pid]
+    let peak = output.components(separatedBy: "\n").filter { $0.hasPrefix("Physical footprint (peak):") }.first ?? "unavailable"
+    let record: [String: Any] = ["sample": result!["stage"]!, "footprint": footprint, "peak": peak, "pid": pid]
     print(String(decoding: try! JSONSerialization.data(withJSONObject: record), as: UTF8.self))
     web.evaluateJavaScript("window.__memoryContinue()")
    }

@@ -64,7 +64,7 @@ import type { Project, Thread, ThreadActivityState } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
-import { selectThreadsForProject, useStore } from "@/state/store"
+import { createProjectThreadsSelector, useStore } from "@/state/store"
 
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { ProjectPicker } from "./ProjectPicker"
@@ -262,21 +262,22 @@ function PrimaryAction({ icon, label, shortcut, onClick, active }: { icon: React
 }
 
 function ProjectItem({ project }: { project: Project }) {
-  const threads = useStore(useShallow((s) => selectThreadsForProject(s, project.id)))
+  const selectThreads = useMemo(() => createProjectThreadsSelector(project.id), [project.id])
+  const threads = useStore(useShallow(selectThreads))
   const collapsed = useStore((s) => !!s.collapsedProjects[project.id])
   const toggle = useStore((s) => s.toggleProject)
   const selected = useStore((s) => s.selected)
-  const activity = useStore((s) => s.threadActivity)
+  const activityState = useStore((s): ThreadActivityState | undefined => {
+    const projectThreads = selectThreads(s)
+    if (projectThreads.some((thread) => s.threadActivity[thread.id]?.state === "working")) return "working"
+    if (projectThreads.some((thread) => s.threadActivity[thread.id]?.state === "monitoring")) return "monitoring"
+    return undefined
+  })
   const [showAll, setShowAll] = useState(false)
   const open = !collapsed
   const isDraftHere = selected.kind === "draft" && selected.draft.projectId === project.id
   const running = threads.some((t) => t.status === "running")
   const waiting = threads.some((t) => t.status === "awaiting-approval")
-  const activityState: ThreadActivityState | undefined = threads.some((thread) => activity[thread.id]?.state === "working")
-    ? "working"
-    : threads.some((thread) => activity[thread.id]?.state === "monitoring")
-      ? "monitoring"
-      : undefined
   const visible = showAll ? threads : threads.slice(0, MAX_PROJECT_THREADS)
 
   return (

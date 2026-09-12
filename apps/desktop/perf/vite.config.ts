@@ -1,8 +1,16 @@
 import path from "node:path"
+import { readFileSync } from "node:fs"
 import { mergeConfig } from "vite"
 import base from "../vite.config"
 export default mergeConfig(base, {
-  define: { __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]" },
+  define: {
+    __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]",
+    __WORK_REPLAY__: process.env.KYBERN_WORK_REPLAY ? readFileSync(process.env.KYBERN_WORK_REPLAY, "utf8") : "[]",
+    __SCROLL_SCENARIO__: JSON.stringify(process.env.KYBERN_SCROLL_SCENARIO ?? ""),
+    __SCROLL_FRAMES__: JSON.stringify(Number(process.env.KYBERN_SCROLL_FRAMES ?? 100)),
+    __SCROLL_MEMORY__: JSON.stringify(process.env.KYBERN_SCROLL_MEMORY === "1"),
+    __COMPOSER_STACK_MODE__: JSON.stringify(process.env.KYBERN_COMPOSER_STACK_MODE ?? "queue"),
+  },
   plugins: process.env.KYBERN_PERF_FIXTURE === "history" ? [{
     name: "history-fixture-transport",
     enforce: "pre",

@@ -79,3 +79,12 @@ test("live folds advance stale sequence numbers carried inside event projections
   })
   assert.equal(advanceSequence(staleProjection, 10), staleProjection)
 })
+
+test("workspace hydration respects the transcript cursor without publishing token-only thread changes", () => {
+  const live = { id: "thread-1", last_seq: 12, title: "Live" }
+  const stale = { id: "thread-1", last_seq: 19, title: "Stale" }
+  const cursors = { "thread-1": { lastSeq: 20 } }
+  assert.equal(mergeSequencedSnapshot({ "thread-1": live }, [stale], cursors)["thread-1"], live)
+  const fresh = { ...stale, last_seq: 21, title: "Fresh" }
+  assert.equal(mergeSequencedSnapshot({ "thread-1": live }, [fresh], cursors)["thread-1"], fresh)
+})

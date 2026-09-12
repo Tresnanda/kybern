@@ -282,6 +282,13 @@ export function Transcript({
     return {
       items: navigationItems,
       scrollToEnd() { rows.current?.scrollToEnd() },
+      cancelScroll() {
+        cancelAnimationFrame(navigationFrame.current)
+        navigationFrame.current = 0
+        // An index target keeps reconciling as row measurements arrive, even
+        // after following stops. Replace it with the reader's current offset.
+        if (viewport.current) rows.current?.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
+      },
       activeId(scroll) {
         const index = (rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0) - historyOffset
         const candidates = byTurn.get(index) ?? []
@@ -1021,7 +1028,7 @@ function ToolGroupRow({
         <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
           {workIcon(summary.visual, false)}
         </span>
-        <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
+        <span data-work-group-display-text className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
           {summary.label}
         </span>
         <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
@@ -1118,15 +1125,17 @@ function ToolRow({
 }) {
   const [open, setOpen] = useTranscriptRowState("open", false)
   const active = !!task && isRuntimeTaskActive(task)
-  const activity = toolLine(block.call, block.complete && !active)
-  const visual = toolVisualKind(block.call, activity)
-  const surface = toolSurface(block.call, block.output)
-  const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
-  const out = surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream)
-  const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
+  const { activity, visual, surface, screenshots, out, label, hasOutput } = useMemo(() => {
+    const activity = toolLine(block.call, block.complete && !active)
+    const visual = toolVisualKind(block.call, activity)
+    const surface = toolSurface(block.call, block.output)
+    const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
+    const out = surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream)
+    const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
+    return { activity, visual, surface, screenshots, out, label, hasOutput: out.trim().length > 0 || screenshots.length > 0 }
+  }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
-  const hasOutput = out.trim().length > 0 || screenshots.length > 0
   const opensFocusedActivity = isAgentLaunchBlock(block, task)
   const canExpand = !opensFocusedActivity && (hasChildActivity || hasOutput)
   const canOpen = opensFocusedActivity || canExpand
@@ -1204,7 +1213,7 @@ function ToolRow({
   )
 }
 
-function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extract<Block, { kind: "assistant" }>; tone?: WorkTone; live?: boolean }) {
+const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extract<Block, { kind: "assistant" }>; tone?: WorkTone; live?: boolean }) {
   const [open, setOpen] = useTranscriptRowState("thinking", false)
   // Smooth the reasoning stream too, but only while it is both live and expanded.
   const thinking = useSmoothStream(block.thinking, !block.complete && open)
@@ -1251,7 +1260,7 @@ function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extr
       )}
     </>
   )
-}
+})
 
 const MAX_VISIBLE_CHANGED_FILES = 5
 

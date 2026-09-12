@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 let daemon
 try {

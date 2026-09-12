@@ -24,6 +24,16 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [composer panel stacking](composer-stack-2026-09-12.md) for combined activity,
+queued prompts, questions, and approvals, including narrow and short panes.
+
+See [scroll position and frame pacing](scrolling-2026-09-12.md) for measured
+scroll jumps, cold history, active streaming, expanded work, and long code.
+
+See [OMP lifecycle and active-work rendering](work-stream-2026-09-12.md) for
+thinking re-entry, expanded work collisions, and token/task updates in the full
+sidebar/composer shell.
+
 See [chat file links and earlier history](chat-files-history-2026-09-10.md) for
 connected-workspace previews and bounded automatic history prefetch.
 
@@ -73,10 +83,14 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | --- | --- |
 | Theme tokens, surfaces, translucency | `node --experimental-strip-types scripts/check-window-material.mjs` |
 | Streaming, Markdown, highlighting, message rail | `node scripts/check-rendering.mjs` |
+| Thinking disclosure re-entry, mixed work, dynamic row heights | `node scripts/check-rendering.mjs work-stream` |
+| Store publication, sidebar, composer, background task status | `node scripts/check-rendering.mjs work-shell` |
 | Context menus or popup materials | `node scripts/check-rendering.mjs materials` |
 | Large histories, worker scheduling, expanded work | `node scripts/check-rendering.mjs scaling` |
 | Virtualization, navigation, row state, scroll anchoring | `node scripts/check-rendering.mjs interaction` |
+| Scroll position corrections, cold history, scrolling during work | `node scripts/check-rendering.mjs scrolling` |
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
+| Combined composer panels, shared seams, constrained pane height | `node scripts/check-rendering.mjs composer-stack` |
 | Attached-image controls, user line breaks, environment menu | `node scripts/check-rendering.mjs chat-fixes` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
 | Provider catalogs, sign-in terminals, native artifact preview and publication controls | `node scripts/check-rendering.mjs integrations` |

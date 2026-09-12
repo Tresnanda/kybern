@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from "react"
-import { defaultRangeExtractor, useVirtualizer, type Range, type ReactVirtualizer } from "@tanstack/react-virtual"
+import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range, type ReactVirtualizer } from "@tanstack/react-virtual"
 import { TranscriptStateScope } from "./TranscriptStateScope"
 
 export type VirtualRowsController = ReactVirtualizer<HTMLElement, HTMLDivElement>
@@ -140,32 +140,78 @@ function VirtualizedRows<T>({
     // The library's virtual end excludes our composer's trailing overlay space,
     // so a distance threshold alone cannot tell whether the reader left it.
     scrollEndThreshold: followEnd ? 1 : -1,
-    useAnimationFrameWithResizeObserver: true,
-    directDomUpdates: true,
-    directDomUpdatesMode: "position",
+    // Normal-flow rows need resize corrections before this paint. Deferring an
+    // observer by a frame paints shifted content, then snaps it back.
+    useAnimationFrameWithResizeObserver: false,
+    // Measurements can notify from mount refs during commit. DOM-based
+    // anchoring keeps flow stable without forcing a React commit per resize.
+    useFlushSync: false,
+    scrollToFn: (offset, options, instance) => {
+      const current = instance.scrollElement?.scrollTop
+      if (options.adjustments !== undefined && current !== undefined) {
+        // A wheel/trackpad move can precede the scroll event that updates the
+        // library's cursor. Apply height compensation to the actual position,
+        // or it can undo that move. Core adds the adjustment to this cursor.
+        instance.scrollOffset = current
+        elementScroll(current, options, instance)
+      } else {
+        elementScroll(offset, options, instance)
+      }
+    },
   })
+  const measureRow = useCallback((element: HTMLDivElement | null) => {
+    virtualizer.measureElement(element)
+    if (element && virtualizer.isScrolling) {
+      // Core normally defers new measurements during scrolling. In normal
+      // flow an overscan row's real height already affects visible neighbours;
+      // account for it in this commit instead of painting the estimate first.
+      virtualizer.resizeItem(Number(element.dataset.index), element.getBoundingClientRect().height)
+    }
+  }, [virtualizer])
+  useLayoutEffect(() => {
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
+      const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
+      // Compensate settled rows above the viewport in both scroll directions
+      // (including late Markdown formatting). A partially visible growing row
+      // should keep its top fixed rather than moving the reader with its end.
+      if (!instance.itemSizeCache.has(item.key)) return item.start < offset
+      // Cached starts can lag newly inserted flow siblings. Use the previous
+      // DOM bottom (before this delta) so a visible row is not mistaken for an
+      // offscreen row, causing a spurious correction followed by a snap back.
+      const element = instance.elementsCache.get(item.key)
+      const scroll = instance.scrollElement
+      return element?.isConnected && scroll
+        ? element.getBoundingClientRect().bottom - delta <= scroll.getBoundingClientRect().top
+        : item.end <= offset
+    }
+    return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
+  }, [virtualizer])
   useImperativeHandle(controllerRef, () => virtualizer, [virtualizer])
   const setContainer = useCallback((element: HTMLDivElement | null) => {
     container.current = element
-    virtualizer.containerRef(element)
-  }, [virtualizer])
+  }, [])
 
   if (!viewport) return <>{items.map((item, index) => <TranscriptStateScope key={getKey(item, index)} name={getKey(item, index)}>{children(item, index)}</TranscriptStateScope>)}</>
+  const rows = virtualizer.getVirtualItems()
   return (
-    <div ref={setContainer} className={className} data-virtual-list={owner} style={{ position: "relative", width: "100%" }}>
-      {virtualizer.getVirtualItems().map((row) => (
+    <div ref={setContainer} className={className} data-virtual-list={owner} style={{ position: "relative", width: "100%", display: "flow-root" }}>
+      {/* Mounted rows share normal flow. Absolute positions based on earlier
+          measurements let expanding disclosures overlap their neighbours until the
+          next measurement. Spacers represent only the unmounted ranges. */}
+      {rows.map((row, index) => (
         <div
           key={row.key}
-          ref={virtualizer.measureElement}
+          ref={measureRow}
           data-index={row.index}
           data-virtual-owner={owner}
-          style={{ position: "absolute", left: 0, width: "100%", display: "flow-root" }}
+          style={{ width: "100%", display: "flow-root", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
         >
           <VirtualScrollContext value={{ viewport, origin: row.start }}>
             <TranscriptStateScope name={String(row.key)}>{children(items[row.index]!, row.index)}</TranscriptStateScope>
           </VirtualScrollContext>
         </div>
       ))}
+      <div aria-hidden style={{ height: Math.max(0, virtualizer.getTotalSize() - ((rows.at(-1)?.end ?? margin) - margin)), overflowAnchor: "none" }} />
     </div>
   )
 }

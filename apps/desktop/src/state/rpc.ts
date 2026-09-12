@@ -135,7 +135,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       useStore.getState().set((state) => {
         const mergedThreads = mergeSequencedSnapshot(
           state.threads,
-          threads.threads
+          threads.threads,
+          state.transcripts
         )
         const incomingThreads = new Map(
           threads.threads.map((thread) => [thread.id, thread])
@@ -154,7 +155,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           const incomingThread = incomingThreads.get(threadId as ThreadId)
           if (
             !incomingThread ||
-            (currentThread && currentThread.last_seq > incomingThread.last_seq)
+            (currentThread && Math.max(currentThread.last_seq, state.transcripts[threadId]?.lastSeq ?? 0) > incomingThread.last_seq)
           ) {
             threadActivity[threadId as ThreadId] = current
           }
