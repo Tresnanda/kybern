@@ -4,7 +4,7 @@
 //! with a `Flavor` switch. Differences that matter here: omp announces itself
 //! with a `ready` frame and supports chunked frames after protocol
 //! negotiation; omp has built-in approval tiers surfaced as `select` UI
-//! requests, pi has none (so pi runs as Full access only); pi signals run
+//! requests, while pi uses Kybern's bundled blocking tool hook; pi signals run
 //! completion with `agent_settled`, omp with `agent_end.isTerminal`.
 
 use std::collections::HashMap;
@@ -23,7 +23,17 @@ use crate::binary::{at_least, resolve, version_of};
 use crate::ndjson::NdjsonChild;
 use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, ProbeContext, Result, SessionConfig, SpawnedSession};
 
+mod extension;
+#[cfg(test)]
+mod lifecycle_tests;
+mod models;
+#[cfg(test)]
+mod ui_tests;
+
 const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const MAX_TOOL_PREVIEW_BYTES: usize = 128 * 1024;
+const MAX_ACTIVE_TOOLS: usize = 256;
+const MAX_PENDING_APPROVALS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flavor {
@@ -50,7 +60,7 @@ impl PiDriver {
     }
     fn min_version(flavor: Flavor) -> (u64, u64, u64) {
         match flavor {
-            Flavor::Pi => (0, 80, 0),
+            Flavor::Pi => (0, 80, 5),
             Flavor::Omp => (18, 0, 0),
         }
     }
@@ -65,12 +75,12 @@ impl PiDriver {
             version: None,
             unavailable_reason: None,
             supported_permission_modes: match self.flavor {
-                Flavor::Pi => vec![PermissionMode::FullAccess],
+                Flavor::Pi => vec![PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::FullAccess],
                 Flavor::Omp => PermissionMode::ALL.to_vec(),
             },
             supports_fork: true,
             supports_model_switch: true,
-            supports_effort_switch: self.flavor == Flavor::Omp,
+            supports_effort_switch: true,
             supported_efforts: vec![],
             models: vec![],
             instances: vec!["default".into()],
@@ -99,7 +109,17 @@ impl PiDriver {
                 status.version = Some(v);
                 if ok {
                     status.models = match self.flavor {
-                        Flavor::Pi => pi_models(&bin, context).await,
+                        Flavor::Pi => match models::discover(&bin, context).await {
+                            Ok(discovery) => discovery.models,
+                            Err(error) => {
+                                // The executable still works: an interactive session can answer
+                                // startup dialogs and use Pi's own configured model.
+                                status.unavailable_reason = Some(format!(
+                                    "Model discovery failed: {error}. Start a thread to use Pi's configured model, or refresh models."
+                                ));
+                                Vec::new()
+                            }
+                        },
                         Flavor::Omp => omp_models(&bin, context).await,
                     };
                     for model in &status.models {
@@ -130,38 +150,6 @@ async fn model_command_output(bin: &std::path::Path, args: &[&str], context: &Pr
         Ok(Ok(output)) if output.status.success() => Some(output.stdout),
         _ => None,
     }
-}
-
-fn parse_pi_models(output: &[u8]) -> Vec<ProviderModel> {
-    let mut models = String::from_utf8_lossy(output)
-        .lines()
-        .filter_map(|line| {
-            let columns = line.split_whitespace().collect::<Vec<_>>();
-            if columns.len() < 6
-                || (columns[0].eq_ignore_ascii_case("provider") && columns[1].eq_ignore_ascii_case("model"))
-                || !matches!(columns[columns.len() - 2], "yes" | "no")
-                || !matches!(columns[columns.len() - 1], "yes" | "no")
-            {
-                return None;
-            }
-            let provider = columns[0].to_string();
-            let model = columns[1].to_string();
-            Some(ProviderModel {
-                id: format!("{provider}/{model}"),
-                display_name: model,
-                provider: Some(provider),
-                efforts: Vec::new(),
-                default_effort: None,
-                is_default: false,
-            })
-        })
-        .collect::<Vec<_>>();
-    models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)));
-    models
-}
-
-async fn pi_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
-    model_command_output(bin, &["--list-models"], context).await.map_or_else(Vec::new, |output| parse_pi_models(&output))
 }
 
 async fn omp_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
@@ -219,6 +207,16 @@ impl AgentDriver for PiDriver {
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let kind = self.kind();
         let bin = resolve(kind, config.binary.as_ref())?;
+        if self.flavor == Flavor::Pi {
+            let version = version_of(&bin, &["--version"])
+                .await
+                .ok_or_else(|| DriverError::Protocol("Could not read Pi's version. Verify the configured Pi executable.".into()))?;
+            if !at_least(&version, Self::min_version(self.flavor)) {
+                return Err(DriverError::VersionTooOld { found: version, required: "0.80.5".into() });
+            }
+            extension::mode_command(config.permission_mode)?;
+        }
+        let extension = if self.flavor == Flavor::Pi { Some(extension::StagedExtension::new(config.permission_mode)?) } else { None };
         let mut cmd = Command::new(&bin);
         cmd.current_dir(&config.cwd).args(["--mode", "rpc"]);
         let new_session_id = Uuid::new_v4().to_string();
@@ -233,7 +231,6 @@ impl AgentDriver for PiDriver {
                         cmd.args(["--session-id", &new_session_id]);
                     }
                 }
-                cmd.arg("--approve");
             }
             Flavor::Omp => {
                 cmd.arg("--cwd").arg(&config.cwd);
@@ -246,19 +243,21 @@ impl AgentDriver for PiDriver {
         if let Some(model) = &config.model {
             cmd.args(["--model", model]);
         }
-        if self.flavor == Flavor::Omp
-            && let Some(effort) = &config.effort
-        {
+        if let Some(effort) = &config.effort {
             cmd.args(["--thinking", effort]);
         }
         for (k, v) in &config.env {
             cmd.env(k, v);
+        }
+        if let Some(extension) = &extension {
+            extension.configure(&mut cmd);
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), flavor = ?self.flavor, "spawning pi-family agent");
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
 
         let mut lifetime = crate::ndjson::SessionLifetime::new(child.clone());
         let (tx, rx) = mpsc::channel(1024);
+        let (initialized_tx, initialized) = tokio::sync::watch::channel(None);
         let session = Arc::new(PiSession {
             flavor: self.flavor,
             child,
@@ -267,49 +266,23 @@ impl AgentDriver for PiDriver {
             pending_approvals: Mutex::new(HashMap::new()),
             state: Mutex::new(State::default()),
             ready: Mutex::new(None),
+            initialized,
+            command_gate: Mutex::new(()),
+            extension,
+            pending_app_tools: Mutex::new(HashMap::new()),
         });
         let (ready_tx, ready_rx) = oneshot::channel();
         *session.ready.lock().await = Some(ready_tx);
         let reader = session.clone();
         lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
 
-        if self.flavor == Flavor::Omp {
-            // Wait for `ready`, then negotiate chunked framing so big frames survive.
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(30), ready_rx).await;
-            let _ = session.call("negotiate_protocol", json!({ "protocolVersion": 2 })).await;
-            // OMP keeps subagents on a dedicated observability channel. Progress
-            // includes lifecycle, current tool, usage, and detached state without
-            // leaking child prose into the parent transcript.
-            if let Err(error) = session.call("set_subagent_subscription", json!({ "level": "progress" })).await {
-                tracing::debug!(%error, "OMP subagent subscription unavailable");
-            }
-        }
-
-        // Rewind: fork the persisted session at the first dropped user message.
-        if config.fork
-            && let Some(entry) = config.rewind.as_ref().and_then(|r| r.drop_from.turn_id.clone())
-        {
-            let cmd_name = match self.flavor {
-                Flavor::Pi => "fork",
-                Flavor::Omp => "branch",
-            };
-            session.call(cmd_name, json!({ "entryId": entry })).await?;
-        }
-
-        let state = session.call("get_state", json!({})).await?;
-        let session_id = state.get("sessionId").and_then(|s| s.as_str()).map(str::to_string).unwrap_or(new_session_id);
-        let model = state.pointer("/model/id").and_then(|m| m.as_str()).map(|id| {
-            let provider = state.pointer("/model/provider").and_then(|p| p.as_str()).unwrap_or("");
-            if provider.is_empty() { id.to_string() } else { format!("{provider}/{id}") }
-        });
-        session.state.lock().await.context_window = state.pointer("/model/contextWindow").and_then(Value::as_u64);
-        session.state.lock().await.session_id = Some(session_id.clone());
-        session.emit(DriverEvent::SessionBound { session_id, model }).await;
-
-        let catalog = session.clone();
+        let initializing = session.clone();
         lifetime.track(tokio::spawn(async move {
-            if let Ok(value) = catalog.call("get_commands", json!({})).await {
-                catalog.emit(DriverEvent::CommandsUpdated(crate::provider_commands(&value["commands"]))).await;
+            let result = initializing.initialize(config, new_session_id, ready_rx).await;
+            let failed = result.as_ref().err().map(ToString::to_string);
+            let _ = initialized_tx.send(Some(result.map_err(|error| error.to_string())));
+            if failed.is_some() {
+                initializing.child.kill().await;
             }
         }));
         Ok(SpawnedSession { session: Box::new(Handle(session, lifetime)), events: rx })
@@ -326,6 +299,19 @@ fn approval_tier(mode: PermissionMode) -> &'static str {
 
 #[derive(Default)]
 struct State {
+    generation: u64,
+    admission_revision: u64,
+    activity_revision: u64,
+    retrying: bool,
+    compacting: bool,
+    settling: bool,
+    prompt_pending: bool,
+    native_started: bool,
+    manual_compacting: bool,
+    closed: bool,
+    model: Value,
+    default_effort: Option<String>,
+    tool_previews: HashMap<String, String>,
     context_window: Option<u64>,
     session_id: Option<String>,
     /// Sequence number for synthetic assistant message ids.
@@ -348,36 +334,139 @@ struct PiSession {
     child: Arc<NdjsonChild>,
     events: mpsc::Sender<DriverEvent>,
     pending: Mutex<HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>>,
-    /// UI request id -> tool name, for approvals awaiting the user.
-    pending_approvals: Mutex<HashMap<String, String>>,
+    /// UI request id -> registration, for approvals awaiting the user.
+    pending_approvals: Mutex<HashMap<String, PendingApproval>>,
     state: Mutex<State>,
     ready: Mutex<Option<oneshot::Sender<()>>>,
+    initialized: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
+    command_gate: Mutex<()>,
+    extension: Option<extension::StagedExtension>,
+    pending_app_tools: Mutex<HashMap<String, u64>>,
+}
+
+#[derive(Clone)]
+struct PendingApproval {
+    kind: String,
+    /// Distinguishes a reused native dialog id from an older timeout task.
+    nonce: Uuid,
 }
 
 struct Handle(Arc<PiSession>, #[allow(dead_code)] crate::ndjson::SessionLifetime);
 
 impl PiSession {
+    async fn initialize(self: &Arc<Self>, config: SessionConfig, new_session_id: String, ready_rx: oneshot::Receiver<()>) -> Result<()> {
+        let session = self;
+        if session.flavor == Flavor::Omp {
+            // Wait for `ready`, then negotiate chunked framing so big frames survive.
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(30), ready_rx).await;
+            let _ = session.call("negotiate_protocol", json!({ "protocolVersion": 2 })).await;
+            // OMP keeps subagents on a dedicated observability channel. Progress
+            // includes lifecycle, current tool, usage, and detached state without
+            // leaking child prose into the parent transcript.
+            if let Err(error) = session.call("set_subagent_subscription", json!({ "level": "progress" })).await {
+                tracing::debug!(%error, "OMP subagent subscription unavailable");
+            }
+        }
+
+        // Rewind: fork the persisted session at the first dropped user message.
+        if config.fork
+            && let Some(entry) = config.rewind.as_ref().and_then(|r| r.drop_from.turn_id.clone())
+        {
+            let cmd_name = match session.flavor {
+                Flavor::Pi => "fork",
+                Flavor::Omp => "branch",
+            };
+            session.call(cmd_name, json!({ "entryId": entry })).await?;
+        }
+
+        let state = session.call("get_state", json!({})).await?;
+        let session_id = state.get("sessionId").and_then(|s| s.as_str()).map(str::to_string).unwrap_or(new_session_id);
+        let model = state.pointer("/model/id").and_then(|m| m.as_str()).map(|id| {
+            let provider = state.pointer("/model/provider").and_then(|p| p.as_str()).unwrap_or("");
+            if provider.is_empty() { id.to_string() } else { format!("{provider}/{id}") }
+        });
+        session.update_model_state(&state).await;
+        session.state.lock().await.session_id = Some(session_id.clone());
+        session.emit(DriverEvent::SessionBound { session_id, model }).await;
+
+        if session.flavor == Flavor::Pi {
+            let value = session.call("get_commands", json!({})).await?;
+            if let Some(extension) = &session.extension {
+                extension.verify(&value)?;
+            }
+            session.emit_commands(value).await;
+        } else if let Ok(value) = session.call("get_commands", json!({})).await {
+            session.emit_commands(value).await;
+        }
+        Ok(())
+    }
+
+    async fn emit_commands(&self, mut value: Value) {
+        if let Some(commands) = value.get_mut("commands").and_then(Value::as_array_mut) {
+            commands.retain(|command| {
+                !matches!(command.get("name").and_then(Value::as_str), Some(extension::COMMAND_SENTINEL | extension::MODE_COMMAND))
+            });
+        }
+        self.emit(DriverEvent::CommandsUpdated(crate::provider_commands(&value["commands"]))).await;
+    }
+
+    async fn wait_initialized(&self) -> Result<()> {
+        let mut initialized = self.initialized.clone();
+        loop {
+            if let Some(result) = initialized.borrow_and_update().clone() {
+                return result.map_err(DriverError::Protocol);
+            }
+            initialized
+                .changed()
+                .await
+                .map_err(|_| DriverError::ProcessExited("Pi initialization stopped; send again to resume".into()))?;
+        }
+    }
+
+    async fn update_model_state(&self, state: &Value) {
+        let mut st = self.state.lock().await;
+        st.context_window = state.pointer("/model/contextWindow").and_then(Value::as_u64);
+        st.model = state.get("model").cloned().unwrap_or(Value::Null);
+        if st.default_effort.is_none() {
+            st.default_effort = state.get("thinkingLevel").and_then(Value::as_str).map(str::to_string);
+        }
+    }
+
     async fn emit(&self, ev: DriverEvent) {
         let _ = self.events.send(ev).await;
     }
 
     async fn call(&self, ty: &str, mut params: Value) -> Result<Value> {
+        let timeout = std::time::Duration::from_secs(if matches!(ty, "compact" | "prompt") { 600 } else { 60 });
+        self.call_with_timeout(ty, &mut params, timeout).await
+    }
+
+    async fn call_with_timeout(&self, ty: &str, params: &mut Value, timeout: std::time::Duration) -> Result<Value> {
         let id = Uuid::new_v4().simple().to_string();
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         self.pending.lock().await.insert(id.clone(), tx);
         params["id"] = Value::String(id.clone());
         params["type"] = Value::String(ty.into());
-        self.child.write(&params).await?;
-        match tokio::time::timeout(std::time::Duration::from_secs(if ty == "compact" { 600 } else { 60 }), rx).await {
-            Ok(Ok(Ok(v))) => Ok(v),
-            Ok(Ok(Err(e))) => Err(DriverError::Protocol(format!("{ty}: {e}"))),
-            Ok(Err(_)) => Err(DriverError::ProcessExited("agent exited while waiting for a response".into())),
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                if ty == "compact" {
-                    self.child.kill().await;
+        if let Err(error) = self.child.write(params).await {
+            self.pending.lock().await.remove(&id);
+            return Err(error);
+        }
+        loop {
+            match tokio::time::timeout(timeout, &mut rx).await {
+                Ok(Ok(Ok(v))) => return Ok(v),
+                Ok(Ok(Err(e))) => return Err(DriverError::Protocol(format!("{ty}: {e}"))),
+                Ok(Err(_)) => return Err(DriverError::ProcessExited("agent exited while waiting for a response".into())),
+                Err(_) if !self.pending_approvals.lock().await.is_empty() && !self.state.lock().await.closed => {
+                    // User input is not a hung provider. Keep the native request alive
+                    // until answered, withdrawn, or interrupted.
                 }
-                Err(DriverError::Protocol(format!("{ty}: timed out; send again to resume the saved conversation")))
+                Err(_) => {
+                    self.pending.lock().await.remove(&id);
+                    if matches!(ty, "compact" | "prompt") {
+                        self.child.kill().await;
+                    }
+                    return Err(DriverError::Protocol(format!("{ty}: timed out; send again to resume the saved conversation")));
+                }
             }
         }
     }
@@ -394,6 +483,8 @@ impl PiSession {
             }
         }
         let code = self.child.wait().await;
+        self.state.lock().await.closed = true;
+        self.withdraw_requests().await;
         for (_, tx) in self.pending.lock().await.drain() {
             let _ = tx.send(Err("process exited".into()));
         }
@@ -449,6 +540,8 @@ impl PiSession {
             }
             "agent_start" => {
                 let mut st = self.state.lock().await;
+                st.native_started = true;
+                st.activity_revision += 1;
                 if !st.active {
                     st.active = true;
                     st.turn_started = Some(std::time::Instant::now());
@@ -456,6 +549,16 @@ impl PiSession {
                     st.turn_cost = 0.0;
                     st.turn_error = None;
                     st.aborted = false;
+                }
+                let aborted = st.aborted;
+                drop(st);
+                if aborted {
+                    // Stop may arrive during prompt preflight before Pi has a run
+                    // to abort. Cancel again as soon as the run is committed.
+                    let session = self.clone();
+                    tokio::spawn(async move {
+                        let _ = session.cancel_native_work().await;
+                    });
                 }
             }
             "message_start" => {
@@ -549,6 +652,12 @@ impl PiSession {
                 }
             }
             "tool_execution_start" => {
+                if let Some(id) = v.get("toolCallId").and_then(Value::as_str) {
+                    let mut st = self.state.lock().await;
+                    if st.tool_previews.len() < MAX_ACTIVE_TOOLS {
+                        st.tool_previews.insert(id.to_string(), String::new());
+                    }
+                }
                 if self.flavor == Flavor::Omp
                     && let Some(task) = omp_background_process(&v)
                 {
@@ -563,6 +672,25 @@ impl PiSession {
                 .await;
             }
             "tool_execution_update" => {
+                if let Some(id) = v.get("toolCallId").and_then(Value::as_str) {
+                    let snapshot = tool_preview(&v["partialResult"]);
+                    let delta = {
+                        let mut st = self.state.lock().await;
+                        st.tool_previews.get_mut(id).and_then(|previous| {
+                            // Pi sends cumulative snapshots. An append-only transcript
+                            // can safely stream only an extending prefix; final output
+                            // remains authoritative when a tool rewrites its snapshot.
+                            let delta = snapshot.strip_prefix(previous.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+                            if delta.is_some() {
+                                *previous = snapshot;
+                            }
+                            delta
+                        })
+                    };
+                    if let Some(delta) = delta {
+                        self.emit(DriverEvent::ToolOutputDelta { tool_call_id: id.to_string(), delta }).await;
+                    }
+                }
                 if self.flavor == Flavor::Omp
                     && let Some(task) = omp_background_process(&v)
                 {
@@ -570,6 +698,9 @@ impl PiSession {
                 }
             }
             "tool_execution_end" => {
+                if let Some(id) = v.get("toolCallId").and_then(Value::as_str) {
+                    self.state.lock().await.tool_previews.remove(id);
+                }
                 if self.flavor == Flavor::Omp
                     && let Some(task) = omp_background_process(&v)
                 {
@@ -595,16 +726,19 @@ impl PiSession {
                     Flavor::Omp => v.get("isTerminal").and_then(|t| t.as_bool()) != Some(false),
                 };
                 if terminal {
-                    let session = self.clone();
-                    tokio::spawn(async move { session.finish_turn().await });
+                    self.schedule_finish().await;
                 }
             }
             "agent_settled" => {
-                let session = self.clone();
-                tokio::spawn(async move { session.finish_turn().await });
+                self.schedule_finish().await;
             }
             "extension_ui_request" => self.handle_ui_request(&v).await,
             "auto_retry_start" => {
+                {
+                    let mut st = self.state.lock().await;
+                    st.retrying = true;
+                    st.activity_revision += 1;
+                }
                 self.emit(DriverEvent::Notice {
                     level: NoticeLevel::Warning,
                     text: format!("retrying ({})", v.get("errorMessage").and_then(|e| e.as_str()).unwrap_or("provider error")),
@@ -612,19 +746,57 @@ impl PiSession {
                 })
                 .await;
             }
+            "auto_retry_end" => {
+                let mut st = self.state.lock().await;
+                st.retrying = false;
+                st.activity_revision += 1;
+                if v.get("success").and_then(Value::as_bool) == Some(true) {
+                    st.turn_error = None;
+                } else if !st.aborted {
+                    st.turn_error = Some(v.get("finalError").and_then(Value::as_str).unwrap_or("Pi exhausted its retries").to_string());
+                }
+            }
             "compaction_start" | "auto_compaction_start" => {
+                {
+                    let mut st = self.state.lock().await;
+                    st.activity_revision += 1;
+                    st.compacting = true;
+                }
                 self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "compacting context".into(), data: None }).await
             }
             "compaction_end" | "auto_compaction_end" => {
+                {
+                    let mut st = self.state.lock().await;
+                    st.activity_revision += 1;
+                    st.compacting = false;
+                }
                 let error = v.get("errorMessage").and_then(Value::as_str);
+                if v.get("willRetry").and_then(Value::as_bool) == Some(true) && error.is_none() {
+                    self.state.lock().await.turn_error = None;
+                }
                 self.emit(DriverEvent::Notice {
                     level: if error.is_some() { NoticeLevel::Warning } else { NoticeLevel::Info },
-                    text: error.map(|error| format!("Context compaction failed: {error}")).unwrap_or_else(|| "Context compacted".into()),
+                    text: error.map(|error| format!("Context compaction failed: {error}")).unwrap_or_else(|| {
+                        if v.get("aborted").and_then(Value::as_bool) == Some(true) {
+                            "Compaction interrupted".into()
+                        } else {
+                            "Context compacted".into()
+                        }
+                    }),
                     data: None,
                 })
                 .await;
             }
             "extension_error" => {
+                if let Some(extension) = &self.extension
+                    && v.get("extensionPath").and_then(Value::as_str).is_some_and(|path| std::path::Path::new(path) == extension.path())
+                {
+                    // A broken approval hook must never leave a live unrestricted
+                    // Pi process behind. Other user extensions keep their notices.
+                    self.state.lock().await.turn_error =
+                        Some("Kybern's Pi permission extension failed. Fix the extension error and reconnect.".into());
+                    self.child.kill().await;
+                }
                 self.emit(DriverEvent::Notice {
                     level: NoticeLevel::Warning,
                     text: format!("extension error: {}", v.get("error").and_then(|e| e.as_str()).unwrap_or("")),
@@ -633,70 +805,254 @@ impl PiSession {
                 .await;
             }
             "model_changed" => {
-                let model = v.get("model").and_then(|m| m.as_str()).map(str::to_string);
-                let sid = self.state.lock().await.session_id.clone().unwrap_or_default();
-                self.emit(DriverEvent::SessionBound { session_id: sid, model }).await;
+                let session = self.clone();
+                tokio::spawn(async move {
+                    if let Ok(state) = session.call("get_state", json!({})).await {
+                        session.update_model_state(&state).await;
+                        let model = state.pointer("/model/id").and_then(Value::as_str).map(|id| {
+                            let provider = state.pointer("/model/provider").and_then(Value::as_str).unwrap_or("");
+                            if provider.is_empty() { id.to_string() } else { format!("{provider}/{id}") }
+                        });
+                        let sid = session.state.lock().await.session_id.clone().unwrap_or_default();
+                        session.emit(DriverEvent::SessionBound { session_id: sid, model }).await;
+                    }
+                });
             }
             _ => {}
         }
     }
 
-    async fn finish_turn(&self) {
-        let (usage, cost, duration_ms, error, aborted, active) = {
-            let mut st = self.state.lock().await;
-            let active = st.active;
-            st.active = false;
-            let d = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-            (std::mem::take(&mut st.turn_usage), st.turn_cost, d, st.turn_error.take(), st.aborted, active)
-        };
-        if !active {
-            return;
+    async fn admission_revision(&self) -> u64 {
+        self.state.lock().await.admission_revision
+    }
+
+    async fn begin_turn(&self, manual_compacting: bool, admitted_at: u64) -> Result<Option<u64>> {
+        let mut st = self.state.lock().await;
+        if st.admission_revision != admitted_at {
+            drop(st);
+            self.emit(DriverEvent::TurnCompleted {
+                stop_reason: StopReason::Interrupted,
+                usage: Usage::default(),
+                cost_usd: Some(0.0),
+                duration_ms: 0,
+                anchors: crate::TurnAnchors::default(),
+            })
+            .await;
+            return Ok(None);
         }
-        // Rewind anchor: the entry id of this turn's user message.
-        let list_cmd = match self.flavor {
-            Flavor::Pi => "get_fork_messages",
-            Flavor::Omp => "get_branch_messages",
+        if st.active || st.closed {
+            return Err(DriverError::Protocol("Pi is busy or closed. Queue the message or reconnect the session.".into()));
+        }
+        st.generation += 1;
+        st.active = true;
+        st.settling = false;
+        st.prompt_pending = true;
+        st.native_started = false;
+        st.retrying = false;
+        st.compacting = false;
+        st.manual_compacting = manual_compacting;
+        st.turn_started = Some(std::time::Instant::now());
+        st.turn_usage = Usage::default();
+        st.turn_cost = 0.0;
+        st.turn_error = None;
+        st.aborted = false;
+        st.tool_previews.clear();
+        Ok(Some(st.generation))
+    }
+
+    async fn schedule_finish(self: &Arc<Self>) {
+        let generation = {
+            let mut st = self.state.lock().await;
+            if !st.active || st.settling || st.closed || st.manual_compacting {
+                return;
+            }
+            st.settling = true;
+            st.generation
         };
-        let anchor = self.call(list_cmd, json!({})).await.ok().and_then(|d| {
-            d.get("messages")
-                .and_then(|m| m.as_array())
-                .and_then(|a| a.last())
-                .and_then(|m| m.get("entryId"))
-                .and_then(|e| e.as_str())
-                .map(str::to_string)
+        let session = self.clone();
+        tokio::spawn(async move {
+            session.finish_turn(generation).await;
         });
+    }
+
+    async fn finish_turn(&self, generation: u64) {
+        // An admitted steer can still be in prompt preflight when the previous
+        // native run settles. Wait for its acknowledgement before testing idle.
+        let _gate = self.command_gate.lock().await;
+        // A settled callback may start extension compaction or retries. Verify
+        // the entire idle/anchor boundary, including events received while the
+        // anchor request was pending, before publishing terminal state.
+        let (anchor, usage, cost, duration_ms, error, aborted) = loop {
+            let revision = {
+                let st = self.state.lock().await;
+                if !st.active || st.closed || st.generation != generation {
+                    return;
+                }
+                st.activity_revision
+            };
+            if self.flavor == Flavor::Pi {
+                let idle = self.call_with_timeout("get_state", &mut json!({}), std::time::Duration::from_secs(2)).await;
+                let mut st = self.state.lock().await;
+                if !st.active || st.closed || st.generation != generation {
+                    return;
+                }
+                match idle {
+                    Ok(state)
+                        if state["isStreaming"] == false
+                            && state["isCompacting"] == false
+                            && state.get("pendingMessageCount").and_then(Value::as_u64).unwrap_or(0) == 0
+                            && revision == st.activity_revision
+                            && !st.prompt_pending
+                            && !st.retrying
+                            && !st.compacting => {}
+                    Ok(_) => {
+                        drop(st);
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    Err(error) => {
+                        st.turn_error =
+                            Some(format!("Could not verify Pi finished: {error}. Send again to resume the saved conversation."));
+                        drop(st);
+                        self.child.kill().await;
+                        return;
+                    }
+                }
+            }
+            let list_cmd = if self.flavor == Flavor::Pi { "get_fork_messages" } else { "get_branch_messages" };
+            let anchor = self.call_with_timeout(list_cmd, &mut json!({}), std::time::Duration::from_secs(2)).await.ok().and_then(|d| {
+                d.get("messages")
+                    .and_then(Value::as_array)
+                    .and_then(|a| a.last())
+                    .and_then(|m| m.get("entryId"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+            let mut st = self.state.lock().await;
+            if !st.active || st.closed || st.generation != generation {
+                return;
+            }
+            if self.flavor == Flavor::Pi && (st.activity_revision != revision || st.retrying || st.compacting || st.prompt_pending) {
+                continue;
+            }
+            st.active = false;
+            st.settling = false;
+            st.tool_previews.clear();
+            let duration = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+            break (anchor, std::mem::take(&mut st.turn_usage), st.turn_cost, duration, st.turn_error.take(), st.aborted);
+        };
+        self.withdraw_requests().await;
         let anchors = crate::TurnAnchors { turn_id: anchor, previous_end: None };
-        let ev = match (error, aborted) {
-            (Some(e), _) => DriverEvent::TurnFailed { error: e },
-            (None, true) => {
-                DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: Some(cost), duration_ms, anchors }
-            }
-            (None, false) => {
-                DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms, anchors }
-            }
+        let ev = if aborted {
+            DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: Some(cost), duration_ms, anchors }
+        } else if let Some(error) = error {
+            DriverEvent::TurnFailed { error }
+        } else {
+            DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms, anchors }
         };
         self.emit(ev).await;
-        // Query after publishing completion so stats never delay the answer.
-        // Older Pi/OMP builds may omit contextUsage; cumulative totals are not
-        // a substitute for the current context occupancy.
-        if let Ok(Ok(stats)) = tokio::time::timeout(std::time::Duration::from_secs(2), self.call("get_session_stats", json!({}))).await
+        drop(_gate);
+        // Stats cannot delay completion or overwrite the next turn's context.
+        if let Ok(stats) = self.call_with_timeout("get_session_stats", &mut json!({}), std::time::Duration::from_secs(2)).await
             && let (Some(used_tokens), Some(window_tokens)) = (
                 stats.pointer("/contextUsage/tokens").and_then(Value::as_u64),
                 stats.pointer("/contextUsage/contextWindow").and_then(Value::as_u64),
             )
         {
-            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+            let event = DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
                 context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
                 limits: None,
-            }))
-            .await;
+            });
+            let Ok(permit) = self.events.reserve().await else { return };
+            let st = self.state.lock().await;
+            if st.generation != generation || st.active || st.closed {
+                return;
+            }
+            permit.send(event);
         }
     }
 
+    async fn withdraw_requests(&self) {
+        let requests: Vec<_> = self.pending_approvals.lock().await.drain().map(|(id, _)| id).collect();
+        for request_id in requests {
+            let _ = self.child.write(&json!({ "type": "extension_ui_response", "id": request_id, "cancelled": true })).await;
+            self.emit(DriverEvent::PermissionWithdrawn { request_id }).await;
+        }
+        let requests: Vec<_> = self.pending_app_tools.lock().await.drain().map(|(id, _)| id).collect();
+        for id in requests {
+            let _ = self.child.write(&json!({ "type": "extension_ui_response", "id": id, "cancelled": true })).await;
+        }
+    }
+
+    async fn cancel_native_work(&self) -> Result<()> {
+        // These messages must be sent independently: abort() may wait for work
+        // whose completion requires cancelling retry backoff or a queued input.
+        if self.flavor == Flavor::Pi {
+            for ty in ["clear_queue", "abort_retry"] {
+                self.child.write(&json!({ "type": ty, "id": Uuid::new_v4().to_string() })).await?;
+            }
+        }
+        self.child.write(&json!({ "type": "abort", "id": Uuid::new_v4().to_string() })).await
+    }
+
     async fn handle_ui_request(self: &Arc<Self>, v: &Value) {
-        let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+        let Some(id) = v.get("id").and_then(Value::as_str).filter(|id| !id.is_empty() && id.len() <= 128) else {
+            return;
+        };
+        let id = id.to_string();
         let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        if self.flavor == Flavor::Pi {
+            if let Some(request) = extension::parse_permission_request(&title) {
+                match request {
+                    Ok(request) if method == "select" => {
+                        let event = DriverEvent::PermissionRequest {
+                            request_id: id.clone(),
+                            tool_call_id: Some(request.tool_call_id),
+                            summary: crate::summarize_tool_call(&request.tool_name, &request.input),
+                            tool_name: request.tool_name,
+                            input: request.input,
+                            suggestions: vec![],
+                        };
+                        self.register_permission(id, "kybern_tool".into(), event, v.get("timeout").and_then(Value::as_u64)).await;
+                    }
+                    _ => {
+                        let _ = self.child.write(&json!({"type":"extension_ui_response","id":id,"cancelled":true})).await;
+                    }
+                }
+                return;
+            }
+            if let Some(request) = extension::parse_app_tool_request(&title) {
+                let st = self.state.lock().await;
+                let allowed = st.active && !st.closed && !st.aborted;
+                let generation = st.generation;
+                drop(st);
+                if let Ok(request) = request
+                    && method == "input"
+                    && allowed
+                {
+                    let mut pending = self.pending_app_tools.lock().await;
+                    if pending.len() < 16 && !pending.contains_key(&id) {
+                        pending.insert(id.clone(), generation);
+                        drop(pending);
+                        self.emit(DriverEvent::AppToolRequest { request_id: id.clone(), name: request.name, arguments: request.arguments })
+                            .await;
+                        let weak = Arc::downgrade(self);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                            if let Some(session) = weak.upgrade()
+                                && session.pending_app_tools.lock().await.remove(&id).is_some()
+                            {
+                                let _ = session.child.write(&json!({"type":"extension_ui_response","id":id,"cancelled":true})).await;
+                            }
+                        });
+                        return;
+                    }
+                }
+                let _ = self.child.write(&json!({"type":"extension_ui_response","id":id,"cancelled":true})).await;
+                return;
+            }
+        }
         match method {
             "select" if title.starts_with("Allow tool:") => {
                 let mut lines = title.lines();
@@ -711,39 +1067,27 @@ impl PiSession {
                     Some(c) => format!("run: {}", c.chars().take(120).collect::<String>()),
                     None => format!("{tool_name}: {}", input.values().filter_map(|v| v.as_str()).next().unwrap_or("")),
                 };
-                self.pending_approvals.lock().await.insert(id.clone(), tool_name.clone());
-                self.emit(DriverEvent::PermissionRequest {
-                    request_id: id,
+                let event = DriverEvent::PermissionRequest {
+                    request_id: id.clone(),
                     tool_call_id: None,
-                    tool_name,
+                    tool_name: tool_name.clone(),
                     input: Value::Object(input),
                     summary,
                     suggestions: vec![],
-                })
-                .await;
+                };
+                self.register_permission(id, tool_name, event, v.get("timeout").and_then(Value::as_u64)).await;
             }
             "select" | "confirm" | "input" | "editor" => {
-                self.pending_approvals.lock().await.insert(id.clone(), format!("ui_{method}"));
-                self.emit(DriverEvent::PermissionRequest {
+                let kind = format!("ui_{method}");
+                let event = DriverEvent::PermissionRequest {
                     request_id: id.clone(),
                     tool_call_id: None,
-                    tool_name: format!("ui_{method}"),
+                    tool_name: kind.clone(),
                     input: v.clone(),
                     summary: title,
                     suggestions: vec![],
-                })
-                .await;
-                if let Some(timeout) = v.get("timeout").and_then(Value::as_u64) {
-                    let weak = Arc::downgrade(self);
-                    tokio::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(timeout)).await;
-                        if let Some(session) = weak.upgrade()
-                            && session.pending_approvals.lock().await.remove(&id).is_some()
-                        {
-                            session.emit(DriverEvent::PermissionWithdrawn { request_id: id }).await;
-                        }
-                    });
-                }
+                };
+                self.register_permission(id, kind, event, v.get("timeout").and_then(Value::as_u64)).await;
             }
             "notify" => {
                 let level = match v.get("notifyType").and_then(|t| t.as_str()) {
@@ -761,6 +1105,74 @@ impl PiSession {
             _ => {}
         }
     }
+
+    async fn register_permission(self: &Arc<Self>, id: String, kind: String, event: DriverEvent, timeout: Option<u64>) {
+        let Ok(permit) = self.events.reserve().await else {
+            self.cancel_ui_request(&id).await;
+            return;
+        };
+        let nonce = Uuid::new_v4();
+        let registered = {
+            // Stop takes this lock before withdrawing requests. Holding it
+            // through insertion and the non-async event send makes the two
+            // operations one ordered registration boundary.
+            let state = self.state.lock().await;
+            if !permission_state_available(&state) {
+                false
+            } else {
+                let mut pending = self.pending_approvals.lock().await;
+                if pending.len() >= MAX_PENDING_APPROVALS || pending.contains_key(&id) {
+                    false
+                } else {
+                    pending.insert(id.clone(), PendingApproval { kind, nonce });
+                    permit.send(event);
+                    true
+                }
+            }
+        };
+        if registered {
+            self.expire_permission(id, nonce, timeout);
+        } else {
+            self.cancel_ui_request(&id).await;
+        }
+    }
+
+    async fn cancel_ui_request(&self, id: &str) {
+        let _ = self.child.write(&json!({"type":"extension_ui_response","id":id,"cancelled":true})).await;
+    }
+
+    fn expire_permission(self: &Arc<Self>, id: String, nonce: Uuid, timeout: Option<u64>) {
+        if let Some(timeout) = timeout {
+            let weak = Arc::downgrade(self);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(timeout)).await;
+                let Some(session) = weak.upgrade() else { return };
+                let Ok(permit) = session.events.reserve().await else { return };
+                let expired = {
+                    let state = session.state.lock().await;
+                    if !permission_state_available(&state) {
+                        false
+                    } else {
+                        let mut pending = session.pending_approvals.lock().await;
+                        if pending.get(&id).is_some_and(|approval| approval.nonce == nonce) {
+                            pending.remove(&id);
+                            permit.send(DriverEvent::PermissionWithdrawn { request_id: id.clone() });
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if expired {
+                    session.cancel_ui_request(&id).await;
+                }
+            });
+        }
+    }
+}
+
+fn permission_state_available(state: &State) -> bool {
+    !state.aborted && !state.closed
 }
 
 fn omp_runtime_status(status: &str) -> RuntimeTaskStatus {
@@ -887,6 +1299,26 @@ fn omp_background_process(frame: &Value) -> Option<DriverRuntimeTask> {
     })
 }
 
+fn tool_preview(result: &Value) -> String {
+    let mut text = String::new();
+    for block in result.get("content").and_then(Value::as_array).into_iter().flatten() {
+        if block["type"] != "text" {
+            continue;
+        }
+        let value = block.get("text").and_then(Value::as_str).unwrap_or("");
+        let remaining = MAX_TOOL_PREVIEW_BYTES.saturating_sub(text.len());
+        let mut end = remaining.min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.push_str(&value[..end]);
+        if text.len() == MAX_TOOL_PREVIEW_BYTES {
+            break;
+        }
+    }
+    text
+}
+
 fn images(message: &UserMessage) -> Vec<Value> {
     message
         .parts
@@ -900,6 +1332,7 @@ fn images(message: &UserMessage) -> Vec<Value> {
 
 fn prompt_text(message: &UserMessage) -> String {
     let mut out = String::new();
+    let mut skills = Vec::new();
     for part in &message.parts {
         match part {
             ContentPart::Text { text } => out.push_str(text),
@@ -908,8 +1341,9 @@ fn prompt_text(message: &UserMessage) -> String {
                 out.push_str(path);
             }
             ContentPart::Skill { name, .. } => {
-                out.push_str("/skill:");
-                out.push_str(name);
+                if !name.is_empty() && !name.chars().any(char::is_whitespace) && !skills.contains(name) {
+                    skills.push(name.clone());
+                }
             }
             ContentPart::Mention { name, .. } => {
                 out.push('@');
@@ -923,118 +1357,226 @@ fn prompt_text(message: &UserMessage) -> String {
             }
         }
     }
-    out
+    if skills.is_empty() {
+        out
+    } else {
+        format!("{} {}", skills.into_iter().map(|name| format!("/skill:{name}")).collect::<Vec<_>>().join(" "), out)
+    }
 }
 
 #[async_trait]
 impl AgentSession for Handle {
     async fn compact(&self) -> Result<()> {
-        let started = std::time::Instant::now();
-        self.0.state.lock().await.aborted = false;
+        let admitted_at = self.0.admission_revision().await;
+        self.0.wait_initialized().await?;
+        let _gate = self.0.command_gate.lock().await;
+        let Some(generation) = self.0.begin_turn(true, admitted_at).await? else { return Ok(()) };
         self.0.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "Compacting context…".into(), data: None }).await;
-        self.0.call("compact", json!({})).await?;
-        let interrupted = self.0.state.lock().await.aborted;
-        self.0
-            .emit(DriverEvent::Notice {
-                level: NoticeLevel::Info,
-                text: if interrupted { "Compaction interrupted" } else { "Context compacted" }.into(),
-                data: None,
-            })
-            .await;
-        self.0
-            .emit(DriverEvent::TurnCompleted {
-                stop_reason: if interrupted { StopReason::Interrupted } else { StopReason::Completed },
-                usage: Usage::default(),
-                cost_usd: None,
-                duration_ms: started.elapsed().as_millis() as u64,
-                anchors: crate::TurnAnchors::default(),
-            })
-            .await;
+        let result = self.0.call("compact", json!({})).await;
+        {
+            let mut st = self.0.state.lock().await;
+            if st.generation != generation {
+                return result.map(|_| ());
+            }
+            st.prompt_pending = false;
+            st.manual_compacting = false;
+            if result.is_err() && !st.aborted {
+                // Delivery failures are terminalized by the orchestrator. Do not
+                // also publish a completion for the same failed compact request.
+                st.active = false;
+                st.settling = false;
+                return result.map(|_| ());
+            }
+        }
+        // Compaction's response is authoritative even without agent lifecycle frames.
+        self.0.schedule_finish().await;
         Ok(())
     }
 
     async fn send_message(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
-        {
-            let mut st = s.state.lock().await;
-            st.active = true;
-            st.turn_started = Some(std::time::Instant::now());
-            st.turn_usage = Usage::default();
-            st.turn_cost = 0.0;
-            st.turn_error = None;
-            st.aborted = false;
-        }
-        let mut params = json!({ "message": prompt_text(message) });
+        let admitted_at = s.admission_revision().await;
+        s.wait_initialized().await?;
+        let _gate = s.command_gate.lock().await;
+        let Some(generation) = s.begin_turn(false, admitted_at).await? else { return Ok(()) };
+        let text = prompt_text(message);
+        let mut params = json!({ "message": text });
         let imgs = images(message);
         if !imgs.is_empty() {
             params["images"] = Value::Array(imgs);
         }
-        let slash_command = prompt_text(message).trim_start().starts_with('/');
-        s.call("prompt", params).await?;
-        // Native extension commands can finish without starting an agent turn.
-        // Ask the protocol for idle state instead of leaving Kybern running forever.
-        if slash_command {
+        let result = s.call("prompt", params).await;
+        let (no_run, interrupted, open) = {
+            let mut st = s.state.lock().await;
+            if st.generation != generation {
+                return result.map(|_| ());
+            }
+            st.prompt_pending = false;
+            if result.is_err() && !st.aborted {
+                st.active = false;
+                st.settling = false;
+            }
+            (!st.native_started, st.aborted, !st.closed)
+        };
+        if result.is_err() && interrupted {
+            if open {
+                s.schedule_finish().await;
+            }
+            return Ok(());
+        }
+        result?;
+        // Extension commands and input hooks may consume ordinary text too.
+        // Confirm a runless acknowledgement against native state before completion.
+        if no_run {
             let state = s.call("get_state", json!({})).await?;
-            if state["isStreaming"] == false && state["isCompacting"] == false && s.state.lock().await.active {
-                s.finish_turn().await;
+            if state["isStreaming"] == false && state["isCompacting"] == false {
+                s.schedule_finish().await;
             }
         }
         Ok(())
     }
 
-    async fn interrupt(&self) -> Result<()> {
-        self.0.state.lock().await.aborted = true;
-        self.0.call("abort", json!({})).await.map(|_| ())
+    async fn steer(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
+        self.0.wait_initialized().await?;
+        let _gate = self.0.command_gate.lock().await;
+        {
+            let st = self.0.state.lock().await;
+            if !st.active || st.aborted || st.closed || st.manual_compacting || st.settling {
+                return Err(DriverError::Unsupported("Pi is finishing or stopping this turn. Queue the message instead.".into()));
+            }
+        }
+        let mut params = json!({ "message": prompt_text(message), "streamingBehavior": "steer" });
+        let imgs = images(message);
+        if !imgs.is_empty() {
+            params["images"] = Value::Array(imgs);
+        }
+        // Pi atomically runs extension commands or steers the active run. Unlike
+        // a bare `steer`, an input at the idle boundary cannot be orphaned.
+        self.0.call("prompt", params).await.map(|_| ())
     }
 
-    async fn set_permission_mode(&self, _mode: PermissionMode) -> Result<()> {
-        Err(DriverError::Unsupported("approval mode is fixed when the agent starts; start a new thread to change it".into()))
+    async fn interrupt(&self) -> Result<()> {
+        {
+            let mut st = self.0.state.lock().await;
+            st.admission_revision = st.admission_revision.wrapping_add(1);
+            st.aborted = true;
+        }
+        self.0.withdraw_requests().await;
+        self.0.cancel_native_work().await
+    }
+
+    async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
+        self.0.wait_initialized().await?;
+        let _gate = self.0.command_gate.lock().await;
+        if self.0.state.lock().await.closed {
+            return Err(DriverError::ProcessExited("Pi session is closed; send again to resume".into()));
+        }
+        if self.0.flavor == Flavor::Omp {
+            return Err(DriverError::Unsupported("approval mode is fixed when the agent starts; start a new thread to change it".into()));
+        }
+        self.0.call("prompt", json!({ "message": extension::mode_command(mode)? })).await.map(|_| ())
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
+        self.0.wait_initialized().await?;
+        let _gate = self.0.command_gate.lock().await;
         let Some((provider, model_id)) = model.split_once('/') else {
             return Err(DriverError::Unsupported(format!("models are named provider/model, got {model}")));
         };
         self.0.call("set_model", json!({ "provider": provider, "modelId": model_id })).await?;
         let state = self.0.call("get_state", json!({})).await?;
-        self.0.state.lock().await.context_window = state.pointer("/model/contextWindow").and_then(Value::as_u64);
+        self.0.update_model_state(&state).await;
         Ok(())
     }
 
     async fn set_effort(&self, effort: &str) -> Result<()> {
-        if self.0.flavor != Flavor::Omp {
-            return Err(DriverError::Unsupported("pi did not advertise an effort control".into()));
-        }
-        self.0.call("set_thinking_level", json!({ "level": effort })).await.map(|_| ())
+        self.0.wait_initialized().await?;
+        let _gate = self.0.command_gate.lock().await;
+        let level = if self.0.flavor == Flavor::Pi {
+            let st = self.0.state.lock().await;
+            let supported = models::model_supported_efforts(&st.model);
+            if supported.is_empty() && effort.is_empty() {
+                return Ok(());
+            }
+            let requested = if effort.is_empty() { st.default_effort.as_deref() } else { Some(effort) };
+            let level = models::effective_effort(requested, &supported)
+                .ok_or_else(|| DriverError::Unsupported("The selected Pi model does not expose thinking levels.".into()))?;
+            if !effort.is_empty() && !supported.iter().any(|item| item == effort) {
+                return Err(DriverError::Unsupported(format!("Pi model does not support thinking level {effort}. Choose a listed level.")));
+            }
+            level
+        } else {
+            effort.to_string()
+        };
+        self.0.call("set_thinking_level", json!({ "level": level })).await.map(|_| ())
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
-        let Some(kind) = self.0.pending_approvals.lock().await.get(request_id).cloned() else {
-            return Err(DriverError::Protocol(format!("no pending approval {request_id}")));
-        };
-        if kind.starts_with("ui_") {
-            let mut response = match decision {
-                ApprovalDecision::Submit { response } if response.is_object() => response.clone(),
-                ApprovalDecision::Deny { .. } => json!({ "cancelled": true }),
-                _ => return Err(DriverError::Protocol("this dialog needs an answer".into())),
+        let response = {
+            // Stop takes the same state lock before withdrawing approvals. A
+            // response either claims the live request first or observes the
+            // stopped state; it cannot resurrect or answer a drained dialog.
+            let state = self.0.state.lock().await;
+            if !permission_state_available(&state) {
+                return Err(DriverError::Protocol("Pi permission request belongs to a finished turn".into()));
+            }
+            let mut pending = self.0.pending_approvals.lock().await;
+            let Some(approval) = pending.get(request_id) else {
+                return Err(DriverError::Protocol(format!("no pending approval {request_id}")));
             };
-            response["type"] = json!("extension_ui_response");
-            response["id"] = json!(request_id);
-            self.0.child.write(&response).await?;
-            self.0.pending_approvals.lock().await.remove(request_id);
-            return Ok(());
-        }
-        let value = match decision {
-            ApprovalDecision::Submit { .. } => return Err(DriverError::Protocol("expected permission decision".into())),
-            ApprovalDecision::AllowOnce | ApprovalDecision::AllowAlways => "Approve",
-            ApprovalDecision::Deny { .. } => "Deny",
+            let response = if approval.kind == "kybern_tool" {
+                json!({
+                    "type": "extension_ui_response",
+                    "id": request_id,
+                    "value": extension::permission_response(decision)?,
+                })
+            } else if approval.kind.starts_with("ui_") {
+                let mut response = match decision {
+                    ApprovalDecision::Submit { response } if response.is_object() => response.clone(),
+                    ApprovalDecision::Deny { .. } => json!({ "cancelled": true }),
+                    _ => return Err(DriverError::Protocol("this dialog needs an answer".into())),
+                };
+                response["type"] = json!("extension_ui_response");
+                response["id"] = json!(request_id);
+                response
+            } else {
+                let value = match decision {
+                    ApprovalDecision::Submit { .. } => return Err(DriverError::Protocol("expected permission decision".into())),
+                    ApprovalDecision::AllowOnce | ApprovalDecision::AllowAlways => "Approve",
+                    ApprovalDecision::Deny { .. } => "Deny",
+                };
+                json!({ "type": "extension_ui_response", "id": request_id, "value": value })
+            };
+            pending.remove(request_id);
+            response
         };
-        self.0.child.write(&json!({ "type": "extension_ui_response", "id": request_id, "value": value })).await?;
-        self.0.pending_approvals.lock().await.remove(request_id);
-        Ok(())
+        self.0.child.write(&response).await
+    }
+
+    async fn respond_app_tool(&self, request_id: &str, result: std::result::Result<Value, String>) -> Result<()> {
+        let generation = self
+            .0
+            .pending_app_tools
+            .lock()
+            .await
+            .remove(request_id)
+            .ok_or_else(|| DriverError::Protocol("Pi app tool request has expired".into()))?;
+        let st = self.0.state.lock().await;
+        if st.generation != generation || !st.active || st.aborted || st.closed {
+            return Err(DriverError::Protocol("Pi app tool request belongs to a finished turn".into()));
+        }
+        drop(st);
+        let value = match result {
+            Ok(data) => extension::encode_app_tool_result(true, Some(&data), None),
+            Err(error) => extension::encode_app_tool_result(false, None, Some(&error)),
+        };
+        self.0.child.write(&json!({"type":"extension_ui_response","id":request_id,"value":value})).await
     }
 
     async fn close(&self) -> Result<()> {
+        self.0.state.lock().await.closed = true;
+        self.0.withdraw_requests().await;
+        let _ = self.0.cancel_native_work().await;
         self.0.child.close().await;
         Ok(())
     }
@@ -1057,6 +1599,10 @@ mod tests {
                 pending_approvals: Mutex::new(HashMap::new()),
                 state: Mutex::new(State::default()),
                 ready: Mutex::new(None),
+                initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
+                command_gate: Mutex::new(()),
+                extension: None,
+                pending_app_tools: Mutex::new(HashMap::new()),
             });
             let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
             let task = tokio::spawn(async move {
@@ -1079,9 +1625,27 @@ mod tests {
                 .unwrap();
             let (handle, result) = task.await.unwrap();
             result.unwrap();
-            assert!(matches!(rx.recv().await, Some(DriverEvent::Notice { .. })));
-            assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
+            let answering = session.clone();
+            let responder = tokio::spawn(async move {
+                while let Some(request) = answering.child.lines.lock().await.recv().await {
+                    if let Some(id) = request["id"].as_str()
+                        && let Some(response) = answering.pending.lock().await.remove(id)
+                    {
+                        let data = if request["type"] == "get_state" {
+                            json!({"isStreaming":false,"isCompacting":false})
+                        } else {
+                            json!({"messages":[]})
+                        };
+                        let _ = response.send(Ok(data));
+                    }
+                }
+            });
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(3), rx.recv()).await.unwrap(),
+                Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })
+            ));
             handle.close().await.unwrap();
+            responder.abort();
         }
     }
 
@@ -1099,6 +1663,10 @@ mod tests {
                 pending_approvals: Mutex::new(HashMap::new()),
                 state: Mutex::new(State::default()),
                 ready: Mutex::new(None),
+                initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
+                command_gate: Mutex::new(()),
+                extension: None,
+                pending_app_tools: Mutex::new(HashMap::new()),
             });
             let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
             for (method, response) in [
@@ -1137,20 +1705,6 @@ mod tests {
     #[test]
     fn omp_model_discovery_budget_covers_a_cold_registry_refresh() {
         assert!(MODEL_DISCOVERY_TIMEOUT >= Duration::from_secs(10));
-    }
-
-    #[test]
-    fn parses_plain_pi_model_table() {
-        let models = parse_pi_models(
-            b"provider   model                 context  max-out  thinking  images\n\
-              anthropic  claude-sonnet-4-5   200K     64K      yes       yes\n\
-              openai     gpt-5.4              1M       128K     yes       no\n",
-        );
-
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].id, "anthropic/claude-sonnet-4-5");
-        assert_eq!(models[0].provider.as_deref(), Some("anthropic"));
-        assert_eq!(models[1].id, "openai/gpt-5.4");
     }
 
     #[test]
@@ -1245,7 +1799,7 @@ mod tests {
                 ContentPart::Text { text: " now".into() },
             ],
         };
-        assert_eq!(prompt_text(&message), "Use /skill:review now");
+        assert_eq!(prompt_text(&message), "/skill:review Use  now");
     }
 
     #[tokio::test]
@@ -1258,6 +1812,7 @@ IFS= read -r line
 id=${line#*\"id\":\"}
 id=${id%%\"*}
 printf '{"id":"%s","type":"response","command":"get_branch_messages","success":true,"data":{"messages":[{"entryId":"entry-1"}]}}\n' "$id"
+cat >/dev/null
 "#,
         );
         let child = Arc::new(NdjsonChild::spawn(command).expect("spawn fake omp"));
@@ -1270,6 +1825,10 @@ printf '{"id":"%s","type":"response","command":"get_branch_messages","success":t
             pending_approvals: Mutex::new(HashMap::new()),
             state: Mutex::new(State { active: true, ..State::default() }),
             ready: Mutex::new(None),
+            initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
+            command_gate: Mutex::new(()),
+            extension: None,
+            pending_app_tools: Mutex::new(HashMap::new()),
         });
         let reader = session.clone();
         tokio::spawn(async move { reader.read_loop().await });
@@ -1286,5 +1845,6 @@ printf '{"id":"%s","type":"response","command":"get_branch_messages","success":t
         .expect("OMP terminal frame should not block its own response reader");
 
         assert_eq!(completed.as_deref(), Some("entry-1"));
+        session.child.kill().await;
     }
 }

@@ -99,14 +99,15 @@ RPCs; an older daemon reports an unsupported-method error.
 
 Open **Notes** from the conversation’s environment menu to keep reminders and
 things to do. Use **Save notes** to sync them with the desktop. Notes belong to
-the conversation and are not sent to the agent. Conflicting edits from another
+the conversation and are not appended to prompts automatically. Pi can read
+them when it calls the Kybern thread-context tool. Conflicting edits from another
 device preserve the local draft; copy it before choosing **Reload saved notes**.
 Unsaved mobile drafts survive navigation within the current app session.
 
 During a turn, **Queue follow-up** sends the prompt after the current work
 finishes. Queued prompts can be edited or removed; editing preserves their
-position and attached context. For Codex, **Steer now** delivers input within the
-current turn through its native steering API. Other providers retain queuing.
+position and attached context. For Codex and Pi, **Steer now** delivers input within the
+current turn through the provider’s native steering API. Other providers retain queuing.
 Failed submissions retain the composer text. Stop remains a separate action.
 
 These features require the accompanying daemon changes as well as the new

@@ -210,6 +210,14 @@ pub enum DriverEvent {
     PermissionWithdrawn {
         request_id: String,
     },
+    /// The provider is waiting for a result from one of Kybern's internal,
+    /// read-only app tools. The daemon binds the request to the live session's
+    /// owning thread; no client-visible RPC or credential is involved.
+    AppToolRequest {
+        request_id: String,
+        name: String,
+        arguments: Value,
+    },
     TurnCompleted {
         stop_reason: StopReason,
         usage: Usage,
@@ -254,6 +262,10 @@ pub trait AgentSession: Send + Sync {
     async fn set_model(&self, model: &str) -> Result<()>;
     async fn set_effort(&self, effort: &str) -> Result<()>;
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()>;
+    /// Return the result of an internal Kybern app tool request.
+    async fn respond_app_tool(&self, _request_id: &str, _result: std::result::Result<Value, String>) -> Result<()> {
+        Err(DriverError::Unsupported("Kybern app tools".into()))
+    }
     /// Stop one provider-owned subagent or background process without
     /// interrupting unrelated work in the parent thread.
     async fn stop_runtime_task(&self, _task: &RuntimeTask) -> Result<()> {

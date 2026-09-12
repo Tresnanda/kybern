@@ -42,6 +42,9 @@ Install and authenticate your coding-agent CLIs on the machine that will run
 work. A VPS keeps its own projects, threads and provider credentials; connecting
 to it does not copy your laptop's projects or credentials.
 
+For Pi's model and thinking controls, live steering, permission modes, and
+thread-scoped app tools, see the [Pi integration guide](crates/kybern-drivers/PI.md).
+
 ### Desktop app
 
 Every desktop package bundles `kybernd`; you do not need to install the daemon

@@ -16,7 +16,7 @@ use kybern_drivers::{
 use kybern_git::{Repo, checkpoint_ref};
 use kybern_protocol::*;
 use kybern_store::{Store, TurnUsageRow};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, Semaphore};
 use uuid::Uuid;
 
 use crate::config::Paths;
@@ -36,6 +36,7 @@ struct Inner {
     events: crate::bounded_broadcast::Sender<ThreadEvent>,
     paths: Paths,
     settings: SettingsStore,
+    app_tools: crate::app_tools::AppTools,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
     releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
@@ -71,6 +72,10 @@ struct LiveSession {
     deferred_checkpoints: Mutex<HashSet<TurnId>>,
     /// Approval id -> provider request id, for pending permission requests.
     pending: Mutex<HashMap<ApprovalId, String>>,
+    /// In-flight internal tool request ids. A bounded semaphore prevents one
+    /// provider session from monopolizing daemon read work.
+    app_tool_requests: Mutex<HashSet<String>>,
+    app_tool_permits: Arc<Semaphore>,
 }
 
 /// Idle expiry includes suspend time, which `Instant` does not count on macOS.
@@ -192,6 +197,7 @@ impl Orchestrator {
         paths: Paths,
         settings: SettingsStore,
     ) -> Self {
+        let app_tools = crate::app_tools::AppTools::new(store.clone(), crate::terminal::TerminalManager::default());
         Self {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
@@ -202,6 +208,7 @@ impl Orchestrator {
                 events,
                 paths,
                 settings,
+                app_tools,
                 sessions: Mutex::new(HashMap::new()),
                 releasing: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
@@ -209,6 +216,15 @@ impl Orchestrator {
                 queue_wakeup: Notify::new(),
             }),
         }
+    }
+
+    /// Use the daemon's shared terminal registry for thread-bound app tools.
+    /// Existing embedders keep an isolated empty registry by default.
+    pub fn with_terminal_manager(mut self, terminals: crate::terminal::TerminalManager) -> Self {
+        let store = self.inner.store.clone();
+        Arc::get_mut(&mut self.inner).expect("terminal manager must be installed before cloning the orchestrator").app_tools =
+            crate::app_tools::AppTools::new(store, terminals);
+        self
     }
 
     /// Resolves the next time a queued follow-up may be ready to dispatch.
@@ -1571,6 +1587,8 @@ impl Orchestrator {
             tasks: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
+            app_tool_requests: Mutex::new(HashSet::new()),
+            app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
@@ -1845,8 +1863,94 @@ impl Orchestrator {
         drop(cleanup_barrier);
     }
 
+    async fn owns_app_tool_turn(&self, thread_id: ThreadId, live: &Arc<LiveSession>, expected_turn: Option<TurnId>) -> Option<TurnId> {
+        if live.is_released() || live.stop_cleanup.load(Ordering::Relaxed) {
+            return None;
+        }
+        let current = self.inner.sessions.lock().await.get(&thread_id).cloned();
+        if !current.as_ref().is_some_and(|current| Arc::ptr_eq(current, live)) {
+            return None;
+        }
+        let turn = live.turn.lock().await;
+        turn.as_ref().filter(|turn| !turn.completed && expected_turn.is_none_or(|expected| expected == turn.id)).map(|turn| turn.id)
+    }
+
+    async fn queue_app_tool_request(
+        &self,
+        thread_id: ThreadId,
+        live: Arc<LiveSession>,
+        request_id: String,
+        name: String,
+        arguments: serde_json::Value,
+    ) {
+        if request_id.is_empty() || request_id.len() > 128 {
+            if request_id.len() <= 512 {
+                reject_app_tool_request(live, request_id, "invalid app tool request id");
+            }
+            return;
+        }
+        if name.is_empty() || name.len() > 64 || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_') {
+            reject_app_tool_request(live, request_id, "invalid app tool name");
+            return;
+        }
+        if serde_json::to_vec(&arguments).map_or(true, |encoded| encoded.len() > crate::app_tools::MAX_ARGUMENT_BYTES) {
+            reject_app_tool_request(live, request_id, "app tool arguments exceed the 64 KiB limit");
+            return;
+        }
+        let Some(turn_id) = self.owns_app_tool_turn(thread_id, &live, None).await else {
+            reject_app_tool_request(live, request_id, "app tool request has no active owning turn");
+            return;
+        };
+        {
+            let mut requests = live.app_tool_requests.lock().await;
+            if !requests.insert(request_id.clone()) {
+                drop(requests);
+                reject_app_tool_request(live, request_id, "duplicate app tool request id");
+                return;
+            }
+        }
+        let permit = match live.app_tool_permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                live.app_tool_requests.lock().await.remove(&request_id);
+                reject_app_tool_request(live, request_id, "too many concurrent app tool requests");
+                return;
+            }
+        };
+
+        let this = self.clone();
+        tokio::spawn(async move {
+            let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
+                Err("app tool request is stale".to_string())
+            } else {
+                match tokio::time::timeout(crate::app_tools::REQUEST_TIMEOUT, this.inner.app_tools.execute(thread_id, &name, arguments))
+                    .await
+                {
+                    Ok(Ok(value)) => Ok(value),
+                    Ok(Err(error)) => Err(bounded_app_tool_error(error.to_string())),
+                    Err(_) => Err("app tool request timed out".to_string()),
+                }
+            };
+            if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
+                result = Err("app tool request expired because its owning turn ended".to_string());
+            }
+            let response = tokio::time::timeout(Duration::from_secs(5), live.session.respond_app_tool(&request_id, result)).await;
+            if let Ok(Err(error)) = response {
+                tracing::debug!(%thread_id, %request_id, %error, "failed to return app tool result");
+            }
+            live.app_tool_requests.lock().await.remove(&request_id);
+            drop(permit);
+        });
+    }
+
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
-        self.process_driver_event(thread_id, live, ev, false).await
+        match ev {
+            DriverEvent::AppToolRequest { request_id, name, arguments } => {
+                self.queue_app_tool_request(thread_id, live.clone(), request_id, name, arguments).await;
+                Ok(())
+            }
+            event => self.process_driver_event(thread_id, live, event, false).await,
+        }
     }
 
     async fn process_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent, retiring: bool) -> Result<()> {
@@ -2122,6 +2226,9 @@ impl Orchestrator {
                     }
                 }
             }
+            DriverEvent::AppToolRequest { .. } => {
+                unreachable!("app tool requests are dispatched outside the sequential event pump")
+            }
             DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
                 let has_pending_tasks = if turn.provider == ProviderKind::ClaudeCode && stop_reason == StopReason::Completed {
@@ -2263,6 +2370,24 @@ impl Orchestrator {
         }
         Ok(())
     }
+}
+
+fn reject_app_tool_request(live: Arc<LiveSession>, request_id: String, reason: &'static str) {
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(Duration::from_secs(2), live.session.respond_app_tool(&request_id, Err(reason.to_string()))).await;
+    });
+}
+
+fn bounded_app_tool_error(mut error: String) -> String {
+    const MAX_ERROR_BYTES: usize = 4096;
+    if error.len() > MAX_ERROR_BYTES {
+        let mut end = MAX_ERROR_BYTES;
+        while !error.is_char_boundary(end) {
+            end -= 1;
+        }
+        error.truncate(end);
+    }
+    error
 }
 
 fn map_message_delta(turn: &mut Option<ActiveTurn>, origin: &EventOrigin, provider_id: &str) -> MessageId {
@@ -2449,13 +2574,17 @@ mod tests {
     use kybern_protocol::*;
     use kybern_store::Store;
     use serde_json::json;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, Semaphore};
     use uuid::Uuid;
+
+    type AppToolResponse = (String, std::result::Result<serde_json::Value, String>);
+    type CapturedAppToolResponses = Arc<Mutex<Vec<AppToolResponse>>>;
 
     #[derive(Default)]
     struct TestSession {
         closes: Arc<AtomicUsize>,
         messages: Arc<Mutex<Vec<UserMessage>>>,
+        app_tool_responses: CapturedAppToolResponses,
         hang_interrupt: bool,
         broken_interrupt: bool,
     }
@@ -2495,6 +2624,15 @@ mod tests {
         }
 
         async fn respond_permission(&self, _request_id: &str, _decision: &ApprovalDecision) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
+        async fn respond_app_tool(
+            &self,
+            request_id: &str,
+            result: std::result::Result<serde_json::Value, String>,
+        ) -> kybern_drivers::Result<()> {
+            self.app_tool_responses.lock().await.push((request_id.to_string(), result));
             Ok(())
         }
 
@@ -2669,6 +2807,8 @@ mod tests {
             tasks: Mutex::new(HashMap::from([(task.id.clone(), task)])),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
+            app_tool_requests: Mutex::new(HashSet::new()),
+            app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
         orchestrator
             .handle_driver_event(
@@ -2994,9 +3134,34 @@ mod tests {
                 tasks: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
                 pending: Mutex::new(HashMap::new()),
+                app_tool_requests: Mutex::new(HashSet::new()),
+                app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
+        }
+
+        async fn active_app_tool_session(&self, thread: &Thread) -> (Arc<LiveSession>, CapturedAppToolResponses) {
+            let responses = Arc::new(Mutex::new(Vec::new()));
+            let live = Arc::new(LiveSession {
+                session: Box::new(TestSession { app_tool_responses: responses.clone(), ..Default::default() }),
+                last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
+                released: AtomicBool::new(false),
+                stop_cleanup: AtomicBool::new(false),
+                turn: Mutex::new(None),
+                continuation: Mutex::new(None),
+                turn_ready: tokio::sync::Notify::new(),
+                last_turn_id: Mutex::new(None),
+                tasks: Mutex::new(HashMap::new()),
+                deferred_checkpoints: Mutex::new(HashSet::new()),
+                pending: Mutex::new(HashMap::new()),
+                app_tool_requests: Mutex::new(HashSet::new()),
+                app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            });
+            self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+            self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
+            live.turn_ready.notified().await;
+            (live, responses)
         }
 
         async fn has_session(&self, thread: &Thread) -> bool {
@@ -3030,6 +3195,93 @@ mod tests {
             duration_ms: 1,
             anchors: TurnAnchors::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn app_tool_request_roundtrips_through_the_event_pump() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.root.join("bridge.txt"), "through the daemon").unwrap();
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Pi);
+        let (live, responses) = fixture.active_app_tool_session(&thread).await;
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let pump = tokio::spawn(fixture.orchestrator.clone().pump(thread.id, live, rx));
+
+        tx.send(DriverEvent::AppToolRequest {
+            request_id: "request-1".into(),
+            name: "kybern_read_file".into(),
+            arguments: json!({ "path": "bridge.txt" }),
+        })
+        .await
+        .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if !responses.lock().await.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let response = responses.lock().await.pop().unwrap();
+        assert_eq!(response.0, "request-1");
+        assert_eq!(response.1.unwrap()["content"], "through the daemon");
+        drop(tx);
+        pump.abort();
+    }
+
+    #[tokio::test]
+    async fn app_tool_request_from_a_replaced_session_is_rejected() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Pi);
+        let (stale, responses) = fixture.active_app_tool_session(&thread).await;
+        let (replacement, _) = fixture.park(&thread, Instant::now()).await;
+        assert!(!Arc::ptr_eq(&stale, &replacement));
+
+        fixture
+            .orchestrator
+            .queue_app_tool_request(thread.id, stale, "stale-request".into(), "kybern_thread_context".into(), json!({}))
+            .await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if !responses.lock().await.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (_, response) = responses.lock().await.pop().unwrap();
+        assert!(response.unwrap_err().contains("no active owning turn"));
+    }
+
+    #[tokio::test]
+    async fn app_tool_requests_have_a_per_session_concurrency_cap() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Pi);
+        let (live, responses) = fixture.active_app_tool_session(&thread).await;
+        let mut permits = Vec::new();
+        for _ in 0..crate::app_tools::MAX_CONCURRENT_REQUESTS {
+            permits.push(live.app_tool_permits.clone().acquire_owned().await.unwrap());
+        }
+
+        fixture.orchestrator.queue_app_tool_request(thread.id, live, "over-cap".into(), "kybern_thread_context".into(), json!({})).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if !responses.lock().await.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (_, response) = responses.lock().await.pop().unwrap();
+        let error = response.unwrap_err();
+        assert!(error.contains("too many concurrent"), "unexpected rejection: {error}");
+        drop(permits);
     }
 
     #[tokio::test]

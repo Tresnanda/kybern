@@ -390,9 +390,9 @@ export function SettingsBody({ category }: { category: string }) {
                     <Row
                       title={provider.display_name}
                       detail={
-                        provider.available
+                        provider.unavailable_reason ?? (provider.available
                           ? "Model, executable, and environment"
-                          : (provider.unavailable_reason ?? "Not installed")
+                          : "Not installed")
                       }
                       onPress={() =>
                         setSection(

@@ -69,7 +69,7 @@ async function run() {
       <div key={variant} className="flex h-screen items-start gap-8 bg-background p-8 text-foreground">
         <div className="flex w-80 flex-col gap-3"><h2>Notes</h2><ThreadNotes threadId="fixture" /></div>
         <div className="flex min-w-0 flex-1 flex-col gap-4 pt-6">
-          <Composer running provider={{ kind: "codex", instance: "default" }} providers={[]} mode="supervised" onModeChange={() => {}}
+          <Composer running provider={{ kind: variant === "dark" ? "pi" : "codex", instance: "default" }} providers={[]} mode="supervised" onModeChange={() => {}}
             onSend={message => { sent.push({ mode: "queue", message }) }}
             onSteer={message => { if (failSteer) throw new Error("Try steering again."); sent.push({ mode: "steer", message }) }} />
           <QueuedPanel threadId="fixture" />
@@ -178,7 +178,33 @@ async function run() {
   check(rows.every(row => Number(getComputedStyle(row).opacity) === 1 && getComputedStyle(row).filter === "none"), "Queued rows finish entering")
   await openCustomModel()
   await sleep(250)
-  report({ pass: true, themes: ["light", "dark"], notesConflict: true, failedSaveRetention: true, queueEditAttachments: true, steeringAndQueue: true, keyboardDelivery: true, customModels: true, emptyModelCatalog: true })
+  button("Cancel").click()
+  await waitFor(() => !document.querySelector('[role="dialog"]'), "Custom dialog closes before Pi checks")
+  const pi: ProviderStatus = { ...claude, kind: "pi", display_name: "Pi", supports_effort_switch: true, supported_efforts: ["off", "low", "high", "xhigh"], models: [
+    { id: "custom/plain", display_name: "Plain model", efforts: [] },
+    { id: "custom/reasoner", display_name: "Reasoner", efforts: ["low", "high"], default_effort: "high" },
+  ] }
+  for (const model of pi.models!) {
+    flushSync(() => root.render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
+      <div className="h-screen bg-background p-8 text-foreground"><Composer key={model.id} provider={{ kind: "pi", instance: "default" }} providers={[pi]} model={model.id}
+        mode="supervised" onModeChange={() => {}} onSend={() => {}} onModelChange={(model, effort) => { modelChanges.push({ model, effort }) }} /></div>
+    </ThemeProviderContext>))
+    document.querySelector<HTMLButtonElement>('[aria-label="Change model and reasoning"]')!.click()
+    await waitFor(() => !!document.querySelector('[role="menu"]'), "Pi model controls open")
+    const menu = document.querySelector<HTMLElement>('[role="menu"]')!
+    check(menu.textContent!.includes("Effort") === !!model.efforts?.length, "Pi only exposes thinking controls for reasoning models")
+    if (model.efforts?.length) {
+      check(!menu.textContent!.includes("Xhigh"), "Pi does not inherit unsupported global thinking levels")
+      const low = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(el => el.textContent?.trim().toLowerCase() === "low")!
+      check(low, "Pi's supported low effort is available")
+      low.click()
+      await waitFor(() => modelChanges.at(-1)?.model === model.id && modelChanges.at(-1)?.effort === "low", "Pi thinking change reaches the model handler")
+    } else {
+      menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+    }
+    await sleep(250)
+  }
+  report({ pass: true, themes: ["light", "dark"], notesConflict: true, failedSaveRetention: true, queueEditAttachments: true, steeringAndQueue: ["codex", "pi"], keyboardDelivery: true, customModels: true, emptyModelCatalog: true, piThinkingCapabilities: true })
 }
 function report(value: unknown) {
   (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(value))

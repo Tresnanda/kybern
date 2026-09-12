@@ -610,7 +610,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const current = models.find((m) => (model ? m.id === model : m.is_default))
   const modelLabel = current?.display_name ?? (model || null)
   const modelOptions = modelChoices(models, model).models.filter((m) => m.id)
-  const efforts = current?.efforts?.length ? current.efforts : (status?.supported_efforts ?? [])
+  const efforts = current?.efforts ?? status?.supported_efforts ?? []
   const effortLabel = effort ?? current?.default_effort ?? null
   const canPickModel = !!onModelChange
   const customId = customModelId(customModel ?? "")

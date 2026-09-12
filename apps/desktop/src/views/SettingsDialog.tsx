@@ -459,7 +459,7 @@ function AgentSettings() {
         const result = updates.find((item) => item.kind === provider.kind)
         const busy = result?.status === "waiting" || result?.status === "updating"
         const custom = !!settings?.providers[provider.kind]?.binary
-        return <Row key={provider.kind} title={provider.display_name} description={provider.available ? <span title={provider.binary_path ?? undefined} className="block truncate">{provider.binary_path}</span> : provider.unavailable_reason ?? "Not found on PATH"}>
+        return <Row key={provider.kind} title={provider.display_name} description={provider.unavailable_reason ?? (provider.available ? <span title={provider.binary_path ?? undefined} className="block truncate">{provider.binary_path}</span> : "Not found on PATH")}>
           <div className="flex min-w-0 flex-col items-end gap-2">
             <div className="flex items-center gap-3">
               <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{provider.version ?? (provider.available ? "Installed" : "Not installed")}</span>

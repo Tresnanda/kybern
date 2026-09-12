@@ -92,7 +92,9 @@ impl AppState {
         let settings = SettingsStore::load(&paths.settings)?;
         let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;
         let daemon_updates = crate::self_update::DaemonUpdates::new(&store)?;
-        let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone());
+        let terminals = TerminalManager::default();
+        let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone())
+            .with_terminal_manager(terminals.clone());
         Ok(Self {
             inner: Arc::new(Inner {
                 paths: paths.clone(),
@@ -100,7 +102,7 @@ impl AppState {
                 drivers,
                 events,
                 orchestrator,
-                terminals: TerminalManager::default(),
+                terminals,
                 settings,
                 provider_catalogs: ProviderCatalogCache::default(),
                 thread_projections: crate::thread_projection::ThreadProjectionCache::default(),

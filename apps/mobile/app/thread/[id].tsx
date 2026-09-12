@@ -546,7 +546,7 @@ export default function ThreadScreen() {
           >
             <Composer
               thread={thread}
-              onSteer={thread?.provider.kind === "codex" ? steer : undefined}
+              onSteer={thread && ["codex", "pi"].includes(thread.provider.kind) ? steer : undefined}
               disabled={
                 app.status !== "open" ||
                 !snapshot.loaded ||
