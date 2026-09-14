@@ -1,6 +1,10 @@
 // Scroll frames through the actual transcript, both settled and receiving work.
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
+import { ThreadView } from "../src/views/Thread"
+import { SidebarProvider } from "../src/components/kit/sidebar"
+import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
+import type { Thread } from "../src/protocol"
 import { Transcript } from "../src/views/Transcript"
 import { useStore } from "../src/state/store"
 import { emptyThreadState, type Block } from "../src/state/transcript"
@@ -28,12 +32,24 @@ const failures: string[] = []
 declare const __SCROLL_SCENARIO__: string
 declare const __SCROLL_FRAMES__: number
 declare const __SCROLL_MEMORY__: boolean
+declare const __SCROLL_COMPOSER__: boolean
+declare const __SCROLL_COMPOSER_GLASS__: boolean
 window.addEventListener("error", e => failures.push(e.message))
 function publish(blocks: Block[]) { useStore.getState().set({ transcripts: { fixture: { ...emptyThreadState(), loaded: true, blocks } } }) }
 async function run() {
   document.documentElement.classList.add("dark")
   publish(histories)
-  flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex h-screen flex-col"><Transcript threadId="fixture" bottomInset={0} /></div></ThemeProviderContext>))
+  if (__SCROLL_COMPOSER__) {
+    const root = document.documentElement
+    root.dataset.windowMaterial = "opaque"
+    const built = buildThemeCssVariables({ codeThemeId: DEFAULT_THEME_STATE.codeThemeIds.dark, theme: { ...DEFAULT_THEME_STATE.chromeThemes.dark, opaqueWindows: true } }, "dark", { electron: true, isMac: true, systemUiFont: true })
+    for (const [key, value] of Object.entries(built.variables)) root.style.setProperty(key, value)
+    // Controlled reproduction of #11, available only in this synthetic build.
+    if (__SCROLL_COMPOSER_GLASS__) root.style.setProperty("--composer-glass-filter", "blur(40px) saturate(150%)", "important")
+    const thread: Thread = { id: "fixture", project_id: "project", title: "Rendered memory", provider: { kind: "omp", instance: "default" }, model: null, effort: null, permission_mode: "full-access", status: "running", cwd: "/project", worktree: null, provider_session_id: null, pinned: false, created_at: at, updated_at: at, last_seq: 0 }
+    useStore.getState().set({ threads: { fixture: thread }, projects: { project: { id: "project", name: "Fixture", path: "/project", is_git: false, created_at: at, updated_at: at } }, selected: { kind: "thread", id: "fixture" }, splitView: null, providers: [], queued: { fixture: [{ id: "queue", thread_id: "fixture", queued_at: at, message: { parts: [{ type: "text", text: "Verify this change" }] } }] } })
+  }
+  flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex h-screen flex-col">{__SCROLL_COMPOSER__ ? <SidebarProvider><ThreadView threadId="fixture" showSidebarControls={false} /></SidebarProvider> : <Transcript threadId="fixture" bottomInset={0} />}</div></ThemeProviderContext>))
   const samples = []
   for (const scenario of ["history-cold", "history-warm", "history-fast", "mixed-work", "mixed-work-streaming", "expanded-thinking", "expanded-tools", "long-code"] as const) {
     if (__SCROLL_SCENARIO__ && scenario !== __SCROLL_SCENARIO__) continue

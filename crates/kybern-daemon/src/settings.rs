@@ -31,6 +31,11 @@ impl SettingsStore {
     }
 
     pub fn set(&self, settings: Settings) -> Result<Settings> {
+        if let Some(omp) = settings.providers.get(&kybern_protocol::ProviderKind::Omp) {
+            for profile in omp.env.get("OMP_PROFILE").into_iter().chain(omp.project_profiles.values()) {
+                kybern_drivers::omp_profile::normalize(profile)?;
+            }
+        }
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();
         Ok(settings)
@@ -42,4 +47,41 @@ fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
     std::fs::write(&tmp, serde_json::to_string_pretty(settings)?)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// Profile overrides use the registered project, never a temporary worktree cwd.
+/// Supply the effective OMP environment to discovery, imports and process spawn.
+pub fn provider_settings(
+    settings: &Settings,
+    kind: kybern_protocol::ProviderKind,
+    project_path: Option<&str>,
+) -> kybern_protocol::ProviderSettings {
+    let mut provider = settings.providers.get(&kind).cloned().unwrap_or_default();
+    if kind == kybern_protocol::ProviderKind::Omp
+        && let Some(profile) = project_path.and_then(|path| provider.project_profiles.get(path))
+    {
+        provider.env.insert("OMP_PROFILE".into(), profile.trim().into());
+    }
+    provider
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use kybern_protocol::ProviderKind;
+
+    #[test]
+    fn project_profile_overrides_global_env_including_explicit_default() {
+        let mut settings = Settings::default();
+        let omp = settings.providers.entry(ProviderKind::Omp).or_default();
+        omp.env.insert("OMP_PROFILE".into(), "global".into());
+        omp.env.insert("PI_PROFILE".into(), "legacy".into());
+        omp.project_profiles.insert("/projects/work".into(), "work".into());
+        omp.project_profiles.insert("/projects/default".into(), "".into());
+        assert_eq!(provider_settings(&settings, ProviderKind::Omp, Some("/projects/work")).env["OMP_PROFILE"], "work");
+        assert_eq!(provider_settings(&settings, ProviderKind::Omp, Some("/projects/default")).env["OMP_PROFILE"], "");
+        assert_eq!(provider_settings(&settings, ProviderKind::Omp, Some("/projects/else")).env["OMP_PROFILE"], "global");
+        assert_eq!(provider_settings(&settings, ProviderKind::Omp, None).env["OMP_PROFILE"], "global");
+        assert!(provider_settings(&settings, ProviderKind::Pi, Some("/projects/work")).env.is_empty());
+    }
 }

@@ -11,8 +11,21 @@ import { chatLink } from "../../../../packages/kybern-client/src/chatLinks.ts"
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true })
 type MarkdownTree = ReturnType<typeof processor.parse>
 export type MarkdownTreeNode = ReturnType<typeof processor.runSync>["children"][number]
-export interface MarkdownBlock { key: string; signature: string; node: MarkdownTreeNode }
+export interface MarkdownBlock { key: string; node: MarkdownTreeNode }
 export interface ParsedMarkdown { source: string; blocks: MarkdownBlock[] }
+
+/** Exact comparison of the parser's JSON-shaped trees, including positions and
+ * link properties. Avoid retaining a serialized copy of every tree in both the
+ * worker and the renderer. No hashes/collisions can hide a content change. */
+export function sameMarkdownNode(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((value, index) => sameMarkdownNode(value, b[index]))
+  if (Array.isArray(b)) return false
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && sameMarkdownNode(left[key], right[key]))
+}
 
 function sanitize(node: MarkdownTreeNode): MarkdownTreeNode {
   if (node.type === "raw") return { type: "text", value: node.value, position: node.position }
@@ -70,9 +83,8 @@ export function createMarkdownParser() {
       const blocks = nodes.map((node) => {
         const key = node.position ? `${node.position.start.offset}:${node.type === "element" ? node.tagName : node.type}` : `${previousKey}:gap`
         previousKey = key
-        const signature = JSON.stringify(node)
         const existing = old.get(key)
-        return existing?.signature === signature ? existing : { key, signature, node }
+        return existing && sameMarkdownNode(existing.node, node) ? existing : { key, node }
       })
       previous = { source, blocks: [...prefix, ...blocks] }
       return previous

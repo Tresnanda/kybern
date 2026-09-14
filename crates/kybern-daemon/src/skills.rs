@@ -147,7 +147,13 @@ fn roots(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>, hom
                 add(home.join(".agents/skills"), SkillScope::User, MAX_DEPTH);
                 add(home.join(".pi/agent/skills"), SkillScope::User, MAX_DEPTH);
             }
-            if let Some(agent_dir) = pi_agent_dir(cwd, env, home, ".omp/agent") {
+            let profile = kybern_drivers::omp_profile::resolve(env).ok();
+            let agent_dir = match profile.as_deref() {
+                Some(profile) if !profile.is_empty() => home.map(|home| home.join(".omp/profiles").join(profile).join("agent")),
+                Some(_) => pi_agent_dir(cwd, env, home, ".omp/agent"),
+                None => None,
+            };
+            if let Some(agent_dir) = agent_dir {
                 add(agent_dir.join("skills"), SkillScope::User, MAX_DEPTH);
             }
         }
@@ -404,5 +410,15 @@ mod tests {
         assert!(paths.contains(&cwd.join(".pi/../.agents/skills")));
         assert!(paths.contains(&home.join(".claude/skills")));
         assert!(!paths.contains(&home.join(".agents/skills")), "Pi should not advertise unconfigured cross-provider roots");
+    }
+    #[test]
+    fn omp_named_profile_skills_do_not_fall_back_to_the_default_profile() {
+        let cwd = PathBuf::from("/workspace");
+        let home = PathBuf::from("/home/test");
+        let env = [("OMP_PROFILE".into(), "work".into()), ("PI_CODING_AGENT_DIR".into(), "/other/agent".into())].into();
+        let paths: Vec<_> = roots(&cwd, ProviderKind::Omp, &env, Some(&home)).into_iter().map(|root| root.path).collect();
+        assert!(paths.contains(&home.join(".omp/profiles/work/agent/skills")));
+        assert!(!paths.contains(&home.join(".omp/agent/skills")));
+        assert!(!paths.contains(&PathBuf::from("/other/agent/skills")));
     }
 }

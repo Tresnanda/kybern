@@ -27,6 +27,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         <main class="chat-content-card">Transcript</main>
         <section class="app-settings-surface">Settings</section>
         <article class="chat-composer-surface">Composer</article>
+        <article class="chat-composer-stacked-top">Stacked panel</article>
         <div data-probe style="background:var(--app-user-message-background)">Message bubble</div>
         <div data-probe style="background:var(--card)">Card</div>
         <div data-probe style="background:var(--app-chat-code-surface)">Code block</div>
@@ -67,6 +68,15 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             context.fillRect(0, 0, 1, 1);
             return context.getImageData(0, 0, 1, 1).data[3] / 255;
           }
+          function verifyComposer(name, glass) {
+            for (const el of elements.filter(el => el.matches('article'))) {
+              if (!glass && alpha(el) < 0.99) throw new Error(name + ': ' + el.textContent + ' must be opaque, alpha ' + alpha(el));
+              const blur = filter(el, '::before');
+              if ((blur !== 'none' && blur !== '') !== glass) throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur);
+              if (filter(el) !== 'none') throw new Error(name + ': duplicate composer blur');
+            }
+            results.push('PASS: ' + name + ' composer and stacked panels');
+          }
           function verify(name, glass) {
             const active = getComputedStyle(root).getPropertyValue('--app-full-translucency').trim() === '1';
             if (active !== glass) throw new Error(name + ': incorrect glass flag');
@@ -85,6 +95,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
               }
               if (getComputedStyle(el).opacity !== '1') throw new Error(name + ': text opacity must remain unchanged');
             }
+            verifyComposer(name, glass);
             results.push('PASS: ' + name);
           }
           for (const [theme, variables] of Object.entries(themes)) {
@@ -101,7 +112,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             results.push('PASS: ' + theme + ' disabled restores original surfaces');
             root.setAttribute('data-full-translucency', '');
             root.setAttribute('data-window-material', 'opaque');
-            if (JSON.stringify(elements.map(background)) !== JSON.stringify(original)) throw new Error(theme + ': opaque material must keep original surfaces');
+            verifyComposer(theme + ' opaque material', false);
             results.push('PASS: ' + theme + ' opaque material');
           }
           root.setAttribute('data-window-material', 'translucent');

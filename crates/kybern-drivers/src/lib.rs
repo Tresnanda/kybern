@@ -13,6 +13,7 @@ pub mod codex;
 pub mod codex_integrations;
 pub mod cursor;
 mod ndjson;
+pub mod omp_profile;
 pub mod opencode;
 pub mod pi;
 pub mod process_tree;

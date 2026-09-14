@@ -454,6 +454,7 @@ function AgentSettings() {
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
       <DaemonUpdateRows autoUpdate={settings?.auto_update_daemon ?? false} onAutoUpdate={(checked) => void update({ auto_update_daemon: checked })} />
     </Section>
+    {settings && <OmpProfiles settings={settings} update={update} />}
     <Section title="Installed agents">
       {providers.map((provider) => {
         const result = updates.find((item) => item.kind === provider.kind)
@@ -472,6 +473,53 @@ function AgentSettings() {
       {loadError && <Row title="Unable to load update status" description={loadError} />}
     </Section>
   </>
+}
+
+
+export function OmpProfiles({ settings, update }: { settings: Settings; update: (patch: Partial<Settings>) => Promise<void> }) {
+  const projects = useStore((s) => s.projects)
+  const [selected, select] = useState("")
+  const paths = Object.values(projects)
+  const path = paths.find((p) => p.path === selected)?.path ?? paths[0]?.path
+  const provider: NonNullable<Settings["providers"]["omp"]> = settings.providers.omp ?? { env: {} }
+  const defaultProfile = provider.env?.OMP_PROFILE === "" ? "default" : provider.env?.OMP_PROFILE ?? ""
+  const projectProfile = path && provider.project_profiles?.[path] === "" ? "default" : provider.project_profiles?.[path ?? ""] ?? ""
+  const save = (value: string, project?: string) => {
+    const next = { ...provider }
+    if (project) {
+      next.project_profiles = { ...provider.project_profiles }
+      if (value) next.project_profiles[project] = value
+      else delete next.project_profiles[project]
+    } else {
+      next.env = { ...provider.env }
+      if (value) next.env.OMP_PROFILE = value
+      else delete next.env.OMP_PROFILE
+    }
+    return update({ providers: { ...settings.providers, omp: next } })
+  }
+  return <Section title="OMP profiles">
+    <Row title="Default profile" description="Leave blank to inherit OMP's environment. Enter default to use its unnamed profile. Existing chats keep the profile they started with.">
+      <ProfileInput key={`global:${defaultProfile}`} value={defaultProfile} label="Default OMP profile" onSave={(value) => save(value)} />
+    </Row>
+    {path && <>
+      <Row title="Project" description="Worktree chats use the same profile as their project.">
+        <SettingsPicker value={path} onChange={select} options={paths.map((p) => ({ value: p.path, label: p.name }))} />
+      </Row>
+      <Row title="Project profile" description="Leave blank to inherit the default above. Enter a named OMP profile to isolate its rules, memory and connections.">
+        <ProfileInput key={`${path}:${projectProfile}`} value={projectProfile} label="Project OMP profile" onSave={(value) => save(value, path)} />
+      </Row>
+    </>}
+  </Section>
+}
+
+function ProfileInput({ value, label, onSave }: { value: string; label: string; onSave: (value: string) => Promise<void> }) {
+  const [draft, setDraft] = useState(value)
+  return <InputGroup className={cn("w-44", SETTINGS_CONTROL_RADIUS_CLASS_NAME)}>
+    <InputGroupInput aria-label={label} placeholder="Inherit" value={draft} maxLength={64}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => { if (draft.trim() !== value) void onSave(draft.trim()) }}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.preventDefault(); setDraft(value) } }} />
+  </InputGroup>
 }
 
 const DAEMON_UPDATE_LABEL: Record<DaemonUpdate["status"], string> = {

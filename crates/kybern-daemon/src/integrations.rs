@@ -5,7 +5,7 @@ use kybern_protocol::{methods::*, *};
 
 fn context(state: &AppState, project_id: ProjectId, provider: ProviderKind) -> Result<ProbeContext> {
     let project = state.store.project_get(project_id)?.ok_or_else(|| anyhow!("Project not found. Select another project."))?;
-    let settings = state.settings.get().providers.get(&provider).cloned().unwrap_or_default();
+    let settings = crate::settings::provider_settings(&state.settings.get(), provider, Some(&project.path));
     Ok(ProbeContext { binary: settings.binary.map(Into::into), cwd: Some(project.path.into()), env: settings.env })
 }
 

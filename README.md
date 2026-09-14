@@ -382,6 +382,48 @@ historical usage to Kybern. History imports are limited to 64 MB. If a harness
 refuses continuation because another process owns the session, close that
 process and retry. Saved sessions remain native to their original harness.
 
+### OMP profiles
+
+Open **Settings → Agents → OMP profiles** to select a default or a project
+profile. Leave a field blank to inherit; enter `default` to explicitly use the
+unnamed OMP profile. Worktrees inherit the registered project's profile.
+Profiles apply when a chat first starts; resumed chats retain their original
+profile even after defaults change or the daemon releases an idle process.
+Older chats acquire that binding on their first start with this version.
+
+The daemon's `settings.json` also supports:
+
+```json
+{
+  "providers": {
+    "omp": {
+      "env": { "OMP_PROFILE": "personal" },
+      "project_profiles": { "/absolute/registered/project": "work" }
+    }
+  }
+}
+```
+
+`OMP_PROFILE` is resolved from the project override, provider environment, then
+the daemon environment. `PI_PROFILE` is used only when `OMP_PROFILE` is absent.
+Profile names follow OMP's
+lowercase name rules. Discovery, model lists, skills and saved-session imports
+use the selected project/profile. To resume from the CLI, use the same context:
+
+```sh
+kybern sessions --provider omp --project /absolute/registered/project
+kybern resume --provider omp --project /absolute/registered/project <session-id>
+```
+
+### Mermaid diagrams
+
+Desktop renders fenced `mermaid` blocks as diagrams. **Source** switches to the
+original definition; **Copy code** copies that definition. Incomplete streaming
+blocks remain source until settled, and invalid or oversized diagrams retain a
+readable source fallback. Diagram rendering is lazy, uses strict Mermaid
+security, and releases its rendering document after idle. Finished images stay
+visible; switching chats releases their image URLs.
+
 ### Connectors, plugins, and Claude artifacts
 
 Open **Settings → Integrations** on desktop, or **Connectors and plugins** in a
