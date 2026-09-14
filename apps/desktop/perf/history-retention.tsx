@@ -37,7 +37,8 @@ async function run() {
   check(state().nextBeforeSeq === 2401, "Evicted history has an exact reload cursor")
   check(state().blocks.at(-2) === fixture.all.at(-2), "Latest answer retains its object identity")
   check(document.body.innerText.includes("Answer 999"), "Latest formatted answer stays visible")
-  check(scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 60, "Cleanup preserves following position")
+  // The store changes before React commits and WebKit finishes end anchoring.
+  await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 60, "Cleanup preserves following position")
   scroll().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
   scroll().scrollTop = 1000
   await sleep(60)
