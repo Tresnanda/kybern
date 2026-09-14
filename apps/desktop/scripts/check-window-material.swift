@@ -24,7 +24,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         window.orderFront(nil)
         web.navigationDelegate = self
         web.loadHTMLString("""
-        <html data-runtime="electron" data-platform="macos"><head><style>
+        <!doctype html><html data-runtime="electron" data-platform="macos"><head><style>
         .chat-content-card { background: var(--color-background-surface); }
         .app-settings-surface { background: var(--app-settings-surface, var(--color-background-surface)); }
         aside { background: var(--popover); }
@@ -82,13 +82,27 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             context.fillRect(0, 0, 1, 1);
             return context.getImageData(0, 0, 1, 1).data[3] / 255;
           }
+          function composerDiagnostic() {
+            const sheet = document.createElement('style');
+            sheet.textContent = '.material-literal::before, .material-variable::before { content: ""; position: absolute; inset: 0; } .material-literal::before { backdrop-filter: blur(16px); } .material-variable::before { backdrop-filter: var(--composer-glass-filter); }';
+            document.head.append(sheet);
+            const probes = ['material-literal', 'material-variable'].map(className => {
+              const el = document.createElement('div');
+              el.className = className;
+              el.style.cssText = 'position:relative;width:100px;height:20px;backdrop-filter:var(--composer-glass-filter)';
+              document.body.append(el);
+              el.getBoundingClientRect();
+              return { className, element: filter(el), pseudo: filter(el, '::before') };
+            });
+            return JSON.stringify({ mode: document.compatMode, probes });
+          }
           function verifyComposer(name, glass) {
             for (const el of elements.filter(el => el.matches('article'))) {
               if (!glass && alpha(el) < 0.99) throw new Error(name + ': ' + el.textContent + ' must be opaque, alpha ' + alpha(el));
               const blur = filter(el, '::before');
               if ((blur !== 'none' && blur !== '') !== glass) {
                 const pseudo = getComputedStyle(el, '::before');
-                throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur + ' (prefixed: ' + pseudo.getPropertyValue('-webkit-backdrop-filter') + ', content: ' + pseudo.content + ', token: ' + pseudo.getPropertyValue('--composer-glass-filter') + ')');
+                throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur + ' (prefixed: ' + pseudo.getPropertyValue('-webkit-backdrop-filter') + ', content: ' + pseudo.content + ', token: ' + pseudo.getPropertyValue('--composer-glass-filter') + ') ' + composerDiagnostic());
               }
               if (filter(el) !== 'none') throw new Error(name + ': duplicate composer blur');
             }
