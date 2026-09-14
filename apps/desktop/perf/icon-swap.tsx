@@ -105,14 +105,28 @@ async function run() {
   check(children().length === 1 && spinner && !icon("brain", thoughtSwap()), "Live Thinking did not mount only its Spinner")
   check(near(spinnerRect.width, 14) && near(spinnerRect.height, 14), "Thinking Spinner is not 14px")
   check(getComputedStyle(spinnerSvg).animationName !== "none" && spinnerSvg.getAnimations().some((animation) => animation.playState === "running"), "Visible Thinking Spinner is not running")
+  const restingSpinner = children()[0]!
+  const restingStyle = getComputedStyle(restingSpinner)
+  check(Number(restingStyle.opacity) === 1 && restingStyle.transitionDuration !== "0s", "Live Thinking did not commit its resting icon style before the swap")
 
   setThought(true)
-  await frame()
-  await sleep(40)
   const midChildren = children()
-  const midOpacities = midChildren.map((child) => Number(getComputedStyle(child).opacity))
   check(midChildren.length === 2 && icon("spinner", thoughtSwap()) && icon("brain", thoughtSwap()), "Thought cross-blur did not retain both glyphs during the transition")
-  check(midChildren.flatMap((child) => child.getAnimations()).length > 0 || midOpacities.some((opacity) => opacity > 0.01 && opacity < 0.99), "Thought cross-blur had no intermediate transition")
+  const childTransitions = midChildren.map((child) => {
+    void getComputedStyle(child).opacity
+    return child.getAnimations().filter((animation): animation is CSSTransition => animation instanceof CSSTransition)
+  })
+  check(childTransitions.every((items) => items.some((transition) => transition.transitionProperty === "opacity")), "Thought cross-blur did not start both real CSS transitions")
+  const transitions = childTransitions.flat()
+  for (const transition of transitions) {
+    transition.pause()
+    const duration = transition.effect?.getComputedTiming().duration
+    check(typeof duration === "number" && duration > 0, "Thought cross-blur transition had no duration")
+    transition.currentTime = duration / 2
+  }
+  const midOpacities = midChildren.map((child) => Number(getComputedStyle(child).opacity))
+  check(midOpacities.every((opacity) => opacity > 0.01 && opacity < 0.99), "Thought cross-blur had no intermediate transition")
+  for (const transition of transitions) transition.play()
   await sleep(270)
   const settledSlot = slot.getBoundingClientRect()
   const brainRect = icon("brain", thoughtSwap())!.querySelector("svg")!.getBoundingClientRect()
