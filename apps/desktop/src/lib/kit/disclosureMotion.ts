@@ -24,7 +24,9 @@ export const DISCLOSURE_INNER_CLASS = "min-h-0 overflow-hidden";
 export const DISCLOSURE_CONTENT_MOTION_CLASS =
   "transition-[opacity,transform] duration-220 ease-out motion-reduce:transition-none";
 
-export const DISCLOSURE_CONTENT_OPEN_CLASS = "translate-y-0 opacity-100";
+// `translate-y-0` leaves a transform on settled, potentially large transcript
+// disclosures. Transition to `none` so WebKit can release that graphics layer.
+export const DISCLOSURE_CONTENT_OPEN_CLASS = "translate-none opacity-100";
 export const DISCLOSURE_CONTENT_CLOSED_CLASS = "-translate-y-1 opacity-0 pointer-events-none";
 
 /** Chevron rotation paired with the shell motion. */
