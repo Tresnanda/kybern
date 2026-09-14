@@ -3067,8 +3067,16 @@ impl Orchestrator {
         let _gate = self.inner.harness_gates.get(&params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?.read().await;
         let driver = self.inner.drivers.get(params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?;
         let settings = self.inner.settings.get();
-        let provider = settings.providers.get(&params.provider).cloned().unwrap_or_default();
-        let context = kybern_drivers::ProbeContext { binary: provider.binary.map(PathBuf::from), cwd: None, env: provider.env };
+        let source_project =
+            params.project_id.map(|id| self.inner.store.project_get(id)?.ok_or_else(|| anyhow!("Project not found"))).transpose()?;
+        let provider = crate::settings::provider_settings(&settings, params.provider, source_project.as_ref().map(|p| p.path.as_str()));
+        let context = kybern_drivers::ProbeContext {
+            binary: provider.binary.map(PathBuf::from),
+            cwd: source_project.as_ref().map(|p| PathBuf::from(&p.path)),
+            env: provider.env,
+        };
+        let imported_profile =
+            if params.provider == ProviderKind::Omp { Some(kybern_drivers::omp_profile::resolve(&context.env)?) } else { None };
         let history = driver.read_session(&context, &params.session_id).await?;
         let session = history.session;
         if session.provider != params.provider || session.id != params.session_id {
@@ -3105,6 +3113,9 @@ impl Orchestrator {
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
+        if let Some(profile) = imported_profile {
+            self.inner.store.meta_set(&format!("omp_profile:{}", thread.id), &profile)?;
+        }
         for event in events {
             let _ = self.inner.events.send(event);
         }
@@ -4223,7 +4234,21 @@ impl Orchestrator {
             .drivers
             .get(thread.provider.kind)
             .ok_or_else(|| anyhow!("provider {} is not available in this build", thread.provider.kind))?;
-        let provider_settings = self.inner.settings.get().providers.get(&thread.provider.kind).cloned().unwrap_or_default();
+        let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found"))?;
+        let mut provider_settings =
+            crate::settings::provider_settings(&self.inner.settings.get(), thread.provider.kind, Some(&project.path));
+        let mut profile_binding = None;
+        if thread.provider.kind == ProviderKind::Omp {
+            // A resumed chat must keep the profile that owns its native session,
+            // even after project defaults change or the daemon releases it at idle.
+            let key = format!("omp_profile:{}", thread.id);
+            let profile = match self.inner.store.meta_get(&key)? {
+                Some(profile) => profile,
+                None => kybern_drivers::omp_profile::resolve(&provider_settings.env)?,
+            };
+            provider_settings.env.insert("OMP_PROFILE".into(), profile.clone());
+            profile_binding = Some((key, profile));
+        }
         let session_instance_id = Uuid::now_v7();
         let restrictions = self.native_tool_restrictions(thread)?;
         let coordinator_instructions = self.coordinator_instructions(thread)?;
@@ -4262,6 +4287,16 @@ impl Orchestrator {
                 return Err(error.into());
             }
         };
+        // A failed executable launch must not pin a profile before a session exists.
+        if let Some((key, profile)) = profile_binding {
+            if let Err(error) = self.inner.store.meta_set(&key, &profile) {
+                if let Some(gateway) = &self.inner.native_tools {
+                    gateway.revoke(session_instance_id);
+                }
+                let _ = session.close().await;
+                return Err(error.into());
+            }
+        }
         let live = Arc::new(LiveSession {
             session_instance_id,
             session,
@@ -5888,6 +5923,10 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_drivers(DriverRegistry::default())
+        }
+
+        fn with_drivers(drivers: DriverRegistry) -> Self {
             let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
             let paths = Paths::resolve(Some(root.clone())).unwrap();
             let settings = SettingsStore::load(&paths.settings).unwrap();
@@ -5904,7 +5943,7 @@ mod tests {
             };
             store.project_insert(&project).unwrap();
             let (events_tx, _) = crate::bounded_broadcast::channel(64, 8 * 1024 * 1024);
-            let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
+            let orchestrator = Orchestrator::new(store.clone(), drivers, events_tx, paths, settings);
             Self { root, store, orchestrator, project }
         }
 
@@ -7344,5 +7383,76 @@ mod tests {
             .enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: running.id, message: UserMessage::text("next") })
             .unwrap();
         assert!(fixture.orchestrator.drain_queues().await.unwrap(), "a busy thread's follow-up dispatches soon");
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn omp_processes_inherit_project_profiles_and_resume_with_the_original_profile() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::with_drivers(DriverRegistry::with_defaults());
+        let binary = fixture.root.join("fake-omp");
+        let capture = fixture.root.join("launches.jsonl");
+        std::fs::write(
+            &binary,
+            r#"#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ['PROFILE_CAPTURE'], 'a') as f:
+    f.write(json.dumps({'profile': os.environ.get('OMP_PROFILE'), 'cwd': os.getcwd(), 'args': sys.argv[1:]}) + '\n')
+print(json.dumps({'type': 'ready'}), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    data = {'sessionId': 'provider-session', 'isStreaming': False} if request['type'] == 'get_state' else {}
+    print(json.dumps({'id': request.get('id'), 'type': 'response', 'command': request['type'], 'success': True, 'data': data}), flush=True)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let settings_store = &fixture.orchestrator.inner.settings;
+        let mut settings = settings_store.get();
+        let provider = settings.providers.entry(ProviderKind::Omp).or_default();
+        provider.binary = Some(binary.display().to_string());
+        provider.env.insert("PROFILE_CAPTURE".into(), capture.display().to_string());
+        provider.env.insert("OMP_PROFILE".into(), "global".into());
+        provider.project_profiles.insert(fixture.project.path.clone(), "work".into());
+        settings_store.set(settings).unwrap();
+        let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Omp);
+        let worktree = fixture.root.join("worktree");
+        std::fs::create_dir(&worktree).unwrap();
+        thread.cwd = worktree.display().to_string();
+        thread.provider_session_id = None;
+        let mut expected = vec!["work", "work", "new-profile"];
+        for index in 0..3 {
+            if index == 1 {
+                thread.provider_session_id = Some("provider-session".into());
+                let mut settings = settings_store.get();
+                settings
+                    .providers
+                    .get_mut(&ProviderKind::Omp)
+                    .unwrap()
+                    .project_profiles
+                    .insert(fixture.project.path.clone(), "new-profile".into());
+                settings_store.set(settings).unwrap();
+            }
+            if index == 2 {
+                thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Omp);
+                thread.provider_session_id = None;
+            }
+            let live = fixture.orchestrator.spawn_session(&thread, None).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if std::fs::read_to_string(&capture).unwrap_or_default().lines().count() > index {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            live.session.close().await.unwrap();
+            let value: serde_json::Value =
+                serde_json::from_str(std::fs::read_to_string(&capture).unwrap().lines().last().unwrap()).unwrap();
+            assert_eq!(value["profile"], expected.remove(0));
+            assert_eq!(std::fs::canonicalize(value["cwd"].as_str().unwrap()).unwrap(), std::fs::canonicalize(&thread.cwd).unwrap());
+            assert_eq!(value["args"].as_array().unwrap().iter().any(|arg| arg == "--resume"), index == 1);
+        }
     }
 }

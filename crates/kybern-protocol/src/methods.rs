@@ -119,6 +119,9 @@ method!(SessionsList, "sessions.list", Some(Scope::OrchestrationRead), SessionsL
 pub struct SessionsResumeParams {
     pub provider: ProviderKind,
     pub session_id: String,
+    /// Use the same project/profile context as sessions.list.
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
 }
 method!(SessionsResume, "sessions.resume", Some(Scope::OrchestrationOperate), SessionsResumeParams, Thread);
 

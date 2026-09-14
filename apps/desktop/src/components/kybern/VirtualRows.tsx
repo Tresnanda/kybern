@@ -198,19 +198,28 @@ function VirtualizedRows<T>({
       {/* Mounted rows share normal flow. Absolute positions based on earlier
           measurements let expanding disclosures overlap their neighbours until the
           next measurement. Spacers represent only the unmounted ranges. */}
-      {rows.map((row, index) => (
-        <div
-          key={row.key}
-          ref={measureRow}
-          data-index={row.index}
-          data-virtual-owner={owner}
-          style={{ width: "100%", display: "flow-root", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
-        >
+      {rows.map((row, index) => {
+        const content = (
           <VirtualScrollContext value={{ viewport, origin: row.start }}>
             <TranscriptStateScope name={String(row.key)}>{children(items[row.index]!, row.index)}</TranscriptStateScope>
           </VirtualScrollContext>
-        </div>
-      ))}
+        )
+        return (
+          <div
+            key={row.key}
+            ref={measureRow}
+            data-index={row.index}
+            data-virtual-owner={owner}
+            style={{ width: "100%", display: "flow-root", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
+          >
+            {/* Bound WebKit's graphics allocations while traversing large history
+                gaps. Keep small lists and nested work in their existing paint
+                context. The 8px bleed preserves focus rings, negative icon margins
+                and entry motion without changing row measurements or gutters. */}
+            {providedViewport ? <div style={{ contain: items.length > 30 ? "paint" : undefined, margin: -8, padding: 8 }}>{content}</div> : content}
+          </div>
+        )
+      })}
       <div aria-hidden style={{ height: Math.max(0, virtualizer.getTotalSize() - ((rows.at(-1)?.end ?? margin) - margin)), overflowAnchor: "none" }} />
     </div>
   )

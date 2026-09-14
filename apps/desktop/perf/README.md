@@ -12,7 +12,10 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Running indicators | Animating dot background colors repainted continuously; invisible indicators kept running. | Opacity animation with matching painted colors; one shared visibility observer; pause hidden/offscreen/inactive loops without resetting phase. |
 | Streaming history | New turn groups and Markdown component types invalidated settled messages, code controls, and highlighted DOM. | Stable identities, memoized rows, stable component types, retained highlighted markup, and subscriptions scoped to the affected state. |
 | Closed and expanded work | Closed details stayed mounted; large histories and expanded tool groups created tens of thousands of DOM nodes. | Unmount closed content after exit; virtualize large history, work groups, and agent activity while retaining small lists in normal flow. |
-| Markdown and code | Full parsing and highlighting competed with input and scrolling on the renderer thread. | Separate module workers, incremental tail parsing, bounded queues/caches, cancellation, and source-size limits. Retain prior formatting during updates and readable text on failure. |
+| Rendered-history memory | Fast scrolling reached gigabyte-scale WebKit graphics allocations with a small mounted DOM. | Paint boundaries on large outer virtual rows, with room for gutter controls and focus rings; measure native footprint as well as DOM counts. |
+| Earlier-history paging | A retry at the top could reuse old scroll intent and download every remaining page. | Consume intent per request; require further reading input before another automatic page, while preserving the anchor. |
+| Markdown and code | Full parsing and highlighting competed with input and scrolling on the renderer thread; serialized equality signatures duplicated retained trees. | Separate module workers, incremental tail parsing, exact structural comparison, bounded queues/caches, cancellation, and source-size limits. Retain prior formatting during updates and readable text on failure. |
+| Diagrams | DOM-based diagram engines and image URLs can outlive visible content. | Load Mermaid only for settled diagrams, bound queued work/cache/output, release its rendering document at idle, and revoke replaced/unmounted image URLs. |
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
@@ -23,6 +26,17 @@ and motion cadence. Inspect the existing modules before tuning them; justify a
 change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
+
+See [profile and diagram UI polish](renderer-ui-polish-2026-09-14.md) for explicit
+profile controls, responsive grouping, diagram expansion, and motion/focus checks.
+
+See [renderer follow-ups](renderer-followups-2026-09-14.md) for Markdown data
+retention, the latest peer-source review, lazy diagram rendering, OMP profiles
+and the opaque composer correction.
+
+See [rendered-history memory](rendered-history-memory-2026-09-14.md) for the
+fast-scroll graphics spike, its native before/after comparison, and the remaining
+limits of the earlier store/worker memory tests.
 
 See [composer panel stacking](composer-stack-2026-09-12.md) for combined activity,
 queued prompts, questions, and approvals, including narrow and short panes.
@@ -90,6 +104,10 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Release announcement, release details, and sidebar update controls | `node scripts/check-rendering.mjs app-update` |
 | Context menus or popup materials | `node scripts/check-rendering.mjs materials` |
 | Large histories, worker scheduling, expanded work | `node scripts/check-rendering.mjs scaling` |
+| Rendered-history graphics allocations | `node scripts/check-rendering-memory.mjs` |
+| Parsed Markdown retention and worker release | `node scripts/check-rendering.mjs markdown-memory` |
+| Mermaid rendering, fallbacks and resource cleanup | `node scripts/check-rendering.mjs mermaid` |
+| Default/project OMP profile settings | `node scripts/check-rendering.mjs profiles` |
 | Virtualization, navigation, row state, scroll anchoring | `node scripts/check-rendering.mjs interaction` |
 | Scroll position corrections, cold history, scrolling during work | `node scripts/check-rendering.mjs scrolling` |
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |

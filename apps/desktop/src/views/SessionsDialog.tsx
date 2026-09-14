@@ -32,9 +32,9 @@ export function SessionsDialog() {
   const environmentId = useStore((s) => s.environmentId)
   const available = providers.filter((p) => p.available).map((p) => p.kind)
   const fetchPage = useCallback<FetchPage>((provider, project_id, query, cursor) => rpc().call("sessions.list", { provider, project_id, query, cursor }), [])
-  const resume = useCallback(async (session: SavedSession) => {
+  const resume = useCallback(async (session: SavedSession, project_id: ProjectId | null) => {
     const client = rpc()
-    const thread = await client.call("sessions.resume", { provider: session.provider, session_id: session.id })
+    const thread = await client.call("sessions.resume", { provider: session.provider, session_id: session.id, project_id })
     const { projects } = await client.call("projects.list", {})
     const state = useStore.getState()
     if (state.environmentId !== environmentId) return
@@ -61,7 +61,7 @@ export function SessionPicker({ project, available, projects = [], fetchPage, on
   available: ProviderKind[]
   projects?: Pick<Project, "name" | "path">[]
   fetchPage: FetchPage
-  onResume: (session: SavedSession) => Promise<void>
+  onResume: (session: SavedSession, projectId: ProjectId | null) => Promise<void>
 }) {
   const searchId = useId()
   const [query, setQuery] = useState("")
@@ -124,7 +124,7 @@ export function SessionPicker({ project, available, projects = [], fetchPage, on
     openingRef.current = true
     setOpening(sessionKey(session))
     setResumeError(null)
-    try { await onResume(session) }
+    try { await onResume(session, projectId) }
     catch (error) { if (alive.current) setResumeError(errorText(error)) }
     finally { openingRef.current = false; if (alive.current) setOpening(null) }
   }

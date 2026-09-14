@@ -770,9 +770,6 @@ export function buildThemeCssVariables(
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a
     // repaint. Keep it "none" off macOS.
-    // NOTE: this gates window-vibrancy frosting only. The composer's own glass
-    // (`.chat-composer-surface`, index.css) frosts page content, not the window
-    // material, so — like the floating menus — it stays on across platforms.
     "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,
@@ -802,9 +799,10 @@ export function buildThemeCssVariables(
       variant === "dark"
         ? DARK_COMPOSER_BACKING
         : "color-mix(in srgb, var(--color-background-elevated-secondary) 76%, var(--color-background-surface) 24%)",
-    "--composer-glass-surface": composerSurface,
-    "--composer-glass-opacity": variant === "dark" ? "100%" : "86%",
-    "--composer-glass-stacked-opacity": variant === "dark" ? "100%" : "43%",
+    "--composer-glass-surface": material === "opaque" ? "var(--popover)" : composerSurface,
+    "--composer-glass-opacity": material === "opaque" || variant === "dark" ? "100%" : "86%",
+    "--composer-glass-stacked-opacity": material === "opaque" || variant === "dark" ? "100%" : "43%",
+    "--composer-glass-filter": material === "opaque" ? "none" : "blur(40px) saturate(150%)",
     "--destructive": pack.theme.semanticColors.diffRemoved,
     "--destructive-foreground": pack.theme.surface,
     "--foreground": readCodexVariable("--color-text-foreground"),

@@ -1080,6 +1080,8 @@ export interface ProviderSettings {
   binary?: string | null;
   model?: string | null;
   env: Record<string, string>;
+  /** OMP profile overrides keyed by registered project path. */
+  project_profiles?: Record<string, string>;
 }
 
 /** Limits on what the daemon keeps alive after work finishes. Minutes; 0 turns a limit off. */
@@ -1345,7 +1347,7 @@ export interface Methods {
   "daemon.info": [Empty, DaemonInfo];
   "daemon.activity": [Empty, DaemonActivity];
   "sessions.list": [{ provider: ProviderKind; query?: string; project_id?: ProjectId | null; cursor?: string | null }, SessionsListResult];
-  "sessions.resume": [{ provider: ProviderKind; session_id: string }, Thread];
+  "sessions.resume": [{ provider: ProviderKind; session_id: string; project_id?: ProjectId | null }, Thread];
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];

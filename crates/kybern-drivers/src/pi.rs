@@ -271,6 +271,10 @@ impl AgentDriver for PiDriver {
         for (k, v) in &config.env {
             cmd.env(k, v);
         }
+        if self.flavor == Flavor::Omp {
+            let env = config.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+            cmd.env("OMP_PROFILE", crate::omp_profile::resolve(&env)?);
+        }
         if let Some(extension) = &extension {
             extension.configure(&mut cmd, config.native_tool_bridge.as_ref());
         }

@@ -850,6 +850,10 @@ pub struct ProviderSettings {
     /// Extra environment variables for the provider process.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub env: std::collections::BTreeMap<String, String>,
+    /// OMP profiles keyed by the registered project's absolute path. Worktrees
+    /// inherit their project's profile; an empty value selects OMP's default.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub project_profiles: std::collections::BTreeMap<String, String>,
 }
 
 /// User settings persisted at `<data_dir>/settings.json`.

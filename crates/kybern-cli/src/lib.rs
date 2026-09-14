@@ -109,6 +109,9 @@ enum Cmd {
     Resume {
         #[arg(long)]
         provider: ProviderKind,
+        /// Select the project/profile used to list this saved session.
+        #[arg(long)]
+        project: Option<String>,
         session_id: String,
     },
     /// Show harness update results, or request an update when idle.
@@ -509,8 +512,12 @@ pub async fn run() -> Result<()> {
                 }
             }
         }
-        Cmd::Resume { provider, session_id } => {
-            let thread = client.call::<SessionsResume>(SessionsResumeParams { provider, session_id }).await?;
+        Cmd::Resume { provider, project, session_id } => {
+            let project_id = match project {
+                Some(project) => Some(resolve_project(&client, &project, false).await?),
+                None => None,
+            };
+            let thread = client.call::<SessionsResume>(SessionsResumeParams { provider, session_id, project_id }).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&thread)?);
             } else {

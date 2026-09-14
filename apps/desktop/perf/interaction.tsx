@@ -82,6 +82,16 @@ async function run() {
   check(visible(turn("turn-100")?.querySelector('[data-message-role="user"]') ?? null), "Middle message is visible")
   results.middleNavigation = true
   const middle = turn("turn-100")!
+  // The footer deliberately extends into the text gutter. Paint isolation must
+  // preserve the whole hit target, including the portion outside its row box.
+  const copy = middle.querySelector<HTMLButtonElement>('[data-message-role="assistant"] [aria-label="Copy message"]')!
+  check(copy, "Middle message copy action is rendered")
+  copy.scrollIntoView({ block: "center" })
+  await sleep(100)
+  const copyRect = copy.getBoundingClientRect()
+  const hit = document.elementFromPoint(copyRect.left + 1, copyRect.top + copyRect.height / 2)
+  check(copy.contains(hit), "Message action remains clickable across the row's paint boundary")
+  results.actionPaintOverflow = true
   const wrap = middle.querySelector<HTMLButtonElement>('[aria-label="Wrap lines"]')!
   check(wrap, "Middle code block is rendered")
   wrap.click()
@@ -248,6 +258,8 @@ async function run() {
   await waitFor(() => turn("live-tools")!.querySelectorAll("[data-work-entry-display-text]").length > 0, "Live tools expand")
   check(turn("live-tools")!.querySelectorAll("[data-work-entry-display-text]").length < 100, "Expanded live tools remain virtualized")
   results.liveGrouping = true
+  // Native screenshots should capture the settled disclosure, not its entry fade.
+  await sleep(300)
   report({ ...results, pass: true })
 }
 function report(value: unknown) {

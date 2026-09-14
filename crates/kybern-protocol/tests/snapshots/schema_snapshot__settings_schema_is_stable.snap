@@ -158,6 +158,13 @@ expression: schema_for!(Settings)
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "project_profiles": {
+          "description": "OMP profiles keyed by the registered project's absolute path. Worktrees\ninherit their project's profile; an empty value selects OMP's default.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

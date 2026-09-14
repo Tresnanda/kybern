@@ -348,6 +348,23 @@ html[data-full-translucency][data-window-material="translucent"] :is([data-slot=
     --composer-glass-surface: var(--app-opaque-color-background-control-opaque) !important;
   }
 }
+/* Opaque mode must also stop frosting the transcript under the composer.
+   Keep the elevated fill and borders without allocating a backdrop layer. */
+html[data-window-material="opaque"] {
+  --composer-glass-surface: var(--popover) !important;
+  --composer-glass-opacity: 100% !important;
+  --composer-glass-stacked-opacity: 100% !important;
+  --composer-glass-filter: none !important;
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  html[data-window-material] {
+    --composer-glass-surface: var(--popover) !important;
+    --composer-glass-opacity: 100% !important;
+    --composer-glass-stacked-opacity: 100% !important;
+    --composer-glass-filter: none !important;
+  }
+}
+
 /* Runtime notices also work before the React tree has mounted. */
 .runtime-error-notice {
   position: fixed;

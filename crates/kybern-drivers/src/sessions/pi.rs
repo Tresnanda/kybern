@@ -5,16 +5,8 @@ fn root(kind: ProviderKind, context: &ProbeContext) -> Result<PathBuf> {
     if kind == ProviderKind::Pi {
         return Ok(env(context, "PI_CODING_AGENT_DIR").map(PathBuf::from).unwrap_or(user_home.join(".pi/agent")).join("sessions"));
     }
-    // OMP_PROFILE takes precedence even when explicitly empty; PI_PROFILE is
-    // its compatibility alias. Named profiles override PI_CODING_AGENT_DIR.
-    let profile = context
-        .env
-        .get("OMP_PROFILE")
-        .cloned()
-        .or_else(|| std::env::var("OMP_PROFILE").ok())
-        .or_else(|| env(context, "PI_PROFILE"))
-        .filter(|s| !s.trim().is_empty() && s.trim() != "default");
-    let profile = profile.as_deref().map(str::trim);
+    let selected = crate::omp_profile::resolve(&context.env)?;
+    let profile = (!selected.is_empty()).then_some(selected.as_str());
     let base = user_home.join(".omp");
     let config_root = profile.map(|p| base.join("profiles").join(p)).unwrap_or(base);
     let agent = if profile.is_none() {

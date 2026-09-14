@@ -51,6 +51,18 @@ function panels() {
   return [...document.querySelectorAll<HTMLElement>(".composer-panel-section, .chat-composer-stacked-top:not(.composer-panel-stack), .t-border-beam")].filter((el, i, all) => all.indexOf(el) === i)
 }
 function geometry(label: string) {
+  if (themeRoot.dataset.windowMaterial === "opaque") {
+    const canvas = document.createElement("canvas")
+    canvas.width = canvas.height = 1
+    const context = canvas.getContext("2d")!
+    for (const surface of document.querySelectorAll(".chat-composer-surface:not(.composer-panel-section), .chat-composer-stacked-top:not(.composer-panel-section)")) {
+      context.clearRect(0, 0, 1, 1)
+      context.fillStyle = getComputedStyle(surface).backgroundColor
+      context.fillRect(0, 0, 1, 1)
+      check(context.getImageData(0, 0, 1, 1).data[3] === 255, `${label}: opaque fill`)
+      check(getComputedStyle(surface, "::before").backdropFilter === "none", `${label}: no opaque backdrop blur`)
+    }
+  }
   const items = panels(), rects = items.map(el => el.getBoundingClientRect())
   const stack = document.querySelector<HTMLElement>(".composer-panel-stack")
   if (stack && items.length) {
