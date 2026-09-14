@@ -422,6 +422,32 @@ test("streaming a later turn preserves earlier turn groups for memoized views", 
   assert.equal(group([older, changed])[1], after[1])
 })
 
+test("incremental running-turn updates stay equivalent across live block kinds", () => {
+  const group = createTurnGrouper()
+  const older = { kind: "user", id: "old-user", turnId: "old", at: AT, seq: 1, message: { parts: [{ type: "text", text: "Earlier request" }] } }
+  const olderAnswer = { kind: "assistant", id: "old#0", messageId: "old", turnId: "old", at: AT, seq: 2, origin: ROOT, segment: 0, text: "Done", thinking: "", complete: true }
+  const olderEnd = { kind: "turn_end", id: "end:old", turnId: "old", at: AT, seq: 3, stopReason: "completed", usage: USAGE, costUsd: null, durationMs: 5, terminalMessageId: "old", error: null }
+  const prompt = { kind: "user", id: "current-user", turnId: "current", at: AT, seq: 4, message: { parts: [{ type: "text", text: "Current request" }] } }
+  const tool = { kind: "tool", id: "tool:current", turnId: "current", at: AT, seq: 5, origin: ROOT, call: readTool("current"), stream: "", output: null, isError: false, complete: false }
+  const task = { kind: "runtime_task", id: "task:current", turnId: "current", at: AT, seq: 6, task: runtimeTask("current") }
+  const approval = { kind: "approval", id: "approval:current", turnId: "current", at: AT, seq: 7, approval: { id: "current", summary: "Run it" }, decision: null }
+  const tail = { kind: "assistant", id: "current#0", messageId: "current", turnId: "current", at: AT, seq: 8, origin: ROOT, segment: 0, text: "Hello", thinking: "", complete: false }
+  let blocks = [older, olderAnswer, olderEnd, prompt, tool, task, approval, tail]
+  const before = group(blocks)
+
+  for (const [index, update] of [
+    [4, { ...tool, stream: "partial output" }],
+    [5, { ...task, task: { ...task.task, status: "waiting", detail: "Waiting" } }],
+    [6, { ...approval, decision: { decision: "allow", scope: "once" } }],
+    [7, { ...tail, text: "Hello world" }],
+  ]) {
+    blocks = blocks.map((block, blockIndex) => blockIndex === index ? update : block)
+    const actual = group(blocks)
+    assert.equal(actual[0], before[0], "an unrelated settled turn remains referentially stable")
+    assert.deepEqual(actual, groupTurns(blocks))
+  }
+})
+
 test("turn grouping updates late events, follows ordering, and drops rewound turns", () => {
   const group = createTurnGrouper()
   const a = { kind: "notice", id: "a", turnId: "a", at: AT, seq: 1, level: "info", text: "First" }
