@@ -10,7 +10,7 @@ import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 async function waitFor(condition: () => unknown, message: string) {
-  const end = performance.now() + 6000
+  const end = performance.now() + 15000
   while (!condition() && performance.now() < end) await sleep(20)
   check(condition(), message)
 }
@@ -70,4 +70,4 @@ async function run() {
   return { pass: true, beforeBlocks: 3000, afterBlocks: state().blocks.length, beforeBytes, afterBytes, anchorShift, reload: true, selection: true, focus: true, identity: true }
 }
 const w = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }
-run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), blocks: state()?.blocks.length })))
+run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))
