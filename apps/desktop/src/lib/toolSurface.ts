@@ -133,3 +133,15 @@ export function surfaceOutputText(output: JsonValue | null): string {
   const message = string(record(error).message)
   return message
 }
+
+/** Match the text view without joining potentially large content blocks. */
+export function surfaceHasOutputText(output: JsonValue | null): boolean {
+  const outer = record(output)
+  const content = record(outer.result).content ?? outer.content
+  if (Array.isArray(content) && content.some(item => {
+    const block = record(item)
+    return block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0
+  })) return true
+  const error = outer.error
+  return typeof error === "string" ? error.trim().length > 0 : string(record(error).message).trim().length > 0
+}

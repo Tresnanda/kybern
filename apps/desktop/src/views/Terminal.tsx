@@ -10,6 +10,8 @@ import { openExternal } from "@/lib/tauri"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import "@xterm/xterm/css/xterm.css"
 
+import { createTerminalRenderer } from "@/lib/terminalRenderer"
+
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -239,6 +241,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
   const dark = useIsDark()
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const rendererRef = useRef<ReturnType<typeof createTerminalRenderer> | null>(null)
   const idRef = useRef<TerminalId | null>(null)
   const cwd = useStore((s) => s.threads[threadId]?.cwd)
   const onExitRef = useRef(onExit)
@@ -303,18 +306,9 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     term.loadAddon(fit)
     term.open(el)
     fit.fit()
-    import("@xterm/addon-webgl")
-      .then((m) => {
-        if (disposed) return
-        const webgl = new m.WebglAddon()
-        webgl.onContextLoss(() => {
-          webgl.dispose()
-          term.refresh(0, Math.max(0, term.rows - 1))
-        })
-        term.loadAddon(webgl)
-        term.refresh(0, Math.max(0, term.rows - 1))
-      })
-      .catch(() => {})
+    const renderer = createTerminalRenderer(term)
+    rendererRef.current = renderer
+    renderer.setActive(active && !document.hidden)
 
     const client = rpc()
     const ownerStore = useStore
@@ -416,12 +410,21 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       clearTimeout(exitTimer)
       if (idRef.current) client.call("terminals.unsubscribe", { terminal_id: idRef.current }).catch(() => {})
       idRef.current = null
+      renderer.dispose()
+      rendererRef.current = null
       term.dispose()
       termRef.current = null
       fitRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, cwd, everActive])
+
+  useEffect(() => {
+    const update = () => rendererRef.current?.setActive(active && !document.hidden)
+    update()
+    document.addEventListener("visibilitychange", update)
+    return () => document.removeEventListener("visibilitychange", update)
+  }, [active, everActive, ready])
 
   async function submitRedirect() {
     if (!idRef.current || !redirect.trim()) return

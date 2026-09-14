@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
-import { imageSource, responseImages, imageSafeOutput, localImageLink, responseImageError } from "./src/lib/responseImages.ts"
+import { imageSource, responseImages, imageSafeOutput, imageSafeValue, localImageLink, responseImageError } from "./src/lib/responseImages.ts"
 
 test("packaged and development CSP allow the remote image schemes accepted by the renderer", () => {
   const config = JSON.parse(readFileSync(new URL("./src-tauri/tauri.conf.json", import.meta.url), "utf8"))
@@ -42,4 +42,12 @@ test("blocked image paths explain recovery without offering a futile retry", () 
   assert.equal(responseImageError(new Error("Connection interrupted")).retryable, true)
   assert.equal(responseImageError(new Error("image file is unavailable")).retryable, true)
   assert.equal(responseImageError(new Error("images are limited to 50 MB")).retryable, false)
+})
+
+
+test("streaming image-safe JSON matches the old sanitized tree without copying payload objects", () => {
+  const output = { nested: [{ type: "image", data: "a".repeat(1000), mimeType: "image/png" }, { type: "imageGeneration", result: "binary", outputFormat: "png" }], text: "plain", values: ["data:image/png;base64,YQ=="], url: "data:image/png;base64,YQ==", stdout: "exact output" }
+  assert.equal(JSON.stringify(output, imageSafeValue, 2), JSON.stringify(imageSafeOutput(output), null, 2))
+  assert.equal(imageSafeValue.call(output, "nested", output.nested), output.nested)
+  assert.equal(output.nested[0].data.length, 1000, "original image remains available to the gallery")
 })

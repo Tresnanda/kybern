@@ -100,6 +100,20 @@ jobs:
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs interaction
+      - name: Native WebKit history retention
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        working-directory: apps/desktop
+        run: |
+          node scripts/check-rendering.mjs history-retention
+          KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
+      - name: Native WebKit deferred tool output
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs tool-memory
+      - name: Native WebKit terminal graphics lifecycle
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs terminal-memory
       - name: Native WebKit question forms
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop

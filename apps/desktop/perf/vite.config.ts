@@ -4,6 +4,7 @@ import { mergeConfig } from "vite"
 import base from "../vite.config"
 export default mergeConfig(base, {
   define: {
+    __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
     __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]",
     __WORK_REPLAY__: process.env.KYBERN_WORK_REPLAY ? readFileSync(process.env.KYBERN_WORK_REPLAY, "utf8") : "[]",
     __SCROLL_SCENARIO__: JSON.stringify(process.env.KYBERN_SCROLL_SCENARIO ?? ""),
@@ -42,7 +43,7 @@ export default mergeConfig(base, {
       const source = process.env.KYBERN_COLLAB_BASELINE ? readFileSync(process.env.KYBERN_COLLAB_BASELINE, "utf8") : code
       return source.replace('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "collaboration-rpc.ts")))
     },
-  }] : process.env.KYBERN_PERF_FIXTURE === "history" ? [{
+  }] : ["history", "history-retention"].includes(process.env.KYBERN_PERF_FIXTURE ?? "") ? [{
     name: "history-fixture-transport",
     enforce: "pre",
     transform(code, id) {

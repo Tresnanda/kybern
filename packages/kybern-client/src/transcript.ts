@@ -342,7 +342,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "tool_call_completed": {
       const idx = findLast(blocks, `tool:${ev.tool_call_id}`)
       const b = blocks[idx]
-      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, output: ev.output, isError: ev.is_error, complete: true })
+      // Final output owns exact duplicate text. Keep distinct/fallback streams,
+      // including transport-only agent/task receipts used by activity views.
+      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, stream: ev.output === b.stream && !/^\s*(?:agent|task)[_ ]?id\s*:/i.test(b.stream) ? "" : b.stream, output: ev.output, isError: ev.is_error, complete: true })
       break
     }
     case "runtime_task_started":

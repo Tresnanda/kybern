@@ -542,3 +542,30 @@ test("artifact publication requires native successful receipts and republishing 
   assert.match(prompt, /only after a successful tool receipt/);
   assert.throws(() => publishArtifactPrompt({ path: null, url: null }));
 });
+
+
+test("completed tool results release duplicate stream text but preserve fallback output", () => {
+  for (const output of ["x".repeat(1024 * 1024), null, 0, false]) {
+    const stream = "x".repeat(1024 * 1024)
+    let state = emptyThreadState()
+    const ev = (seq, payload) => ({ seq, thread_id: "t", turn_id: T, at: AT, ...payload })
+    state = applyEvent(state, ev(1, { kind: "tool_call_started", call: { id: "tool", name: "exec", input: {}, parent_id: null } }))
+    state = applyEvent(state, ev(2, { kind: "tool_call_output_delta", tool_call_id: "tool", delta: stream }))
+    assert.equal(state.blocks[0].stream, stream)
+    state = applyEvent(state, ev(3, { kind: "tool_call_completed", tool_call_id: "tool", output, is_error: false }))
+    assert.equal(state.blocks[0].stream.length, typeof output === "string" ? 0 : stream.length)
+    assert.equal(state.blocks[0].output, output)
+  }
+})
+
+
+test("distinct and transport-only completed tool streams remain available", () => {
+  for (const [stream, output] of [["live details", "final result"], ["agentId: helper send_message", "agentId: helper send_message"]]) {
+    let state = emptyThreadState()
+    const ev = (seq, payload) => ({ seq, thread_id: "t", turn_id: T, at: AT, ...payload })
+    state = applyEvent(state, ev(1, { kind: "tool_call_started", call: { id: "tool", name: "exec", input: {}, parent_id: null } }))
+    state = applyEvent(state, ev(2, { kind: "tool_call_output_delta", tool_call_id: "tool", delta: stream }))
+    state = applyEvent(state, ev(3, { kind: "tool_call_completed", tool_call_id: "tool", output, is_error: false }))
+    assert.equal(state.blocks[0].stream, stream)
+  }
+})

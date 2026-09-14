@@ -27,6 +27,11 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [long-chat and renderer memory reductions](memory-reductions-2026-09-14.md)
+for bounded refreshes, cleanup while following, stable interaction pins, deferred
+result formatting, and inactive terminal graphics release. Run `history-retention`
+at 1100px/480px plus `tool-memory` and `terminal-memory` for those paths.
+
 See [profile and diagram UI polish](renderer-ui-polish-2026-09-14.md) for explicit
 profile controls, responsive grouping, diagram expansion, and motion/focus checks.
 

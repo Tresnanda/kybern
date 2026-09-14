@@ -1,8 +1,9 @@
+import { useFollowingHistory } from "@/lib/useFollowingHistory"
 import { useEarlierHistory } from "@/lib/useEarlierHistory"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
-import { surfaceOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
+import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
 import { connectorApproval, isUserInput } from "@/lib/userInput"
 // Transcript pane:
 // centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
@@ -32,7 +33,7 @@ import {
   getChatMessageFooterTextStyle,
   getChatTranscriptTextStyle,
 } from "@/components/kit/chat/chatTypography"
-import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
+import { clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
 import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel } from "@/components/beui/message-scroller"
@@ -334,6 +335,7 @@ export function Transcript({
   }, [groups, navigationItems, historyOffset])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
+  useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
     setFollowing(true)
@@ -1185,14 +1187,14 @@ function ToolRow({
 }) {
   const [open, setOpen] = useTranscriptRowState("open", false)
   const active = !!task && isRuntimeTaskActive(task)
-  const { activity, visual, surface, screenshots, out, label, hasOutput } = useMemo(() => {
+  const { activity, visual, surface, screenshots, label, hasOutput } = useMemo(() => {
     const activity = toolLine(block.call, block.complete && !active)
     const visual = toolVisualKind(block.call, activity)
     const surface = toolSurface(block.call, block.output)
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
-    const out = surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream)
+    const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
     const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, out, label, hasOutput: out.trim().length > 0 || screenshots.length > 0 }
+    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1250,26 +1252,36 @@ function ToolRow({
           {hasOutput && (
             <section aria-label={hasChildActivity ? "Result" : undefined}>
               {hasChildActivity && <p className="pb-1 font-system-ui text-[11px] leading-5 text-muted-foreground/45">Result</p>}
-              {screenshots.length > 0 && (
-                <div className={cn("flex flex-wrap gap-2", out.trim() && "pb-2")}>
-                  {screenshots.map((source, index) => (
-                    <ResponseImage key={source} source={source} label={surface?.app ? `Screenshot of ${surface.app}` : `Screenshot ${index + 1}`} compact />
-                  ))}
-                </div>
-              )}
-              {out.trim() && <pre
-                className={cn(
-                  "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
-                  block.isError ? "text-destructive/90" : "text-foreground/92",
-                )}
-              >
-                {out}
-              </pre>}
+              <ToolResult block={block} surface={surface} screenshots={screenshots} />
             </section>
           )}
         </DisclosureRegion>
       )}
     </div>
+  )
+}
+
+/** Mounted by DisclosureRegion only while open or completing its exit. */
+function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface: ToolSurface | null; screenshots: string[] }) {
+  const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
+  return (
+    <>
+      {screenshots.length > 0 && (
+        <div className={cn("flex flex-wrap gap-2", out.trim() && "pb-2")}>
+          {screenshots.map((source, index) => (
+            <ResponseImage key={source} source={source} label={surface?.app ? `Screenshot of ${surface.app}` : `Screenshot ${index + 1}`} compact />
+          ))}
+        </div>
+      )}
+      {out.trim() && <pre
+        className={cn(
+          "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
+          block.isError ? "text-destructive/90" : "text-foreground/92",
+        )}
+      >
+        {out}
+      </pre>}
+    </>
   )
 }
 

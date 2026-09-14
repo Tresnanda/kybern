@@ -26,6 +26,7 @@ import {
   type SkillInfo,
   type ThreadEvent,
   type ThreadId,
+  type ThreadsGetResult,
   type TurnId,
   type UserMessage,
 } from "@/protocol"
@@ -216,10 +217,35 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const request = (async () => {
       try {
         const generation = hydrationGeneration
-        const requested = Math.max(60, useStore.getState().transcripts[id]?.blocks.length ?? 0)
-        let res: Awaited<ReturnType<typeof getSnapshot>> | undefined
-        async function getSnapshot() {
-          return rpc().call("threads.get", { thread_id: id, ...(requested <= 500 ? { transcript_limit: requested } : {}) })
+        const previous = useStore.getState().transcripts[id]
+        const requested = Math.max(60, previous?.blocks.length ?? 0)
+        const oldest = previous?.nextBeforeSeq ?? previous?.blocks[0]?.seq ?? 0
+        let res: ThreadsGetResult | undefined
+        async function getSnapshot(): Promise<ThreadsGetResult> {
+          const snapshot = await rpc().call("threads.get", { thread_id: id, transcript_limit: Math.min(requested, 500) })
+          if (requested <= 500 || snapshot.next_before_seq == null) return snapshot
+          // Preserve the already-loaded reading window without falling back to an
+          // unlimited response. Every page belongs to the first snapshot's head;
+          // the surrounding replay buffer catches output received during paging.
+          let remaining = requested - snapshot.transcript.filter(entry => entry.seq >= (snapshot.next_before_seq ?? 0)).length
+          const key = (entry: (typeof snapshot.transcript)[number]) => JSON.stringify([entry.role, entry.turn_id, entry.seq, "id" in entry ? entry.id : null, "segment" in entry ? entry.segment : null])
+          const entries = new Map(snapshot.transcript.map(entry => [key(entry), entry]))
+          while (snapshot.next_before_seq != null && snapshot.next_before_seq > oldest && isCurrentHydration(generation) && isThreadVisible(useStore.getState(), id)) {
+            const before: number = snapshot.next_before_seq
+            const page: ThreadsGetResult = await rpc().call("threads.get", {
+              thread_id: id, transcript_limit: Math.min(Math.max(remaining, 60), 500),
+              before_seq: before, through_seq: snapshot.thread.last_seq,
+            })
+            if (page.thread.last_seq !== snapshot.thread.last_seq || (page.next_before_seq != null && page.next_before_seq >= before))
+              throw new Error("History changed while loading. Open the thread again to retry.")
+            if (!page.transcript.length && page.next_before_seq != null)
+              throw new Error("History page is empty. Open the thread again to retry.")
+            for (const entry of page.transcript) if (entry.seq >= oldest) entries.set(key(entry), entry)
+            snapshot.next_before_seq = page.transcript.some(entry => entry.seq < oldest) ? oldest : page.next_before_seq
+            remaining -= page.transcript.length
+          }
+          snapshot.transcript = [...entries.values()].sort((a, b) => a.seq - b.seq)
+          return snapshot
         }
         let events: ThreadEvent[] | null = null
         for (let attempt = 0; attempt < 3; attempt++) {
