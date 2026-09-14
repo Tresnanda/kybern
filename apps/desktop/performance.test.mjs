@@ -3,6 +3,7 @@ import test from "node:test"
 
 import {
   LARGE_SOURCE_MAX_BYTES,
+  canHighlightCode,
   diffSummaryRequest,
   mapWithConcurrency,
   shouldHighlightSource,
@@ -41,6 +42,15 @@ test("large source files bypass syntax highlighting", () => {
     false
   )
   assert.equal(shouldHighlightSource("x\n".repeat(4_001)), false)
+})
+
+test("code fallback releases the highlighted subtree at language and source limits", () => {
+  const short = "const answer = 42\n"
+  assert.equal(canHighlightCode("typescript", short), true)
+  assert.equal(canHighlightCode("mermaid", short), false)
+  assert.equal(canHighlightCode(null, short), false)
+  assert.equal(canHighlightCode("typescript", "x".repeat(LARGE_SOURCE_MAX_BYTES + 1)), false)
+  assert.equal(canHighlightCode("typescript", "x\n".repeat(4_001)), false)
 })
 
 test("the Explorer window renders only nearby fixed-height rows", () => {

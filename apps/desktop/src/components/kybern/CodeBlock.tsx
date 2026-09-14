@@ -3,7 +3,7 @@ import { useTheme } from "@/components/theme-context"
 import { copyText } from "@/lib/hooks"
 import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
 import { IconSwap } from "./motion"
-import { shouldHighlightSource, streamingHighlightInterval } from "@/lib/workload"
+import { canHighlightCode, streamingHighlightInterval } from "@/lib/workload"
 import { highlightToHtml } from "@/lib/highlight"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
 
@@ -53,16 +53,12 @@ export function useIsDark(): boolean {
   return theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
 }
 
-export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions, header }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode; header?: ReactNode }) {
-  const dark = useIsDark()
+function HighlightedCode({ code, name, dark, live }: { code: string; name: string | null; dark: boolean; live: boolean }) {
   const [highlight, setHighlight] = useState<{ code: string; name: string; dark: boolean; html: string } | null>(null)
   const markup = useMemo(() => highlight ? { __html: highlight.html } : null, [highlight])
   const highlightedAt = useRef(0)
   const inFlight = useRef<{ code: string; name: string; dark: boolean; abort: AbortController } | null>(null)
-  const [wrap, setWrap] = useTranscriptRowState(stateKey, false)
-  const [copied, setCopied] = useState(false)
-  const name = lang ? (ALIASES[lang.toLowerCase()] ?? lang.toLowerCase()) : null
-  const highlightable = !!name && name !== "mermaid" && shouldHighlightSource(code)
+  const highlightable = canHighlightCode(name, code)
   const currentHighlight = highlight && highlight.name === name && highlight.dark === dark &&
     (highlight.code === code || (live && code.startsWith(highlight.code)))
   useEffect(() => {
@@ -95,6 +91,27 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, sta
     inFlight.current = null
   }, [])
 
+  return markup && highlightable && currentHighlight ? (
+    <div dangerouslySetInnerHTML={markup} />
+  ) : (
+    <pre>
+      <code>{code}</code>
+    </pre>
+  )
+}
+
+export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions, header }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode; header?: ReactNode }) {
+  const dark = useIsDark()
+  const [wrap, setWrap] = useTranscriptRowState(stateKey, false)
+  const [copied, setCopied] = useState(false)
+  const name = lang ? (ALIASES[lang.toLowerCase()] ?? lang.toLowerCase()) : null
+  const highlightable = canHighlightCode(name, code)
+  // Keep the highlighted subtree stable for streaming appends and theme
+  // changes, but release its HTML immediately when its grammar changes or it
+  // can no longer be displayed. Otherwise a block that grows past the source
+  // limit could retain a large, unreachable token DOM string for its lifetime.
+  const highlightKey = highlightable ? name : "plain"
+
   return (
     <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : undefined}>
       <div className="chat-markdown-codeblock__header">
@@ -125,13 +142,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, sta
         </span>
       </div>
       <div className="chat-markdown-codeblock__body [&_pre]:!bg-transparent">
-        {preview ?? (markup && highlightable && currentHighlight ? (
-          <div dangerouslySetInnerHTML={markup} />
-        ) : (
-          <pre>
-            <code>{code}</code>
-          </pre>
-        ))}
+        {preview ?? <HighlightedCode key={highlightKey} code={code} name={name} dark={dark} live={live} />}
       </div>
     </div>
   )

@@ -46,6 +46,11 @@ export function shouldHighlightSource(content: string): boolean {
   return true
 }
 
+/** Whether a code block should keep a live highlighted subtree. */
+export function canHighlightCode(name: string | null, content: string): boolean {
+  return !!name && name !== "mermaid" && shouldHighlightSource(content)
+}
+
 export function countLines(content: string): number {
   if (!content) return 0
   let lines = 1

@@ -1,6 +1,7 @@
 // Syntax parsing/tokenization lives off the renderer thread. Only one request is
 // sent at a time by highlight.ts, so obsolete streams cannot build a worker backlog.
 import type { HighlightJob } from "./highlightQueue"
+import { createHighlightCache } from "./highlightCache"
 type Highlighter = {
   codeToHtml: (code: string, opts: { lang: string; theme: string }) => string
   loadLanguage: (lang: unknown) => Promise<void>
@@ -34,36 +35,19 @@ async function ensureLang(hl: Highlighter, lang: string): Promise<boolean> {
   await hl.loadLanguage(loader)
   return true
 }
-
-
-const cache = new Map<string, string>()
-let cacheBytes = 0
-const MAX_CACHE_BYTES = 4 * 1024 * 1024
-const MAX_CACHE_ENTRIES = 24
+// Keep the source as the final map key instead of embedding it in a composite
+// key. The cache implementation retains each source once while preserving the
+// existing settled-output limits.
+const cache = createHighlightCache()
 
 async function highlight(job: HighlightJob): Promise<string | null> {
-  const key = `${job.dark ? "dark" : "light"}\0${job.lang}\0${job.code}`
-  const cached = cache.get(key)
-  if (cached !== undefined) {
-    cache.delete(key)
-    cache.set(key, cached)
-    return cached
-  }
+  const cached = cache.get(job.dark, job.lang, job.code)
+  if (cached !== undefined) return cached
   const h = await getHighlighter()
   if (!(await ensureLang(h, job.lang))) return null
   const html = h.codeToHtml(job.code, { lang: job.lang, theme: job.dark ? "github-dark-default" : "github-light-default" })
-  const bytes = (key.length + html.length) * 2
   // Settled code only: don't retain every prefix of a live stream.
-  if (job.cache && bytes <= MAX_CACHE_BYTES) {
-    while (cache.size >= MAX_CACHE_ENTRIES || cacheBytes + bytes > MAX_CACHE_BYTES) {
-      const oldest = cache.entries().next().value
-      if (!oldest) break
-      cache.delete(oldest[0])
-      cacheBytes -= (oldest[0].length + oldest[1].length) * 2
-    }
-    cache.set(key, html)
-    cacheBytes += bytes
-  }
+  if (job.cache) cache.set({ dark: job.dark, lang: job.lang, code: job.code, html })
   return html
 }
 

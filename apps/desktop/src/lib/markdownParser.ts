@@ -54,29 +54,31 @@ function shiftPositions(node: MarkdownTree | MarkdownTree["children"][number], o
  * possible definition conservatively selects the full-document path. */
 export function createMarkdownParser() {
   let previous: ParsedMarkdown | undefined
-  let tree: MarkdownTree | undefined
+  // Incremental reparsing only needs the start of the previous final
+  // top-level construct. Retaining the complete mdast root here duplicates
+  // the HAST tree held by `previous`, which is especially costly for long code
+  // blocks and tables.
+  let lastPosition: { offset?: number; line: number } | undefined
   return {
     parse(source: string): ParsedMarkdown {
       if (previous?.source === source) return previous
       let prefix: MarkdownBlock[] = []
       let nextTree: MarkdownTree
-      const last = tree?.children.at(-1)
-      const offset = last?.position?.start.offset
-      if (previous && tree && offset !== undefined && source.startsWith(previous.source) && !source.includes("]:")) {
+      const offset = lastPosition?.offset
+      if (previous && lastPosition && offset !== undefined && source.startsWith(previous.source) && !source.includes("]:")) {
         const boundary = Math.max(source.lastIndexOf("\n", offset - 1), source.lastIndexOf("\r", offset - 1)) + 1
         nextTree = processor.parse(source.slice(boundary))
-        shiftPositions(nextTree, boundary, (last!.position!.start.line - 1))
+        shiftPositions(nextTree, boundary, lastPosition.line - 1)
         // Whitespace between blocks belongs to the boundary, not the prefix.
         const first = previous.blocks.findIndex((block) => block.node.position !== undefined && (block.node.position.start.offset ?? 0) >= boundary)
         prefix = first < 0 ? previous.blocks : previous.blocks.slice(0, first)
         while (prefix.at(-1)?.node.type === "text" && !(prefix.at(-1)!.node.position)) prefix = prefix.slice(0, -1)
-        const tailTree = nextTree
-        tree = { type: "root", children: [...tree.children.slice(0, -1), ...tailTree.children] }
       } else {
         nextTree = processor.parse(source)
-        tree = nextTree
       }
       const nodes = processor.runSync(nextTree).children.map(sanitize)
+      const last = nextTree.children.at(-1)
+      lastPosition = last?.position ? { offset: last.position.start.offset, line: last.position.start.line } : undefined
       if (prefix.length && nodes.length) nodes.unshift({ type: "text", value: "\n" })
       let previousKey = prefix.at(-1)?.key ?? "start"
       const old = new Map(previous?.blocks.map((block) => [block.key, block]))
