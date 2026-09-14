@@ -20,7 +20,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use crate::binary::{at_least, resolve, version_of};
 use crate::ndjson::NdjsonChild;
 use crate::{
-    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, Result, SessionConfig, SpawnedSession,
+    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, NativeToolBridge, ProbeContext,
+    Result, SessionConfig, SpawnedSession,
 };
 
 const MIN_VERSION: (u64, u64, u64) = (0, 140, 0);
@@ -51,9 +52,48 @@ async fn catalog_call(child: &NdjsonChild, id: i64, method: &str, params: Value)
     .flatten()
 }
 
-async fn codex_models(bin: &std::path::Path) -> Vec<ProviderModel> {
+fn parse_codex_model(item: &Value) -> Option<ProviderModel> {
+    if item.get("hidden").and_then(Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+    let id = item.get("model").or_else(|| item.get("id")).and_then(Value::as_str)?.to_string();
+    let display_name = item.get("displayName").and_then(Value::as_str).unwrap_or(&id).to_string();
+    let efforts = item
+        .get("supportedReasoningEfforts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|option| option.get("reasoningEffort").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    Some(ProviderModel {
+        id,
+        display_name,
+        provider: None,
+        efforts,
+        default_effort: item.get("defaultReasoningEffort").and_then(Value::as_str).map(str::to_string),
+        is_default: item.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+fn ensure_requested_codex_model(requested: Option<&str>, effective: Option<&str>) -> Result<()> {
+    if let (Some(requested), Some(effective)) = (requested, effective)
+        && requested != effective
+    {
+        return Err(DriverError::Unsupported(format!(
+            "Codex resolved requested model '{requested}' to '{effective}'. Choose an exact model ID from the provider catalog or omit the model to use the default."
+        )));
+    }
+    Ok(())
+}
+
+async fn codex_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
     let mut cmd = Command::new(bin);
     cmd.arg("app-server");
+    if let Some(cwd) = context.cwd.as_deref() {
+        cmd.current_dir(cwd);
+    }
+    cmd.envs(&context.env);
     let child = match NdjsonChild::spawn(cmd) {
         Ok(child) => child,
         Err(_) => return Vec::new(),
@@ -87,29 +127,7 @@ async fn codex_models(bin: &std::path::Path) -> Vec<ProviderModel> {
             break;
         };
         if let Some(items) = result.get("data").and_then(Value::as_array) {
-            models.extend(items.iter().filter_map(|item| {
-                if item.get("hidden").and_then(Value::as_bool).unwrap_or(false) {
-                    return None;
-                }
-                let id = item.get("model").or_else(|| item.get("id")).and_then(Value::as_str)?.to_string();
-                let display_name = item.get("displayName").and_then(Value::as_str).unwrap_or(&id).to_string();
-                let efforts = item
-                    .get("supportedReasoningEfforts")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|option| option.get("reasoningEffort").and_then(Value::as_str))
-                    .map(str::to_string)
-                    .collect();
-                Some(ProviderModel {
-                    id,
-                    display_name,
-                    provider: None,
-                    efforts,
-                    default_effort: item.get("defaultReasoningEffort").and_then(Value::as_str).map(str::to_string),
-                    is_default: item.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
-                })
-            }));
+            models.extend(items.iter().filter_map(parse_codex_model));
         }
         cursor = result.get("nextCursor").and_then(Value::as_str).map(str::to_string);
         if cursor.is_none() {
@@ -282,13 +300,8 @@ fn installed_plugins(result: &Value) -> Vec<SkillInfo> {
     out
 }
 
-#[async_trait]
-impl AgentDriver for CodexDriver {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Codex
-    }
-
-    async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
+impl CodexDriver {
+    async fn probe_inner(&self, context: &ProbeContext) -> ProviderStatus {
         let mut status = ProviderStatus {
             kind: ProviderKind::Codex,
             display_name: ProviderKind::Codex.display_name().into(),
@@ -304,7 +317,7 @@ impl AgentDriver for CodexDriver {
             models: vec![],
             instances: vec!["default".into()],
         };
-        let bin = match resolve(ProviderKind::Codex, binary) {
+        let bin = match resolve(ProviderKind::Codex, context.binary.as_ref()) {
             Ok(b) => b,
             Err(e) => {
                 status.unavailable_reason = Some(format!("{e}. Install with: npm install -g @openai/codex"));
@@ -322,7 +335,7 @@ impl AgentDriver for CodexDriver {
                 }
                 status.version = Some(v);
                 if ok {
-                    status.models = codex_models(&bin).await;
+                    status.models = codex_models(&bin, context).await;
                     for model in &status.models {
                         for effort in &model.efforts {
                             if !status.supported_efforts.contains(effort) {
@@ -335,6 +348,21 @@ impl AgentDriver for CodexDriver {
             None => status.unavailable_reason = Some("could not run `codex --version`".into()),
         }
         status
+    }
+}
+
+#[async_trait]
+impl AgentDriver for CodexDriver {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Codex
+    }
+
+    async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
+        self.probe_inner(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }).await
+    }
+
+    async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        self.probe_inner(context).await
     }
 
     async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
@@ -377,6 +405,9 @@ impl AgentDriver for CodexDriver {
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
+        if let Some(bridge) = config.native_tool_bridge.as_ref() {
+            validate_codex_bridge(bridge)?;
+        }
         let bin = resolve(ProviderKind::Codex, config.binary.as_ref())?;
         let mut cmd = Command::new(&bin);
         cmd.current_dir(&config.cwd).arg("app-server");
@@ -394,6 +425,7 @@ impl AgentDriver for CodexDriver {
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
                 manual_compaction: false,
@@ -412,6 +444,7 @@ impl AgentDriver for CodexDriver {
                 stopping_processes: HashSet::new(),
             }),
             turn_usage: Mutex::new(None),
+            bridge: config.native_tool_bridge.clone(),
             closed: AtomicBool::new(false),
         });
         let reader = session.clone();
@@ -430,6 +463,24 @@ impl AgentDriver for CodexDriver {
 
         let (approval, sandbox) = policy_for(config.permission_mode);
         let mut params = json!({ "cwd": config.cwd, "approvalPolicy": approval, "sandbox": sandbox });
+        if let Some(bridge) = config.native_tool_bridge.as_ref() {
+            params["dynamicTools"] = Value::Array(
+                bridge
+                    .tools()
+                    .map(|tool| {
+                        json!({
+                            "type": "function",
+                            "name": tool.name,
+                            "description": tool.description,
+                            "inputSchema": tool.input_schema,
+                        })
+                    })
+                    .collect(),
+            );
+            if let Some(instructions) = bridge.coordinator_instructions.as_ref() {
+                params["developerInstructions"] = Value::String(instructions.clone());
+            }
+        }
         if let Some(m) = &config.model {
             params["model"] = Value::String(m.clone());
         }
@@ -454,6 +505,10 @@ impl AgentDriver for CodexDriver {
             .ok_or_else(|| DriverError::Protocol(format!("{method}: no thread id in response")))?
             .to_string();
         let model = resp.get("model").and_then(|m| m.as_str()).map(str::to_string);
+        if let Err(error) = ensure_requested_codex_model(config.model.as_deref(), model.as_deref()) {
+            session.child.close().await;
+            return Err(error);
+        }
         session.bind_thread(thread_id, model).await;
         let usage_session = session.clone();
         lifetime.track(tokio::spawn(async move {
@@ -468,6 +523,19 @@ impl AgentDriver for CodexDriver {
 
         Ok(SpawnedSession { session: Box::new(Handle(session, lifetime)), events: rx })
     }
+}
+
+fn validate_codex_bridge(bridge: &NativeToolBridge) -> Result<()> {
+    // The daemon may provision one session capability for every provider. The
+    // Codex app-server path deliberately ignores its MCP endpoint/credential
+    // and carries only the filtered definitions over dynamicTools.
+    bridge.validate()?;
+    if bridge.restrictions.require_enforcement {
+        return Err(DriverError::Unsupported(
+            "Codex app-server dynamic tools cannot enforce coordinator restrictions on built-in tools".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// (approvalPolicy, sandbox mode) for a kybern permission mode.
@@ -519,10 +587,19 @@ struct CodexSession {
     pending: Mutex<HashMap<i64, oneshot::Sender<std::result::Result<Value, String>>>>,
     /// Our request key -> (server request id, kind) for approvals awaiting the user.
     pending_approvals: Mutex<HashMap<String, (Value, ApprovalKind)>>,
+    /// Dynamic tool request ids are provider JSON-RPC ids rendered as strings
+    /// for the daemon event. Keep the original JSON value for the response.
+    pending_app_tools: Mutex<HashMap<String, PendingAppTool>>,
     state: Mutex<State>,
     /// Per-turn usage derived from thread totals, consumed at turn/completed.
     turn_usage: Mutex<Option<Usage>>,
+    bridge: Option<NativeToolBridge>,
     closed: AtomicBool,
+}
+
+struct PendingAppTool {
+    provider_id: Value,
+    turn_id: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -725,6 +802,33 @@ impl CodexSession {
     async fn handle_server_request(&self, id: Value, method: &str, params: &Value) {
         let item_id = params.get("itemId").and_then(|i| i.as_str()).map(str::to_string);
         match method {
+            "item/tool/call" => {
+                let name = params.get("tool").and_then(Value::as_str).unwrap_or("").to_string();
+                let allowed = self.bridge.as_ref().is_some_and(|bridge| bridge.has_tool(&name));
+                if !allowed {
+                    let _ = self.respond(&id, Err(format!("kybern dynamic tool is not enabled: {name}"))).await;
+                    return;
+                }
+                // Codex's callId is the stable application-level identifier;
+                // retain the JSON-RPC id separately for the response frame.
+                let request_id = params.get("callId").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| id.to_string());
+                let bound_turn = self.state.lock().await.turn_id.clone();
+                let turn_id = params.get("turnId").and_then(Value::as_str).map(str::to_string).or(bound_turn);
+                let mut pending = self.pending_app_tools.lock().await;
+                if pending.contains_key(&request_id) {
+                    drop(pending);
+                    let _ = self.respond(&id, Err("duplicate Kybern dynamic tool request".into())).await;
+                    return;
+                }
+                pending.insert(request_id.clone(), PendingAppTool { provider_id: id.clone(), turn_id });
+                drop(pending);
+                self.emit(DriverEvent::AppToolRequest {
+                    request_id,
+                    name,
+                    arguments: params.get("arguments").cloned().unwrap_or_else(|| json!({})),
+                })
+                .await;
+            }
             "item/commandExecution/requestApproval" => {
                 let command = params.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string();
                 let key = format!("cmd:{}", serde_json::to_string(&id).unwrap_or_default());
@@ -1356,7 +1460,23 @@ impl CodexSession {
                     .await;
                 }
             }
-            "imageView" | "imageGeneration" | "dynamicToolCall" => {
+            "dynamicToolCall" => {
+                let name = item.get("tool").and_then(Value::as_str).unwrap_or("dynamic_tool").to_string();
+                if !completed {
+                    self.emit(DriverEvent::ToolStarted(ToolCall {
+                        id,
+                        name,
+                        input: item.get("arguments").cloned().unwrap_or(Value::Null),
+                        parent_id: None,
+                    }))
+                    .await;
+                } else {
+                    let status = item.get("status").and_then(Value::as_str).unwrap_or("");
+                    let is_error = status == "failed" || item.get("success").and_then(Value::as_bool) == Some(false);
+                    self.emit(DriverEvent::ToolCompleted { tool_call_id: id, output: item.clone(), is_error }).await;
+                }
+            }
+            "imageView" | "imageGeneration" => {
                 if !completed {
                     self.emit(DriverEvent::ToolStarted(ToolCall { id, name: ty.to_string(), input: item.clone(), parent_id: None })).await;
                 } else {
@@ -1541,6 +1661,9 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
         match part {
             ContentPart::Text { text } => items.push(json!({ "type": "text", "text": text, "text_elements": [] })),
             ContentPart::FileMention { path } => items.push(json!({ "type": "text", "text": format!("@{path}"), "text_elements": [] })),
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                items.push(json!({ "type": "text", "text": thread_reference_text(*thread_id, title), "text_elements": [] }))
+            }
             ContentPart::Skill { name, path } => {
                 // App-server currently expects both the visible `$skill` text
                 // and the structured item that identifies the canonical file.
@@ -1684,6 +1807,33 @@ impl AgentSession for Handle {
         Ok(())
     }
 
+    async fn respond_app_tool(&self, request_id: &str, result: std::result::Result<Value, String>) -> Result<()> {
+        let pending = self
+            .0
+            .pending_app_tools
+            .lock()
+            .await
+            .remove(request_id)
+            .ok_or_else(|| DriverError::Protocol("Codex dynamic tool request has expired".into()))?;
+        let current_turn = self.0.state.lock().await.turn_id.clone();
+        if pending.turn_id.is_some() && pending.turn_id != current_turn {
+            let error = "Codex dynamic tool request belongs to a finished turn".to_string();
+            let response_result = self.0.respond(&pending.provider_id, Err(error.clone())).await;
+            return response_result.map_err(|_| DriverError::Protocol(error));
+        }
+        let response = match result {
+            Ok(data) => json!({
+                "success": true,
+                "contentItems": [{ "type": "inputText", "text": serde_json::to_string(&data).unwrap_or_else(|_| "null".into()) }]
+            }),
+            Err(error) => json!({
+                "success": false,
+                "contentItems": [{ "type": "inputText", "text": error }]
+            }),
+        };
+        self.0.respond(&pending.provider_id, Ok(response)).await
+    }
+
     async fn stop_runtime_task(&self, task: &RuntimeTask) -> Result<()> {
         match task.kind {
             RuntimeTaskKind::Process => {
@@ -1756,6 +1906,185 @@ fn parse_rate_limits(value: &Value) -> Option<Vec<kybern_protocol::UsageLimit>> 
 
 #[cfg(test)]
 mod tests {
+    use super::{ensure_requested_codex_model, parse_codex_model};
+
+    #[test]
+    fn model_catalog_preserves_exact_ids_defaults_and_effort_levels() {
+        let model = parse_codex_model(&json!({
+            "model": "gpt-6-astra",
+            "displayName": "GPT-6 Astra",
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": "low"},
+                {"reasoningEffort": "high"},
+                {"reasoningEffort": "max"}
+            ],
+            "defaultReasoningEffort": "high",
+            "isDefault": true
+        }))
+        .expect("visible model");
+
+        assert_eq!(model.id, "gpt-6-astra");
+        assert_eq!(model.display_name, "GPT-6 Astra");
+        assert_eq!(model.efforts, ["low", "high", "max"]);
+        assert_eq!(model.default_effort.as_deref(), Some("high"));
+        assert!(model.is_default);
+    }
+
+    #[test]
+    fn model_catalog_excludes_hidden_and_malformed_entries() {
+        assert!(parse_codex_model(&json!({"model": "internal", "hidden": true})).is_none());
+        assert!(parse_codex_model(&json!({"displayName": "Missing selector"})).is_none());
+    }
+
+    #[test]
+    fn explicit_model_must_not_silently_fall_back() {
+        assert!(ensure_requested_codex_model(Some("custom/luna"), Some("gpt-6-astra")).is_err());
+        assert!(ensure_requested_codex_model(Some("custom/luna"), Some("custom/luna")).is_ok());
+        assert!(ensure_requested_codex_model(None, Some("gpt-6-astra")).is_ok());
+        assert!(ensure_requested_codex_model(Some("custom/luna"), None).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn model_discovery_uses_project_and_configured_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::{AgentDriver, ProbeContext};
+
+        let fixture = tempfile::tempdir().unwrap();
+        std::fs::write(fixture.path().join("project-marker"), "present").unwrap();
+        let binary = fixture.path().join("codex-fixture");
+        std::fs::write(
+            &binary,
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'codex-cli 0.154.0\n'
+  exit 0
+fi
+[ "$1" = "app-server" ] || exit 2
+IFS= read -r initialize
+printf '{"id":1,"result":{}}\n'
+IFS= read -r initialized
+IFS= read -r models
+if [ "$CODEX_DISCOVERY_FIXTURE" = "from-env" ] && [ -f project-marker ]; then
+  printf '{"id":2,"result":{"data":[{"model":"custom/from-context","displayName":"Context model","supportedReasoningEfforts":[{"reasoningEffort":"max"}],"defaultReasoningEffort":"max","isDefault":true}]}}\n'
+else
+  printf '{"id":2,"result":{"data":[]}}\n'
+fi
+"##,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&binary, permissions).unwrap();
+
+        let status = super::CodexDriver
+            .probe_with_context(&ProbeContext {
+                binary: Some(binary),
+                cwd: Some(fixture.path().to_path_buf()),
+                env: [("CODEX_DISCOVERY_FIXTURE".into(), "from-env".into())].into(),
+            })
+            .await;
+
+        assert!(status.available);
+        assert_eq!(status.models.len(), 1);
+        assert_eq!(status.models[0].id, "custom/from-context");
+        assert_eq!(status.models[0].efforts, ["max"]);
+        assert_eq!(status.models[0].default_effort.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn dynamic_tools_accept_shared_gateway_credentials_without_using_mcp() {
+        use super::*;
+        use crate::{NativeToolDefinition, NativeToolRestrictions};
+
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: None,
+            tools: vec![NativeToolDefinition {
+                name: "kybern_collaboration_read".into(),
+                description: "Read collaboration state".into(),
+                input_schema: json!({"type":"object"}),
+            }],
+            restrictions: NativeToolRestrictions::default(),
+        };
+        assert!(validate_codex_bridge(&bridge).is_ok());
+
+        let mut restricted = bridge;
+        restricted.restrictions.require_enforcement = true;
+        assert!(matches!(
+            validate_codex_bridge(&restricted),
+            Err(DriverError::Unsupported(message)) if message.contains("cannot enforce coordinator restrictions")
+        ));
+    }
+
+    #[tokio::test]
+    async fn dynamic_tool_requests_round_trip_with_native_ids() {
+        use super::*;
+        use crate::{NativeToolDefinition, NativeToolRestrictions};
+
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: Some("root".into()),
+                turn_id: Some("turn-1".into()),
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            bridge: Some(NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: None,
+                authorization: None,
+                coordinator_instructions: None,
+                tools: vec![NativeToolDefinition {
+                    name: "kybern_collaboration_read".into(),
+                    description: "Read collaboration state".into(),
+                    input_schema: json!({"type":"object"}),
+                }],
+                restrictions: NativeToolRestrictions::default(),
+            }),
+            closed: AtomicBool::new(false),
+        });
+
+        session
+            .handle_server_request(
+                json!(17),
+                "item/tool/call",
+                &json!({"callId":"call-17","threadId":"root","turnId":"turn-1","tool":"kybern_collaboration_read","arguments":{"group_id":"g"}}),
+            )
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(DriverEvent::AppToolRequest { request_id, name, arguments })
+                if request_id == "call-17" && name == "kybern_collaboration_read" && arguments["group_id"] == "g"
+        ));
+
+        let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        handle.respond_app_tool("call-17", Ok(json!({"messages":[]}))).await.unwrap();
+        assert!(session.pending_app_tools.lock().await.is_empty());
+        handle.close().await.unwrap();
+    }
 
     #[tokio::test]
     async fn questions_round_trip_and_withdraw_on_provider_resolution() {
@@ -1769,6 +2098,7 @@ mod tests {
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
                 manual_compaction: false,
@@ -1787,6 +2117,7 @@ mod tests {
                 stopping_processes: HashSet::new(),
             }),
             turn_usage: Mutex::new(None),
+            bridge: None,
             closed: AtomicBool::new(false),
         });
         session
@@ -1938,6 +2269,78 @@ mod startup_cleanup_tests {
     use std::{os::unix::fs::PermissionsExt, time::Duration};
 
     #[tokio::test]
+    async fn provider_session_attach_scopes_tools_and_coordinator_instructions() {
+        use crate::{NativeToolDefinition, NativeToolRestrictions};
+
+        for (resume, fork, coordinator, method) in [
+            (None, false, true, "thread/start"),
+            (Some("saved"), false, true, "thread/resume"),
+            (Some("saved"), true, true, "thread/fork"),
+            (Some("ordinary"), false, false, "thread/resume"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("codex-fixture");
+            let requests = root.path().join("requests");
+            std::fs::write(
+                &binary,
+                r#"#!/bin/sh
+IFS= read -r line
+printf '%s\n' "$line" >> "$REQUESTS"
+printf '{"id":1,"result":{}}\n'
+IFS= read -r line
+printf '%s\n' "$line" >> "$REQUESTS"
+IFS= read -r line
+printf '%s\n' "$line" >> "$REQUESTS"
+printf '{"id":2,"result":{"thread":{"id":"root"},"model":"fixture"}}\n'
+IFS= read -r line
+printf '{"id":3,"result":{"rateLimits":{}}}\n'
+wait
+"#,
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let bridge = NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+                authorization: Some("session-capability".into()),
+                coordinator_instructions: coordinator.then(|| "COORDINATOR ROLE SENTINEL".into()),
+                tools: vec![NativeToolDefinition {
+                    name: "kybern_collaboration_spawn".into(),
+                    description: "Delegate bounded work".into(),
+                    input_schema: json!({"type":"object"}),
+                }],
+                restrictions: NativeToolRestrictions::default(),
+            };
+            let spawned = CodexDriver
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: PermissionMode::Supervised,
+                    native_tool_bridge: Some(bridge),
+                    resume_session_id: resume.map(str::to_string),
+                    fork,
+                    rewind: None,
+                    binary: Some(binary),
+                    env: HashMap::from([("REQUESTS".into(), requests.to_string_lossy().into_owned())]),
+                })
+                .await
+                .unwrap();
+            let recorded = std::fs::read_to_string(requests).unwrap();
+            let lines = recorded.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+            assert_eq!(lines.len(), 3);
+            assert_eq!(lines[2]["method"], method);
+            assert!(lines.iter().all(|line| line["method"] != "config/read"));
+            assert_eq!(lines[2]["params"].get("developerInstructions").is_some(), coordinator);
+            if coordinator {
+                assert_eq!(lines[2]["params"]["developerInstructions"], "COORDINATOR ROLE SENTINEL");
+            }
+            assert_eq!(lines[2]["params"]["dynamicTools"][0]["name"], "kybern_collaboration_spawn");
+            spawned.session.close().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn failed_resume_cleans_up_and_preserves_history() {
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("codex-fixture");
@@ -1962,6 +2365,7 @@ wait
                 model: None,
                 effort: None,
                 permission_mode: PermissionMode::Supervised,
+                native_tool_bridge: None,
                 resume_session_id: Some("fixture".into()),
                 fork: false,
                 rewind: None,
@@ -1989,6 +2393,7 @@ wait
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
                 manual_compaction: false,
@@ -2007,6 +2412,7 @@ wait
                 stopping_processes: HashSet::new(),
             }),
             turn_usage: Mutex::new(None),
+            bridge: None,
             closed: AtomicBool::new(false),
         });
         let tokens = json!({"threadId":"test","tokenUsage":{"last":{"totalTokens":1234},"modelContextWindow":200000}});
@@ -2043,6 +2449,7 @@ wait
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
                 manual_compaction: false,
@@ -2061,6 +2468,7 @@ wait
                 stopping_processes: HashSet::new(),
             }),
             turn_usage: Mutex::new(None),
+            bridge: None,
             closed: AtomicBool::new(false),
         });
 
@@ -2111,6 +2519,7 @@ wait
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
                 manual_compaction: false,
@@ -2129,6 +2538,7 @@ wait
                 stopping_processes: HashSet::new(),
             }),
             turn_usage: Mutex::new(None),
+            bridge: None,
             closed: AtomicBool::new(false),
         });
 
@@ -2178,6 +2588,7 @@ wait
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
             notification_gate: Mutex::new(()),
             state: Mutex::new(State {
                 manual_compaction: false,
@@ -2196,6 +2607,7 @@ wait
                 stopping_processes: HashSet::new(),
             }),
             turn_usage: Mutex::new(None),
+            bridge: None,
             closed: AtomicBool::new(false),
         });
         session.state.lock().await.turn_id = Some("active-turn".into());

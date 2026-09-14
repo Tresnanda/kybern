@@ -1,9 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { randomUUID } from "expo-crypto";
 import { Keyboard, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { router } from "expo-router";
 import { setDraft, useDraft } from "../state/draft";
-import type { PermissionMode, Thread } from "../state/protocol";
+import type { PermissionMode, ProjectCoordinatorSwitchHarnessParams, ProviderStatus, Thread } from "../state/protocol";
+import { projectCoordinatorMode } from "../../../../packages/kybern-client/src/projectCoordinator";
 import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
 import {
   errorText,
@@ -205,11 +207,57 @@ export function ComposerOptions({
   const [choosing, setChoosing] = useState<"agent" | "effort" | null>(null);
   const [error, setError] = useState("");
   const [modelQuery, setModelQuery] = useState("");
+  const switchAttempt = useRef<{ fingerprint: string; request: ProjectCoordinatorSwitchHarnessParams } | null>(null);
+  const coordinator = !!thread?.coordinator_project_id;
+  const canSwitchHarness = !thread || (coordinator && (thread.status === "idle" || thread.status === "failed"));
   const { models: visibleModels, customId } = modelChoices(
     provider?.models ?? [],
     model,
     modelQuery,
   );
+  async function switchCoordinator(request: Omit<ProjectCoordinatorSwitchHarnessParams, "operation_id" | "project_id">) {
+    if (!thread?.coordinator_project_id || !canSwitchHarness) throw new Error("Finish or stop the current turn before changing the coordinator’s harness.");
+    const fingerprint = JSON.stringify([thread.coordinator_project_id, request]);
+    if (switchAttempt.current?.fingerprint !== fingerprint) switchAttempt.current = {
+      fingerprint,
+      request: {
+        operation_id: randomUUID(),
+        project_id: thread.coordinator_project_id,
+        ...request,
+      },
+    };
+    await rpc("collaboration.coordinator.switch_harness", switchAttempt.current.request);
+    await Promise.all([refresh(), loadThread(thread.id)]);
+    switchAttempt.current = null;
+  }
+  async function chooseProvider(next: ProviderStatus) {
+    if (busy || !canSwitchHarness) return;
+    const permission = next.supported_permission_modes.includes(mode)
+      ? mode : next.supported_permission_modes[0] ?? "supervised";
+    if (!thread) {
+      setDraft({ provider: next.kind, instance: next.instances[0] ?? "default", model: "", effort: "", permission });
+      setModelQuery("");
+      setChoosing(null);
+      return;
+    }
+    if (!thread.coordinator_project_id || next.kind === thread.provider.kind) {
+      setChoosing(null);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await switchCoordinator({
+        provider: { kind: next.kind, instance: next.instances.includes("default") ? "default" : next.instances[0] ?? "default" },
+        permission_mode: permission,
+      });
+      setModelQuery("");
+      setChoosing(null);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally { setBusy(false); }
+  }
+
   async function update(patch: {
     model?: string;
     effort?: string;
@@ -219,8 +267,19 @@ export function ComposerOptions({
     setError("");
     try {
       if (thread) {
-        await rpc("threads.update", { thread_id: thread.id, ...patch });
-        await Promise.all([refresh(), loadThread(thread.id)]);
+        if (thread.coordinator_project_id && (patch.model !== undefined || patch.effort !== undefined)) {
+          const nextModel = patch.model !== undefined ? patch.model || undefined : thread.model || undefined;
+          const nextEffort = patch.effort !== undefined ? patch.effort || undefined : patch.model !== undefined ? undefined : thread.effort || undefined;
+          await switchCoordinator({
+            provider: thread.provider,
+            ...(nextModel ? { model: nextModel } : {}),
+            ...(nextEffort ? { effort: nextEffort } : {}),
+            permission_mode: thread.permission_mode,
+          });
+        } else {
+          await rpc("threads.update", { thread_id: thread.id, ...patch });
+          await Promise.all([refresh(), loadThread(thread.id)]);
+        }
       } else
         setDraft({
           ...(patch.model !== undefined ? { model: patch.model } : {}),
@@ -284,7 +343,7 @@ export function ComposerOptions({
               marginBottom: 20,
             }}
           >
-            {thread ? (
+            {thread && !coordinator ? (
               <View style={[styles.line, { minHeight: 54 }]}>
                 <ProviderMark kind={kind} size={22} />
                 <T style={{ flex: 1 }}>{provider?.display_name ?? kind}</T>
@@ -293,7 +352,7 @@ export function ComposerOptions({
               <>
                 <Tap
                   label="Choose agent"
-                  disabled={!!thread}
+                  disabled={busy || !canSwitchHarness}
                   onPress={() =>
                     setChoosing(choosing === "agent" ? null : "agent")
                   }
@@ -301,7 +360,7 @@ export function ComposerOptions({
                 >
                   <ProviderMark kind={kind} size={22} />
                   <T style={{ flex: 1 }}>{provider?.display_name ?? kind}</T>
-                  {!thread && <Icon name="chevron.down" size={12} />}
+                  <Icon name="chevron.down" size={12} />
                 </Tap>
               </>
             )}
@@ -336,34 +395,29 @@ export function ComposerOptions({
                       key={p.kind}
                       label={`Use ${p.display_name}`}
                       selected={kind === p.kind}
-                      onPress={() => {
-                        setModelQuery("");
-                        setDraft({
-                          provider: p.kind,
-                          instance: p.instances[0] ?? "default",
-                          model: "",
-                          effort: "",
-                          permission: p.supported_permission_modes.includes(
-                            mode,
-                          )
-                            ? mode
-                            : (p.supported_permission_modes[0] ?? "supervised"),
-                        });
-                        setChoosing(null);
-                      }}
+                      disabled={busy}
+                      onPress={() => void chooseProvider(p)}
                       style={[
                         styles.line,
                         { paddingHorizontal: 16, minHeight: 54 },
                       ]}
                     >
                       <ProviderMark kind={p.kind} size={22} />
-                      <T style={{ flex: 1 }}>{p.display_name}</T>
+                      <View style={{ flex: 1, paddingVertical: 10 }}>
+                        <T>{p.display_name}</T>
+                        {coordinator && <T variant="caption" tone="secondary">
+                          {projectCoordinatorMode(p.kind) === "dedicated" ? "Coordination tools only" : "Native coding tools remain available"}
+                        </T>}
+                      </View>
                       {kind === p.kind && <Icon name="checkmark" size={16} />}
                     </Tap>
                   ))}
               </View>
             </Group>
           )}
+          {coordinator && <T variant="caption" tone="secondary" style={{ marginVertical: 12 }}>
+            {canSwitchHarness ? "Changing harnesses keeps this conversation, workers, and project knowledge." : "Finish or stop the current turn before changing the coordinator’s harness."}
+          </T>}
           {choosing === "effort" && (
             <Group title="Choose reasoning effort">
               <View

@@ -3,6 +3,7 @@ import {
   partToken,
   structuredSegments,
 } from "../../../../packages/kybern-client/src/composerTokens";
+import { threadReferenceLabel } from "../../../../packages/kybern-client/src/threadReferences";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { ComposerCamera } from "./ComposerCamera";
@@ -94,6 +95,7 @@ const ATTACH_EXIT = FadeOut.duration(120);
 const selectCommands = (state: ThreadState) => state.providerCommands;
 
 function contextLabel(part: ContentPart) {
+  if (part.type === "thread_reference") return threadReferenceLabel(part);
   if (part.type === "mention") return part.display_name || part.name;
   if (part.type === "skill" || part.type === "attachment") return part.name;
   if (part.type === "file_mention") return part.path;
@@ -703,6 +705,17 @@ export const Composer = memo(function Composer({
                       : { projectId: draft.projectId, tab: "Files" },
                   }),
               },
+              {
+                label: "Conversation",
+                icon: "text.bubble",
+                action: () =>
+                  router.push({
+                    pathname: "/thread-picker",
+                    params: thread
+                      ? { threadId: thread.id, projectId: thread.project_id }
+                      : { projectId: draft.projectId },
+                  }),
+              },
             ] as const
           ).map((item) => (
             <Tap
@@ -918,7 +931,9 @@ export const Composer = memo(function Composer({
                           <>
                             <Icon
                               name={
-                                part.type === "skill"
+                                part.type === "thread_reference"
+                                  ? "text.bubble"
+                                  : part.type === "skill"
                                   ? "sparkles"
                                   : part.type === "file_mention"
                                     ? "doc.text"

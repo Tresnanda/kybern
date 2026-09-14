@@ -49,6 +49,9 @@ impl Host {
             created_at: now,
             updated_at: now,
             last_seq: 0,
+            parent_thread_id: None,
+            coordinator_project_id: None,
+            collaboration_group_id: None,
         };
         self.state.store.thread_upsert(&thread).unwrap();
         thread

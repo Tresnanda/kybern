@@ -23,6 +23,11 @@ export const EVENTS_LAGGED_NOTIFICATION = "events.lagged";
 export type Uuid = string;
 export type ProjectId = Uuid;
 export type ThreadId = Uuid;
+export type GroupId = Uuid;
+export type AssignmentId = Uuid;
+export type CollaborationMessageId = Uuid;
+export type ContextEntryId = Uuid;
+export type OperationId = Uuid;
 export type TurnId = Uuid;
 export type MessageId = Uuid;
 export type ApprovalId = Uuid;
@@ -167,6 +172,10 @@ export interface WorktreeInfo {
 export interface Thread {
   id: ThreadId;
   project_id: ProjectId;
+  /** Real Kybern thread relationships; provider-native tasks stay separate. */
+  parent_thread_id?: ThreadId | null;
+  coordinator_project_id?: ProjectId | null;
+  collaboration_group_id?: GroupId | null;
   title: string;
   provider: ProviderInstance;
   model?: string | null;
@@ -183,8 +192,211 @@ export interface Thread {
   last_seq: EventSeq;
 }
 
+// ---- collaboration ----
+
+export type GroupStatus = "active" | "paused" | "stopped" | "completed";
+export type CoordinatorMode = "ordinary" | "dedicated";
+
+export interface CollaborationPolicy {
+  allowed_providers: ProviderKind[];
+  max_active_workers: number;
+  max_depth: number;
+  max_pending_messages: number;
+  max_wakeups_per_assignment: number;
+  require_worktree_for_editing: boolean;
+}
+
+export interface CollaborationGroup {
+  id: GroupId;
+  project_id: ProjectId;
+  coordinator_thread_id: ThreadId;
+  objective: string;
+  success_criteria: string[];
+  status: GroupStatus;
+  coordinator_mode: CoordinatorMode;
+  policy: CollaborationPolicy;
+  revision: number;
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+export interface ProjectCoordinator {
+  thread: Thread;
+  group: CollaborationGroup;
+  created: boolean;
+}
+
+export interface ProjectCoordinatorCreateParams {
+  operation_id: OperationId;
+  project_id: ProjectId;
+  provider: ProviderInstance;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  coordinator_mode?: CoordinatorMode | null;
+  initial_goal?: string | null;
+}
+
+export interface ProjectCoordinatorSwitchHarnessParams {
+  operation_id: OperationId;
+  project_id: ProjectId;
+  provider: ProviderInstance;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+}
+
+export type GroupMemberRole =
+  | "coordinator"
+  | "worker"
+  | "reviewer"
+  | "integrator"
+  | "observer";
+
+export interface GroupMember {
+  group_id: GroupId;
+  thread_id: ThreadId;
+  role: GroupMemberRole;
+  active: boolean;
+  joined_at: DateTime;
+}
+
+export type AssignmentKind =
+  | "edit"
+  | "review"
+  | "research"
+  | "integration"
+  | "coordination";
+export type AssignmentStatus =
+  | "pending"
+  | "working"
+  | "waiting"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "attention_needed";
+
+export interface AssignmentResult {
+  outcome: "success" | "partial" | "failed";
+  summary: string;
+  changes: string[];
+  checks: string[];
+  artifacts: string[];
+  unresolved: string[];
+  completed_at: DateTime;
+}
+
+export interface CollaborationAssignment {
+  id: AssignmentId;
+  group_id: GroupId;
+  parent_assignment_id?: AssignmentId | null;
+  owner_thread_id?: ThreadId | null;
+  requested_child?: CollaborationChildSpec | null;
+  created_by_thread_id?: ThreadId | null;
+  title: string;
+  instructions: string;
+  kind: AssignmentKind;
+  status: AssignmentStatus;
+  dispatch_message_id?: Uuid | null;
+  base_revision?: string | null;
+  depth: number;
+  result?: AssignmentResult | null;
+  uncertainty?: string | null;
+  revision: number;
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+export interface CollaborationChildSpec {
+  provider: ProviderInstance;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  base_revision?: string | null;
+}
+
+export type CollaborationMessagePurpose =
+  | "progress"
+  | "question"
+  | "reply"
+  | "change_request"
+  | "result"
+  | "failure"
+  | "redirect";
+export type CollaborationDeliveryState =
+  | "persisted"
+  | "queued"
+  | "submitted"
+  | "answered"
+  | "failed"
+  | "cancelled"
+  | "uncertain";
+
+export interface CollaborationMessage {
+  id: CollaborationMessageId;
+  operation_id: OperationId;
+  group_id: GroupId;
+  assignment_id?: AssignmentId | null;
+  from_thread_id?: ThreadId | null;
+  to_thread_id: ThreadId;
+  /** Older daemons omit this field; false means ordinary group delivery. */
+  external_recipient?: boolean;
+  purpose: CollaborationMessagePurpose;
+  reply_to?: CollaborationMessageId | null;
+  body: string;
+  state: CollaborationDeliveryState;
+  delivery_turn_id?: TurnId | null;
+  wakeup_count: number;
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+export type ContextEntryKind =
+  | "plan"
+  | "brief"
+  | "decision"
+  | "research"
+  | "instruction"
+  | "result_reference";
+
+export interface ContextEntry {
+  id: ContextEntryId;
+  group_id: GroupId;
+  key: string;
+  kind: ContextEntryKind;
+  body: string;
+  author_thread_id?: ThreadId | null;
+  user_authored: boolean;
+  revision: number;
+  source_refs: string[];
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+export interface CollaborationGroupDetail {
+  group: CollaborationGroup;
+  members: GroupMember[];
+  assignments: CollaborationAssignment[];
+  pending_messages: CollaborationMessage[];
+}
+
+export interface ContextEntryHistory {
+  entry_id: ContextEntryId;
+  revisions: ContextEntry[];
+  next_before_revision?: number | null;
+}
+
+export interface ThreadReferencePart {
+  type: "thread_reference";
+  thread_id: ThreadId;
+  title: string;
+  project_id?: ProjectId | null;
+}
+
 export type ContentPart =
   | { type: "text"; text: string }
+  | ThreadReferencePart
   | { type: "image"; media_type: string; data: string }
   | {
       type: "attachment";
@@ -431,6 +643,11 @@ export type EventPayload =
   | { kind: "message_queue_updated"; message: QueuedMessage }
   | { kind: "message_steered"; message_id: MessageId; message: UserMessage }
   | { kind: "thread_notes_updated"; notes: ThreadNotes }
+  | { kind: "collaboration_group_updated"; group: CollaborationGroup }
+  | { kind: "collaboration_member_updated"; member: GroupMember }
+  | { kind: "collaboration_assignment_updated"; assignment: CollaborationAssignment }
+  | { kind: "collaboration_message_updated"; message: CollaborationMessage }
+  | { kind: "collaboration_context_updated"; entry: ContextEntry }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "turn_resumed" }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
@@ -593,6 +810,49 @@ export interface ThreadsListResult {
   activity?: ThreadActivitySummary[];
 }
 
+export interface ThreadsSearchParams {
+  project_id?: ProjectId | null;
+  all_projects?: boolean;
+  query?: string | null;
+  include_archived?: boolean;
+  cursor?: string | null;
+  limit?: number;
+}
+
+export interface ThreadSearchHit {
+  thread: Thread;
+  snippet?: string | null;
+  matched_at?: DateTime | null;
+}
+
+export interface ThreadsSearchResult {
+  threads: ThreadSearchHit[];
+  next_cursor?: string | null;
+}
+
+export interface ThreadReadMessage {
+  seq: EventSeq;
+  turn_id?: TurnId | null;
+  role: "user" | "assistant" | "system";
+  text: string;
+  text_offset: number;
+  next_text_offset?: number | null;
+  text_truncated: boolean;
+  created_at: DateTime;
+  attribution: {
+    kind: "user" | "agent" | "collaboration";
+    thread_id?: ThreadId | null;
+    collaboration_message_id?: CollaborationMessageId | null;
+  };
+}
+
+export interface ThreadsReadResult {
+  thread: Thread;
+  messages: ThreadReadMessage[];
+  next_before_seq?: EventSeq | null;
+  through_seq: EventSeq;
+}
+
 export interface ThreadsCreateParams {
   project_id: ProjectId;
   provider: ProviderInstance;
@@ -650,6 +910,7 @@ export interface ThreadsArchiveParams {
 export interface ThreadsSendParams {
   thread_id: ThreadId;
   message: UserMessage;
+  message_id?: MessageId | null;
 }
 
 export interface ThreadsSendResult {
@@ -1116,6 +1377,8 @@ export interface Methods {
   "projects.update": [ProjectsUpdateParams, Project];
   "projects.remove": [ProjectsRemoveParams, Empty];
   "threads.list": [ThreadsListParams, ThreadsListResult];
+  "threads.search": [ThreadsSearchParams, ThreadsSearchResult];
+  "threads.read": [{ thread_id: ThreadId; before_seq?: EventSeq | null; through_seq?: EventSeq | null; limit?: number; message_seq?: EventSeq | null; text_offset?: number | null }, ThreadsReadResult];
   "threads.create": [ThreadsCreateParams, Thread];
   "threads.get": [ThreadsGetParams, ThreadsGetResult];
   "threads.update": [ThreadsUpdateParams, Thread];
@@ -1125,6 +1388,28 @@ export interface Methods {
   "threads.answer": [ThreadsAnswerParams, Empty];
   "threads.compact": [ThreadsInterruptParams, ThreadsSendResult];
   "threads.interrupt": [ThreadsInterruptParams, Empty];
+  "collaboration.coordinator.get": [{ project_id: ProjectId }, ProjectCoordinator | null];
+  "collaboration.coordinator.get_or_create": [ProjectCoordinatorCreateParams, ProjectCoordinator];
+  "collaboration.coordinator.switch_harness": [ProjectCoordinatorSwitchHarnessParams, ProjectCoordinator];
+  "collaboration.groups.create": [{ operation_id: OperationId; project_id: ProjectId; coordinator_thread_id: ThreadId; objective: string; success_criteria?: string[]; coordinator_mode?: CoordinatorMode | null; policy?: CollaborationPolicy | null }, CollaborationGroup];
+  "collaboration.groups.get": [{ group_id: GroupId }, CollaborationGroupDetail];
+  "collaboration.groups.list": [{ project_id?: ProjectId | null; include_stopped?: boolean; cursor?: string | null; limit?: number }, { groups: CollaborationGroup[]; next_cursor?: string | null }];
+  "collaboration.groups.update": [{ operation_id: OperationId; group_id: GroupId; expected_revision: number; objective?: string | null; success_criteria?: string[] | null; coordinator_thread_id?: ThreadId | null; coordinator_mode?: CoordinatorMode | null; policy?: CollaborationPolicy | null }, CollaborationGroup];
+  "collaboration.groups.control": [{ operation_id: OperationId; group_id: GroupId; action: "pause" | "stop" | "resume" | "complete" }, CollaborationGroup];
+  "collaboration.members.attach": [{ operation_id: OperationId; group_id: GroupId; thread_id: ThreadId; role: GroupMemberRole }, GroupMember];
+  "collaboration.members.detach": [{ operation_id: OperationId; group_id: GroupId; thread_id: ThreadId }, Empty];
+  "collaboration.assignments.create": [{ operation_id: OperationId; group_id: GroupId; parent_assignment_id?: AssignmentId | null; owner_thread_id?: ThreadId | null; child?: CollaborationChildSpec | null; title: string; instructions: string; kind: AssignmentKind }, CollaborationAssignment];
+  "collaboration.assignments.get": [{ assignment_id: AssignmentId }, CollaborationAssignment];
+  "collaboration.assignments.list": [{ group_id: GroupId; include_finished?: boolean; cursor?: string | null; limit?: number }, { assignments: CollaborationAssignment[]; next_cursor?: string | null }];
+  "collaboration.assignments.update": [{ operation_id: OperationId; assignment_id: AssignmentId; expected_revision: number; status: AssignmentStatus; uncertainty?: string | null }, CollaborationAssignment];
+  "collaboration.assignments.complete": [{ operation_id: OperationId; assignment_id: AssignmentId; result: AssignmentResult }, CollaborationAssignment];
+  "collaboration.assignments.cancel": [{ operation_id: OperationId; assignment_id: AssignmentId; reason?: string | null }, CollaborationAssignment];
+  "collaboration.messages.send": [{ operation_id: OperationId; group_id: GroupId; assignment_id?: AssignmentId | null; from_thread_id?: ThreadId | null; to_thread_id: ThreadId; purpose: CollaborationMessagePurpose; reply_to?: CollaborationMessageId | null; body: string }, CollaborationMessage];
+  "collaboration.messages.list": [{ group_id: GroupId; thread_id?: ThreadId | null; assignment_id?: AssignmentId | null; cursor?: string | null; limit?: number }, { messages: CollaborationMessage[]; next_cursor?: string | null }];
+  "collaboration.context.put": [{ operation_id: OperationId; group_id: GroupId; entry_id?: ContextEntryId | null; key: string; kind: ContextEntryKind; body: string; author_thread_id?: ThreadId | null; user_authored?: boolean; expected_revision?: number | null; source_refs?: string[] }, ContextEntry];
+  "collaboration.context.list": [{ group_id: GroupId; keys?: string[]; kinds?: ContextEntryKind[]; cursor?: string | null; limit?: number }, { entries: ContextEntry[]; next_cursor?: string | null }];
+  "collaboration.context.history": [{ entry_id: ContextEntryId; before_revision?: number | null; limit?: number }, ContextEntryHistory];
+  "collaboration.wait": [{ group_id: GroupId; assignment_ids?: AssignmentId[]; cursor?: string | null; timeout_ms?: number }, { cursor: string; timed_out: boolean; group?: CollaborationGroup; members: GroupMember[]; assignments: CollaborationAssignment[]; messages: CollaborationMessage[]; context_entries: ContextEntry[] }];
   "tasks.list": [TasksListParams, TasksListResult];
   "tasks.stop": [TaskControlParams, RuntimeTask];
   "tasks.background": [TaskControlParams, RuntimeTask];

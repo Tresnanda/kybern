@@ -36,6 +36,10 @@ expression: scopes
   - "orchestration:operate"
 - - threads.list
   - "orchestration:read"
+- - threads.search
+  - "orchestration:read"
+- - threads.read
+  - "orchestration:read"
 - - threads.create
   - "orchestration:operate"
 - - threads.get
@@ -68,6 +72,50 @@ expression: scopes
   - "orchestration:operate"
 - - threads.interrupt
   - "orchestration:operate"
+- - collaboration.groups.create
+  - "orchestration:operate"
+- - collaboration.coordinator.get
+  - "orchestration:read"
+- - collaboration.coordinator.get_or_create
+  - "orchestration:operate"
+- - collaboration.coordinator.switch_harness
+  - "orchestration:operate"
+- - collaboration.groups.get
+  - "orchestration:read"
+- - collaboration.groups.list
+  - "orchestration:read"
+- - collaboration.groups.update
+  - "orchestration:operate"
+- - collaboration.groups.control
+  - "orchestration:operate"
+- - collaboration.members.attach
+  - "orchestration:operate"
+- - collaboration.members.detach
+  - "orchestration:operate"
+- - collaboration.assignments.create
+  - "orchestration:operate"
+- - collaboration.assignments.get
+  - "orchestration:read"
+- - collaboration.assignments.list
+  - "orchestration:read"
+- - collaboration.assignments.update
+  - "orchestration:operate"
+- - collaboration.assignments.complete
+  - "orchestration:operate"
+- - collaboration.assignments.cancel
+  - "orchestration:operate"
+- - collaboration.messages.send
+  - "orchestration:operate"
+- - collaboration.messages.list
+  - "orchestration:read"
+- - collaboration.context.put
+  - "orchestration:operate"
+- - collaboration.context.list
+  - "orchestration:read"
+- - collaboration.context.history
+  - "orchestration:read"
+- - collaboration.wait
+  - "orchestration:read"
 - - tasks.list
   - "orchestration:read"
 - - tasks.stop

@@ -10,6 +10,7 @@ import {
   buildStructuredTextParts,
   structuredSegments,
 } from "../../../packages/kybern-client/src/composerTokens.ts";
+import { replacePromptText } from "../../../packages/kybern-client/src/prompts.ts";
 const skill = {
   type: "skill",
   name: "better-ui",
@@ -22,6 +23,12 @@ const plugin = {
   path: "/plugins/figma",
 };
 const file = { type: "file_mention", path: "src/My App.tsx" };
+const threadReference = {
+  type: "thread_reference",
+  thread_id: "thread-123",
+  title: "Release review",
+  project_id: "project-1",
+};
 test("structured parts flow in one paragraph, retaining prose, spacing and markers", () => {
   const parts = [
     { type: "text", text: "Please use " },
@@ -61,6 +68,23 @@ test("structured parts flow in one paragraph, retaining prose, spacing and marke
       [...parts, attachment, file].map((part, index) => ({ part, index })),
     ).map((g) => g.inline),
     [true, false, true],
+  );
+  assert.deepEqual(
+    groupInlineParts(
+      [
+        { type: "text", text: "Compare with" },
+        threadReference,
+        { type: "text", text: "before changing it" },
+      ].map((part, index) => ({ part, index })),
+    ).map((group) => group.inline),
+    [true, false, true],
+  );
+  assert.deepEqual(
+    replacePromptText(
+      { parts: [{ type: "text", text: "Old prompt" }, threadReference] },
+      "Edited prompt",
+    ).parts,
+    [{ type: "text", text: "Edited prompt" }, threadReference],
   );
 });
 test("picker insertion replaces only the caret token and keeps its wire identity", () => {

@@ -59,6 +59,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   let canReuseSnapshots = false
   const reusableSnapshots = new Set<ThreadId>()
   const uploads = new AbortController()
+  const collaborationListeners = new Set<(event: ThreadEvent | null) => void>()
 
   function rpc(): KybernClient {
     if (!client) throw new ConnectionClosedError("Not connected")
@@ -102,10 +103,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       // Old daemons and fresh subscriptions need authoritative snapshots.
       reusableSnapshots.clear()
       canReuseSnapshots = true
+      collaborationListeners.forEach((listener) => listener(null))
       void loadWorkspace(generation)
     }, (_headSeq, resumed) => {
       if (!resumed || disposed) return
       canReuseSnapshots = true
+      collaborationListeners.forEach((listener) => listener(null))
       void loadWorkspace(++hydrationGeneration)
     })
     client.connect()
@@ -385,6 +388,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       storeRuntimeTask(ev.task)
     }
     s.receiveEvent(ev)
+    if (ev.kind.startsWith("collaboration_"))
+      collaborationListeners.forEach((listener) => listener(ev))
 
     if (ev.kind === "turn_completed" || ev.kind === "turn_failed") {
       const current = useStore.getState()
@@ -832,6 +837,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     uploads.abort()
     client?.close("Environment disconnected")
   }
+  function subscribeCollaboration(listener: (event: ThreadEvent | null) => void) {
+    collaborationListeners.add(listener)
+    return () => {
+      collaborationListeners.delete(listener)
+    }
+  }
   return {
     connect,
     disconnect,
@@ -861,6 +872,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     uploadFile,
     fetchThreadImage,
     artifactPreviewUrl,
+    subscribeCollaboration,
   }
 }
 
@@ -927,6 +939,8 @@ export const addProject: EnvironmentRuntime["addProject"] = (...args) =>
   activeRuntime().addProject(...args)
 export const removeProject: EnvironmentRuntime["removeProject"] = (...args) =>
   activeRuntime().removeProject(...args)
+export const subscribeCollaboration: EnvironmentRuntime["subscribeCollaboration"] = (...args) =>
+  activeRuntime().subscribeCollaboration(...args)
 export const uploadFile: EnvironmentRuntime["uploadFile"] = (...args) =>
   activeRuntime().uploadFile(...args)
 

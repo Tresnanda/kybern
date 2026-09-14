@@ -10,18 +10,19 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
-import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, PaperclipIcon, SettingsIcon, WorktreeIcon } from "@/lib/kit/icons"
+import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
-import { createThread, rpc } from "@/state/rpc"
+import { activeRuntime, createThread, rpc } from "@/state/rpc"
 import { selectAvailableProviders, useStore } from "@/state/store"
+import { createProjectCoordinatorStarter, projectCoordinatorMode } from "../../../../packages/kybern-client/src/projectCoordinator"
 
 import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from "./Composer"
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { SurfaceHeader } from "./chrome"
 
-export function Draft({ projectId, paneId, onProjectChange }: { projectId: ProjectId; paneId?: PaneId; onProjectChange?: (id: ProjectId) => void }) {
+export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }: { projectId: ProjectId; paneId?: PaneId; onProjectChange?: (id: ProjectId) => void; purpose?: "thread" | "coordinator" }) {
   const environmentId = useStore((s) => s.environmentId)
   const project = useStore((s) => s.projects[projectId])
   const projects = useStore((s) => s.projects)
@@ -31,6 +32,10 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
   const providers = useStore(useShallow(selectAvailableProviders))
   const set = useStore((s) => s.set)
   const composer = useRef<ComposerHandle>(null)
+  const coordinatorStarter = useRef<{
+    runtime: ReturnType<typeof activeRuntime>
+    controller: ReturnType<typeof createProjectCoordinatorStarter>
+  } | null>(null)
 
   const [modeStored, setMode] = useLocalStorage<PermissionMode | null>(`kybern.mode:${environmentId}`, null)
   const [providerStored, setProvider] = useLocalStorage<ProviderInstance | null>(`kybern.provider:${environmentId}`, null)
@@ -48,6 +53,9 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
   }, [providerStored, providers, settings])
   const choice = provider ? modelStored[provider.kind] : undefined
   const useWorktree = worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
+  const coordinatorDraft = purpose === "coordinator"
+  const providerStatus = provider ? providers.find((item) => item.kind === provider.kind) : undefined
+  const dedicatedCoordinator = provider ? projectCoordinatorMode(provider.kind) === "dedicated" : false
 
   useEffect(() => {
     composer.current?.focus()
@@ -89,7 +97,7 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
           <div className="t-stagger flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]">
             <Logo size={40} className="text-foreground" />
             <h2 style={{ "--i": 1 } as CSSProperties} className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
-              What should we do in{" "}
+              {coordinatorDraft ? "What should we work on in" : "What should we do in"}{" "}
               <Menu>
                 <MenuTrigger
                   render={
@@ -104,7 +112,7 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
                 <ComposerPickerMenuPopup align="center" side="bottom" className="min-w-56">
                   <MenuGroup>
                     {projectList.map((p) => (
-                      <MenuItem key={p.id} onClick={() => onProjectChange ? onProjectChange(p.id) : useStore.getState().selectDraft(p.id)}>
+                      <MenuItem key={p.id} onClick={() => onProjectChange ? onProjectChange(p.id) : useStore.getState().selectDraft(p.id, coordinatorDraft ? "coordinator" : "thread")}>
                         <FolderIcon />
                         <span className="min-w-0 flex-1 truncate">{p.name}</span>
                         {p.id === projectId && <CheckIcon className="size-3.5 shrink-0" />}
@@ -115,30 +123,51 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
               </Menu>
               ?
             </h2>
+            {coordinatorDraft && (
+              <p style={{ "--i": 2 } as CSSProperties} className="max-w-[58ch] text-pretty text-[length:var(--app-font-size-ui,12px)] leading-relaxed text-muted-foreground/75">
+                Your coordinator plans work, delegates tasks, and keeps project knowledge for next time.
+              </p>
+            )}
           </div>
         </div>
 
         <div className="t-stagger w-full shrink-0 pb-3 sm:pb-4">
-          <div style={{ "--i": 2 } as CSSProperties}>
+          <div style={{ "--i": coordinatorDraft ? 3 : 2 } as CSSProperties}>
           <Composer
             surfaceMode={paneId ? "split" : "single"}
-            draftKey={`project:${projectId}:${paneId ?? "main"}`}
+            draftKey={`${coordinatorDraft ? "coordinator" : "project"}:${projectId}:${paneId ?? "main"}`}
             ref={composer}
             autoFocus
             mode={mode}
             onModeChange={setMode}
             provider={provider}
-            onProviderChange={setProvider}
+            onProviderChange={(next) => {
+              setProvider(next)
+              const nextStatus = providers.find((item) => item.kind === next.kind)
+              if (nextStatus && !nextStatus.supported_permission_modes.includes(mode)) {
+                setMode(nextStatus.supported_permission_modes.includes("supervised") ? "supervised" : nextStatus.supported_permission_modes[0] ?? mode)
+              }
+            }}
             providers={allProviders}
             model={choice?.model}
             effort={choice?.effort}
             onModelChange={(model, effort) => { if (provider) setModelStored((m) => ({ ...m, [provider.kind]: { model, effort } })) }}
             projectId={projectId}
+            placeholder={coordinatorDraft ? "Describe the outcome, constraints, and what success looks like" : undefined}
             commands={commands}
             sendDisabled={!provider}
             disabledReason={providersLoading ? "Checking installed coding agents…" : "Install a coding agent first"}
             above={
               <LandingTray>
+                {coordinatorDraft && (
+                  <span
+                    title={dedicatedCoordinator ? "This harness enforces a coordination-only role." : "This harness keeps its native coding tools, so the coordination-only role is advisory."}
+                    className={cn(TRAY_CHIP_CLASS_NAME, "cursor-default text-[var(--color-text-foreground)]")}
+                  >
+                    <UsersIcon className="size-3.5 shrink-0" />
+                    <span className="min-w-0 truncate">Project coordinator</span>
+                  </span>
+                )}
                 <Menu>
                   <MenuTrigger render={<button type="button" aria-label="Switch project" className={TRAY_CHIP_CLASS_NAME} />}>
                     <FolderIcon className="size-3.5 shrink-0" />
@@ -149,7 +178,7 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
                     <MenuGroup>
                       <MenuGroupLabel>Project</MenuGroupLabel>
                       {projectList.map((p) => (
-                        <MenuItem key={p.id} onClick={() => onProjectChange ? onProjectChange(p.id) : useStore.getState().selectDraft(p.id)}>
+                        <MenuItem key={p.id} onClick={() => onProjectChange ? onProjectChange(p.id) : useStore.getState().selectDraft(p.id, coordinatorDraft ? "coordinator" : "thread")}>
                           <FolderIcon />
                           <span className="min-w-0 flex-1 truncate">{p.name}</span>
                           {p.id === projectId && <CheckIcon className="size-3.5 shrink-0" />}
@@ -159,7 +188,7 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
                   </ComposerPickerMenuPopup>
                 </Menu>
 
-                <Menu>
+                {!coordinatorDraft && <Menu>
                   <MenuTrigger render={<button type="button" aria-label="Choose where the thread runs" className={cn(TRAY_CHIP_CLASS_NAME, useWorktree && "text-[var(--color-text-foreground)]")} />}>
                     {useWorktree ? <WorktreeIcon className="size-3.5 shrink-0" /> : <DeviceLaptopIcon className="size-3.5 shrink-0" />}
                     <span className="min-w-0 truncate">{useWorktree ? "New worktree" : "Checkout"}</span>
@@ -182,9 +211,9 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
                       </MenuRadioGroup>
                     </MenuGroup>
                   </ComposerPickerMenuPopup>
-                </Menu>
+                </Menu>}
 
-                {isGit && (
+                {!coordinatorDraft && isGit && (
                   <Menu onOpenChange={(open) => open && loadBranches()}>
                     <MenuTrigger render={<button type="button" aria-label="Choose a branch" className={cn(TRAY_CHIP_CLASS_NAME, baseBranch && "text-[var(--color-text-foreground)]")} />}>
                       <GitBranchIcon className="size-3.5 shrink-0" />
@@ -229,7 +258,31 @@ export function Draft({ projectId, paneId, onProjectChange }: { projectId: Proje
             onSend={async (message) => {
               if (!provider) return
               if (paneId) useStore.getState().focusSplitPane(paneId)
-              await createThread({ paneId, projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
+              if (!coordinatorDraft) {
+                await createThread({ paneId, projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
+                return
+              }
+              if (!providerStatus) throw new Error("Choose an available harness for the project coordinator.")
+              const runtime = activeRuntime()
+              if (!coordinatorStarter.current || coordinatorStarter.current.runtime !== runtime) {
+                coordinatorStarter.current = {
+                  runtime,
+                  controller: createProjectCoordinatorStarter((method, params) => runtime.rpc().call(method, params), () => crypto.randomUUID()),
+                }
+              }
+              const origin = coordinatorStarter.current
+              const result = await origin.controller.send({
+                projectId,
+                provider: providerStatus,
+                instance: provider.instance,
+                permissionMode: mode,
+                model: choice?.model,
+                effort: choice?.effort,
+              }, message)
+              if (activeRuntime() !== origin.runtime) return
+              useStore.getState().set((state) => ({ threads: { ...state.threads, [result.thread.id]: result.thread } }))
+              useStore.getState().selectThread(result.thread.id)
+              void origin.runtime.loadThread(result.thread.id)
             }}
           />
           </div>

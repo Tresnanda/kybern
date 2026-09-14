@@ -4,7 +4,8 @@
 // desktop updater plugin polls (see plugins.updater.endpoints in tauri.conf.json).
 //
 // Usage: node scripts/updater-manifest.mjs [--tag vX.Y.Z] [--repo owner/name]
-import { readFileSync, readdirSync, writeFileSync } from "node:fs"
+//        [--notes-file path/to/release-notes.md]
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -24,6 +25,8 @@ if (!version) {
 }
 const tag = args.tag || `v${version}`
 const dist = join(root, "dist")
+const notesFile = args["notes-file"]
+const releaseNotes = notesFile && existsSync(notesFile) ? readFileSync(notesFile, "utf8").trim() : ""
 
 const platforms = {}
 for (const file of readdirSync(dist).filter((name) => /^updater-.*\.json$/.test(name)).sort()) {
@@ -37,7 +40,7 @@ if (Object.keys(platforms).length === 0) {
 
 const manifest = {
   version,
-  notes: `Release notes: https://github.com/${repo}/releases/tag/${tag}`,
+  notes: releaseNotes || `Release notes: https://github.com/${repo}/releases/tag/${tag}`,
   pub_date: new Date().toISOString(),
   platforms,
 }

@@ -1,9 +1,9 @@
 import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Linking, View } from "react-native";
 import { Alert } from "../src/ui/Alert";
 import { setDraft } from "../src/state/draft";
-import { type Project, type PullRequest } from "../src/state/protocol";
+import { type Project, type PullRequest, type Thread } from "../src/state/protocol";
 import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
 import {
   Button,
@@ -24,12 +24,31 @@ export default function Projects() {
   const [prsLoaded, setPrsLoaded] = useState(false);
   const [loadingPrs, setLoadingPrs] = useState(false);
   const [error, setError] = useState("");
+  const [coordinator, setCoordinator] = useState<Thread | null>();
   function choose(project: Project) {
     setSelected(project);
     setPrs([]);
     setError("");
     setPrsLoaded(false);
   }
+  useEffect(() => {
+    let alive = true;
+    if (!selected) {
+      setCoordinator(undefined);
+      return;
+    }
+    setCoordinator(undefined);
+    void rpc("collaboration.coordinator.get", { project_id: selected.id })
+      .then((result) => {
+        if (alive) setCoordinator(result?.thread ?? null);
+      })
+      .catch((cause) => {
+        if (alive) setError(errorText(cause));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selected?.id, app.activeId]);
   async function loadPullRequests() {
     if (!selected) return;
     setLoadingPrs(true);
@@ -78,6 +97,37 @@ export default function Projects() {
                 setDraft({ projectId: selected.id });
                 router.dismissTo("/");
               }}
+            />
+            <Row
+              title={
+                coordinator === undefined
+                  ? "Coordinator"
+                  : coordinator
+                    ? "Open coordinator"
+                    : "Create coordinator"
+              }
+              detail={
+                coordinator === undefined
+                  ? "Checking this project…"
+                  : coordinator
+                  ? coordinator.title
+                  : "A persistent chat that can delegate helpers for this project."
+              }
+              icon="person.2"
+              onPress={
+                coordinator === undefined
+                  ? undefined
+                  : () =>
+                      coordinator
+                        ? router.push({
+                            pathname: "/thread/[id]",
+                            params: { id: coordinator.id },
+                          })
+                        : router.push({
+                            pathname: "/coordinator",
+                            params: { projectId: selected.id },
+                          })
+              }
             />
             <Row
               title="Browse files"

@@ -1,7 +1,9 @@
 import { Image, View } from "react-native";
+import { router } from "expo-router";
 import { httpBase, type ContentPart } from "../state/protocol";
 import { activeEnvironment } from "../state/runtime";
-import { Icon, T, styles } from "../ui/primitives";
+import { Icon, T, Tap, styles } from "../ui/primitives";
+import { threadReferenceLabel } from "../../../../packages/kybern-client/src/threadReferences";
 
 export function imageSource(part: ContentPart, localUri?: string) {
   if (localUri) return { uri: localUri };
@@ -47,6 +49,25 @@ export function MessagePart({
     );
   if (part.type === "text") return <T selectable={selectable}>{part.text}</T>;
   if (part.type === "image") return null;
+  if (part.type === "thread_reference")
+    return (
+      <Tap
+        label={`Open referenced conversation, ${threadReferenceLabel(part)}`}
+        onPress={() =>
+          router.push({
+            pathname: "/thread/[id]",
+            params: { id: part.thread_id },
+          })
+        }
+        style={[styles.line, { paddingHorizontal: 2 }]}
+      >
+        <Icon name="text.bubble" size={15} />
+        <T variant="caption" numberOfLines={1} style={{ flexShrink: 1 }}>
+          {threadReferenceLabel(part)}
+        </T>
+        <Icon name="chevron.right" size={10} />
+      </Tap>
+    );
   return (
     <View style={styles.line}>
       <Icon

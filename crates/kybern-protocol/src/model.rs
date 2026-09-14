@@ -226,6 +226,15 @@ pub struct Thread {
     pub updated_at: DateTime<Utc>,
     /// Sequence of the last event on this thread. Clients use it to detect gaps.
     pub last_seq: EventSeq,
+    /// Immutable parent for a Kybern-managed helper thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
+    /// Set when this thread is the persistent coordinator for a project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator_project_id: Option<ProjectId>,
+    /// Active collaboration membership, denormalized for efficient navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration_group_id: Option<crate::GroupId>,
 }
 
 /// One piece of a user message.
@@ -251,6 +260,14 @@ pub enum ContentPart {
     FileMention {
         path: String,
     },
+    /// Inert reference to an existing Kybern thread. Selecting or rendering it
+    /// never reads, wakes, or sends to the referenced thread.
+    ThreadReference {
+        thread_id: ThreadId,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+    },
     /// A user-selected agent skill. Drivers translate this into the provider's
     /// native invocation syntax instead of treating a lookalike `$NAME` as a
     /// skill accidentally.
@@ -273,6 +290,10 @@ pub enum ContentPart {
     },
 }
 
+pub fn thread_reference_text(thread_id: ThreadId, title: &str) -> String {
+    format!("@thread[{thread_id}] {title}")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct UserMessage {
     pub parts: Vec<ContentPart>,
@@ -292,6 +313,9 @@ impl UserMessage {
                 ContentPart::FileMention { path } => {
                     out.push('@');
                     out.push_str(path);
+                }
+                ContentPart::ThreadReference { thread_id, title, .. } => {
+                    out.push_str(&thread_reference_text(*thread_id, title));
                 }
                 ContentPart::Skill { name, .. } => {
                     out.push('$');

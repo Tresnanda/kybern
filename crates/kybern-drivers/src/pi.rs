@@ -7,7 +7,7 @@
 //! requests, while pi uses Kybern's bundled blocking tool hook; pi signals run
 //! completion with `agent_settled`, omp with `agent_end.isTerminal`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -34,6 +34,14 @@ const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 const MAX_TOOL_PREVIEW_BYTES: usize = 128 * 1024;
 const MAX_ACTIVE_TOOLS: usize = 256;
 const MAX_PENDING_APPROVALS: usize = 64;
+
+fn configured_app_tool_names(bridge: Option<&crate::NativeToolBridge>) -> HashSet<String> {
+    bridge
+        .map(|bridge| {
+            bridge.tools().filter(|tool| extension::APP_TOOL_NAMES.contains(&tool.name.as_str())).map(|tool| tool.name.clone()).collect()
+        })
+        .unwrap_or_else(|| extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flavor {
@@ -206,6 +214,10 @@ impl AgentDriver for PiDriver {
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let kind = self.kind();
+        if let Some(bridge) = config.native_tool_bridge.as_ref() {
+            bridge.validate()?;
+        }
+        let app_tool_names = configured_app_tool_names(config.native_tool_bridge.as_ref());
         let bin = resolve(kind, config.binary.as_ref())?;
         if self.flavor == Flavor::Pi {
             let version = version_of(&bin, &["--version"])
@@ -216,7 +228,14 @@ impl AgentDriver for PiDriver {
             }
             extension::mode_command(config.permission_mode)?;
         }
-        let extension = if self.flavor == Flavor::Pi { Some(extension::StagedExtension::new(config.permission_mode)?) } else { None };
+        let extension = match self.flavor {
+            Flavor::Pi => Some(extension::StagedExtension::new(config.permission_mode)?),
+            Flavor::Omp if config.native_tool_bridge.is_some() => {
+                let mode = if config.permission_mode == PermissionMode::Auto { PermissionMode::FullAccess } else { config.permission_mode };
+                Some(extension::StagedExtension::new(mode)?)
+            }
+            Flavor::Omp => None,
+        };
         let mut cmd = Command::new(&bin);
         cmd.current_dir(&config.cwd).args(["--mode", "rpc"]);
         let new_session_id = Uuid::new_v4().to_string();
@@ -238,6 +257,9 @@ impl AgentDriver for PiDriver {
                     cmd.args(["--resume", id]);
                 }
                 cmd.args(["--approval-mode", approval_tier(config.permission_mode)]);
+                if config.native_tool_bridge.as_ref().is_some_and(|bridge| bridge.restrictions.require_enforcement) {
+                    cmd.arg("--no-tools");
+                }
             }
         }
         if let Some(model) = &config.model {
@@ -254,7 +276,7 @@ impl AgentDriver for PiDriver {
             cmd.env("OMP_PROFILE", crate::omp_profile::resolve(&env)?);
         }
         if let Some(extension) = &extension {
-            extension.configure(&mut cmd);
+            extension.configure(&mut cmd, config.native_tool_bridge.as_ref());
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), flavor = ?self.flavor, "spawning pi-family agent");
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
@@ -274,6 +296,7 @@ impl AgentDriver for PiDriver {
             command_gate: Mutex::new(()),
             extension,
             pending_app_tools: Mutex::new(HashMap::new()),
+            app_tool_names,
         });
         let (ready_tx, ready_rx) = oneshot::channel();
         *session.ready.lock().await = Some(ready_tx);
@@ -346,6 +369,7 @@ struct PiSession {
     command_gate: Mutex<()>,
     extension: Option<extension::StagedExtension>,
     pending_app_tools: Mutex<HashMap<String, u64>>,
+    app_tool_names: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -393,12 +417,14 @@ impl PiSession {
         session.state.lock().await.session_id = Some(session_id.clone());
         session.emit(DriverEvent::SessionBound { session_id, model }).await;
 
-        if session.flavor == Flavor::Pi {
-            let value = session.call("get_commands", json!({})).await?;
-            if let Some(extension) = &session.extension {
+        if let Some(extension) = &session.extension {
+            if session.flavor == Flavor::Omp {
+                extension.verify_omp_tools(&state, &session.app_tool_names)?;
+            } else {
+                let value = session.call("get_commands", json!({})).await?;
                 extension.verify(&value)?;
+                session.emit_commands(value).await;
             }
-            session.emit_commands(value).await;
         } else if let Ok(value) = session.call("get_commands", json!({})).await {
             session.emit_commands(value).await;
         }
@@ -1006,7 +1032,7 @@ impl PiSession {
         let id = id.to_string();
         let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
-        if self.flavor == Flavor::Pi {
+        if self.extension.is_some() {
             if let Some(request) = extension::parse_permission_request(&title) {
                 match request {
                     Ok(request) if method == "select" => {
@@ -1034,6 +1060,7 @@ impl PiSession {
                 if let Ok(request) = request
                     && method == "input"
                     && allowed
+                    && self.app_tool_names.contains(&request.name)
                 {
                     let mut pending = self.pending_app_tools.lock().await;
                     if pending.len() < 16 && !pending.contains_key(&id) {
@@ -1344,6 +1371,9 @@ fn prompt_text(message: &UserMessage) -> String {
                 out.push('@');
                 out.push_str(path);
             }
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                out.push_str(&thread_reference_text(*thread_id, title));
+            }
             ContentPart::Skill { name, .. } => {
                 if !name.is_empty() && !name.chars().any(char::is_whitespace) && !skills.contains(name) {
                     skills.push(name.clone());
@@ -1567,7 +1597,8 @@ impl AgentSession for Handle {
             .ok_or_else(|| DriverError::Protocol("Pi app tool request has expired".into()))?;
         let st = self.0.state.lock().await;
         if st.generation != generation || !st.active || st.aborted || st.closed {
-            return Err(DriverError::Protocol("Pi app tool request belongs to a finished turn".into()));
+            drop(st);
+            return self.0.child.write(&json!({ "type": "extension_ui_response", "id": request_id, "cancelled": true })).await;
         }
         drop(st);
         let value = match result {
@@ -1588,10 +1619,35 @@ impl AgentSession for Handle {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_app_tools_include_only_effective_supported_bridge_names() {
+        let bridge = crate::NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: None,
+            authorization: None,
+            coordinator_instructions: None,
+            tools: ["kybern_thread_read", "kybern_thread_send", "unsupported_daemon_tool"]
+                .into_iter()
+                .map(|name| crate::NativeToolDefinition {
+                    name: name.into(),
+                    description: name.into(),
+                    input_schema: json!({"type": "object"}),
+                })
+                .collect(),
+            restrictions: crate::NativeToolRestrictions {
+                allowed_tools: vec!["kybern_thread_read".into(), "kybern_thread_send".into(), "unsupported_daemon_tool".into()],
+                denied_tools: vec!["kybern_thread_send".into()],
+                require_enforcement: false,
+            },
+        };
+        assert_eq!(configured_app_tool_names(Some(&bridge)), HashSet::from(["kybern_thread_read".into()]));
+        assert_eq!(configured_app_tool_names(None), extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect());
+    }
 
     #[tokio::test]
     async fn manual_compaction_waits_for_native_response_for_both_flavors() {
-        use super::*;
         for flavor in [Flavor::Pi, Flavor::Omp] {
             let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
             let (events, mut rx) = mpsc::channel(8);
@@ -1607,6 +1663,7 @@ mod tests {
                 command_gate: Mutex::new(()),
                 extension: None,
                 pending_app_tools: Mutex::new(HashMap::new()),
+                app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             });
             let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
             let task = tokio::spawn(async move {
@@ -1671,6 +1728,7 @@ mod tests {
                 command_gate: Mutex::new(()),
                 extension: None,
                 pending_app_tools: Mutex::new(HashMap::new()),
+                app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             });
             let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
             for (method, response) in [
@@ -1703,7 +1761,6 @@ mod tests {
             child.kill().await;
         }
     }
-    use super::*;
     use std::time::Duration;
 
     #[test]
@@ -1833,6 +1890,7 @@ cat >/dev/null
             command_gate: Mutex::new(()),
             extension: None,
             pending_app_tools: Mutex::new(HashMap::new()),
+            app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         });
         let reader = session.clone();
         tokio::spawn(async move { reader.read_loop().await });

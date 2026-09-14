@@ -28,9 +28,10 @@ pub struct Inner {
     pub drivers: DriverRegistry,
     pub events: crate::bounded_broadcast::Sender<ThreadEvent>,
     pub orchestrator: Orchestrator,
+    pub native_tools: crate::native_tools_mcp::NativeToolsGateway,
     pub terminals: TerminalManager,
     pub settings: SettingsStore,
-    pub provider_catalogs: ProviderCatalogCache,
+    pub provider_catalogs: Arc<ProviderCatalogCache>,
     pub thread_projections: crate::thread_projection::ThreadProjectionCache,
     pub harness_updates: crate::harness_updates::HarnessUpdates,
     pub daemon_updates: crate::self_update::DaemonUpdates,
@@ -93,8 +94,11 @@ impl AppState {
         let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;
         let daemon_updates = crate::self_update::DaemonUpdates::new(&store)?;
         let terminals = TerminalManager::default();
+        let native_tools = crate::native_tools_mcp::NativeToolsGateway::default();
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone())
-            .with_terminal_manager(terminals.clone());
+            .with_terminal_manager(terminals.clone())
+            .with_native_tools(native_tools.clone());
+        let provider_catalogs = orchestrator.provider_catalog_cache();
         Ok(Self {
             inner: Arc::new(Inner {
                 paths: paths.clone(),
@@ -102,9 +106,10 @@ impl AppState {
                 drivers,
                 events,
                 orchestrator,
+                native_tools,
                 terminals,
                 settings,
-                provider_catalogs: ProviderCatalogCache::default(),
+                provider_catalogs,
                 thread_projections: crate::thread_projection::ThreadProjectionCache::default(),
                 harness_updates,
                 daemon_updates,
@@ -153,6 +158,9 @@ pub struct ProviderCatalogCache {
 impl ProviderCatalogCache {
     pub async fn invalidate(&self) {
         self.entries.lock().await.clear();
+    }
+    pub async fn get_if_fresh(&self, key: &str) -> Option<Vec<ProviderStatus>> {
+        self.fresh(key).await
     }
     pub async fn get_or_refresh<F, Fut>(&self, key: String, force_refresh: bool, refresh: F) -> Vec<ProviderStatus>
     where

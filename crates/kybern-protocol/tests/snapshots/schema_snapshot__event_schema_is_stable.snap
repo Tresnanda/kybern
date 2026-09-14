@@ -188,6 +188,86 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "group": {
+          "$ref": "#/$defs/CollaborationGroup"
+        },
+        "kind": {
+          "type": "string",
+          "const": "collaboration_group_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "group"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/GroupMember"
+        },
+        "kind": {
+          "type": "string",
+          "const": "collaboration_member_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "member"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "assignment": {
+          "$ref": "#/$defs/CollaborationAssignment"
+        },
+        "kind": {
+          "type": "string",
+          "const": "collaboration_assignment_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "assignment"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/CollaborationMessage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "collaboration_message_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "$ref": "#/$defs/ContextEntry"
+        },
+        "kind": {
+          "type": "string",
+          "const": "collaboration_context_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "entry"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "message_id": {
           "type": "string",
           "format": "uuid"
@@ -812,6 +892,30 @@ expression: schema_for!(ThreadEvent)
           "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
           "type": "integer",
           "format": "int64"
+        },
+        "parent_thread_id": {
+          "description": "Immutable parent for a Kybern-managed helper thread.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "coordinator_project_id": {
+          "description": "Set when this thread is the persistent coordinator for a project.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "collaboration_group_id": {
+          "description": "Active collaboration membership, denormalized for efficient navigation.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
         }
       },
       "required": [
@@ -1031,6 +1135,35 @@ expression: schema_for!(ThreadEvent)
           ]
         },
         {
+          "description": "Inert reference to an existing Kybern thread. Selecting or rendering it\nnever reads, wakes, or sends to the referenced thread.",
+          "type": "object",
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_reference"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "title"
+          ]
+        },
+        {
           "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
           "type": "object",
           "properties": {
@@ -1096,6 +1229,580 @@ expression: schema_for!(ThreadEvent)
       "required": [
         "text",
         "revision"
+      ]
+    },
+    "CollaborationGroup": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "coordinator_thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "success_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "status": {
+          "$ref": "#/$defs/GroupStatus"
+        },
+        "coordinator_mode": {
+          "$ref": "#/$defs/CoordinatorMode"
+        },
+        "policy": {
+          "$ref": "#/$defs/CollaborationPolicy"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "coordinator_thread_id",
+        "objective",
+        "status",
+        "coordinator_mode",
+        "policy",
+        "revision",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "GroupStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused",
+        "stopped",
+        "completed"
+      ]
+    },
+    "CoordinatorMode": {
+      "type": "string",
+      "enum": [
+        "ordinary",
+        "dedicated"
+      ]
+    },
+    "CollaborationPolicy": {
+      "type": "object",
+      "properties": {
+        "allowed_providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderKind"
+          },
+          "default": []
+        },
+        "max_active_workers": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 4
+        },
+        "max_depth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 2
+        },
+        "max_pending_messages": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 64
+        },
+        "max_wakeups_per_assignment": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 16
+        },
+        "require_worktree_for_editing": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "GroupMember": {
+      "type": "object",
+      "properties": {
+        "group_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "role": {
+          "$ref": "#/$defs/GroupMemberRole"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "joined_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "group_id",
+        "thread_id",
+        "role",
+        "active",
+        "joined_at"
+      ]
+    },
+    "GroupMemberRole": {
+      "type": "string",
+      "enum": [
+        "coordinator",
+        "worker",
+        "reviewer",
+        "integrator",
+        "observer"
+      ]
+    },
+    "CollaborationAssignment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "group_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_assignment_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "owner_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "requested_child": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CollaborationChildSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_by_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AssignmentKind"
+        },
+        "status": {
+          "$ref": "#/$defs/AssignmentStatus"
+        },
+        "dispatch_message_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "base_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "depth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssignmentResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uncertainty": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "group_id",
+        "title",
+        "instructions",
+        "kind",
+        "status",
+        "depth",
+        "revision",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "CollaborationChildSpec": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "base_revision": {
+          "description": "Required for editing/integration assignments. Resolved by git, never inferred from dirty state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider"
+      ]
+    },
+    "AssignmentKind": {
+      "type": "string",
+      "enum": [
+        "edit",
+        "review",
+        "research",
+        "integration",
+        "coordination"
+      ]
+    },
+    "AssignmentStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "working",
+        "waiting",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled",
+        "attention_needed"
+      ]
+    },
+    "AssignmentResult": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/AssignmentOutcome"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "unresolved": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "completed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "outcome",
+        "summary",
+        "completed_at"
+      ]
+    },
+    "AssignmentOutcome": {
+      "type": "string",
+      "enum": [
+        "success",
+        "partial",
+        "failed"
+      ]
+    },
+    "CollaborationMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "group_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "assignment_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "from_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "to_thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "external_recipient": {
+          "description": "True when the recipient is addressed without becoming a group member.",
+          "type": "boolean",
+          "default": false
+        },
+        "purpose": {
+          "$ref": "#/$defs/CollaborationMessagePurpose"
+        },
+        "reply_to": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "body": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CollaborationDeliveryState"
+        },
+        "delivery_turn_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "wakeup_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "operation_id",
+        "group_id",
+        "to_thread_id",
+        "purpose",
+        "body",
+        "state",
+        "wakeup_count",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "CollaborationMessagePurpose": {
+      "type": "string",
+      "enum": [
+        "progress",
+        "question",
+        "reply",
+        "change_request",
+        "result",
+        "failure",
+        "redirect"
+      ]
+    },
+    "CollaborationDeliveryState": {
+      "type": "string",
+      "enum": [
+        "persisted",
+        "queued",
+        "submitted",
+        "answered",
+        "failed",
+        "cancelled",
+        "uncertain"
+      ]
+    },
+    "ContextEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "group_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ContextEntryKind"
+        },
+        "body": {
+          "type": "string"
+        },
+        "author_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "user_authored": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "group_id",
+        "key",
+        "kind",
+        "body",
+        "user_authored",
+        "revision",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "ContextEntryKind": {
+      "type": "string",
+      "enum": [
+        "brief",
+        "plan",
+        "decision",
+        "research",
+        "instruction",
+        "result_reference"
       ]
     },
     "SessionReleaseReason": {

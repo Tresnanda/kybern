@@ -2,10 +2,12 @@
 // wraps each match in an InlineToken. Lives outside the component file so
 // Fast Refresh keeps working for the chip itself.
 
-import { InlineToken, type InlineTokenKind } from "@/components/kybern/InlineToken"
+import { InlineToken, type InlineTokenDescriptor, type InlineTokenKind } from "@/components/kybern/InlineToken"
+
+export type InlineTokenValue = InlineTokenKind | InlineTokenDescriptor
 
 /** Split a string on known tokens (longest first) and wrap each match in a chip. */
-export function renderWithTokens(text: string, tokens: ReadonlyMap<string, InlineTokenKind>): React.ReactNode {
+export function renderWithTokens(text: string, tokens: ReadonlyMap<string, InlineTokenValue>): React.ReactNode {
   if (tokens.size === 0 || !text) return text
   const names = [...tokens.keys()].sort((a, b) => b.length - a.length).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   const pattern = new RegExp(`(^|\\s)(${names.join("|")})(?=[\\s,.;:!?)]|$)`, "g")
@@ -16,7 +18,9 @@ export function renderWithTokens(text: string, tokens: ReadonlyMap<string, Inlin
     const start = match.index + match[1]!.length
     const token = match[2]!
     if (start > last) out.push(text.slice(last, start))
-    out.push(<InlineToken key={`${start}:${token}`} kind={tokens.get(token) ?? "skill"} text={token} />)
+    const value = tokens.get(token) ?? "skill"
+    const descriptor = typeof value === "string" ? { kind: value } : value
+    out.push(<InlineToken key={`${start}:${token}`} {...descriptor} text={token} />)
     last = start + token.length
   }
   if (last === 0) return text

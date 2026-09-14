@@ -15,6 +15,8 @@ import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
 import { Button } from "@/components/kit/button"
+import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
+import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { IconButton } from "@/components/kit/icon-button"
 import { ComposerChoiceRow } from "@/components/kit/chat/ComposerChoiceRow"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
@@ -24,6 +26,7 @@ import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { PROVIDER_LABEL, basename, mod, toolLine } from "@/lib/format"
 import { activeTaskSummary } from "@/lib/runtimeActivity"
 import {
+  ArrowLeftIcon,
   ArchiveIcon,
   ChangesIcon,
   ClockIcon,
@@ -46,6 +49,7 @@ import {
   TerminalIcon,
   Trash2,
   WorkflowIcon,
+  UsersIcon,
   XIcon,
 } from "@/lib/kit/icons"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles"
@@ -88,7 +92,11 @@ export function ThreadView({
   showSidebarControls?: boolean
 }) {
   const steeringAttempt = useRef<{ signature: string; id: string } | null>(null)
+  const coordinatorSwitchAttempt = useRef<{ fingerprint: string; operationId: string } | null>(null)
   const thread = useStore((s) => s.threads[threadId])
+  const coordinatorProjectName = useStore((s) =>
+    thread?.coordinator_project_id ? s.projects[thread.project_id]?.name : undefined
+  )
   const providerUsage = useStore((s) => s.transcripts[threadId]?.providerUsage)
   const loaded = useStore((s) => s.transcripts[threadId]?.loaded)
   const questions = useStore((s) => s.transcripts[threadId]?.pendingQuestions ?? EMPTY)
@@ -96,6 +104,8 @@ export function ThreadView({
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
   const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_TASKS)
   const activeTasks = useMemo(() => runtimeTasks.filter(isRuntimeTaskActive), [runtimeTasks])
+  const threads = useStore((s) => s.threads)
+  const helperThreads = useMemo(() => Object.values(threads).filter((candidate) => candidate.parent_thread_id === threadId && candidate.status !== "archived"), [threadId, threads])
   const providers = useStore((s) => s.providers)
   const set = useStore((s) => s.set)
   const requestedEnvOpen = useStore((s) => s.envOpen)
@@ -123,6 +133,7 @@ export function ThreadView({
   }, [])
 
   const running = thread?.status === "running" || thread?.status === "awaiting-approval"
+  const canSwitchCoordinator = !!thread?.coordinator_project_id && (thread.status === "idle" || thread.status === "failed")
   const approval = pending[0] ?? null
   const connector = approval ? connectorApproval(approval) : null
   const hideInput = !!approval && isUserInput(approval) && !connector
@@ -182,6 +193,8 @@ export function ThreadView({
       } },
       { name: "stop", hint: "Interrupt the running turn", icon: <StopIcon className="size-4" />, run: () => void interrupt(threadId) },
       { name: "activity", hint: "Show agents and background processes", icon: <WorkflowIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "activity" }) },
+      { name: "agents", hint: "Start and coordinate helper agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "collaboration" }) },
+      { name: "collaboration", hint: "Open Agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "collaboration" }) },
       { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
       { name: "changes", hint: "Show the changes panel", icon: <ChangesIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" }) },
       { name: "terminal", hint: "Open a terminal in this thread", icon: <TerminalIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "terminal" }) },
@@ -221,7 +234,44 @@ export function ThreadView({
     steeringAttempt.current = null
   } : undefined
 
-  const placeholder = approval ? (isUserInput(approval) && !connector ? "Answer the questions above" : "Resolve this approval request to continue") : running ? "Ask for follow-up changes" : undefined
+  const placeholder = approval
+    ? (isUserInput(approval) && !connector ? "Answer the questions above" : "Resolve this approval request to continue")
+    : running
+      ? "Ask for follow-up changes"
+      : thread.coordinator_project_id
+        ? `What should we work on in ${coordinatorProjectName ?? "this project"}?`
+        : undefined
+
+  const switchCoordinatorHarness = async (
+    provider: import("@/protocol").ProviderInstance,
+    model?: string,
+    effort?: string,
+  ) => {
+    if (!thread.coordinator_project_id) return
+    if (running) throw new Error("Finish or stop the coordinator's current turn before changing its harness.")
+    const status = providers.find((item) => item.kind === provider.kind && item.available)
+    if (!status) throw new Error("Choose an available harness for the project coordinator.")
+    const permissionMode = status.supported_permission_modes.includes(thread.permission_mode)
+      ? thread.permission_mode
+      : status.supported_permission_modes.includes("supervised")
+        ? "supervised"
+        : status.supported_permission_modes[0]
+    if (!permissionMode) throw new Error("This harness does not expose a supported permission mode.")
+    const fingerprint = JSON.stringify([thread.coordinator_project_id, provider, model, effort, permissionMode])
+    if (coordinatorSwitchAttempt.current?.fingerprint !== fingerprint) {
+      coordinatorSwitchAttempt.current = { fingerprint, operationId: crypto.randomUUID() }
+    }
+    const switched = await rpc().call("collaboration.coordinator.switch_harness", {
+      operation_id: coordinatorSwitchAttempt.current.operationId,
+      project_id: thread.coordinator_project_id,
+      provider,
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+      permission_mode: permissionMode,
+    })
+    coordinatorSwitchAttempt.current = null
+    useStore.getState().set((state) => ({ threads: { ...state.threads, [switched.thread.id]: switched.thread } }))
+  }
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
@@ -258,15 +308,22 @@ export function ThreadView({
               onModeChange={(m) => updateThread(threadId, { permission_mode: m }).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={thread.provider}
               providers={providers}
+              onProviderChange={canSwitchCoordinator ? (provider) => switchCoordinatorHarness(provider) : undefined}
               model={thread.model}
               effort={thread.effort}
               surfaceMode={splitPaneId ? "split" : "single"}
-              onModelChange={(model, effort) => updateThread(threadId, { model, effort })}
+              onModelChange={thread.coordinator_project_id
+                ? canSwitchCoordinator
+                  ? (model, effort) => switchCoordinatorHarness(thread.provider, model, effort)
+                  : undefined
+                : (model, effort) => updateThread(threadId, { model, effort })}
               projectId={thread.project_id}
               commands={commands}
               onDigit={(n) => answer(n)}
               above={
                 <ComposerPanelStack closed={hideInput}>
+                  {thread.coordinator_project_id && <CoordinatorControlsPanel />}
+                  {helperThreads.length > 0 && <HelperThreadsPanel threads={helperThreads} />}
                   {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
@@ -280,6 +337,70 @@ export function ThreadView({
         </div>
       </div>
     </div>
+  )
+}
+
+function CoordinatorControlsPanel() {
+  const set = useStore((state) => state.set)
+  const open = (view: "work" | "context" | "results") => {
+    set({ rightOpen: true, rightTab: "collaboration" })
+    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("kybern:collaboration-view", { detail: view })))
+  }
+  return (
+    <ComposerStackedPanel>
+      <ComposerStackedPanelRow compact className="gap-1.5">
+        <ComposerStackedPanelRowMain>
+          <UsersIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          <span className="sr-only">Project coordinator controls</span>
+        </ComposerStackedPanelRowMain>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button variant="ghost" size="chip" onClick={() => open("work")}>Workers</Button>
+          <Button variant="ghost" size="chip" onClick={() => open("context")}>Knowledge</Button>
+          <Button variant="ghost" size="chip" onClick={() => open("results")}>Results</Button>
+        </div>
+      </ComposerStackedPanelRow>
+    </ComposerStackedPanel>
+  )
+}
+
+function HelperThreadsPanel({ threads }: { threads: import("@/protocol").Thread[] }) {
+  const set = useStore((state) => state.set)
+  const working = threads.filter((thread) => thread.status === "running").length
+  const approvals = threads.filter((thread) => thread.status === "awaiting-approval").length
+  const [open, setOpen] = useState(() => (working > 0 || approvals > 0) && threads.length <= 3)
+  const summary = approvals > 0 ? `${approvals} ${approvals === 1 ? "needs" : "need"} approval` : working > 0 ? `${working} working` : null
+  return (
+    <ComposerStackedPanel>
+      <ComposerStackedPanelRow compact className="gap-1">
+        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-start outline-hidden focus-visible:ring-1 focus-visible:ring-ring">
+          <UsersIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          <span className="truncate font-medium text-foreground/85">{threads.length} {threads.length === 1 ? "helper" : "helpers"}{summary ? ` · ${summary}` : ""}</span>
+          <DisclosureChevron open={open} className="shrink-0 text-muted-foreground/60" />
+        </button>
+        <Button variant="ghost" size="chip" onClick={() => set({ rightOpen: true, rightTab: "collaboration" })}>Details</Button>
+      </ComposerStackedPanelRow>
+      <DisclosureRegion open={open}>
+        <div className={cn("max-h-44 overflow-y-auto", COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
+          {threads.map((thread) => (
+            <button
+              key={thread.id}
+              type="button"
+              onClick={() => {
+                useStore.getState().selectThread(thread.id)
+                void loadThread(thread.id)
+              }}
+              className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-start text-[length:var(--app-font-size-ui,12px)] outline-hidden hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              <ProviderMark kind={thread.provider.kind} size={12} className="size-3 shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-foreground/85">{thread.title || "Untitled"}</span>
+              <span className={cn("shrink-0 text-[length:var(--app-font-size-ui-2xs,10px)]", thread.status === "failed" ? "text-destructive" : thread.status === "awaiting-approval" ? "text-amber-600 dark:text-amber-300" : "text-muted-foreground/60")}>
+                {thread.status === "running" ? "Working" : thread.status === "awaiting-approval" ? "Needs approval" : thread.status === "failed" ? "Failed" : "Idle"}
+              </span>
+            </button>
+          ))}
+        </div>
+      </DisclosureRegion>
+    </ComposerStackedPanel>
   )
 }
 
@@ -446,6 +567,19 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
 
 function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: ThreadId; splitPaneId?: PaneId; showSidebarControls: boolean }) {
   const thread = useStore((s) => s.threads[threadId])
+  const threads = useStore((s) => s.threads)
+  const mainThread = useMemo(() => {
+    if (!thread?.parent_thread_id) return undefined
+    const seen = new Set<ThreadId>([thread.id])
+    let current = thread
+    while (current.parent_thread_id && !seen.has(current.parent_thread_id)) {
+      const parent = threads[current.parent_thread_id]
+      if (!parent) break
+      seen.add(parent.id)
+      current = parent
+    }
+    return current.id === thread.id ? undefined : current
+  }, [thread, threads])
   const providers = useStore((s) => s.providers)
   const splitView = useStore((s) => s.splitView)
   const set = useStore((s) => s.set)
@@ -531,12 +665,16 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
                   {thread.pinned ? "Unpin" : "Pin"}
                 </MenuItem>
               </MenuGroup>
-              <MenuSeparator />
-              <MenuGroup>
-                <MenuItem variant="destructive" onClick={() => archiveThread(threadId)}>
-                  <ArchiveIcon /> Archive
-                </MenuItem>
-              </MenuGroup>
+              {!thread.coordinator_project_id && (
+                <>
+                  <MenuSeparator />
+                  <MenuGroup>
+                    <MenuItem variant="destructive" onClick={() => archiveThread(threadId)}>
+                      <ArchiveIcon /> Archive
+                    </MenuItem>
+                  </MenuGroup>
+                </>
+              )}
             </ComposerPickerMenuPopup>
           </Menu>
         </>
@@ -544,6 +682,21 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
     >
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 items-center gap-2">
+          {mainThread && (
+            <ChatHeaderButton
+              type="button"
+              tone="plain"
+              className="max-w-44 gap-1.5 px-1.5 text-muted-foreground"
+              title={`Back to main thread: ${mainThread.title || "Untitled"}`}
+              onClick={() => {
+                useStore.getState().selectThread(mainThread.id)
+                void loadThread(mainThread.id)
+              }}
+            >
+              <ArrowLeftIcon className="size-3.5 shrink-0" />
+              <span className="truncate">Main thread</span>
+            </ChatHeaderButton>
+          )}
           <div className="flex min-w-0 items-center gap-2">
             <span className="inline-flex size-3.5 shrink-0 items-center justify-center" title={PROVIDER_LABEL[thread.provider.kind]}>
               <ProviderMark kind={thread.provider.kind} tone="header" size={14} className="size-3.5" />
@@ -573,6 +726,7 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
                 <TextSwap text={thread.title || "Untitled"} />
               </h2>
             )}
+            {thread.coordinator_project_id && <span className="shrink-0 text-[10px] font-medium text-muted-foreground/60">Project coordinator</span>}
           </div>
         </div>
       </div>

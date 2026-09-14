@@ -12,7 +12,6 @@ import { ErrorBoundary } from "@/components/kybern/ErrorBoundary"
 import { Logo, Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/kit/button"
 import { Sidebar, SidebarInset, SidebarProvider } from "@/components/kit/sidebar"
-import { Toaster } from "@/components/ui/sonner"
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import { useHotkey, useResize } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
@@ -32,6 +31,7 @@ import { SettingsDialog } from "@/views/SettingsDialog"
 import { ThreadSidebar } from "@/views/Sidebar"
 import { SplitThreads } from "@/views/SplitThreads"
 import { ThreadView } from "@/views/Thread"
+import { AppUpdateSurface } from "@/views/AppUpdate"
 import { SurfaceHeader } from "@/views/chrome"
 
 const DOCK_MOTION = { type: "spring", stiffness: 420, damping: 42, mass: 0.7 } as const
@@ -51,7 +51,7 @@ function useDockWidth() {
 
 export default function App() {
   const epoch = useEnvironments((s) => s.epoch)
-  return <Workspace key={epoch} />
+  return <><Workspace key={epoch} /><AppUpdateSurface /></>
 }
 
 function Workspace() {
@@ -123,8 +123,8 @@ function Workspace() {
                     <PullRequests />
                   </ErrorBoundary>
                 ) : selected.kind === "draft" ? (
-                  <ErrorBoundary key={selected.draft.projectId} label="the home screen">
-                    <Draft key={selected.draft.projectId} projectId={selected.draft.projectId} />
+                  <ErrorBoundary key={`${selected.draft.projectId}:${selected.draft.purpose ?? "thread"}`} label="the home screen">
+                    <Draft key={`${selected.draft.projectId}:${selected.draft.purpose ?? "thread"}`} projectId={selected.draft.projectId} purpose={selected.draft.purpose} />
                   </ErrorBoundary>
                 ) : (
                   <Welcome />
@@ -170,7 +170,6 @@ function Workspace() {
       <ErrorBoundary label="closing">
         <CloseGuard />
       </ErrorBoundary>
-      <Toaster position="bottom-right" />
     </SidebarProvider>
   )
 }

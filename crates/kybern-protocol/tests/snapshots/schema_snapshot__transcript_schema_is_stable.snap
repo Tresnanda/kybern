@@ -527,6 +527,35 @@ expression: schema_for!(TranscriptEntry)
           ]
         },
         {
+          "description": "Inert reference to an existing Kybern thread. Selecting or rendering it\nnever reads, wakes, or sends to the referenced thread.",
+          "type": "object",
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_reference"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "title"
+          ]
+        },
+        {
           "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
           "type": "object",
           "properties": {

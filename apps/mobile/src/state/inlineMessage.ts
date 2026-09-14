@@ -2,7 +2,10 @@ import { partToken } from "../../../../packages/kybern-client/src/composerTokens
 import type { ContentPart, SkillInfo } from "./protocol";
 
 export function isInlinePart(part: ContentPart) {
-  return part.type === "text" || partToken(part) !== null;
+  return (
+    part.type === "text" ||
+    (part.type !== "thread_reference" && partToken(part) !== null)
+  );
 }
 
 /** Text and mentions share a native text paragraph; files keep their own tiles. */

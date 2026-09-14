@@ -1,6 +1,8 @@
 // Persist only client workspace state. Credentials and provider settings never
 // enter browser storage. Every key belongs to the verified daemon identity.
-import type { AppState } from "./store"
+import type { AppState, RightTab } from "./store"
+
+const rightTabIds: RightTab[] = ["collaboration", "activity", "changes", "terminal", "explorer", "artifacts"]
 
 export const workspaceKey = (environmentId: string) =>
   `kybern.workspace.v1:${environmentId}`
@@ -44,10 +46,14 @@ export function readWorkspace(environmentId: string): Partial<AppState> {
       )
         result[key] = stored[key]
     }
-    if (
-      ["activity", "changes", "terminal", "explorer"].includes(stored.rightTab)
-    )
-      result.rightTab = stored.rightTab
+    // Earlier workspaces opened every panel automatically, so they have no
+    // chosen tab list to restore. Start those workspaces with an empty dock.
+    result.rightTabs = Array.isArray(stored.rightTabs)
+      ? [...new Set<RightTab>(stored.rightTabs.filter((tab: RightTab) => rightTabIds.includes(tab)))]
+      : []
+    result.rightTab = result.rightTabs.includes(stored.rightTab)
+      ? stored.rightTab
+      : result.rightTabs[0] ?? null
     if (typeof stored.rightOpen === "boolean")
       result.rightOpen = stored.rightOpen
     if (typeof stored.envOpen === "boolean") result.envOpen = stored.envOpen
@@ -68,6 +74,7 @@ export function persistWorkspace(environmentId: string, state: AppState): void {
     activeTerminalTab,
     rightOpen,
     rightTab,
+    rightTabs,
     envOpen,
   } = state
   try {
@@ -85,6 +92,7 @@ export function persistWorkspace(environmentId: string, state: AppState): void {
           activeTerminalTab,
           rightOpen,
           rightTab,
+          rightTabs,
           envOpen,
         },
       })

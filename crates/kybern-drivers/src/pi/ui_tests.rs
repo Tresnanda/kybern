@@ -25,6 +25,7 @@ impl UiHarness {
             command_gate: Mutex::new(()),
             extension: None,
             pending_app_tools: Mutex::new(HashMap::new()),
+            app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         });
         let handle = Arc::new(Handle(session.clone(), crate::ndjson::SessionLifetime::new(child)));
         Self { session, handle, events: receiver }

@@ -1,3 +1,4 @@
+mod collaboration;
 mod render;
 
 use std::path::PathBuf;
@@ -73,6 +74,11 @@ enum ArtifactsCmd {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Coordinate agent threads, assignments, messages, and shared context.
+    Collaboration {
+        #[command(subcommand)]
+        cmd: collaboration::CollaborationCmd,
+    },
     /// Show daemon info.
     Info,
     /// Show what the daemon is holding open: clients, agent processes, terminals, queued work.
@@ -464,6 +470,7 @@ pub async fn run() -> Result<()> {
     let json = cli.json;
 
     match cli.cmd {
+        Cmd::Collaboration { cmd } => collaboration::run(&client, cmd).await?,
         Cmd::Info => {
             let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
             if json { println!("{}", serde_json::to_string_pretty(&info)?) } else { render::info(&info) }
@@ -598,7 +605,13 @@ pub async fn run() -> Result<()> {
             } else {
                 Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread_id), after_seq: None }).await?)
             };
-            let r = client.call::<ThreadsSend>(ThreadsSendParams { thread_id, message: UserMessage::text(prompt) }).await?;
+            let r = client
+                .call::<ThreadsSend>(ThreadsSendParams {
+                    thread_id,
+                    message: UserMessage::text(prompt),
+                    message_id: Some(uuid::Uuid::now_v7()),
+                })
+                .await?;
             eprintln!("turn {}", r.turn_id);
             if let Some(sub) = sub {
                 render::follow_turn(&client, sub.subscription_id, thread_id, json).await?;

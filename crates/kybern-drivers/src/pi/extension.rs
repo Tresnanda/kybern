@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 use uuid::Uuid;
 
-use crate::{DriverError, Result};
+use crate::{DriverError, NativeToolBridge, Result};
 
 const SOURCE: &str = include_str!("extension.ts");
 const PROTOCOL_VERSION: u8 = 1;
@@ -26,7 +27,27 @@ pub const APP_TOOL_TITLE_PREFIX: &str = "kybern_app_tool_request:";
 pub const ALLOW_ONCE: &str = "Allow once";
 pub const ALLOW_ALWAYS: &str = "Always allow this exact call";
 pub const DENY: &str = "Deny";
-pub const APP_TOOL_NAMES: [&str; 7] = [
+pub const APP_TOOL_NAMES: [&str; 18] = [
+    "kybern_thread_context",
+    "kybern_workspace_diff",
+    "kybern_read_file",
+    "kybern_list_files",
+    "kybern_runtime_tasks",
+    "kybern_list_terminals",
+    "kybern_read_terminal",
+    "kybern_threads_search",
+    "kybern_thread_read",
+    "kybern_thread_send",
+    "kybern_collaboration_spawn",
+    "kybern_collaboration_send",
+    "kybern_collaboration_read",
+    "kybern_collaboration_wait",
+    "kybern_collaboration_report",
+    "kybern_collaboration_cancel",
+    "kybern_collaboration_context_read",
+    "kybern_collaboration_context_put",
+];
+pub const DEFAULT_APP_TOOL_NAMES: [&str; 7] = [
     "kybern_thread_context",
     "kybern_workspace_diff",
     "kybern_read_file",
@@ -87,9 +108,39 @@ impl StagedExtension {
 
     /// Add the supported Pi extension flag and fail-safe initial permission
     /// mode to a command before spawning it.
-    pub fn configure(&self, command: &mut Command) {
+    pub fn configure(&self, command: &mut Command, bridge: Option<&NativeToolBridge>) {
         command.arg("--extension").arg(&self.path);
         command.env("KYBERN_PI_PERMISSION_MODE", mode_name(self.mode));
+        command.env_remove("KYBERN_PI_APP_TOOLS");
+        command.env_remove("KYBERN_PI_SYSTEM_PROMPT");
+        command.env_remove("KYBERN_PI_COORDINATOR_ONLY");
+        command.env_remove("KYBERN_PI_DENIED_TOOLS");
+        if let Some(bridge) = bridge {
+            if let Some(instructions) = bridge.coordinator_instructions.as_deref() {
+                command.env("KYBERN_PI_SYSTEM_PROMPT", instructions);
+            }
+            let tools: Vec<_> = bridge
+                .tools()
+                .filter(|tool| APP_TOOL_NAMES.contains(&tool.name.as_str()))
+                .map(|tool| {
+                    json!({
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    })
+                })
+                .collect();
+            command.env("KYBERN_PI_APP_TOOLS", serde_json::to_string(&tools).unwrap_or_else(|_| "[]".into()));
+            if bridge.restrictions.require_enforcement {
+                command.env("KYBERN_PI_COORDINATOR_ONLY", "1");
+            }
+            if !bridge.restrictions.denied_tools.is_empty() {
+                command.env(
+                    "KYBERN_PI_DENIED_TOOLS",
+                    serde_json::to_string(&bridge.restrictions.denied_tools).unwrap_or_else(|_| "[]".into()),
+                );
+            }
+        }
     }
 
     /// Require Pi to advertise our versioned sentinel before any prompt is
@@ -110,6 +161,26 @@ impl StagedExtension {
             Ok(())
         } else {
             Err(DriverError::Protocol("Pi did not load Kybern's permission extension; fix the extension error and send again".into()))
+        }
+    }
+
+    /// OMP's RPC v2 advertises extension tools in `get_state.dumpTools` and
+    /// does not implement Pi's `get_commands` request. Seeing every configured
+    /// bridge tool proves that the private extension loaded before prompting.
+    pub fn verify_omp_tools(&self, state: &Value, expected: &HashSet<String>) -> Result<()> {
+        let advertised = state
+            .get("dumpTools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect::<HashSet<_>>();
+        if !expected.is_empty() && expected.iter().all(|name| advertised.contains(name.as_str())) {
+            Ok(())
+        } else {
+            Err(DriverError::Protocol(
+                "OMP did not load Kybern's configured collaboration tools; fix the extension error and send again".into(),
+            ))
         }
     }
 }
@@ -242,12 +313,18 @@ fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::process::Command as StdCommand;
 
     use super::*;
+    use crate::{NativeToolDefinition, NativeToolRestrictions};
 
     fn marker(prefix: &str, value: Value) -> String {
         format!("{prefix}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string()))
+    }
+
+    fn command_env<'a>(command: &'a Command, name: &str) -> Option<Option<&'a OsStr>> {
+        command.as_std().get_envs().find_map(|(key, value)| (key == OsStr::new(name)).then_some(value))
     }
 
     #[test]
@@ -291,6 +368,86 @@ mod tests {
                 }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn omp_handshake_requires_every_configured_bridge_tool() {
+        let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
+        let expected = HashSet::from(["kybern_thread_context".to_string(), "kybern_collaboration_read".to_string()]);
+        staged
+            .verify_omp_tools(
+                &json!({"dumpTools": [
+                    {"name": "kybern_thread_context"},
+                    {"name": "kybern_collaboration_read"}
+                ]}),
+                &expected,
+            )
+            .unwrap();
+        assert!(staged.verify_omp_tools(&json!({"dumpTools": [{"name": "kybern_thread_context"}]}), &expected).is_err());
+    }
+
+    #[test]
+    fn configure_passes_exact_effective_tool_definitions_without_prompt_guidance() {
+        let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
+        let search_schema = json!({
+            "type": "object",
+            "properties": {"query": {"type": ["string", "null"]}},
+            "additionalProperties": false
+        });
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: Some("COORDINATOR ROLE SENTINEL".into()),
+            tools: vec![
+                NativeToolDefinition {
+                    name: "kybern_threads_search".into(),
+                    description: "Find persisted threads.".into(),
+                    input_schema: search_schema.clone(),
+                },
+                NativeToolDefinition {
+                    name: "kybern_thread_read".into(),
+                    description: "Read a thread.".into(),
+                    input_schema: json!({"type": "object"}),
+                },
+                NativeToolDefinition {
+                    name: "unsupported_daemon_tool".into(),
+                    description: "Must not reach Pi.".into(),
+                    input_schema: json!({"type": "object"}),
+                },
+            ],
+            restrictions: NativeToolRestrictions {
+                allowed_tools: vec!["kybern_threads_search".into(), "unsupported_daemon_tool".into()],
+                denied_tools: vec!["bash".into()],
+                require_enforcement: true,
+            },
+        };
+        let mut command = Command::new("pi");
+        staged.configure(&mut command, Some(&bridge));
+
+        let encoded = command_env(&command, "KYBERN_PI_APP_TOOLS").unwrap().unwrap().to_str().unwrap();
+        let tools: Value = serde_json::from_str(encoded).unwrap();
+        assert_eq!(
+            tools,
+            json!([{
+                "name": "kybern_threads_search",
+                "description": "Find persisted threads.",
+                "parameters": search_schema,
+            }])
+        );
+        assert_eq!(command_env(&command, "KYBERN_PI_SYSTEM_PROMPT").unwrap().unwrap(), "COORDINATOR ROLE SENTINEL");
+        assert_eq!(command_env(&command, "KYBERN_PI_COORDINATOR_ONLY").unwrap().unwrap(), "1");
+        assert_eq!(command_env(&command, "KYBERN_PI_DENIED_TOOLS").unwrap().unwrap(), r#"["bash"]"#);
+    }
+
+    #[test]
+    fn configure_clears_bridge_environment_when_disabled() {
+        let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
+        let mut command = Command::new("pi");
+        staged.configure(&mut command, None);
+        for name in ["KYBERN_PI_APP_TOOLS", "KYBERN_PI_SYSTEM_PROMPT", "KYBERN_PI_COORDINATOR_ONLY", "KYBERN_PI_DENIED_TOOLS"] {
+            assert_eq!(command_env(&command, name), Some(None));
+        }
     }
 
     #[test]

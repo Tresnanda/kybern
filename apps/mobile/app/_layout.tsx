@@ -266,6 +266,21 @@ function Navigation() {
           }}
         />
         <Stack.Screen name="tasks" options={{ title: "Tasks & agents" }} />
+        <Stack.Screen name="collaboration" options={{ title: "Agents" }} />
+        <Stack.Screen
+          name="coordinator"
+          options={{ title: "Project coordinator" }}
+        />
+        <Stack.Screen
+          name="thread-picker"
+          options={{
+            title: "Reference conversation",
+            presentation: "formSheet",
+            sheetAllowedDetents: sheetDetents,
+            sheetGrabberVisible: true,
+            ...androidSheet,
+          }}
+        />
         <Stack.Screen name="file" options={{ title: "File" }} />
         <Stack.Screen name="workspace" options={{ title: "Workspace" }} />
         <Stack.Screen

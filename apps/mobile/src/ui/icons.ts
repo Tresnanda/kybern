@@ -12,6 +12,7 @@ export const androidIcons = {
   "arrow.triangle.pull": "merge",
   "arrow.triangle.swap": "swap_horiz",
   "arrow.turn.down.right": "subdirectory_arrow_right",
+  "arrow.turn.up.left": "subdirectory_arrow_left",
   "arrow.up": "arrow_upward",
   "arrow.up.left": "north_west",
   "arrow.up.right": "north_east",

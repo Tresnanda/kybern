@@ -3,6 +3,8 @@ mod app_tools;
 mod artifacts;
 mod auth;
 mod bounded_broadcast;
+#[cfg(test)]
+mod collaboration_tests;
 mod config;
 mod discovery;
 mod exposure;
@@ -12,6 +14,7 @@ mod harness_updates;
 mod http;
 mod integrations;
 mod maintenance;
+mod native_tools_mcp;
 mod orchestrator;
 mod power;
 #[cfg(test)]
@@ -134,6 +137,7 @@ pub async fn run() -> Result<()> {
     let addr = listener.local_addr()?;
     state.port.store(addr.port(), std::sync::atomic::Ordering::Relaxed);
     *state.listen_addr.write().unwrap() = Some(addr);
+    state.native_tools.set_endpoint(addr);
     if let Some(url) = args.advertise_url {
         *state.advertised_urls.write().unwrap() = vec![kybern_client::address::normalize(&url)?];
     }
@@ -165,7 +169,15 @@ pub async fn run() -> Result<()> {
                     true
                 }
             };
-            let fallback = if waiting { std::time::Duration::from_secs(2) } else { std::time::Duration::from_secs(60) };
+            let collaboration_waiting = match queue_state.orchestrator.drain_collaboration_assignments().await {
+                Ok(waiting) => waiting,
+                Err(error) => {
+                    tracing::error!(%error, "could not dispatch collaboration assignment");
+                    true
+                }
+            };
+            let fallback =
+                if waiting || collaboration_waiting { std::time::Duration::from_secs(2) } else { std::time::Duration::from_secs(60) };
             tokio::select! {
                 _ = queue_state.shutdown.cancelled() => break,
                 _ = queue_state.orchestrator.queue_changed() => {}
@@ -176,6 +188,7 @@ pub async fn run() -> Result<()> {
 
     let app = Router::new()
         .merge(http::routes())
+        .merge(native_tools_mcp::routes())
         .route("/ws", get(ws::upgrade))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state.clone());

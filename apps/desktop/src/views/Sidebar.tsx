@@ -43,6 +43,7 @@ import {
   SettingsIcon,
   SquareSplitHorizontal,
   SquareSplitVertical,
+  UsersIcon,
   WorktreeIcon,
 } from "@/lib/kit/icons"
 import { disclosureContentClassName, disclosureShellClassName } from "@/lib/kit/disclosureMotion"
@@ -68,6 +69,7 @@ import { createProjectThreadsSelector, useStore } from "@/state/store"
 
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { ProjectPicker } from "./ProjectPicker"
+import { SidebarUpdateButton } from "./AppUpdate"
 
 const MAX_PROJECT_THREADS = 8
 
@@ -192,6 +194,7 @@ export function ThreadSidebar() {
       <ProjectPicker open={projectPickerOpen} onOpenChange={setProjectPickerOpen} />
       <SidebarFooter className="gap-2 border-t border-sidebar-border p-2 font-system-ui">
         <SidebarMenu>
+          <SidebarUpdateButton />
           <SidebarMenuItem>
             <div className="flex items-center gap-2">
               <SidebarMenuButton
@@ -278,7 +281,46 @@ function ProjectItem({ project }: { project: Project }) {
   const isDraftHere = selected.kind === "draft" && selected.draft.projectId === project.id
   const running = threads.some((t) => t.status === "running")
   const waiting = threads.some((t) => t.status === "awaiting-approval")
-  const visible = showAll ? threads : threads.slice(0, MAX_PROJECT_THREADS)
+  // Archived coordinators are omitted from the normal project selector, but
+  // remain valid persistent chats and should still be offered as existing.
+  const coordinator = useStore((state) => {
+    for (const thread of Object.values(state.threads)) {
+      if (thread.coordinator_project_id === project.id) return thread
+    }
+    return undefined
+  })
+  const { roots, childrenByParent } = useMemo(() => {
+    const liveIds = new Set(threads.map((thread) => thread.id))
+    const children = new Map<string, Thread[]>()
+    const topLevel: Thread[] = []
+    for (const thread of threads) {
+      if (thread.coordinator_project_id === project.id) continue
+      const parentId = thread.parent_thread_id
+      if (!parentId || !liveIds.has(parentId)) {
+        topLevel.push(thread)
+        continue
+      }
+      const siblings = children.get(parentId) ?? []
+      siblings.push(thread)
+      children.set(parentId, siblings)
+    }
+    return { roots: topLevel, childrenByParent: children }
+  }, [project.id, threads])
+  const orderedRows = useMemo(() => {
+    const rows: { thread: Thread; depth: number }[] = []
+    const visited = new Set<string>()
+    const append = (thread: Thread, depth = 0) => {
+      if (visited.has(thread.id)) return
+      visited.add(thread.id)
+      rows.push({ thread, depth })
+      for (const child of childrenByParent.get(thread.id) ?? []) append(child, Math.min(depth + 1, 2))
+    }
+    if (coordinator) append(coordinator)
+    for (const root of roots) append(root)
+    for (const thread of threads) if (thread.id !== coordinator?.id) append(thread)
+    return rows
+  }, [childrenByParent, coordinator, roots, threads])
+  const visible = showAll ? orderedRows : orderedRows.slice(0, MAX_PROJECT_THREADS)
 
   return (
     <SidebarMenuItem className="rounded-md">
@@ -343,17 +385,18 @@ function ProjectItem({ project }: { project: Project }) {
         <div className={cn(disclosureShellClassName(open), "pt-0.5")}>
           <div className="min-h-0 overflow-hidden">
             <ul className={cn("mx-0 my-0 flex w-full min-w-0 translate-x-0 flex-col border-l-0 px-0 py-0", SIDEBAR_NESTED_LIST_GAP_CLASS_NAME, disclosureContentClassName(open))}>
-              {visible.map((t) => (
-                <ThreadRow key={t.id} thread={t} />
+              {!coordinator && <CreateCoordinatorRow project={project} />}
+              {visible.map(({ thread, depth }) => (
+                <ThreadRow key={thread.id} thread={thread} depth={depth} />
               ))}
-              {threads.length > MAX_PROJECT_THREADS && (
+              {orderedRows.length > MAX_PROJECT_THREADS && (
                 <li>
                   <button
                     type="button"
                     onClick={() => setShowAll((v) => !v)}
                     className="h-7 w-full cursor-pointer justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:text-foreground"
                   >
-                    {showAll ? "Show less" : `Show ${threads.length - MAX_PROJECT_THREADS} more`}
+                    {showAll ? "Show less" : `Show ${orderedRows.length - MAX_PROJECT_THREADS} more`}
                   </button>
                 </li>
               )}
@@ -363,6 +406,25 @@ function ProjectItem({ project }: { project: Project }) {
         </div>
       </div>
     </SidebarMenuItem>
+  )
+}
+
+function CreateCoordinatorRow({ project }: { project: Project }) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => {
+          const store = useStore.getState()
+          store.selectDraft(project.id)
+          store.set({ selected: { kind: "draft", draft: { projectId: project.id, purpose: "coordinator" } } })
+        }}
+        className={cn(SIDEBAR_THREAD_ROW_BASE_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, "flex w-full items-center gap-2 rounded-md pr-2 pl-8 text-start")}
+      >
+        <UsersIcon className="size-3 shrink-0" />
+        <span className="truncate">Create coordinator</span>
+      </button>
+    </li>
   )
 }
 
@@ -386,7 +448,7 @@ function StatusGlyph({ status, activity }: { status: Thread["status"]; activity?
   return null
 }
 
-function ThreadRow({ thread }: { thread: Thread }) {
+function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
   const selected = useStore((s) => s.selected.kind === "thread" && s.selected.id === thread.id)
   const splitView = useStore((s) => s.splitView)
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
@@ -441,7 +503,8 @@ function ThreadRow({ thread }: { thread: Thread }) {
           className={cn(
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
             fresh && "t-row-enter",
-            "flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md pl-8 text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
+            "flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
+            depth === 0 ? "pl-8" : depth === 1 ? "pl-11" : "pl-14",
             "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]",
             hasGlyph || thread.pinned ? "pr-[1.75rem]" : "pr-2",
             selected ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, inSplit && "bg-sidebar-accent/55"),
@@ -468,7 +531,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
                 className="w-full rounded bg-background px-1 text-[length:var(--app-font-size-ui,12px)] outline-none ring-1 ring-ring"
               />
             ) : (
-              <TextSwap text={thread.title || "Untitled"} className={cn("t-marquee flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")} />
+              <TextSwap text={thread.coordinator_project_id ? "Open coordinator" : thread.title || "Untitled"} className={cn("t-marquee flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")} />
             )}
             {thread.status === "awaiting-approval" && <span className="t-pop shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-300/90">Pending</span>}
           </div>
@@ -541,16 +604,18 @@ function ThreadRow({ thread }: { thread: Thread }) {
             <SquareSplitHorizontal /> Open below
           </ContextMenuItem>
         </ContextMenuGroup>
-        <ContextMenuSeparator />
+        {(thread.worktree || !thread.coordinator_project_id) && <ContextMenuSeparator />}
         <ContextMenuGroup>
           {thread.worktree && (
             <ContextMenuItem disabled>
               <GitBranchIcon /> {thread.worktree.branch}
             </ContextMenuItem>
           )}
-          <ContextMenuItem variant="destructive" onClick={() => archiveThread(thread.id).catch((e) => toast.error("Unable to archive", { description: errorText(e) }))}>
-            <ArchiveIcon /> Archive
-          </ContextMenuItem>
+          {!thread.coordinator_project_id && (
+            <ContextMenuItem variant="destructive" onClick={() => archiveThread(thread.id).catch((e) => toast.error("Unable to archive", { description: errorText(e) }))}>
+              <ArchiveIcon /> Archive
+            </ContextMenuItem>
+          )}
         </ContextMenuGroup>
       </ContextMenuContent>
     </ContextMenu>
