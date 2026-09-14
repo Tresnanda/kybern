@@ -43,7 +43,7 @@ Each request now consumes that intent. A new wheel, keyboard, touch or pressed-p
 
 ## OMP profiles (#9)
 
-Settings → Agents exposes a default OMP profile and overrides keyed by the registered project's absolute path. Worktrees inherit that project. Blank fields inherit; `default` explicitly selects the unnamed profile. Launch, saved-session discovery/import, model discovery and skill roots receive the same effective environment. Native profile-name validation follows OMP's bootstrap rules and prevents profile paths from escaping their root.
+Settings → Agents exposes a default OMP profile and overrides keyed by the registered project's absolute path. Worktrees inherit that project. The profile selector exposes inheritance, OMP's unnamed default, and named profiles; project overrides are grouped in a disclosure. Launch, saved-session discovery/import, model discovery and skill roots receive the same effective environment. Native profile-name validation follows OMP's bootstrap rules and prevents profile paths from escaping their root.
 
 A thread retains its original profile across idle process release and later default changes. Imported sessions retain the profile used to find them; CLI `resume --project` supplies the same context as `sessions --project`. Older threads acquire the binding at their first launch with this version. A failed executable launch does not establish a binding.
 

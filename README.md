@@ -385,8 +385,10 @@ process and retry. Saved sessions remain native to their original harness.
 ### OMP profiles
 
 Open **Settings → Agents → OMP profiles** to select a default or a project
-profile. Leave a field blank to inherit; enter `default` to explicitly use the
-unnamed OMP profile. Worktrees inherit the registered project's profile.
+profile. Choose **Use environment**, **OMP default** (the unnamed profile), or
+**Named profile**. Expand **Project overrides** to choose a profile for a
+registered project; **Use default above** removes its override. Worktrees use
+the registered project's profile.
 Profiles apply when a chat first starts; resumed chats retain their original
 profile even after defaults change or the daemon releases an idle process.
 Older chats acquire that binding on their first start with this version.
@@ -418,7 +420,8 @@ kybern resume --provider omp --project /absolute/registered/project <session-id>
 ### Mermaid diagrams
 
 Desktop renders fenced `mermaid` blocks as diagrams. **Source** switches to the
-original definition; **Copy code** copies that definition. Incomplete streaming
+original definition; **Preview** returns to the diagram. **Expand diagram** opens
+a larger view, and **Copy code** copies the definition. Incomplete streaming
 blocks remain source until settled, and invalid or oversized diagrams retain a
 readable source fallback. Diagram rendering is lazy, uses strict Mermaid
 security, and releases its rendering document after idle. Finished images stay

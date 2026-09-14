@@ -4,7 +4,7 @@ import { notificationPermission, notify, type NotificationPermissionState } from
 // Settings, in a dialog: a 16rem nav column of sidebar rows and a
 // content column of SettingsSection / SettingsCard / SettingsRow blocks.
 
-import { useEffect, useId, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
@@ -16,6 +16,7 @@ import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/c
 import { ChevronDownIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
 import { Switch } from "@/components/kit/switch"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/kit/collapsible"
 import { MatrixLoader, TextSwap } from "@/components/kybern/motion"
 import { PERMISSION_HINT, PERMISSION_LABEL, tokens, usd } from "@/lib/format"
 import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/kit/icons"
@@ -149,10 +150,10 @@ function Row({ title, description, status, children }: { title: string; descript
   )
 }
 
-function SettingsPicker<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode; disabled?: boolean }[] }) {
+function SettingsPicker<T extends string>({ value, onChange, options, label }: { value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode; disabled?: boolean }[]; label?: string }) {
   return (
     <Menu>
-      <MenuTrigger render={<Button variant="chrome-outline" size="sm" className="min-w-36 max-w-full justify-between" />}>
+      <MenuTrigger aria-label={label} render={<Button variant="chrome-outline" size="sm" className="min-w-36 max-w-full justify-between" />}>
         <span className="flex min-w-0 items-center gap-2 truncate">{options.find((o) => o.value === value)?.label ?? value}</span>
         <ChevronDownIcon className="size-3.5 shrink-0" />
       </MenuTrigger>
@@ -479,11 +480,13 @@ function AgentSettings() {
 export function OmpProfiles({ settings, update }: { settings: Settings; update: (patch: Partial<Settings>) => Promise<void> }) {
   const projects = useStore((s) => s.projects)
   const [selected, select] = useState("")
+  const [expanded, setExpanded] = useState(false)
+  const defaultId = useId()
+  const projectId = useId()
   const paths = Object.values(projects)
   const path = paths.find((p) => p.path === selected)?.path ?? paths[0]?.path
   const provider: NonNullable<Settings["providers"]["omp"]> = settings.providers.omp ?? { env: {} }
-  const defaultProfile = provider.env?.OMP_PROFILE === "" ? "default" : provider.env?.OMP_PROFILE ?? ""
-  const projectProfile = path && provider.project_profiles?.[path] === "" ? "default" : provider.project_profiles?.[path ?? ""] ?? ""
+  const overrides = paths.filter(p => provider.project_profiles?.[p.path] !== undefined).length
   const save = (value: string, project?: string) => {
     const next = { ...provider }
     if (project) {
@@ -497,28 +500,63 @@ export function OmpProfiles({ settings, update }: { settings: Settings; update: 
     }
     return update({ providers: { ...settings.providers, omp: next } })
   }
-  return <Section title="OMP profiles">
-    <Row title="Default profile" description="Leave blank to inherit OMP's environment. Enter default to use its unnamed profile. Existing chats keep the profile they started with.">
-      <ProfileInput key={`global:${defaultProfile}`} value={defaultProfile} label="Default OMP profile" onSave={(value) => save(value)} />
-    </Row>
-    {path && <>
-      <Row title="Project" description="Worktree chats use the same profile as their project.">
-        <SettingsPicker value={path} onChange={select} options={paths.map((p) => ({ value: p.path, label: p.name }))} />
-      </Row>
-      <Row title="Project profile" description="Leave blank to inherit the default above. Enter a named OMP profile to isolate its rules, memory and connections.">
-        <ProfileInput key={`${path}:${projectProfile}`} value={projectProfile} label="Project OMP profile" onSave={(value) => save(value, path)} />
-      </Row>
-    </>}
-  </Section>
+  return <section className={SETTINGS_PANEL_SECTION_CLASS_NAME} data-omp-profiles>
+    <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>OMP profiles</h2>
+    <div className={cn(SETTINGS_CARD_CLASS_NAME, "@container")}>
+      <div className="grid items-start gap-3 p-3 @min-[26rem]:grid-cols-[minmax(0,1fr)_12rem]">
+        <div className="space-y-1 py-1">
+          <h3 id={defaultId} className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Default profile</h3>
+          <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "text-pretty leading-normal")}>For new chats.</p>
+        </div>
+        <ProfileChoice key={`global:${provider.env?.OMP_PROFILE}`} value={provider.env?.OMP_PROFILE} label="Default OMP profile" labelledBy={defaultId} inherit="Use environment" onSave={(value) => save(value)} />
+      </div>
+      {path && <Collapsible open={expanded} onOpenChange={setExpanded} className="border-t border-[color:var(--color-border)]">
+        <CollapsibleTrigger className="group flex w-full items-center gap-3 px-3 py-3 text-start outline-none hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+          <span className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "flex-1")}>Project overrides</span>
+          {overrides > 0 && <span className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "tabular-nums")}><bdi>{overrides === 1 ? "1 project" : `${overrides} projects`}</bdi></span>}
+          <ChevronDownIcon className="size-3.5 text-muted-foreground transition-transform duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] group-data-panel-open:rotate-180 motion-reduce:transition-none" />
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <div className="grid items-start gap-4 px-3 pt-1 pb-4 @min-[26rem]:grid-cols-[minmax(0,1fr)_12rem]">
+            <div className="grid min-w-0 gap-2 [&_[data-slot=menu-trigger]]:w-full [&_[data-slot=menu-trigger]]:min-w-0">
+              <span className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>Project</span>
+              <SettingsPicker value={path} label="Choose project" onChange={select} options={paths.map((p) => ({ value: p.path, label: <bdi title={`${p.name}\n${p.path}`}>{p.name}</bdi> }))} />
+            </div>
+            <div className="grid min-w-0 gap-2">
+              <span id={projectId} className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>Profile</span>
+              <ProfileChoice key={`${path}:${provider.project_profiles?.[path]}`} value={provider.project_profiles?.[path]} label="Project OMP profile" labelledBy={projectId} inherit="Use default above" onSave={(value) => save(value, path)} />
+            </div>
+            <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "text-pretty leading-normal @min-[26rem]:col-span-2")}>Also applies to this project’s worktrees.</p>
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>}
+    </div>
+    <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "px-3 pt-1 text-pretty leading-normal")}>Existing chats keep their profile.</p>
+  </section>
 }
 
-function ProfileInput({ value, label, onSave }: { value: string; label: string; onSave: (value: string) => Promise<void> }) {
+function ProfileChoice({ value, label, labelledBy, inherit, onSave }: { value?: string; label: string; labelledBy: string; inherit: string; onSave: (value: string) => Promise<void> }) {
+  const [naming, setNaming] = useState(false)
+  const controls = useRef<HTMLDivElement>(null)
+  const mode = naming || (value !== undefined && value !== "" && value !== "default") ? "named" : value === undefined ? "inherit" : "default"
+  const choices = [{ value: "inherit", label: inherit }, { value: "default", label: "OMP default" }, { value: "named", label: "Named profile" }]
+  return <div ref={controls} role="group" aria-labelledby={labelledBy} className="grid min-w-0 gap-2 [&_[data-slot=menu-trigger]]:w-full [&_[data-slot=menu-trigger]]:min-w-0">
+    <SettingsPicker value={mode} label={`${label} source`} options={choices} onChange={(next) => {
+      setNaming(next === "named")
+      if (next !== "named") void onSave(next === "inherit" ? "" : "default")
+    }} />
+    {mode === "named" && <ProfileInput value={value === "default" ? "" : value ?? ""} label={label} focus={naming} onSave={onSave} onCancel={() => { setNaming(false); controls.current?.querySelector<HTMLButtonElement>("[data-slot=menu-trigger]")?.focus() }} />}
+  </div>
+}
+
+function ProfileInput({ value, label, focus, onSave, onCancel }: { value: string; label: string; focus: boolean; onSave: (value: string) => Promise<void>; onCancel: () => void }) {
   const [draft, setDraft] = useState(value)
-  return <InputGroup className={cn("w-44", SETTINGS_CONTROL_RADIUS_CLASS_NAME)}>
-    <InputGroupInput aria-label={label} placeholder="Inherit" value={draft} maxLength={64}
+  const canceled = useRef(false)
+  return <InputGroup className={cn("w-full", SETTINGS_CONTROL_RADIUS_CLASS_NAME)}>
+    <InputGroupInput aria-label={label} placeholder="work" value={draft} maxLength={64} autoFocus={focus} autoCapitalize="none" autoCorrect="off" spellCheck={false}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => { if (draft.trim() !== value) void onSave(draft.trim()) }}
-      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.preventDefault(); setDraft(value) } }} />
+      onBlur={() => { if (canceled.current) { canceled.current = false; return }; if (draft.trim() !== value) void onSave(draft.trim()) }}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); canceled.current = true; setDraft(value); onCancel() } }} />
   </InputGroup>
 }
 

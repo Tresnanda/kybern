@@ -1086,6 +1086,74 @@ label:has(> select#reasoning-effort) select {
   background: transparent;
 }
 
+/* Diagram controls share the code toolbar, with a compact view switch. */
+.chat-mermaid .chat-markdown-codeblock__header {
+  min-height: 2.5rem;
+  padding: 0.375rem 0.5rem;
+}
+.chat-diagram-view {
+  display: inline-flex;
+  gap: 0.125rem;
+  padding: 0.125rem;
+  border-radius: 0.5rem;
+  background: var(--color-background-button-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--app-font-size-ui, 12px);
+  line-height: 1.4;
+}
+.chat-diagram-view__pill {
+  border-radius: 0.375rem;
+  background: var(--sidebar-accent-active);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.08);
+}
+.chat-diagram-view > button {
+  position: relative;
+  z-index: 1;
+  min-height: 1.5rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--duration-quick) var(--ease-out), scale var(--duration-quick) var(--ease-out);
+}
+.chat-diagram-view > button:is(:hover, [aria-pressed="true"]) { color: var(--foreground); }
+.chat-diagram-view > button:active, .chat-diagram-expand:active { scale: 0.96; }
+.chat-diagram-view > button:focus-visible, .chat-diagram-expand:focus-visible, .chat-diagram-canvas:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.chat-diagram-label { padding-inline: 0.25rem; font-size: var(--app-font-size-ui, 12px); color: var(--muted-foreground); }
+.chat-diagram-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: color var(--duration-quick) var(--ease-out), background-color var(--duration-quick) var(--ease-out), scale var(--duration-quick) var(--ease-out);
+}
+.chat-diagram-expand:hover { background: var(--color-background-button-secondary-hover); }
+.chat-diagram-canvas { overflow: auto; padding: 0.5rem 1rem 1rem; }
+.chat-diagram-canvas > img {
+  display: block;
+  width: 100%;
+  max-height: 24rem;
+  margin-inline: auto;
+  border-radius: 0.375rem;
+  object-fit: contain;
+  outline: 1px solid oklch(0 0 0 / 0.1);
+  outline-offset: -1px;
+}
+.dark .chat-diagram-canvas > img { outline-color: oklch(1 0 0 / 0.1); }
+.chat-markdown .chat-diagram-note { margin: 0.25rem 0.5rem 0.5rem; font-size: var(--app-font-size-ui, 12px); line-height: 1.5; color: var(--muted-foreground); }
+@media (prefers-reduced-motion: reduce) {
+  .chat-diagram-view > button, .chat-diagram-expand { transition: none; }
+  .chat-diagram-view > button:active, .chat-diagram-expand:active { scale: none; }
+}
+
 .chat-markdown .chat-markdown-codeblock[data-wrap="true"] .chat-markdown-codeblock__body pre {
   white-space: pre-wrap;
   overflow-x: hidden;

@@ -27,6 +27,9 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [profile and diagram UI polish](renderer-ui-polish-2026-09-14.md) for explicit
+profile controls, responsive grouping, diagram expansion, and motion/focus checks.
+
 See [renderer follow-ups](renderer-followups-2026-09-14.md) for Markdown data
 retention, the latest peer-source review, lazy diagram rendering, OMP profiles
 and the opaque composer correction.

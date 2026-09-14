@@ -53,7 +53,7 @@ export function useIsDark(): boolean {
   return theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
 }
 
-export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode }) {
+export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions, header }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode; header?: ReactNode }) {
   const dark = useIsDark()
   const [highlight, setHighlight] = useState<{ code: string; name: string; dark: boolean; html: string } | null>(null)
   const markup = useMemo(() => highlight ? { __html: highlight.html } : null, [highlight])
@@ -98,7 +98,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, sta
   return (
     <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : undefined}>
       <div className="chat-markdown-codeblock__header">
-        <span className="chat-markdown-codeblock__lang">{lang ?? "text"}</span>
+        {header ?? <span className="chat-markdown-codeblock__lang">{lang ?? "text"}</span>}
         <span className="chat-markdown-codeblock__actions">
           {actions}
           {!preview && <button
@@ -136,4 +136,3 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, sta
     </div>
   )
 })
-
