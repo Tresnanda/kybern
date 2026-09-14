@@ -4,11 +4,12 @@ import AppKit
 import WebKit
 
 let app = NSApplication.shared
-app.setActivationPolicy(.prohibited)
+app.setActivationPolicy(.accessory)
 
 final class MaterialCheck: NSObject, WKNavigationDelegate {
     let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     var themes = "{}"
+    var window: NSWindow!
 
     func run() throws {
         guard CommandLine.arguments.count == 3 else {
@@ -16,6 +17,12 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         }
         let css = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
         themes = try String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8)
+        // Older WebKit does not resolve generated pseudo-element styles until
+        // the view has a window. Exercise the same mounted state as the app.
+        window = NSWindow(contentRect: web.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Kybern material checks"
+        window.contentView = web
+        window.orderFront(nil)
         web.navigationDelegate = self
         web.loadHTMLString("""
         <html data-runtime="electron" data-platform="macos"><head><style>
@@ -75,7 +82,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             for (const el of elements.filter(el => el.matches('article'))) {
               if (!glass && alpha(el) < 0.99) throw new Error(name + ': ' + el.textContent + ' must be opaque, alpha ' + alpha(el));
               const blur = filter(el, '::before');
-              if ((blur !== 'none' && blur !== '') !== glass) throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur);
+              if ((blur !== 'none' && blur !== '') !== glass) throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur + ' (content: ' + getComputedStyle(el, '::before').content + ', token: ' + getComputedStyle(el).getPropertyValue('--composer-glass-filter') + ')');
               if (filter(el) !== 'none') throw new Error(name + ': duplicate composer blur');
             }
             results.push('PASS: ' + name + ' composer and stacked panels');
