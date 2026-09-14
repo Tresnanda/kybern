@@ -118,6 +118,15 @@ jobs:
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering-memory.mjs
+      - name: Diagnose scrolling on the previous memory baseline
+        if: runner.os == macOS && failure() && steps.frontend-build.outcome == success
+        working-directory: apps/desktop
+        run: |
+          git fetch --no-tags origin 887b6464e1201034d8f833a9f39db9cc0ca1439b
+          git worktree add --detach /tmp/kybern-memory-baseline 887b6464e1201034d8f833a9f39db9cc0ca1439b
+          ln -s "$PWD/node_modules" /tmp/kybern-memory-baseline/apps/desktop/node_modules
+          cd /tmp/kybern-memory-baseline/apps/desktop
+          node scripts/check-rendering-memory.mjs
       - name: Native WebKit Markdown memory
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
