@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 <!-- kybern-release-title: Bring your agents together -->
 <!-- kybern-release-summary: Delegate across harnesses, keep project knowledge with a coordinator, and follow the work from your chats. -->
@@ -9,6 +9,10 @@
 - Create a project coordinator from the familiar chat composer. It plans work, manages workers, and maintains shared project knowledge; switch its harness when it is idle.
 - Choose the tools you want in the right sidebar with **+**. New workspaces start with the panel empty and remember your choices.
 - See what changed when a desktop update arrives, with a dismissible release card and full release details. Install from **Update and restart** at the bottom of the sidebar, with download progress and retry after a failed installation.
+- Preview Mermaid diagrams in conversations. Switch between preview and source, expand a diagram, or copy its definition; incomplete and invalid diagrams keep a readable source fallback.
+- Choose a default OMP profile or override it per project in **Settings → Agents**. Worktrees inherit the project profile, while existing chats keep the profile they started with.
+- Browse large conversation histories with lower memory use, while preserving selection, focus, row controls, and deliberate loading of earlier messages.
+- Keep the composer and stacked panels readable when translucency or accessibility settings disable blur.
 
 ## 0.3.6
 
