@@ -12,16 +12,25 @@ The changes reuse Kybern's settings, menu, disclosure, dialog, typography and mo
 
 ## Verification
 
-Desktop: 134 tests, typecheck, lint and production build pass. The initial updated native profile and Mermaid fixtures passed under the production CSP at `tauri://localhost`; their screenshots were reviewed. Later native runs stalled after the Mac locked: the page reported `document.visibilityState === "hidden"`, and a process sample showed an idle WebKit main thread. Those timeouts are not recorded as passing tests. Temporary diagnostic changes to the native harness were removed.
-
-The expanded checks ran in the locally installed Playwright WebKit, headless, using a production fixture build and the application's CSP headers over loopback HTTP:
+Desktop: 134 tests, typecheck, lint and production build pass. The final fixture matrix passed in system WKWebView at `tauri://localhost` under the production CSP, on Apple M1 / 16 GiB / macOS 27.0 (26A5416b). The same functional checks also passed in the locally installed headless Playwright WebKit over loopback HTTP with the application's CSP. Native screenshots were reviewed in light/dark, narrow and enlarged-text layouts.
 
 - Profiles at 1100px dark, 480px light, and 360px RTL with 150% UI text: save, explicit unnamed/default behavior, inheritance, preservation of unrelated provider settings, cancellation/focus, project selection, and closed-content unmounting passed. Controls stayed inside the viewport.
 - Mermaid at 1100px dark and 480px light/RTL: six diagram families in both themes, exact source/copy, stable settled images, invalid/incomplete fallback, image-URL cleanup and idle renderer release/restart passed. Expanded images reused the same URL, dialogs fit the viewport, and Escape restored focus.
 - Shared rendering and interaction checks passed: 30/30 historical code wrappers retained identity, exact final text and wrap state survived streaming, and keyboard focus, selection, navigation, reading position and follow controls remained functional.
 - Both disclosure and diagram selection passed a mid-animation reversal at 10% speed using fixture-only CSS durations. Emulated reduced-motion CSS disabled the selection animation.
 
-Headless WebKit is useful functional and layout coverage, but it does not replace the system WKWebView or native graphics-memory measurement. The final native matrix and a fresh native memory run require an unlocked Mac. This UI pass makes no new RAM, CPU, frame-time or energy claim; the measurements in the preceding report remain scoped to that implementation and workload.
+An earlier native run was interrupted by the Mac locking: WebKit reported a hidden page and paused timers. All native cases were rerun successfully after unlock. Temporary diagnostic changes to the native harness were removed.
+
+The native rendered-history memory guard also passed, with no builds running during sampling:
+
+| Measurement | Prior renderer follow-up | UI polish rerun | Guard |
+| --- | ---: | ---: | ---: |
+| History-stage peak physical footprint | 416.9 MiB | 406.9 MiB | 768 MiB |
+| Full stress-sequence peak physical footprint | 801.1 MiB | 858.0 MiB | 1024 MiB |
+
+The sequence sampled 1,600 nonempty frames across cold/warm/fast history, mixed work, streaming, expanded thinking/tools and long code. Frame-interval p95 was 17–18 ms per stage. Separately, the Markdown rendering fixture measured 1 ms explanation-commit p95 and 18 ms streaming frame-interval p95. No CPU, energy or OS input-latency measurement was taken for this UI pass.
+
+Native allocations vary; these single-run figures do not establish a memory change attributable to the UI polish. The guard covers this isolated stress workload and does not impose a whole-application RAM cap.
 
 To repeat the native cases from `apps/desktop`:
 
