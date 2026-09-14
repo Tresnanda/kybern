@@ -20,6 +20,6 @@ async function run() {
   await sleep(32_000)
   await mark("markdown-workers-released")
   const retainedBytes = retainedSize([...retained])
-  w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: retained.length === 8 && retainedBytes < 60 * 1024 * 1024, retainedBytes, budgetBytes: 60 * 1024 * 1024, fixtures: retained.length }))
+  w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: retained.length === 8 && retainedBytes < 36 * 1024 * 1024, retainedBytes, budgetBytes: 36 * 1024 * 1024, fixtures: retained.length }))
 }
 run().catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error) })))

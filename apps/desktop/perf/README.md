@@ -27,6 +27,11 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [further renderer memory work](memory-followup-2026-09-15.md) for redundant
+Markdown metadata, streaming allocation reductions, inactive icon cleanup, and
+the remaining native WebKit footprint. The focused parsed-data guard is 36 MiB;
+Node timing improvements are separate from native memory measurements.
+
 See [long-chat and renderer memory reductions](memory-reductions-2026-09-14.md)
 for bounded refreshes, cleanup while following, stable interaction pins, deferred
 result formatting, and inactive terminal graphics release. Run `history-retention`
