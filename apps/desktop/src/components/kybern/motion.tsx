@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 
+import { advanceIconSwap, ICON_SWAP_TRANSITION_MS, settleIconSwap, type IconSwapKey, type IconSwapState } from "@/lib/iconSwap"
 import { observeLoopVisibility } from "@/lib/loopVisibility"
 import { cn } from "@/lib/utils"
 
@@ -137,16 +138,24 @@ export function TextSwap({ text, className, as: Tag = "span", shimmer = false }:
 
 /* ─── Icon swap ─────────────────────────────────────────────────────────── */
 
-/** Two icons in one slot; `active` picks which is visible. Both stay mounted so the cross-blur can run. */
-export function IconSwap({ active, a, b, className }: { active: "a" | "b"; a: ReactNode; b: ReactNode; className?: string }) {
+/** Two icons share one slot during the cross-blur; the inactive icon unmounts after it exits. */
+export function IconSwap({ active, a, b, className }: { active: IconSwapKey; a: ReactNode; b: ReactNode; className?: string }) {
+  const [state, setState] = useState<IconSwapState>(() => ({ shown: active, leaving: null }))
+  const next = advanceIconSwap(state, active)
+  // Preserve both nodes across rapid reversals so their CSS transitions retarget
+  // from the currently painted state instead of restarting.
+  if (next !== state) setState(next)
+  useEffect(() => {
+    if (state.leaving === null) return
+    const shown = state.shown
+    const id = window.setTimeout(() => setState((current) => settleIconSwap(current, shown)), ICON_SWAP_TRANSITION_MS)
+    return () => window.clearTimeout(id)
+  }, [state.leaving, state.shown])
+  const swapping = state.leaving !== null
   return (
-    <span className={cn("t-icon-swap", className)}>
-      <span data-active={active === "a"} className="inline-flex">
-        {a}
-      </span>
-      <span data-active={active === "b"} className="inline-flex">
-        {b}
-      </span>
+    <span className={cn("t-icon-swap", className)} data-swapping={swapping ? "true" : undefined}>
+      {(state.shown === "a" || state.leaving === "a") && <span key="a" data-active={state.shown === "a"} className="inline-flex">{a}</span>}
+      {(state.shown === "b" || state.leaving === "b") && <span key="b" data-active={state.shown === "b"} className="inline-flex">{b}</span>}
     </span>
   )
 }

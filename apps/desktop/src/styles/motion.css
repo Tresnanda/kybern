@@ -267,6 +267,13 @@
   transform: scale(1);
   filter: blur(0.01px);
 }
+@starting-style {
+  .t-icon-swap[data-swapping] > [data-active="true"] {
+    opacity: 0;
+    transform: scale(0.6);
+    filter: blur(var(--blur-small));
+  }
+}
 
 /* ─── Border beam ───────────────────────────────────────────────────────────
    A short streak of light orbiting the element's border. The element supplies

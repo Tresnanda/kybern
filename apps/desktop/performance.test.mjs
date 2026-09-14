@@ -10,6 +10,7 @@ import {
   virtualRange,
 } from "./src/lib/workload.ts"
 import { advanceSequence, mergeSequencedSnapshot } from "./src/state/bootstrap.ts"
+import { advanceIconSwap, settleIconSwap } from "./src/lib/iconSwap.ts"
 
 test("thread and history diff summaries never transfer eager patches", () => {
   assert.deepEqual(diffSummaryRequest("thread-1"), { thread_id: "thread-1", include_patch: false })
@@ -51,6 +52,16 @@ test("code fallback releases the highlighted subtree at language and source limi
   assert.equal(canHighlightCode(null, short), false)
   assert.equal(canHighlightCode("typescript", "x".repeat(LARGE_SOURCE_MAX_BYTES + 1)), false)
   assert.equal(canHighlightCode("typescript", "x\n".repeat(4_001)), false)
+})
+
+test("icon swaps retain only the transitioning pair and survive rapid reversal", () => {
+  const initial = { shown: "a", leaving: null }
+  const forward = advanceIconSwap(initial, "b")
+  assert.deepEqual(forward, { shown: "b", leaving: "a" })
+  const reversed = advanceIconSwap(forward, "a")
+  assert.deepEqual(reversed, { shown: "a", leaving: "b" })
+  assert.equal(settleIconSwap(reversed, "b"), reversed, "a stale exit timer cannot remove the reversed pair")
+  assert.deepEqual(settleIconSwap(reversed, "a"), { shown: "a", leaving: null })
 })
 
 test("the Explorer window renders only nearby fixed-height rows", () => {
