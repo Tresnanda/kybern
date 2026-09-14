@@ -7,10 +7,17 @@ let consumer = 0
 const cache = new Map<string, ParsedMarkdown>()
 let cacheBytes = 0
 const size = retainedSize
+// Set VITE_KYBERN_WORKER_IDLE_MS=2000 in the diagnostic perf build to compare
+// a short worker lifetime with the shipped 30-second default. The settled
+// Markdown cache intentionally remains renderer-owned across worker release;
+// only parser sessions and worker module state are discarded.
+const configuredIdleMs = Number(import.meta.env?.VITE_KYBERN_WORKER_IDLE_MS)
+const workerIdleMs = Number.isFinite(configuredIdleMs) && configuredIdleMs >= 0 ? configuredIdleMs : 30_000
+
 export const nextMarkdownConsumer = () => ++consumer
 export function cachedMarkdown(source: string) {
   const parsed = cache.get(source)
-  if (parsed) { cache.delete(source); cache.set(source, parsed); idle.settle() }
+  if (parsed) { cache.delete(source); cache.set(source, parsed) }
   return parsed
 }
 export function cacheMarkdown(parsed: ParsedMarkdown) {
@@ -50,13 +57,11 @@ function releaseWorker() {
   worker = undefined
   queue.dispose()
   queue = makeQueue()
-  cache.clear()
-  cacheBytes = 0
 }
-const idle = createIdleRelease(() => queue.idle(), releaseWorker)
+const idle = createIdleRelease(() => queue.idle(), releaseWorker, workerIdleMs)
 export function parseMarkdown(input: MarkdownInput, signal: AbortSignal) {
   idle.touch()
   return queue.request(input, signal).finally(() => idle.settle())
 }
 export function releaseMarkdown(consumer: number) { worker?.postMessage({ release: consumer }); idle.settle() }
-if (import.meta.hot) import.meta.hot.dispose(() => { idle.dispose(); queue.dispose(); worker?.terminate(); cache.clear() })
+if (import.meta.hot) import.meta.hot.dispose(() => { idle.dispose(); queue.dispose(); worker?.terminate(); cache.clear(); cacheBytes = 0 })

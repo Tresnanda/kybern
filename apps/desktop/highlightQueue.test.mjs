@@ -49,3 +49,26 @@ test("highlight queue bounds memory and does not retain cancelled consumers", as
   assert.equal(await replacement, null)
   assert.equal(await queue.request(input("closed")), null)
 })
+
+test("highlight queue restart preserves settled-cache ownership and cancellation", async () => {
+  const firstSent = []
+  let queue = createHighlightQueue(job => firstSent.push(job))
+  const first = queue.request(input("settled"))
+  assert.equal(firstSent.length, 1)
+  queue.receive({ id: firstSent[0].id, html: "settled html" })
+  assert.equal(await first, "settled html")
+
+  // Worker release disposes only the transport queue. The renderer-owned
+  // settled cache is intentionally outside this object and can serve the
+  // same source after a new worker is created.
+  queue.dispose()
+  const restartedSent = []
+  queue = createHighlightQueue(job => restartedSent.push(job))
+  const canceled = new AbortController()
+  const next = queue.request(input("after restart"), canceled.signal)
+  canceled.abort()
+  assert.equal(await next, null)
+  assert.equal(restartedSent.length, 1)
+  queue.receive({ id: restartedSent[0].id, html: "ignored after cancellation" })
+  assert.equal(queue.idle(), true)
+})
