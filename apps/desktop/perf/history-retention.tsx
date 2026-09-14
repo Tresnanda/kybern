@@ -27,7 +27,12 @@ async function run() {
   useStore.getState().set({ selected: { kind: "thread", id: "history" }, connection: { state: "open" }, transcripts: { history: { ...emptyThreadState(), loaded: true, blocks: fixture.all, lastSeq: 3000 } } })
   const beforeBytes = retainedSize(state().blocks)
   flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex h-screen flex-col"><Transcript threadId="history" bottomInset={0} /></div></ThemeProviderContext>))
-  await waitFor(() => state().blocks.length === 600, "Following a long chat releases older completed turns")
+  // WebKit can keep emitting scroll notifications at the live edge. They must
+  // not indefinitely postpone cleanup when there is no reading interaction.
+  const notifications = setInterval(() => scroll()?.dispatchEvent(new Event("scroll")), 30)
+  try {
+    await waitFor(() => state().blocks.length === 600, "Following a long chat releases older completed turns")
+  } finally { clearInterval(notifications) }
   const afterBytes = retainedSize(state().blocks)
   check(state().nextBeforeSeq === 2401, "Evicted history has an exact reload cursor")
   check(state().blocks.at(-2) === fixture.all.at(-2), "Latest answer retains its object identity")

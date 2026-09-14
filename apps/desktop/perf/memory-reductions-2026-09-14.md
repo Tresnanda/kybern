@@ -12,7 +12,7 @@ The installed application and normal daemon data were not replaced or restarted.
   replay events received during the complete load. Failures preserve the old
   readable state. This does not limit the size of an individual returned result.
 - Chats following the latest output release old completed turns after crossing
-  1,500 blocks or an estimated 16 MiB. Cleanup waits for 250 ms of quiet and
+  1,500 blocks or an estimated 16 MiB. Cleanup coalesces events over 250 ms and
   targets roughly 600 blocks or 8 MiB, keeping whole turns, at least the newest
   two turns, and unfinished work. Earlier history remains reloadable through its
   sequence cursor. Reading earlier history, selections, focused message controls,
@@ -70,7 +70,10 @@ so its byte figures measure the store's retained data, not total native memory.
 At 1100px and 480px it reloads an evicted page with zero measured anchor movement,
 preserves the final answer object and formatted DOM, and pins history through text
 selection and keyboard focus. Removing cleanup makes it fail with 3,000 blocks;
-using positional virtual-row pins makes its focus assertion fail.
+using positional virtual-row pins makes its focus assertion fail. Continuous
+scroll notifications also reproduce a cleanup-starvation failure with a resetting
+debounce; coalescing those notifications makes the regression pass while preserving
+all reading, focus and selection guards.
 
 The unchanged baseline's full scrolling stress peak was 888.9 MiB. An intermediate
 candidate measured 800.4 MiB, with a 416.0 MiB history peak and 18–19 ms frame p95.

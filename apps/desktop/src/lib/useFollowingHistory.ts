@@ -6,12 +6,14 @@ import type { ThreadState } from "@/state/transcript"
 export function useFollowingHistory(threadId: string, state: ThreadState | undefined, scroll: HTMLElement | null, enabled: boolean) {
   useEffect(() => {
     if (!enabled || !scroll || !state?.loaded || state.loadingEarlier) return
-    // Wait for a quiet frame sequence. Do not walk retained data on every token,
-    // and let a wheel/selection/focus gesture settle before deciding to release.
-    let timer: ReturnType<typeof setTimeout>
+    // Coalesce notifications without postponing cleanup indefinitely: WebKit
+    // can emit scroll events continuously even at the live edge. State changes
+    // still restart the effect so we do not walk retained data on every token.
+    let timer: ReturnType<typeof setTimeout> | undefined
     const schedule = () => {
-      clearTimeout(timer)
+      if (timer !== undefined) return
       timer = setTimeout(() => {
+        timer = undefined
         if (scroll.closest("[inert]") || (!document.hidden && scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop > 56)) return
         if (!document.getSelection()?.isCollapsed) return
         if (document.activeElement?.closest("[data-turn-id]")) return
