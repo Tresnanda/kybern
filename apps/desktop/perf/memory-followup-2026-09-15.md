@@ -177,5 +177,24 @@ The final local default-setting repeat timed out before its first frame-loop
 sample. A sleep-prevention retry also stalled. Read-only system state confirmed
 `CGSSessionScreenIsLocked=true` and the fixture WebContent process at 0% CPU.
 These attempts produced no footprint measurements and are not passing runs.
-The macOS CI scrolling-memory check exercises the final default on an unlocked
-runner; its result is reported separately from the earlier local comparison.
+A diagnostic CI run also exercised the full scrolling fixture on macOS 15.7.9
+arm64, first at the final source and then at baseline `887b646` on the same
+runner (run `34873311159`). Both failed the unchanged rendering budgets:
+history-fast anchor jumps were 27.53 px / 27.27 px and frame p95 was 91 ms /
+103 ms respectively. Neither run painted an empty viewport. Native lifetime
+peaks were 511.2 MiB / 429.8 MiB, both inside the existing memory limits. This
+comparison does not support a full-workload memory improvement on macOS 15.
+An earlier candidate-only CI run measured 487.3 MiB.
+
+The full scrolling fixture remains an unchanged, manually run regression check;
+it is not newly installed as a required CI gate while its prior baseline fails
+on this runner. No rendering threshold or memory limit was relaxed. The narrower
+native rendering, interaction, retention, Markdown, worker and icon checks remain
+in CI. The macOS 15 scrolling failure remains unresolved and must not be counted
+as a passing native run.
+
+The IconSwap fixture now commits the resting wrapper style and seeks both real
+CSS opacity transitions to their midpoint, avoiding a fixed-delay sample that can
+miss short animations. Its spinner size assertion uses CSS layout dimensions,
+since a rotating SVG's transformed bounding box varies with angle. Production
+motion and the lifecycle/geometry/reversal assertions remain intact.

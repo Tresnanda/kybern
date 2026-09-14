@@ -101,9 +101,11 @@ async function run() {
   const liveLabelX = label.getBoundingClientRect().x
   const spinner = icon("spinner", thoughtSwap())!
   const spinnerSvg = spinner.querySelector<SVGElement>("svg")!
-  const spinnerRect = spinnerSvg.getBoundingClientRect()
+  // A rotating square's visual bounding box varies with its current angle.
+  // Verify the layout dimensions independently of the stepped spin transform.
+  const spinnerStyle = getComputedStyle(spinnerSvg)
   check(children().length === 1 && spinner && !icon("brain", thoughtSwap()), "Live Thinking did not mount only its Spinner")
-  check(near(spinnerRect.width, 14) && near(spinnerRect.height, 14), "Thinking Spinner is not 14px")
+  check(near(parseFloat(spinnerStyle.width), 14) && near(parseFloat(spinnerStyle.height), 14), "Thinking Spinner is not 14px")
   check(getComputedStyle(spinnerSvg).animationName !== "none" && spinnerSvg.getAnimations().some((animation) => animation.playState === "running"), "Visible Thinking Spinner is not running")
   const restingSpinner = children()[0]!
   const restingStyle = getComputedStyle(restingSpinner)
