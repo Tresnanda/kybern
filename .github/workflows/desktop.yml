@@ -193,12 +193,6 @@ jobs:
           tag=""
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - name: Write latest.json and the remote installer
-        run: |
-          node scripts/updater-manifest.mjs --tag "${{ steps.release.outputs.tag }}"
-          cp scripts/install-remote.sh dist/kybern-remote-install.sh
-          cp scripts/install-mac.sh dist/kybern-mac-install.sh
-          cat dist/latest.json
       - name: Wait for dist to create the release
         if: steps.release.outputs.tag != ''
         shell: bash
@@ -214,6 +208,23 @@ jobs:
           done
           echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 20 minutes" >&2
           exit 1
+      - name: Read GitHub release notes
+        shell: bash
+        run: |
+          : > dist/release-notes.md
+          if [ -n "${{ steps.release.outputs.tag }}" ]; then
+            if ! gh release view "${{ steps.release.outputs.tag }}" --json body --jq '.body // ""' > "$RUNNER_TEMP/release-notes.md"; then
+              echo "::warning::Unable to read the GitHub release body; latest.json will link to the release instead"
+            elif [ -s "$RUNNER_TEMP/release-notes.md" ]; then
+              cp "$RUNNER_TEMP/release-notes.md" dist/release-notes.md
+            fi
+          fi
+      - name: Write latest.json and the remote installer
+        run: |
+          node scripts/updater-manifest.mjs --tag "${{ steps.release.outputs.tag }}" --notes-file dist/release-notes.md
+          cp scripts/install-remote.sh dist/kybern-remote-install.sh
+          cp scripts/install-mac.sh dist/kybern-mac-install.sh
+          cat dist/latest.json
       - name: Upload to the GitHub Release and publish it
         if: steps.release.outputs.tag != ''
         run: |

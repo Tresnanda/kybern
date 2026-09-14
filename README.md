@@ -88,10 +88,12 @@ this check.
 | Linux x86_64 | `kybern-<version>-x86_64-unknown-linux-gnu.AppImage` or `.deb` |
 | Windows x86_64 | `kybern-<version>-x86_64-pc-windows-msvc-setup.exe` |
 
-The app checks the release feed after launch and every few hours, and offers
-to install a newer version; **Settings → About** has a manual check. Installing
-an update restarts the app and its local daemon, so agents running on that
-machine restart with it. Remote environments are unaffected.
+The app checks the release feed after launch and every few hours; **Settings →
+About** has a manual check. When a newer version is available, a release card
+appears at the bottom right. **See what’s new** opens the release details, and
+the sidebar keeps **Update and restart** available until the update is installed.
+Installing an update restarts the app and its local daemon, so agents running
+on that machine restart with it. Remote environments are unaffected.
 
 To build from source instead, install stable Rust, Node 22+, pnpm 11, and the
 [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), then:
@@ -318,6 +320,17 @@ validate packages and warm caches. Publishing is a separate action.
 | Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release and desktop workflows build in parallel and attach their packages to the same GitHub Release. Desktop packages include the daemon. |
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
+
+Before running `scripts/release.sh X.Y.Z`, add a matching `## X.Y.Z` entry near
+the top of `CHANGELOG.md` with concise, user-visible bullets. Cargo-dist copies
+that entry into the GitHub Release, and the desktop updater uses its first bullet
+as the announcement summary by default. Add these optional comments inside the
+entry when the announcement needs a separate headline or shorter summary:
+
+```md
+<!-- kybern-release-title: Short feature headline -->
+<!-- kybern-release-summary: One concrete sentence about the release. -->
+```
 
 A daemon-only fix is shipped in the next daemon/desktop release. A desktop-only
 fix uses that same release unit because desktop bundles its daemon. A mobile-only

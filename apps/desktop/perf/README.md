@@ -87,6 +87,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Store publication, sidebar, composer, background task status | `node scripts/check-rendering.mjs work-shell` |
 | Collaboration group lifecycle, paging, attribution, and context revisions | `node scripts/check-rendering.mjs collaboration` |
 | Ordinary-chat delegation, child navigation, earlier-thread references, project coordinator entry, and optional dock panels | `node scripts/check-rendering.mjs chat-collaboration` |
+| Release announcement, release details, and sidebar update controls | `node scripts/check-rendering.mjs app-update` |
 | Context menus or popup materials | `node scripts/check-rendering.mjs materials` |
 | Large histories, worker scheduling, expanded work | `node scripts/check-rendering.mjs scaling` |
 | Virtualization, navigation, row state, scroll anchoring | `node scripts/check-rendering.mjs interaction` |

@@ -69,6 +69,7 @@ import { createProjectThreadsSelector, useStore } from "@/state/store"
 
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { ProjectPicker } from "./ProjectPicker"
+import { SidebarUpdateButton } from "./AppUpdate"
 
 const MAX_PROJECT_THREADS = 8
 
@@ -193,6 +194,7 @@ export function ThreadSidebar() {
       <ProjectPicker open={projectPickerOpen} onOpenChange={setProjectPickerOpen} />
       <SidebarFooter className="gap-2 border-t border-sidebar-border p-2 font-system-ui">
         <SidebarMenu>
+          <SidebarUpdateButton />
           <SidebarMenuItem>
             <div className="flex items-center gap-2">
               <SidebarMenuButton
