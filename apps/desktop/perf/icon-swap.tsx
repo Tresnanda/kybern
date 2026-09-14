@@ -69,13 +69,13 @@ function setThought(complete: boolean, remount = false) {
   render()
 }
 
-function enableReducedMotionRules() {
+function configureReducedMotionRules(enabled: boolean) {
   const changed: { rule: CSSMediaRule; media: string }[] = []
   const visit = (rules: CSSRuleList) => {
     for (const rule of rules) {
       if (rule instanceof CSSMediaRule && rule.conditionText.replaceAll(" ", "").includes("prefers-reduced-motion:reduce")) {
         changed.push({ rule, media: rule.media.mediaText })
-        rule.media.mediaText = "all"
+        rule.media.mediaText = enabled ? "all" : "not all"
       } else if ("cssRules" in rule) visit((rule as CSSGroupingRule).cssRules)
     }
   }
@@ -89,6 +89,10 @@ async function run() {
   document.documentElement.dataset.windowMaterial = "opaque"
   document.documentElement.style.colorScheme = "dark"
   document.body.className = "m-0 bg-background font-ui"
+  native().postMessage(JSON.stringify({ stage: "icon-motion-environment", reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches }))
+  // Exercise both production media-rule branches independently of the host's
+  // accessibility preference. Hosted runners may enable reduced motion.
+  const restoreSystemMotion = configureReducedMotionRules(false)
 
   render()
   check(children().length === 1 && icon("brain", thoughtSwap()) && !icon("spinner", thoughtSwap()), "An initially settled Thought retained its hidden Spinner")
@@ -160,7 +164,8 @@ async function run() {
   await sleep(310)
   check(copySwap.children.length === 1 && icon("copy", copySwap) && !icon("check", copySwap), "Copy action did not return cleanly to its Copy icon")
 
-  const restoreMotion = enableReducedMotionRules()
+  restoreSystemMotion()
+  const restoreMotion = configureReducedMotionRules(true)
   setThought(false, true)
   await frame()
   setThought(true)
