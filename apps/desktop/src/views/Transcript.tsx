@@ -1031,19 +1031,27 @@ function WorkRows({
   compact?: boolean
   onOpenAgentActivity: OpenAgentActivity
 }) {
-  const chunks: WorkChunk[] = compact ? chunkWork(blocks, tasksByToolCall) : blocks.map((block) => ({ kind: "single", block }))
+  const renderBlock = (block: Block) => (
+    <WorkRow
+      key={block.id}
+      block={block}
+      task={block.kind === "tool" ? tasksByToolCall.get(block.call.id) : undefined}
+      tasksByToolCall={tasksByToolCall}
+      childrenByParent={childrenByParent}
+      tone={tone}
+      live={block.kind === "assistant" && block.id === liveTextId}
+      onOpenAgentActivity={onOpenAgentActivity}
+    />
+  )
+  // Live work is already one row per block. Feed those blocks directly to the
+  // virtualizer instead of allocating a wrapper for every offscreen block on
+  // each streamed tail update. Settled compact work still needs tool chunks.
+  if (!compact) return <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{renderBlock}</VirtualRows>
+
+  const chunks = chunkWork(blocks, tasksByToolCall)
   return <VirtualRows items={chunks} getKey={chunkKey} estimateSize={estimateWorkSize}>{(chunk) =>
     chunk.kind === "single" ? (
-      <WorkRow
-        key={chunk.block.id}
-        block={chunk.block}
-        task={chunk.block.kind === "tool" ? tasksByToolCall.get(chunk.block.call.id) : undefined}
-        tasksByToolCall={tasksByToolCall}
-        childrenByParent={childrenByParent}
-        tone={tone}
-        live={chunk.block.kind === "assistant" && chunk.block.id === liveTextId}
-        onOpenAgentActivity={onOpenAgentActivity}
-      />
+      renderBlock(chunk.block)
     ) : (
       <ToolGroupRow
         key={chunk.blocks[0]!.id}
