@@ -172,3 +172,10 @@ new workers, preserve full revisions and exact formatted output, then release
 both. Cancellation before queueing and while queued also passes. This verifies
 resource lifecycle rather than inferring worker destruction from a memory dip.
 The Markdown-data, icon and worker lifecycle checks are included in macOS CI.
+
+The final local default-setting repeat timed out before its first frame-loop
+sample. A sleep-prevention retry also stalled. Read-only system state confirmed
+`CGSSessionScreenIsLocked=true` and the fixture WebContent process at 0% CPU.
+These attempts produced no footprint measurements and are not passing runs.
+The macOS CI scrolling-memory check exercises the final default on an unlocked
+runner; its result is reported separately from the earlier local comparison.

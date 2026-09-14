@@ -114,6 +114,10 @@ jobs:
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs terminal-memory
+      - name: Native WebKit scrolling memory
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering-memory.mjs
       - name: Native WebKit Markdown memory
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
