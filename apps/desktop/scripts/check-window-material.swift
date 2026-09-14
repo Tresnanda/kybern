@@ -61,7 +61,10 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
           const reduced = matchMedia('(prefers-reduced-transparency: reduce)').matches;
           const contrast = matchMedia('(prefers-contrast: more)').matches;
           const background = el => getComputedStyle(el).backgroundColor;
-          const filter = (el, pseudo) => getComputedStyle(el, pseudo).getPropertyValue('-webkit-backdrop-filter');
+          const filter = (el, pseudo) => {
+            const style = getComputedStyle(el, pseudo);
+            return style.getPropertyValue('backdrop-filter') || style.getPropertyValue('-webkit-backdrop-filter') || 'none';
+          };
           function alpha(element) {
             context.clearRect(0, 0, 1, 1);
             context.fillStyle = background(element);

@@ -316,6 +316,9 @@ fn spawn_daemon(startup_id: &str, port: u16) -> Result<std::process::Child> {
     // shared by the CLI and mobile clients and intentionally outlives it.
     let mut cmd = std::process::Command::new(&bin);
     cmd.env("PATH", daemon_path());
+    // The Tauri build wrapper sets this for its own artifacts. Passing it to
+    // agents makes builds in other worktrees overwrite the running daemon.
+    cmd.env_remove("CARGO_TARGET_DIR");
     if let Some(r) = &root {
         std::fs::create_dir_all(r)?;
         cmd.arg("--data-dir").arg(r);
