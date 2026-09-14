@@ -11,6 +11,9 @@ export function useEarlierHistory(threadId: string, scroll: HTMLElement | null, 
   const error = failure?.threadId === threadId ? failure.message : ""
   useEffect(() => { intent.current = false }, [threadId])
   const load = useCallback(async () => {
+    // A request consumes the gesture (including an explicit retry). Cursor and
+    // layout changes alone must not keep downloading history at scrollTop=0.
+    intent.current = false
     setFailure(null)
     try { await loadEarlier(threadId) } catch (error) { setFailure({ threadId, message: errorText(error) }) }
   }, [threadId])
@@ -25,17 +28,19 @@ export function useEarlierHistory(threadId: string, scroll: HTMLElement | null, 
     const schedule = () => { if (!frame) frame = requestAnimationFrame(check) }
     const gesture = (event: Event) => {
       if (event instanceof KeyboardEvent && !["PageUp", "Home", "ArrowUp", "PageDown", "End", "ArrowDown"].includes(event.key)) return
+      if (event instanceof PointerEvent && event.type === "pointermove" && event.buttons === 0) return
       intent.current = true
       schedule()
     }
     const pane = scroll.closest("[data-chat-transcript-pane]") ?? scroll
     scroll.addEventListener("scroll", schedule, { passive: true })
-    for (const name of ["wheel", "touchstart", "pointerdown", "keydown"]) pane.addEventListener(name, gesture, { passive: true })
+    const gestures = ["wheel", "touchstart", "touchmove", "pointerdown", "pointermove", "keydown"]
+    for (const name of gestures) pane.addEventListener(name, gesture, { passive: true })
     schedule()
     return () => {
       cancelAnimationFrame(frame)
       scroll.removeEventListener("scroll", schedule)
-      for (const name of ["wheel", "touchstart", "pointerdown", "keydown"]) pane.removeEventListener(name, gesture)
+      for (const name of gestures) pane.removeEventListener(name, gesture)
     }
   }, [scroll, cursor, loading, enabled, error, gate, load])
   return { error, retry: load }

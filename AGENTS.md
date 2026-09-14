@@ -48,6 +48,11 @@ pnpm install --frozen-lockfile
 KYBERN_DATA_DIR=/tmp/kyb KYBERN_NO_ACTIVATE=1 pnpm tauri dev
 ```
 
+In a separate checkout or worktree, explicitly set `CARGO_TARGET_DIR` to that
+checkout's own `target` directory for Cargo and Tauri commands. An inherited
+value can point at the running app's checkout and overwrite its daemon even
+when the sources and test data are isolated.
+
 Use a scratch `--data-dir` for testing so `~/.kybern` stays clean. The app
 connects to the daemon named by `KYBERN_DATA_DIR` (port and token files) and
 spawns `kybernd` from its own directory or `PATH` when none is reachable.

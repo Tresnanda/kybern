@@ -1,10 +1,12 @@
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
+import { useState } from "react"
 import { Transcript } from "../src/views/Transcript"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { useStore } from "../src/state/store"
 import { emptyThreadState, type Block } from "../src/state/transcript"
 import { calls, fixture } from "./history-rpc"
+import { useEarlierHistory } from "../src/lib/useEarlierHistory"
 import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -35,9 +37,47 @@ async function approach() {
   return { id: node.dataset.turnId!, top: node.getBoundingClientRect().top }
 }
 function anchorTop(id: string) { return document.querySelector<HTMLElement>(`[data-turn-id="${id}"]`)!.getBoundingClientRect().top }
+export function RetryHarness() {
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null)
+  const state = useStore(s => s.transcripts.history!)
+  const earlier = useEarlierHistory("history", viewport, state.nextBeforeSeq ?? null, !!state.loadingEarlier, true)
+  return <div ref={setViewport} data-chat-scroll-container style={{ height: 300, overflow: "auto" }}><div style={{ height: 2000 }}>{earlier.error && <button onClick={() => void earlier.retry()}>Retry</button>}</div></div>
+}
+async function checkRetryBudget() {
+  const host = document.createElement("div")
+  document.body.append(host)
+  const root = createRoot(host)
+  useStore.getState().set({ transcripts: { history: { ...emptyThreadState(), loaded: true, blocks: fixture.all.slice(-60), nextBeforeSeq: fixture.all.at(-60)!.seq } } })
+  flushSync(() => root.render(<RetryHarness />))
+  await waitFor(() => scroll(), "Retry test viewport mounts")
+  fixture.failNext = true
+  scroll().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
+  await waitFor(() => host.querySelector("button"), "Retry test exposes failed request")
+  host.querySelector("button")!.click()
+  await waitFor(() => calls.length >= 2 && !useStore.getState().transcripts.history!.loadingEarlier, "Retry test request finishes")
+  // No virtualizer or further gesture can cause these requests. Holding the
+  // viewport at the top reproduces the native scroll-echo failure deterministically.
+  await sleep(1000)
+  check(calls.length === 2, `One retry must load one page; observed ${calls.length - 1}`)
+  scroll().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
+  await waitFor(() => calls.length >= 3 && !useStore.getState().transcripts.history!.loadingEarlier, "A fresh gesture can load the next page")
+  check(calls.length === 3, "A new gesture must remain bounded")
+  scroll().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, buttons: 0 }))
+  await sleep(350)
+  check(calls.length === 3, "Hovering does not download another page")
+  for (const [event, expected] of [[new PointerEvent("pointermove", { bubbles: true, buttons: 1 }), 4], [new Event("touchmove", { bubbles: true }), 5]] as const) {
+    scroll().dispatchEvent(event)
+    await waitFor(() => calls.length >= expected && !useStore.getState().transcripts.history!.loadingEarlier, `${event.type} continues paging`)
+    check(calls.length === expected, `${event.type} stays bounded`)
+  }
+  flushSync(() => root.unmount())
+  host.remove()
+  calls.length = 0
+}
 async function run() {
   window.addEventListener("error", event => native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ stage: "runtime-error", message: event.message })))
   document.documentElement.classList.add("dark")
+  await checkRetryBudget()
   useStore.getState().set({ selected: { kind: "thread", id: "history" }, connection: { state: "open" }, transcripts: { history: { ...emptyThreadState(), loaded: true, blocks: fixture.all.slice(-60), nextBeforeSeq: fixture.all.at(-60)!.seq } } })
   flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex h-screen flex-col"><Transcript threadId="history" bottomInset={0} /></div></ThemeProviderContext>))
   await waitFor(() => scroll(), `History viewport mounts: ${document.body.innerText}`)
@@ -82,4 +122,4 @@ async function run() {
   return { pass: true, pages: calls.length, maxAnchorShift, boundedMountedRows: document.querySelectorAll('[data-turn-id]').length, calls }
 }
 const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }
-run().then(result => native.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error) })))
+run().then(result => native.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), calls, nextBeforeSeq: useStore.getState().transcripts.history?.nextBeforeSeq, loadingEarlier: useStore.getState().transcripts.history?.loadingEarlier })))

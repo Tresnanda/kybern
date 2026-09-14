@@ -47,7 +47,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 )),
                 None => None,
             };
-            let settings = state.settings.get().providers.get(&p.provider).cloned().unwrap_or_default();
+            let settings = crate::settings::provider_settings(&state.settings.get(), p.provider, cwd.as_deref().and_then(|p| p.to_str()));
             let context = kybern_drivers::ProbeContext { binary: settings.binary.map(std::path::PathBuf::from), cwd, env: settings.env };
             let driver = state.drivers.get(p.provider).ok_or_else(|| RpcError::not_found("harness"))?;
             let mut result =
@@ -85,7 +85,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .get_or_refresh(cache_key, p.force_refresh, || async move {
                     let probes = ProviderKind::ALL.into_iter().map(|kind| {
                         let driver = state.drivers.get(kind);
-                        let provider_settings = settings.providers.get(&kind).cloned().unwrap_or_default();
+                        let provider_settings =
+                            crate::settings::provider_settings(&settings, kind, cwd.as_deref().and_then(|p| p.to_str()));
                         let context = kybern_drivers::ProbeContext {
                             binary: provider_settings.binary.map(std::path::PathBuf::from),
                             cwd: cwd.clone(),
@@ -461,7 +462,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: SkillsListParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             let cwd = std::path::Path::new(&project.path);
-            let provider_settings = state.settings.get().providers.get(&p.provider).cloned().unwrap_or_default();
+            let provider_settings = crate::settings::provider_settings(&state.settings.get(), p.provider, cwd.to_str());
             let binary = provider_settings.binary.as_ref().map(std::path::PathBuf::from);
             let skills = match p.provider {
                 ProviderKind::ClaudeCode => {

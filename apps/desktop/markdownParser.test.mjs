@@ -14,7 +14,7 @@ registerHooks({ resolve(specifier, context, next) {
   }
   return next(specifier, context)
 } })
-const { createMarkdownParser } = await import("./src/lib/markdownParser.ts")
+const { createMarkdownParser, sameMarkdownNode } = await import("./src/lib/markdownParser.ts")
 const { imageSource } = await import("./src/lib/responseImages.ts")
 const urlTransform = (url, key) => key === "src" ? (imageSource(url) ? url : "") : key === "href" && chatLink(url).kind === "file" ? url : defaultUrlTransform(url)
 const render = (result) => renderToStaticMarkup(toJsxRuntime({ type: "root", children: result.blocks.map(b => b.node) }, { Fragment: React.Fragment, jsx, jsxs }))
@@ -60,4 +60,25 @@ test("settled blocks retain their object identity during appends", () => {
   assert.equal(after.blocks[0], before.blocks[0])
   assert.equal(after.blocks[2], before.blocks[2])
   assert.notEqual(after.blocks.at(-1), before.blocks.at(-1))
+})
+
+test("large code blocks do not retain a second serialized document tree", () => {
+  const source = "```text\n" + "retained payload ".repeat(6000) + "\n```"
+  const parsed = createMarkdownParser().parse(source)
+  assert.equal(render(parsed), expected(source))
+  // Source + the actual text node are necessary. A full serialized tree used
+  // only for identity comparisons would add another complete copy on the wire.
+  assert.ok(JSON.stringify(parsed).length < source.length * 2.1)
+})
+
+test("tree identity comparison includes attributes, positions, and text after worker cloning", () => {
+  const parser = createMarkdownParser()
+  const first = parser.parse("[Example][ref]\n\n[ref]: https://example.test/one")
+  const cloned = structuredClone(first.blocks[0].node)
+  assert.equal(sameMarkdownNode(first.blocks[0].node, cloned), true)
+  const changed = parser.parse("[Example][ref]\n\n[ref]: https://example.test/two")
+  assert.equal(sameMarkdownNode(first.blocks[0].node, changed.blocks[0].node), false)
+  assert.notEqual(changed.blocks[0], first.blocks[0])
+  cloned.position.start.offset++
+  assert.equal(sameMarkdownNode(first.blocks[0].node, cloned), false)
 })

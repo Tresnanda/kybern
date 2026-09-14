@@ -36,7 +36,7 @@ export default defineConfig([
   },
   {
     // These app modules intentionally colocate React components and shared helpers.
-    files: ['src/components/kybern/Markdown.tsx', 'src/views/chrome.tsx'],
+    files: ['src/components/kybern/Markdown.tsx', 'src/components/kybern/CodeBlock.tsx', 'src/views/chrome.tsx'],
     rules: {
       'react-refresh/only-export-components': 'off',
     },
