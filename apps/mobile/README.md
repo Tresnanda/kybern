@@ -232,7 +232,15 @@ opens the normal draft composer with the project, harness, model, effort, and
 permission controls. Nothing is created until the first message is sent. The
 coordinator plans work, delegates helpers, and maintains revisioned project
 knowledge; user corrections remain authoritative. Later visits reopen the same
-conversation, workers, saved knowledge, and results.
+conversation, workers, saved knowledge, and results. Before implementation, the
+coordinator researches the project and saves a reviewed overview in Knowledge.
+Setup status appears in the conversation's agent strip and Project screen. If
+interrupted, send a follow-up to continue setup and the original task.
+
+**Delete coordinator** is available from conversation menus and Agent settings.
+Stop active agents and clear queued messages first. Deletion archives the
+coordinator and retains workers, results, files, and previous knowledge as history.
+Creating another coordinator starts with fresh knowledge and a new setup pass.
 
 The coordinator’s composer can switch harness, model, or effort while its thread
 is idle or failed. The switch keeps that conversation and project records and

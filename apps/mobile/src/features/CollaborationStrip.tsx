@@ -113,6 +113,11 @@ export function CollaborationStrip({ thread }: { thread?: Thread | null }) {
       contentContainerStyle={{ paddingHorizontal: 20, gap: 8 }}
       style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}
     >
+      {thread.coordinator_project_id && detail?.coordinator_setup_complete === false && <Tap
+        label="Project setup: view research progress"
+        onPress={() => router.push({ pathname: "/collaboration", params: { threadId: thread.id } })}
+        style={[styles.line, pill]}
+      ><T variant="caption">Project setup</T></Tap>}
       {mainId && mainId !== thread.id && (
         <Tap
           label={`Back to main conversation${main?.title ? `, ${main.title}` : ""}`}

@@ -167,11 +167,21 @@ impl Orchestrator {
         if initial_goal.as_ref().is_some_and(|goal| goal.len() > 128 * 1024) {
             return Err(anyhow!("initial_goal must stay under 128 KiB"));
         }
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "coordinator.get_or_create", &params)? {
+        if let Some(receipt) =
+            self.collaboration_receipt::<ProjectCoordinator>(params.operation_id, "human", "coordinator.get_or_create", &params)?
+        {
+            if self.inner.store.project_coordinator(params.project_id)?.map(|(id, _)| id) != Some(receipt.thread.id) {
+                return Err(anyhow!("This coordinator was deleted. Start a new coordinator with a new request."));
+            }
             return Ok(receipt);
         }
         let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "coordinator.get_or_create", &params)? {
+        if let Some(receipt) =
+            self.collaboration_receipt::<ProjectCoordinator>(params.operation_id, "human", "coordinator.get_or_create", &params)?
+        {
+            if self.inner.store.project_coordinator(params.project_id)?.map(|(id, _)| id) != Some(receipt.thread.id) {
+                return Err(anyhow!("This coordinator was deleted. Start a new coordinator with a new request."));
+            }
             return Ok(receipt);
         }
         if let Some(mut existing) = self.project_coordinator_get(params.project_id)? {
@@ -296,6 +306,62 @@ impl Orchestrator {
             None,
         )?;
         Ok(())
+    }
+
+    pub async fn project_coordinator_delete(&self, params: methods::CollaborationCoordinatorDeleteParams) -> Result<Thread> {
+        let _collaboration_command = self.inner.collaboration_commands.lock().await;
+        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "coordinator.delete", &params)? {
+            return Ok(receipt);
+        }
+        let mut current = self.project_coordinator_get(params.project_id)?.ok_or_else(|| anyhow!("coordinator no longer exists"))?;
+        if current.thread.id != params.thread_id {
+            return Err(anyhow!("coordinator changed; reopen the project before deleting it"));
+        }
+        // Serialize the final activity check with turn/queue admission. Hold the
+        // session map only through the synchronous transaction, never its close.
+        let (thread, events, live) = {
+            let mut sessions = self.inner.sessions.lock().await;
+            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+            let _write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
+            current.group =
+                self.inner.store.collaboration_group_get(current.group.id)?.ok_or_else(|| anyhow!("coordinator group is missing"))?;
+            if !self.inner.store.collaboration_assignments(current.group.id, false)?.is_empty() {
+                return Err(anyhow!("Stop agents before deleting the coordinator; unfinished assignments remain."));
+            }
+            for member in self.inner.store.collaboration_members(current.group.id)? {
+                if let Some(thread) = self.inner.store.thread_get(member.thread_id)?
+                    && (matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+                        || self.inner.store.runtime_tasks_for_thread(thread.id)?.iter().any(|task| task.status.is_active())
+                        || !self.inner.store.queue_list(Some(thread.id))?.is_empty())
+                {
+                    return Err(anyhow!("Stop agents and remove queued messages before deleting the coordinator."));
+                }
+            }
+            let thread = self.inner.store.thread_get(current.thread.id)?.ok_or_else(|| anyhow!("coordinator thread is missing"))?;
+            current.thread = thread;
+            current.thread.status = ThreadStatus::Archived;
+            current.thread.coordinator_project_id = None;
+            current.thread.updated_at = Utc::now();
+            current.group.status = GroupStatus::Completed;
+            current.group.revision += 1;
+            current.group.updated_at = Utc::now();
+            let (thread, events) = self.inner.store.project_coordinator_delete_operation(&params, &current.thread, &current.group)?;
+            let live = sessions.remove(&thread.id);
+            if let Some(live) = &live {
+                live.mark_released();
+                self.revoke_native_session(live);
+            }
+            (thread, events, live)
+        };
+        self.broadcast_committed_collaboration(events);
+        if let Some(live) = live {
+            let _ = live.session.close().await;
+        }
+        Ok(thread)
+    }
+
+    fn coordinator_setup_complete(&self, group_id: GroupId) -> Result<bool> {
+        Ok(self.inner.store.collaboration_context_by_key(group_id, "project.setup")?.is_some())
     }
 
     pub async fn project_coordinator_switch_harness(
@@ -519,7 +585,9 @@ impl Orchestrator {
             )
         });
         pending_messages.truncate(100);
-        Ok(CollaborationGroupDetail { group, members, assignments, pending_messages })
+        let coordinator_setup_complete =
+            self.inner.store.project_coordinator_for_group(group_id)?.map(|_| self.coordinator_setup_complete(group_id)).transpose()?;
+        Ok(CollaborationGroupDetail { group, members, assignments, pending_messages, coordinator_setup_complete })
     }
 
     pub fn collaboration_groups_list(
@@ -891,6 +959,9 @@ impl Orchestrator {
     }
 
     fn project_knowledge_group_id(&self, group: &CollaborationGroup) -> Result<GroupId> {
+        if group.status == GroupStatus::Completed {
+            return Ok(group.id);
+        }
         Ok(self.inner.store.project_coordinator(group.project_id)?.map_or(group.id, |(_, coordinator_group_id)| coordinator_group_id))
     }
 
@@ -916,6 +987,19 @@ impl Orchestrator {
         let group = self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
         if group.status == GroupStatus::Stopped || group.status == GroupStatus::Completed {
             return Err(anyhow!("group is not accepting assignments"));
+        }
+        if params.kind.mutates_workspace()
+            && self.inner.store.project_coordinator_for_group(group.id)?.is_some()
+            && !self.coordinator_setup_complete(group.id)?
+        {
+            if actor_thread.is_none() {
+                return Err(anyhow!(
+                    "Set up the coordinator first. Send a message in its conversation to research the project before starting implementation."
+                ));
+            }
+            return Err(anyhow!(
+                "Set up the coordinator first: delegate repository research, review its successful result, and save project.setup knowledge before creating editing or integration assignments."
+            ));
         }
         let actor_member = actor_thread.map(|thread_id| self.require_collaboration_actor(&group, thread_id)).transpose()?;
         if actor_member.as_ref().is_some_and(|member| member.role == GroupMemberRole::Observer) {
@@ -1698,6 +1782,28 @@ impl Orchestrator {
         let knowledge_group_id = self.project_knowledge_group_id(&group)?;
         let key = params.key.trim().to_owned();
         let previous = self.inner.store.collaboration_context_by_key(knowledge_group_id, &key)?;
+        let correcting_setup = key == "project.setup" && previous.is_some() && actor_thread.is_none();
+        if key == "project.setup" && !correcting_setup {
+            if self.inner.store.project_coordinator_for_group(group.id)?.is_none()
+                || actor_thread != Some(group.coordinator_thread_id)
+                || params.kind != ContextEntryKind::Research
+                || params.body.trim().is_empty()
+            {
+                return Err(anyhow!("Only the current coordinator can complete setup by saving a reviewed research overview."));
+            }
+            let researched = self.inner.store.collaboration_assignments(group.id, true)?.iter().any(|assignment| {
+                assignment.kind == AssignmentKind::Research
+                    && assignment.owner_thread_id.is_some_and(|id| id != group.coordinator_thread_id)
+                    && assignment.status == AssignmentStatus::Completed
+                    && assignment.result.as_ref().is_some_and(|result| result.outcome == AssignmentOutcome::Success)
+                    && params.source_refs.contains(&assignment.id.to_string())
+            });
+            if !researched {
+                return Err(anyhow!(
+                    "Review a successful research assignment first, then include its assignment ID in source_refs when saving project.setup."
+                ));
+            }
+        }
         if let Some(previous) = &previous {
             if params.entry_id.is_some_and(|id| id != previous.id) {
                 return Err(anyhow!("context key belongs to another entry id"));
@@ -1721,7 +1827,7 @@ impl Orchestrator {
             author_thread_id,
             user_authored: actor_thread.is_none(),
             revision: previous.as_ref().map_or(1, |entry| entry.revision + 1),
-            source_refs: params.source_refs,
+            source_refs: if correcting_setup { previous.as_ref().expect("existing setup").source_refs.clone() } else { params.source_refs },
             created_at: previous.as_ref().map_or(now, |entry| entry.created_at),
             updated_at: now,
         };
@@ -3245,6 +3351,9 @@ impl Orchestrator {
         {
             let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
             let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+            if t.coordinator_project_id.is_some() {
+                return Err(anyhow!("Use Delete coordinator to remove a project coordinator, or pause its agents temporarily."));
+            }
             t.status = ThreadStatus::Archived;
             self.update_thread(t)?;
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
@@ -4375,6 +4484,10 @@ impl Orchestrator {
              Current objective: {}\n",
             objective
         );
+
+        if !self.coordinator_setup_complete(group.id)? {
+            instructions.push_str("\nFirst-time setup is required before implementation. Check current project context first: if project.setup already exists, reuse it and continue without repeating setup. Otherwise, tell the user you are learning the project first. Delegate a research-only assignment to inspect repository instructions, architecture and entry points, development/test commands, and constraints relevant to the user's brief. For an empty project, record what exists and what is missing rather than inventing conventions. Do not edit files or run installation/setup commands during this research. Review the worker's successful result; save a concise verified overview with kybern_collaboration_context_put using key `project.setup`, kind `research`, and source_refs containing the successful research assignment's exact UUID. This records setup completion durably and unlocks editing/integration assignments. If research fails or needs input, explain the blocker and resume setup on the next turn; never claim readiness prematurely. After saving the overview, tell the user setup is complete, persist the task plan, and continue their original request without asking them to repeat it.\n");
+        }
 
         let mut context = self.inner.store.collaboration_context_latest(group.id)?;
         context.sort_by_key(|entry| (!entry.user_authored, entry.key.clone()));

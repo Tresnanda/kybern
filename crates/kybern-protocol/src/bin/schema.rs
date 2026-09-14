@@ -95,6 +95,7 @@ fn main() {
     method::<CollaborationCoordinatorGet>(&mut methods);
     method::<CollaborationCoordinatorGetOrCreate>(&mut methods);
     method::<CollaborationCoordinatorSwitchHarness>(&mut methods);
+    method::<CollaborationCoordinatorDelete>(&mut methods);
     method::<CollaborationGroupsGet>(&mut methods);
     method::<CollaborationGroupsList>(&mut methods);
     method::<CollaborationGroupsUpdate>(&mut methods);

@@ -1,4 +1,5 @@
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
+import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { Textarea } from "@/components/kit/textarea"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
@@ -57,7 +58,7 @@ import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, JsonValue, RuntimeTask, ThreadId, UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
-import { archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
+import { activeRuntime, subscribeCollaboration, archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
 import { canSplitPane, type PaneId } from "@/state/splitView"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
 
@@ -210,11 +211,11 @@ export function ThreadView({
             .then((p) => toast("Pull request opened", { description: p.title, action: { label: "Open", onClick: () => void openExternal(p.url) } }))
             .catch((e) => toast.error("Unable to create pull request", { description: errorText(e) })),
       },
-      { name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) },
+      ...(!thread?.coordinator_project_id ? [{ name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) }] : []),
       { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
       { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
     ],
-    [threadId, thread?.project_id, thread?.provider, canCompact, nativeCommands, set],
+    [threadId, thread?.project_id, thread?.coordinator_project_id, thread?.provider, canCompact, nativeCommands, set],
   )
 
   if (!thread) return null
@@ -322,7 +323,7 @@ export function ThreadView({
               onDigit={(n) => answer(n)}
               above={
                 <ComposerPanelStack closed={hideInput}>
-                  {thread.coordinator_project_id && <CoordinatorControlsPanel />}
+                  {thread.coordinator_project_id && <CoordinatorControlsPanel key={thread.id} thread={thread} />}
                   {helperThreads.length > 0 && <HelperThreadsPanel threads={helperThreads} />}
                   {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
@@ -340,7 +341,26 @@ export function ThreadView({
   )
 }
 
-function CoordinatorControlsPanel() {
+function CoordinatorControlsPanel({ thread }: { thread: import("@/protocol").Thread }) {
+  const [setup, setSetup] = useState<boolean | undefined>(undefined)
+  useEffect(() => {
+    const runtime = activeRuntime()
+    let disposed = false
+    let generation = 0
+    const load = async () => {
+      if (!thread.collaboration_group_id) return
+      const request = ++generation
+      try {
+        const detail = await runtime.rpc().call("collaboration.groups.get", { group_id: thread.collaboration_group_id })
+        if (!disposed && request === generation && runtime === activeRuntime()) setSetup(detail.coordinator_setup_complete ?? undefined)
+      } catch { /* The work panel exposes connection errors and retries. */ }
+    }
+    void load()
+    const unsubscribe = subscribeCollaboration((event) => {
+      if (!event || (event.kind === "collaboration_context_updated" && event.entry.group_id === thread.collaboration_group_id && event.entry.key === "project.setup")) void load()
+    })
+    return () => { disposed = true; unsubscribe() }
+  }, [thread.collaboration_group_id])
   const set = useStore((state) => state.set)
   const open = (view: "work" | "context" | "results") => {
     set({ rightOpen: true, rightTab: "collaboration" })
@@ -348,6 +368,11 @@ function CoordinatorControlsPanel() {
   }
   return (
     <ComposerStackedPanel>
+      {setup !== undefined && <ComposerStackedPanelRow compact>
+        <ComposerStackedPanelRowMain>
+          <span role="status" className="text-xs text-muted-foreground">{setup ? "Setup complete" : thread.status === "running" ? "Setting up project" : thread.status === "failed" ? "Setup needs attention" : "Project setup"}</span>
+        </ComposerStackedPanelRowMain>
+      </ComposerStackedPanelRow>}
       <ComposerStackedPanelRow compact className="gap-1.5">
         <ComposerStackedPanelRowMain>
           <UsersIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
@@ -566,6 +591,7 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
 }
 
 function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: ThreadId; splitPaneId?: PaneId; showSidebarControls: boolean }) {
+  const [deleting, setDeleting] = useState(false)
   const thread = useStore((s) => s.threads[threadId])
   const threads = useStore((s) => s.threads)
   const mainThread = useMemo(() => {
@@ -607,6 +633,7 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
       showSidebarControls={showSidebarControls}
       trailing={
         <>
+      {deleting && thread && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}
           {others.length > 0 && (
             <Menu>
               <MenuTrigger render={<ChatHeaderButton type="button" tone="outline" className="gap-1.5" />}>
@@ -669,8 +696,8 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
                 <>
                   <MenuSeparator />
                   <MenuGroup>
-                    <MenuItem variant="destructive" onClick={() => archiveThread(threadId)}>
-                      <ArchiveIcon /> Archive
+                    <MenuItem variant="destructive" onClick={() => thread.coordinator_project_id ? setDeleting(true) : void archiveThread(threadId).catch((error) => toast.error(errorText(error)))}>
+                      <ArchiveIcon /> {thread.coordinator_project_id ? "Delete coordinator" : "Archive"}
                     </MenuItem>
                   </MenuGroup>
                 </>

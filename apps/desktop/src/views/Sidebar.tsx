@@ -67,6 +67,7 @@ import { addProject, archiveThread, errorText, loadThread, removeProject, update
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
 import { createProjectThreadsSelector, useStore } from "@/state/store"
 
+import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { ProjectPicker } from "./ProjectPicker"
 import { SidebarUpdateButton } from "./AppUpdate"
@@ -453,6 +454,7 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
   const splitView = useStore((s) => s.splitView)
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
   const [renaming, setRenaming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [title, setTitle] = useState(thread.title)
   // Decided once on mount: a row for a thread created just now rises in.
   const [fresh] = useState(() => Date.now() - Date.parse(thread.updated_at) < 3000)
@@ -479,6 +481,7 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
   }
 
   return (
+    <>
     <ContextMenu>
       <ContextMenuTrigger render={<li className="group/menu-sub-item group/thread-row relative w-full" />}>
         <div
@@ -604,11 +607,16 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
             <SquareSplitHorizontal /> Open below
           </ContextMenuItem>
         </ContextMenuGroup>
-        {(thread.worktree || !thread.coordinator_project_id) && <ContextMenuSeparator />}
+        <ContextMenuSeparator />
         <ContextMenuGroup>
           {thread.worktree && (
             <ContextMenuItem disabled>
               <GitBranchIcon /> {thread.worktree.branch}
+            </ContextMenuItem>
+          )}
+          {thread.coordinator_project_id && (
+            <ContextMenuItem variant="destructive" onClick={() => setDeleting(true)}>
+              <ArchiveIcon /> Delete coordinator
             </ContextMenuItem>
           )}
           {!thread.coordinator_project_id && (
@@ -619,5 +627,7 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
         </ContextMenuGroup>
       </ContextMenuContent>
     </ContextMenu>
+    {deleting && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}
+    </>
   )
 }

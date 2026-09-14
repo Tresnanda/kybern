@@ -1,3 +1,4 @@
+import { confirmDeleteCoordinator } from "../src/features/deleteCoordinator";
 import Animated, {
   useSharedValue,
   useAnimatedScrollHandler,
@@ -86,7 +87,8 @@ export default function Library() {
             .catch((e) => setError(errorText(e)));
         },
       },
-      ...(t.status !== "archived"
+      ...(t.coordinator_project_id ? [{ text: "Delete coordinator", style: "destructive" as const, onPress: () => confirmDeleteCoordinator(t) }] : []),
+      ...(t.status !== "archived" && !t.coordinator_project_id
         ? [
             {
               text: "Archive thread",

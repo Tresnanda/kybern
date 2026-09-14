@@ -1,3 +1,4 @@
+import { confirmDeleteCoordinator } from "../src/features/deleteCoordinator";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
@@ -212,10 +213,11 @@ export default function Workspace() {
                   }
                 />
                 <Row
-                  title="Archive thread"
+                  title={thread.coordinator_project_id ? "Delete coordinator" : "Archive thread"}
                   icon="archivebox"
-                  onPress={() =>
-                    Alert.alert(
+                  onPress={() => thread.coordinator_project_id
+                    ? confirmDeleteCoordinator(thread, () => router.dismissTo("/library"))
+                    : Alert.alert(
                       "Archive this thread?",
                       "You can find it in the Archived filter in Threads.",
                       [

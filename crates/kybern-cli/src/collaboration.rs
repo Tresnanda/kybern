@@ -111,6 +111,8 @@ pub enum CoordinatorCmd {
     Create(MutationInput),
     /// Change an idle coordinator's harness while keeping its conversation and knowledge.
     SwitchHarness(MutationInput),
+    /// Delete an inactive coordinator; retain archived conversations and results.
+    Delete(MutationInput),
 }
 
 #[derive(Debug, Subcommand)]
@@ -226,6 +228,7 @@ fn request(cmd: CollaborationCmd) -> Result<(&'static str, Value)> {
         CollaborationCmd::Coordinator { cmd } => match cmd {
             CoordinatorCmd::Get { project } => typed::<CollaborationCoordinatorGet>(json!({"project_id":project}))?,
             CoordinatorCmd::Create(input) => typed::<CollaborationCoordinatorGetOrCreate>(read_mutation(input)?)?,
+            CoordinatorCmd::Delete(input) => typed::<CollaborationCoordinatorDelete>(read_mutation(input)?)?,
             CoordinatorCmd::SwitchHarness(input) => typed::<CollaborationCoordinatorSwitchHarness>(read_mutation(input)?)?,
         },
         CollaborationCmd::Groups { cmd } => match cmd {

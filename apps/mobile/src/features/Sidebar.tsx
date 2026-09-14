@@ -1,3 +1,4 @@
+import { confirmDeleteCoordinator } from "./deleteCoordinator";
 import * as Haptics from "expo-haptics";
 import { router, useGlobalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
@@ -209,7 +210,8 @@ export function Sidebar() {
             .catch(() => {});
         },
       },
-      ...(t.status !== "archived"
+      ...(t.coordinator_project_id ? [{ text: "Delete coordinator", style: "destructive" as const, onPress: () => confirmDeleteCoordinator(t) }] : []),
+      ...(t.status !== "archived" && !t.coordinator_project_id
         ? [
             {
               text: "Archive thread",

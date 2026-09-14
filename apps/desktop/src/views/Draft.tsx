@@ -125,7 +125,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
             </h2>
             {coordinatorDraft && (
               <p style={{ "--i": 2 } as CSSProperties} className="max-w-[58ch] text-pretty text-[length:var(--app-font-size-ui,12px)] leading-relaxed text-muted-foreground/75">
-                Your coordinator plans work, delegates tasks, and keeps project knowledge for next time.
+                On your first Send, the coordinator researches this project and saves what it learns, then plans and delegates your work. Later tasks reuse that knowledge.
               </p>
             )}
           </div>

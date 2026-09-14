@@ -120,12 +120,14 @@ async function run() {
   const referenceDidNotWake = chatFixture.sent.length === 0 && !chatFixture.calls.some((call) => call.method === "threads.send")
   editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(200)
   const typedReferenceSent = chatFixture.sent[0]?.message.parts.some((part) => part.type === "thread_reference" && part.thread_id === "previous")
-  if (!findButton("Create coordinator")) {
+  if (!findButton("Create coordinator") && !preview.startsWith("coordinator-")) {
     const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
     const checks = { ...dockChecks, initialHasNoSetup, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, noHorizontalOverflow: horizontalOverflow <= 1 }
     return results({ fixture: "chat-collaboration", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow, coordinatorTest: "Covered in the wide sidebar fixture" })
   }
-  await click("Create coordinator"); await sleep(850)
+  if (findButton("Create coordinator")) await click("Create coordinator")
+  else useStore.getState().selectDraft("project-0", "coordinator")
+  await sleep(850)
   const coordinatorDraftInert = document.body.textContent?.includes("What should we work on in") && document.body.textContent?.includes("Project coordinator") && chatFixture.coordinatorCreates === 0 && chatFixture.sent.length === 1
   const settledSidebarRowsCrisp = Array.from(document.querySelectorAll<HTMLElement>("[data-marquee-host]")).every((row) => getComputedStyle(row).filter === "none")
   if (preview === "coordinator-draft") return results({ preview, pass: coordinatorDraftInert && settledSidebarRowsCrisp, settledSidebarRowsCrisp })
@@ -139,6 +141,9 @@ async function run() {
   const coordinator = useStore.getState().threads["project-coordinator"]
   const coordinatorOpensChat = (useStore.getState().selected as { id: string }).id === coordinator?.id && !!document.querySelector('[data-testid="composer-editor"]')
   const initialGoalPreserved = chatFixture.calls.some((call) => call.method === "collaboration.coordinator.get_or_create" && call.params.initial_goal === "Plan and ship the local coordinator experience.")
+  const setupVisible = document.body.textContent?.includes("Project setup")
+  chatFixture.completeSetup(); await sleep(250)
+  const setupCompletes = document.body.textContent?.includes("Setup complete")
   const stableFirstMessageId = !!chatFixture.sent[1]?.messageId
   await click("Change model and reasoning"); await sleep(100); await click("Claude Code"); await sleep(250)
   const harnessSwitched = useStore.getState().threads["project-coordinator"]?.provider.kind === "claude-code" && chatFixture.calls.some((call) => call.method === "collaboration.coordinator.switch_harness")
@@ -150,8 +155,29 @@ async function run() {
   await click("Results"); await sleep(700)
   const resultsVisible = document.body.textContent?.includes("Review coordinator integration") && document.body.textContent?.includes("Verified the inert draft")
   if (preview === "coordinator-results") return results({ preview, pass: resultsVisible })
+  const oneCoordinatorCreated = chatFixture.coordinatorCreates === 1
+  await click("More agent actions"); await sleep(150)
+  const deleteMenu = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((element) => visible(element) && element.textContent?.includes("Delete coordinator"))
+  if (!deleteMenu) throw new Error("Missing coordinator deletion action")
+  deleteMenu.click(); await sleep(250)
+  const deleteCopyClear = document.querySelector('[role="dialog"]')?.textContent?.includes("new coordinator starts with fresh knowledge")
+  if (preview === "coordinator-delete") return results({ preview, pass: !!deleteCopyClear })
+  await click("Cancel")
+  const cancelledDeletionInert = !chatFixture.calls.some((call) => call.method === "collaboration.coordinator.delete")
+  await click("More agent actions"); await sleep(120)
+  Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((element) => visible(element) && element.textContent?.includes("Delete coordinator"))!.click(); await sleep(200)
+  chatFixture.deleteError = true
+  await click("Delete coordinator")
+  const deleteErrorVisible = document.querySelector('[role="alert"]')?.textContent?.includes("Stop agents")
+  chatFixture.deleteError = false
+  await click("Delete coordinator"); await sleep(350)
+  const deletionCalls = chatFixture.calls.filter((call) => call.method === "collaboration.coordinator.delete")
+  const retryPreservesIdentity = deletionCalls.length === 2 && deletionCalls[0].params.operation_id === deletionCalls[1].params.operation_id && deletionCalls[1].params.thread_id === coordinator.id
+  const coordinatorRemoved = useStore.getState().threads[coordinator.id]?.status === "archived" && !useStore.getState().threads[coordinator.id]?.coordinator_project_id && !!findButton("Create coordinator")
+  await click("Create coordinator"); await sleep(250)
+  const recreationDraftInert = chatFixture.coordinatorCreates === 1 && !!document.querySelector('[data-testid="composer-editor"]')
   const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
-  const checks = { ...dockChecks, initialHasNoSetup, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, advisoryRestrictionVisible, coordinatorOpensChat, initialGoalPreserved, stableFirstMessageId, harnessSwitched, projectKnowledgeVisible, resultsVisible, oneCoordinatorCreated: chatFixture.coordinatorCreates === 1, noHorizontalOverflow: horizontalOverflow <= 1 }
+  const checks = { ...dockChecks, initialHasNoSetup, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, advisoryRestrictionVisible, coordinatorOpensChat, initialGoalPreserved, stableFirstMessageId, harnessSwitched, projectKnowledgeVisible, resultsVisible, oneCoordinatorCreated, setupVisible, setupCompletes, deleteCopyClear, cancelledDeletionInert, deleteErrorVisible, retryPreservesIdentity, coordinatorRemoved, recreationDraftInert, noHorizontalOverflow: horizontalOverflow <= 1 }
   results({ fixture: "chat-collaboration", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
 }
 window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason) }))
