@@ -448,6 +448,36 @@ test("incremental running-turn updates stay equivalent across live block kinds",
   }
 })
 
+test("incremental grouping falls back exactly across settlement, edits, and rewinds", () => {
+  const group = createTurnGrouper()
+  const prompt = { kind: "user", id: "current-user", turnId: "current", at: AT, seq: 1, message: { parts: [{ type: "text", text: "Current request" }] } }
+  const tool = { kind: "tool", id: "tool:current", turnId: "current", at: AT, seq: 2, origin: ROOT, call: readTool("current"), stream: "", output: null, isError: false, complete: false }
+  const tail = { kind: "assistant", id: "current#0", messageId: "current", turnId: "current", at: AT, seq: 3, origin: ROOT, segment: 0, text: "Hello", thinking: "Working", complete: false }
+  let blocks = [prompt, tool, tail]
+  group(blocks)
+
+  blocks = [prompt, tool, { ...tail, text: "Hello world", thinking: "Finished", complete: true }]
+  let actual = group(blocks)
+  assert.deepEqual(actual, groupTurns(blocks), "assistant settlement stays exact on the incremental path")
+  assert.equal(actual[0].liveTextId, null)
+
+  const turnEnd = { kind: "turn_end", id: "end:current", turnId: "current", at: AT, seq: 4, stopReason: "completed", usage: USAGE, costUsd: null, durationMs: 5, terminalMessageId: "current", error: null }
+  blocks = [...blocks, turnEnd]
+  actual = group(blocks)
+  assert.deepEqual(actual, groupTurns(blocks), "turn-end append settles through the structural fallback")
+
+  blocks = blocks.map((block) => block === tool ? { ...tool, output: "done", complete: true } : block)
+  actual = group(blocks)
+  assert.deepEqual(actual, groupTurns(blocks), "late settled updates use the full grouping semantics")
+
+  blocks = blocks.map((block, index) => index === 0 ? { ...prompt, id: "renamed-user" } : index === 1 ? { ...blocks[1], id: "tool:renamed" } : block)
+  assert.deepEqual(group(blocks), groupTurns(blocks), "multiple replacements fall back exactly")
+
+  blocks = [{ ...prompt, id: "rewound-user", turnId: "rewound" }]
+  assert.deepEqual(group(blocks), groupTurns(blocks), "rewind and turn identity changes reset the cache exactly")
+  assert.deepEqual(group([]), [])
+})
+
 test("turn grouping updates late events, follows ordering, and drops rewound turns", () => {
   const group = createTurnGrouper()
   const a = { kind: "notice", id: "a", turnId: "a", at: AT, seq: 1, level: "info", text: "First" }
