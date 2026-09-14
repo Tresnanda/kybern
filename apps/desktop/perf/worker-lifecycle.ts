@@ -91,6 +91,7 @@ function checkHighlight(
   check(html !== null && html.includes("<span"), `${label} was not formatted`)
   const parsed = new DOMParser().parseFromString(html, "text/html")
   const code = parsed.querySelector("pre > code")
+  check(code?.querySelector('span[style*="color"]'), `${label} lost syntax colors`)
   check(
     code !== null && code.textContent === source,
     `${label} changed or truncated source text`
@@ -114,7 +115,7 @@ async function run() {
   const idleMs =
     Number.isFinite(configuredIdleMs) && configuredIdleMs >= 0
       ? configuredIdleMs
-      : 30_000
+      : 2_000
   const graceMs = 500
   const markdown = await import("../src/lib/markdown")
   const { highlightToHtml } = await import("../src/lib/highlight")

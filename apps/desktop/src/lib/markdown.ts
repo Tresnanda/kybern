@@ -7,12 +7,11 @@ let consumer = 0
 const cache = new Map<string, ParsedMarkdown>()
 let cacheBytes = 0
 const size = retainedSize
-// Set VITE_KYBERN_WORKER_IDLE_MS=2000 in the diagnostic perf build to compare
-// a short worker lifetime with the shipped 30-second default. The settled
-// Markdown cache intentionally remains renderer-owned across worker release;
-// only parser sessions and worker module state are discarded.
+// Release parser sessions and worker module state after a short idle while
+// preserving the bounded renderer-owned settled cache. The build override is
+// retained for matched native lifetime comparisons.
 const configuredIdleMs = Number(import.meta.env?.VITE_KYBERN_WORKER_IDLE_MS)
-const workerIdleMs = Number.isFinite(configuredIdleMs) && configuredIdleMs >= 0 ? configuredIdleMs : 30_000
+const workerIdleMs = Number.isFinite(configuredIdleMs) && configuredIdleMs >= 0 ? configuredIdleMs : 2_000
 
 export const nextMarkdownConsumer = () => ++consumer
 export function cachedMarkdown(source: string) {

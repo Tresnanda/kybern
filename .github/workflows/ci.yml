@@ -118,6 +118,10 @@ jobs:
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs markdown-memory
+      - name: Native WebKit worker lifecycle
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs worker-lifecycle
       - name: Native WebKit icon lifecycle
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop

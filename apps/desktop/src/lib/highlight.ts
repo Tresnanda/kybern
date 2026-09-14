@@ -4,13 +4,11 @@ import { createIdleRelease } from "./idleRelease"
 import { shouldHighlightSource } from "./workload"
 
 let worker: Worker | undefined
-// The diagnostic perf runner can set VITE_KYBERN_WORKER_IDLE_MS=2000 to
-// compare a short idle release with the shipped 30-second default. Keep the
-// settled cache on the renderer side so restarting the worker does not turn a
-// revisit into a re-highlight, while the worker itself can release Shiki's
-// grammar/runtime allocations.
+// Release the grammar/runtime after a short idle. Settled output stays in the
+// bounded renderer cache, so revisits do not need to restart the worker.
+// The build override supports matched lifetime comparisons in native fixtures.
 const configuredIdleMs = Number(import.meta.env?.VITE_KYBERN_WORKER_IDLE_MS)
-const workerIdleMs = Number.isFinite(configuredIdleMs) && configuredIdleMs >= 0 ? configuredIdleMs : 30_000
+const workerIdleMs = Number.isFinite(configuredIdleMs) && configuredIdleMs >= 0 ? configuredIdleMs : 2_000
 const cache = createHighlightCache()
 
 function makeQueue() {
@@ -52,7 +50,7 @@ export function highlightToHtml(code: string, lang: string | null, dark: boolean
   const cached = cache.get(dark, lang, code)
   if (cached !== undefined) {
     // A renderer-cache hit does not use the worker and must not postpone its
-    // pending idle release. This keeps the 2s diagnostic comparison honest.
+    // pending idle release. Cache-only revisits should not keep an idle runtime alive.
     return Promise.resolve(cached)
   }
   idle.touch()

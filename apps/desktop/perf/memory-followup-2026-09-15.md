@@ -26,7 +26,8 @@ or execution time are not presented as equivalent WebKit memory reductions.
   state. This reduces retained tree metadata without changing rendered output.
 - Use a bounded source-keyed highlight cache without concatenated source keys.
   Keep settled results in the renderer so worker release does not invalidate
-  warm output. Clear stale highlighted/parsed content when a different source
+  warm output. Release Markdown/highlight workers after two idle seconds instead
+  of thirty; active jobs are allowed to finish. Clear stale highlighted/parsed content when a different source
   takes the immediate or unsupported-size path.
 - Patch the affected running turn when only one work block changes. Preserve
   exposed immutable snapshots and fall back for structural changes.
@@ -148,6 +149,7 @@ node --experimental-strip-types scripts/profile-virtual-topology.mjs
 node scripts/check-rendering-memory.mjs
 node scripts/check-rendering.mjs markdown-memory
 node scripts/check-rendering.mjs icon-swap
+node scripts/check-rendering.mjs worker-lifecycle
 node scripts/check-rendering.mjs
 node scripts/check-rendering.mjs interaction
 KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs interaction
@@ -161,4 +163,12 @@ active/inactive animation lifecycle, 14px/16px slot geometry, copy/check swaps,
 reduced motion and preserved active paint hints. Both interaction widths pass
 selection/focus, wrapping, navigation, prepend anchoring and follow gestures.
 Shared transcript changes pass mobile's 108 tests, typecheck and Android/iOS
-exports. Final combined measurements and validation are recorded below.
+exports. Desktop tests (187), typecheck, lint and production build pass.
+
+The worker-lifecycle fixture passes with the shipped two-second default: two
+workers are constructed, both terminate after idle plus a 500 ms grace window,
+and cache-only revisits create none. New Markdown/highlight inputs create two
+new workers, preserve full revisions and exact formatted output, then release
+both. Cancellation before queueing and while queued also passes. This verifies
+resource lifecycle rather than inferring worker destruction from a memory dip.
+The Markdown-data, icon and worker lifecycle checks are included in macOS CI.
