@@ -27,8 +27,14 @@ export function sameMarkdownNode(a: unknown, b: unknown): boolean {
   return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && sameMarkdownNode(left[key], right[key]))
 }
 
-function sanitize(node: MarkdownTreeNode): MarkdownTreeNode {
-  if (node.type === "raw") return { type: "text", value: node.value, position: node.position }
+function sanitize(node: MarkdownTreeNode, topLevel = false): MarkdownTreeNode {
+  // Top-level positions drive incremental boundaries and stable block keys.
+  // MarkdownCode receives the pre node, while inline/fenced code nodes may be
+  // nested, so retain both code container positions as renderer state keys.
+  const preservePosition = topLevel || (node.type === "element" && (node.tagName === "pre" || node.tagName === "code"))
+  if (node.type === "raw") return preservePosition
+    ? { type: "text", value: node.value, position: node.position }
+    : { type: "text", value: node.value }
   if (node.type === "element") {
     for (const [key, tags] of Object.entries(urlAttributes)) {
       if (Object.hasOwn(node.properties, key) && (tags === null || tags.includes(node.tagName))) {
@@ -36,8 +42,9 @@ function sanitize(node: MarkdownTreeNode): MarkdownTreeNode {
         node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : key === "href" && chatLink(url).kind === "file" ? url : defaultUrlTransform(url)
       }
     }
-    node.children = node.children.map(sanitize) as typeof node.children
+    node.children = node.children.map((child) => sanitize(child)) as typeof node.children
   }
+  if (!preservePosition) delete node.position
   return node
 }
 
@@ -76,7 +83,7 @@ export function createMarkdownParser() {
       } else {
         nextTree = processor.parse(source)
       }
-      const nodes = processor.runSync(nextTree).children.map(sanitize)
+      const nodes = processor.runSync(nextTree).children.map((node) => sanitize(node, true))
       const last = nextTree.children.at(-1)
       lastPosition = last?.position ? { offset: last.position.start.offset, line: last.position.start.line } : undefined
       if (prefix.length && nodes.length) nodes.unshift({ type: "text", value: "\n" })
