@@ -83,6 +83,20 @@ function hasText(value: unknown, text: string): boolean {
   )
 }
 
+function checkHighlight(
+  html: string | null,
+  source: string,
+  label: string
+): asserts html is string {
+  check(html !== null && html.includes("<span"), `${label} was not formatted`)
+  const parsed = new DOMParser().parseFromString(html, "text/html")
+  const code = parsed.querySelector("pre > code")
+  check(
+    code !== null && code.textContent === source,
+    `${label} changed or truncated source text`
+  )
+}
+
 async function waitForIdleRelease(
   idleMs: number,
   graceMs: number,
@@ -170,28 +184,24 @@ async function run() {
     warmReply.prefix === 0 && warmReply.blocks.length >= 3,
     "Warm Markdown parse was not a full revision"
   )
+  const warmNodes = warmReply.blocks.map(({ node }) => node)
   check(
-    hasElement(warmReply.blocks, "h1") &&
-      hasElement(warmReply.blocks, "strong") &&
-      hasElement(warmReply.blocks, "pre"),
+    hasElement(warmNodes, "h1") &&
+      hasElement(warmNodes, "strong") &&
+      hasElement(warmNodes, "pre"),
     "Warm Markdown lost formatted elements"
   )
   check(
-    hasText(warmReply.blocks, "Worker lifecycle") &&
-      hasText(warmReply.blocks, "warmValue: number = 42"),
+    hasText(warmNodes, "Worker lifecycle") &&
+      hasText(warmNodes, "warmValue: number = 42"),
     "Warm Markdown lost exact text"
   )
   const cachedResult = { source: markdownSource, blocks: warmReply.blocks }
   markdown.cacheMarkdown(cachedResult)
 
-  const warmCode = "const warmValue: number = 42\n"
+  const warmCode = "const warmValue: number = 42"
   const warmHighlight = await highlightToHtml(warmCode, "typescript", true)
-  check(
-    warmHighlight !== null &&
-      warmHighlight.includes("<span") &&
-      warmHighlight.includes("warmValue"),
-    "Warm highlighting lost formatted output"
-  )
+  checkHighlight(warmHighlight, warmCode, "Warm highlighting")
   const warmConstructed = constructed
   check(
     warmConstructed === 2,
@@ -238,14 +248,14 @@ async function run() {
     coldReply.blocks.length > warmReply.blocks.length,
     "Restarted Markdown worker did not return the full revision"
   )
+  const coldNodes = coldReply.blocks.map(({ node }) => node)
   check(
-    hasElement(coldReply.blocks, "h2") &&
-      hasElement(coldReply.blocks, "strong"),
+    hasElement(coldNodes, "h2") && hasElement(coldNodes, "strong"),
     "Restarted Markdown lost formatted output"
   )
   check(
-    hasText(coldReply.blocks, "Cold revision") &&
-      hasText(coldReply.blocks, "Full revision after worker release."),
+    hasText(coldNodes, "Cold revision") &&
+      hasText(coldNodes, "Full revision after worker release."),
     "Restarted Markdown lost exact text"
   )
   check(
@@ -253,14 +263,9 @@ async function run() {
     `Cold Markdown input did not recreate exactly one worker: ${constructed}`
   )
 
-  const coldCode = "const coldValue: number = 99\n"
+  const coldCode = "const coldValue: number = 99"
   const coldHighlight = await highlightToHtml(coldCode, "typescript", true)
-  check(
-    coldHighlight !== null &&
-      coldHighlight.includes("<span") &&
-      coldHighlight.includes("coldValue"),
-    "Cold highlighting lost formatted output"
-  )
+  checkHighlight(coldHighlight, coldCode, "Cold highlighting")
   check(
     constructed === 4,
     `Cold highlight input did not recreate exactly one worker: ${constructed}`
