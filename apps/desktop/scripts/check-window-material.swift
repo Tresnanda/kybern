@@ -6,7 +6,7 @@ import WebKit
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
-final class MaterialCheck: NSObject, WKNavigationDelegate {
+final class MaterialCheck: NSObject, WKNavigationDelegate, WKScriptMessageHandlerWithReply {
     let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     var themes = "{}"
     var window: NSWindow!
@@ -22,6 +22,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         window.title = "Kybern material checks"
         window.contentView = web
         window.orderFront(nil)
+        web.configuration.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "materialPixels")
         web.navigationDelegate = self
         web.loadHTMLString("""
         <!doctype html><html data-runtime="electron" data-platform="macos"><head><style>
@@ -50,6 +51,14 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         <aside data-slot="combobox-popup">Combobox</aside>
         <aside data-slot="preview-card-popup">Preview card</aside>
         <aside data-slot="sheet-popup">Sheet</aside>
+        <div style="position:fixed;left:16px;top:480px;width:528px;height:64px;z-index:10000">
+          <div style="position:absolute;inset:0 auto 0 0;width:256px;background:repeating-linear-gradient(90deg,black 0 2px,white 2px 4px)">
+            <div class="chat-composer-surface" style="position:absolute;inset:0;z-index:1;background:transparent!important;border-radius:0"></div>
+          </div>
+          <div style="position:absolute;inset:0 0 0 auto;width:256px;background:repeating-linear-gradient(90deg,black 0 2px,white 2px 4px)">
+            <div class="chat-composer-stacked-top" style="position:absolute;inset:0;z-index:1;background:transparent!important;border-radius:0"></div>
+          </div>
+        </div>
         </body></html>
         """, baseURL: nil)
     }
@@ -82,33 +91,22 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             context.fillRect(0, 0, 1, 1);
             return context.getImageData(0, 0, 1, 1).data[3] / 255;
           }
-          function composerDiagnostic() {
-            const sheet = document.createElement('style');
-            sheet.textContent = '.material-literal::before, .material-variable::before { content: ""; position: absolute; inset: 0; } .material-literal::before { backdrop-filter: blur(16px); } .material-variable::before { backdrop-filter: var(--composer-glass-filter); }';
-            document.head.append(sheet);
-            const probes = ['material-literal', 'material-variable'].map(className => {
-              const el = document.createElement('div');
-              el.className = className;
-              el.style.cssText = 'position:relative;width:100px;height:20px;backdrop-filter:var(--composer-glass-filter)';
-              document.body.append(el);
-              el.getBoundingClientRect();
-              return { className, element: filter(el), pseudo: filter(el, '::before') };
-            });
-            return JSON.stringify({ mode: document.compatMode, probes });
-          }
-          function verifyComposer(name, glass) {
+          async function verifyComposer(name, glass) {
             for (const el of elements.filter(el => el.matches('article'))) {
               if (!glass && alpha(el) < 0.99) throw new Error(name + ': ' + el.textContent + ' must be opaque, alpha ' + alpha(el));
-              const blur = filter(el, '::before');
-              if ((blur !== 'none' && blur !== '') !== glass) {
-                const pseudo = getComputedStyle(el, '::before');
-                throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur + ' (prefixed: ' + pseudo.getPropertyValue('-webkit-backdrop-filter') + ', content: ' + pseudo.content + ', token: ' + pseudo.getPropertyValue('--composer-glass-filter') + ') ' + composerDiagnostic());
-              }
               if (filter(el) !== 'none') throw new Error(name + ': duplicate composer blur');
+            }
+            // Older WebKit reports `none` for backdrop-filter on pseudo-elements,
+            // even for a literal blur declaration. Verify rendered stripes instead.
+            // Only these dedicated probes have transparent fills, so opaque paint
+            // cannot hide a blur layer that should have been disabled.
+            const contrasts = await window.webkit.messageHandlers.materialPixels.postMessage({});
+            for (const [index, contrast] of contrasts.entries()) {
+              if (glass ? contrast > 0.15 : contrast < 0.8) throw new Error(name + ': composer ' + index + ' stripe contrast ' + contrast + ', expected ' + (glass ? 'blurred' : 'sharp'));
             }
             results.push('PASS: ' + name + ' composer and stacked panels');
           }
-          function verify(name, glass) {
+          async function verify(name, glass) {
             const active = getComputedStyle(root).getPropertyValue('--app-full-translucency').trim() === '1';
             if (active !== glass) throw new Error(name + ': incorrect glass flag');
             for (const el of elements) {
@@ -126,7 +124,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
               }
               if (getComputedStyle(el).opacity !== '1') throw new Error(name + ': text opacity must remain unchanged');
             }
-            verifyComposer(name, glass);
+            await verifyComposer(name, glass);
             results.push('PASS: ' + name);
           }
           for (const [theme, variables] of Object.entries(themes)) {
@@ -139,7 +137,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             const original = elements.map(background);
             root.setAttribute('data-full-translucency', '');
             await settle();
-            verify(theme + ' enabled (native preferences)', !reduced && !contrast);
+            await verify(theme + ' enabled (native preferences)', !reduced && !contrast);
             root.removeAttribute('data-full-translucency');
             await settle();
             if (JSON.stringify(elements.map(background)) !== JSON.stringify(original)) throw new Error(theme + ': disabling glass must restore original surfaces');
@@ -147,7 +145,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             root.setAttribute('data-full-translucency', '');
             root.setAttribute('data-window-material', 'opaque');
             await settle();
-            verifyComposer(theme + ' opaque material', false);
+            await verifyComposer(theme + ' opaque material', false);
             results.push('PASS: ' + theme + ' opaque material');
           }
           root.setAttribute('data-window-material', 'translucent');
@@ -159,11 +157,11 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             const saved = rules.map(rule => rule.media.mediaText);
             rules.forEach(rule => rule.media.mediaText = 'all');
             await settle();
-            verify(preference + ' (emulated)', false);
+            await verify(preference + ' (emulated)', false);
             rules.forEach((rule, i) => rule.media.mediaText = saved[i]);
           }
           await settle();
-          verify('restored native preferences', !reduced && !contrast);
+          await verify('restored native preferences', !reduced && !contrast);
           return results.join('\\n');
         """, arguments: [:], in: nil, in: .page) { outcome in
             switch outcome {
@@ -178,6 +176,49 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         }
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
+        // WKWebView.takeSnapshot omits composited backdrop filters. Capture only
+        // this fixture window so the assertion sees the actual displayed material.
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("kybern-material-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let capture = Process()
+        capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), file.path]
+        do {
+            try capture.run()
+            capture.waitUntilExit()
+            guard capture.terminationStatus == 0, let image = NSImage(contentsOf: file), let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else {
+                replyHandler(nil, "No material window capture")
+                return
+            }
+            let scaleX = Double(bitmap.pixelsWide) / window.frame.width
+            let scaleY = Double(bitmap.pixelsHigh) / window.frame.height
+            let titleHeight = window.frame.height - web.frame.height
+            func luminance(_ x: Int, _ y: Int) -> Double {
+                guard let color = bitmap.colorAt(x: Int(Double(x + 16) * scaleX), y: Int((Double(y + 480) + titleHeight) * scaleY))?.usingColorSpace(.deviceRGB) else { return .nan }
+                return (color.redComponent + color.greenComponent + color.blueComponent) / 3
+            }
+            let contrasts = [0, 272].map { offset -> Double in
+                var total = 0.0
+                var count = 0.0
+                for y in stride(from: 16, to: 48, by: 4) {
+                    for x in stride(from: 33, to: 225, by: 4) {
+                        total += abs(luminance(offset + x, y) - luminance(offset + x + 2, y))
+                        count += 1
+                    }
+                }
+                return total / count
+            }
+            guard contrasts.allSatisfy({ $0.isFinite }) else {
+                replyHandler(nil, "Unreadable material snapshot pixels")
+                return
+            }
+            replyHandler(contrasts, nil)
+        } catch {
+            replyHandler(nil, error.localizedDescription)
+        }
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         print("FAIL: \(error.localizedDescription)")
         exit(1)
@@ -189,7 +230,7 @@ do { try check.run() } catch {
     print("FAIL: \(error.localizedDescription)")
     exit(2)
 }
-DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
     print("FAIL: WebKit check timed out")
     exit(2)
 }
