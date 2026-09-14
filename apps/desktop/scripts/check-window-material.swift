@@ -17,8 +17,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
         }
         let css = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
         themes = try String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8)
-        // Older WebKit does not resolve generated pseudo-element styles until
-        // the view has a window. Exercise the same mounted state as the app.
+        // Exercise the same mounted state as the app, including frame delivery.
         window = NSWindow(contentRect: web.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Kybern material checks"
         window.contentView = web
@@ -56,8 +55,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        web.evaluateJavaScript("""
-        (() => {
+        web.callAsyncJavaScript("""
           const themes = \(themes);
           const root = document.documentElement;
           const canvas = document.createElement('canvas');
@@ -72,6 +70,12 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             const style = getComputedStyle(el, pseudo);
             return style.getPropertyValue('backdrop-filter') || style.getPropertyValue('-webkit-backdrop-filter') || 'none';
           };
+          // Let style changes reach layout and generated layers before inspecting
+          // them. Reading every mode in one script can observe stale pseudo styles.
+          const settle = () => new Promise(resolve => requestAnimationFrame(() => {
+            root.getBoundingClientRect();
+            requestAnimationFrame(resolve);
+          }));
           function alpha(element) {
             context.clearRect(0, 0, 1, 1);
             context.fillStyle = background(element);
@@ -82,7 +86,10 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             for (const el of elements.filter(el => el.matches('article'))) {
               if (!glass && alpha(el) < 0.99) throw new Error(name + ': ' + el.textContent + ' must be opaque, alpha ' + alpha(el));
               const blur = filter(el, '::before');
-              if ((blur !== 'none' && blur !== '') !== glass) throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur + ' (content: ' + getComputedStyle(el, '::before').content + ', token: ' + getComputedStyle(el).getPropertyValue('--composer-glass-filter') + ')');
+              if ((blur !== 'none' && blur !== '') !== glass) {
+                const pseudo = getComputedStyle(el, '::before');
+                throw new Error(name + ': ' + el.textContent + ' incorrect composer blur ' + blur + ' (prefixed: ' + pseudo.getPropertyValue('-webkit-backdrop-filter') + ', content: ' + pseudo.content + ', token: ' + pseudo.getPropertyValue('--composer-glass-filter') + ')');
+              }
               if (filter(el) !== 'none') throw new Error(name + ': duplicate composer blur');
             }
             results.push('PASS: ' + name + ' composer and stacked panels');
@@ -114,14 +121,18 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             for (const [key, value] of Object.entries(variables)) root.style.setProperty(key, value);
             root.removeAttribute('data-full-translucency');
             root.setAttribute('data-window-material', 'translucent');
+            await settle();
             const original = elements.map(background);
             root.setAttribute('data-full-translucency', '');
+            await settle();
             verify(theme + ' enabled (native preferences)', !reduced && !contrast);
             root.removeAttribute('data-full-translucency');
+            await settle();
             if (JSON.stringify(elements.map(background)) !== JSON.stringify(original)) throw new Error(theme + ': disabling glass must restore original surfaces');
             results.push('PASS: ' + theme + ' disabled restores original surfaces');
             root.setAttribute('data-full-translucency', '');
             root.setAttribute('data-window-material', 'opaque');
+            await settle();
             verifyComposer(theme + ' opaque material', false);
             results.push('PASS: ' + theme + ' opaque material');
           }
@@ -133,20 +144,23 @@ final class MaterialCheck: NSObject, WKNavigationDelegate {
             if (!rules.length) throw new Error('Missing accessibility override: ' + preference);
             const saved = rules.map(rule => rule.media.mediaText);
             rules.forEach(rule => rule.media.mediaText = 'all');
+            await settle();
             verify(preference + ' (emulated)', false);
             rules.forEach((rule, i) => rule.media.mediaText = saved[i]);
           }
+          await settle();
           verify('restored native preferences', !reduced && !contrast);
           return results.join('\\n');
-        })()
-        """) { result, error in
-            if let error {
+        """, arguments: [:], in: nil, in: .page) { outcome in
+            switch outcome {
+            case .failure(let error):
                 let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String
                 print("FAIL: \(detail ?? error.localizedDescription)")
                 exit(1)
+            case .success(let result):
+                print(result as? String ?? "No result")
+                exit(result is String ? 0 : 1)
             }
-            print(result as? String ?? "No result")
-            exit(result is String ? 0 : 1)
         }
     }
 
