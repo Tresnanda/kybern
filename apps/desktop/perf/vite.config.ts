@@ -12,6 +12,7 @@ export default mergeConfig(base, {
     __SCROLL_COMPOSER__: JSON.stringify(process.env.KYBERN_SCROLL_COMPOSER === "1"),
     __SCROLL_COMPOSER_GLASS__: JSON.stringify(process.env.KYBERN_SCROLL_COMPOSER_GLASS === "1"),
     __SCROLL_MEMORY__: JSON.stringify(process.env.KYBERN_SCROLL_MEMORY === "1"),
+    __SCROLL_IDLE_MS__: JSON.stringify(Math.max(0, Math.min(30000, Number(process.env.KYBERN_SCROLL_IDLE_MS) || 0))),
     __COMPOSER_STACK_MODE__: JSON.stringify(process.env.KYBERN_COMPOSER_STACK_MODE ?? "queue"),
     __COLLAB_THEME__: JSON.stringify(process.env.KYBERN_COLLAB_THEME ?? "dark"),
     __COLLAB_REPLAY__: process.env.KYBERN_COLLAB_REPLAY ? readFileSync(process.env.KYBERN_COLLAB_REPLAY, "utf8") : "null",

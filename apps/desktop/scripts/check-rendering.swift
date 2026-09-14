@@ -60,6 +60,12 @@ final class Bench: NSObject, WKScriptMessageHandler {
     try! process.run()
     let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     process.waitUntilExit()
+    if let directory = ProcessInfo.processInfo.environment["KYBERN_PERF_MEMORY_DIR"] {
+     let folder = URL(fileURLWithPath: directory, isDirectory: true)
+     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+     let stage = (result?["stage"] as? String ?? "sample").replacingOccurrences(of: "/", with: "-")
+     try? output.write(to: folder.appendingPathComponent(stage + ".txt"), atomically: true, encoding: .utf8)
+    }
     let footprint = output.components(separatedBy: "\n").filter { $0.hasPrefix("Physical footprint:") }.first ?? "unavailable"
     let peak = output.components(separatedBy: "\n").filter { $0.hasPrefix("Physical footprint (peak):") }.first ?? "unavailable"
     let record: [String: Any] = ["sample": result!["stage"]!, "footprint": footprint, "peak": peak, "pid": pid]

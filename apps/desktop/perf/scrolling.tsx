@@ -32,6 +32,7 @@ const failures: string[] = []
 declare const __SCROLL_SCENARIO__: string
 declare const __SCROLL_FRAMES__: number
 declare const __SCROLL_MEMORY__: boolean
+declare const __SCROLL_IDLE_MS__: number
 declare const __SCROLL_COMPOSER__: boolean
 declare const __SCROLL_COMPOSER_GLASS__: boolean
 window.addEventListener("error", e => failures.push(e.message))
@@ -123,6 +124,13 @@ async function run() {
     if (__SCROLL_MEMORY__) await new Promise<void>(resolve => {
       Object.assign(window, { __memoryContinue: resolve })
       native().postMessage(JSON.stringify({ stage: `${scenario} memory`, memory: true }))
+    })
+  }
+  if (__SCROLL_MEMORY__ && __SCROLL_IDLE_MS__ > 0) {
+    await sleep(__SCROLL_IDLE_MS__)
+    await new Promise<void>(resolve => {
+      Object.assign(window, { __memoryContinue: resolve })
+      native().postMessage(JSON.stringify({ stage: "settled-idle memory", memory: true, idleMs: __SCROLL_IDLE_MS__ }))
     })
   }
   native().postMessage(JSON.stringify({ samples, failures, pass: failures.length === 0 && samples.every(s => s.frameP95 < 25 && s.movingFrameP95 < 25 && s.worstFrame < 100 && s.maxVisibleJump < 8) }))
