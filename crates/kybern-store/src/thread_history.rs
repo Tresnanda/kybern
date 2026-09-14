@@ -488,7 +488,7 @@ fn hex_decode(value: &str) -> Result<Vec<u8>> {
     if !value.is_ascii() || !bytes.len().is_multiple_of(2) || bytes.len() > 2048 {
         bail!("invalid thread search cursor");
     }
-    bytes.chunks_exact(2).map(|pair| Ok((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?)).collect()
+    bytes.as_chunks::<2>().0.iter().map(|pair| Ok((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?)).collect()
 }
 
 fn hex_nibble(byte: u8) -> Result<u8> {
