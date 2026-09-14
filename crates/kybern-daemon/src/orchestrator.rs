@@ -4288,14 +4288,14 @@ impl Orchestrator {
             }
         };
         // A failed executable launch must not pin a profile before a session exists.
-        if let Some((key, profile)) = profile_binding {
-            if let Err(error) = self.inner.store.meta_set(&key, &profile) {
-                if let Some(gateway) = &self.inner.native_tools {
-                    gateway.revoke(session_instance_id);
-                }
-                let _ = session.close().await;
-                return Err(error.into());
+        if let Some((key, profile)) = profile_binding
+            && let Err(error) = self.inner.store.meta_set(&key, &profile)
+        {
+            if let Some(gateway) = &self.inner.native_tools {
+                gateway.revoke(session_instance_id);
             }
+            let _ = session.close().await;
+            return Err(error);
         }
         let live = Arc::new(LiveSession {
             session_instance_id,
