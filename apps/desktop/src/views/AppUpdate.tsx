@@ -68,7 +68,7 @@ function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
     <div
       data-release-artwork
       className={cn(
-        "relative isolate flex shrink-0 items-center justify-center overflow-hidden",
+        "relative isolate mx-3 mt-3 flex shrink-0 items-center justify-center overflow-hidden rounded-2xl",
         compact ? "h-36" : "h-[clamp(5rem,20vh,11rem)]"
       )}
       aria-hidden
@@ -79,11 +79,7 @@ function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
         draggable={false}
         className="absolute inset-0 -z-10 size-full object-cover object-center"
       />
-      <span className="absolute inset-0 -z-10 bg-black/20" />
-      <Logo
-        size={compact ? 76 : 96}
-        className="text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.3)]"
-      />
+      <Logo size={compact ? 76 : 96} className="text-white" />
     </div>
   )
 }
@@ -144,14 +140,14 @@ function UpdateAnnouncement({
       inert={!present}
       className={cn(
         APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
-        "t-toast release-announcement font-system-ui fixed right-4 bottom-4 z-40 flex max-h-[calc(100dvh-2rem)] w-[22rem] max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl text-foreground"
+        "t-toast release-announcement font-system-ui fixed right-4 bottom-4 z-40 flex max-h-[calc(100dvh-2rem)] w-[22rem] max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-3xl text-foreground"
       )}
     >
       <ReleaseArtwork compact />
       <IconButton
         label="Dismiss update announcement"
         size="icon-sm"
-        className="absolute end-2 top-2 !size-8 !rounded-full !bg-black/35 !text-white hover:!bg-black/55"
+        className="absolute end-5 top-5 !size-8 !rounded-full !bg-black/35 !text-white hover:!bg-black/55"
         onClick={() => {
           dismissUpdateAnnouncement()
           detailsFocusTarget()?.focus({ preventScroll: true })
@@ -309,7 +305,7 @@ export function AppUpdateSurface() {
               <IconButton
                 label="Close release details"
                 size="icon-sm"
-                className="absolute end-3 top-3 !size-8 !rounded-full !bg-black/35 !text-white hover:!bg-black/55"
+                className="absolute end-5 top-5 !size-8 !rounded-full !bg-black/35 !text-white hover:!bg-black/55"
               />
             }
           >
