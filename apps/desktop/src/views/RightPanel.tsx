@@ -1,9 +1,9 @@
 import { ArtifactsPane } from "./Artifacts"
 // Right dock: a 46px tab strip of surface chips, a
-// collapse control, and panes kept mounted underneath. The Changes pane
+// collapse control, and chosen panes kept mounted until closed. The Changes pane
 // combines the Environment card rows with the diff file list.
 
-import { memo, useEffect, useMemo, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { Spinner } from "@/components/kybern/bits"
@@ -16,7 +16,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { FileDiffCard } from "@/components/kybern/DiffView"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { plural } from "@/lib/format"
-import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
+import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, UsersIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
@@ -25,12 +25,21 @@ import { errorText, loadDiff, loadFileDiff, loadGitStatus, rpc } from "@/state/r
 import { diffKey, isRuntimeTaskActive, useStore, type RightTab } from "@/state/store"
 
 import { ActivityPane } from "./Activity"
+import { CollaborationPane } from "./Collaboration"
 import { ExplorerPane } from "./Explorer"
 import { TerminalWorkspace } from "./Terminal"
 import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME, DOCK_HEADER_ICON_BUTTON_CLASS } from "./chrome"
 
-const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} inline-flex min-w-0 items-center pr-2.5`
+const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} inline-flex min-w-0 items-center !gap-0 !px-0`
 const DOCK_TAB_ACTIVE = "text-[var(--color-text-foreground)]"
+const DOCK_PANELS = [
+  { id: "collaboration", label: "Agents", Icon: UsersIcon },
+  { id: "activity", label: "Activity", Icon: WorkflowIcon },
+  { id: "changes", label: "Diff", Icon: DiffIcon },
+  { id: "terminal", label: "Terminal", Icon: TerminalIcon },
+  { id: "artifacts", label: "Artifacts", Icon: FoldersIcon },
+  { id: "explorer", label: "Explorer", Icon: FoldersIcon },
+] as const
 
 const ENV_ROW =
   "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground)] outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
@@ -41,58 +50,66 @@ const DIFF_FILES_BATCH = 50
 
 export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const tab = useStore((s) => s.rightTab)
+  const tabs = useStore((s) => s.rightTabs)
   const set = useStore((s) => s.set)
   const diff = useStore((s) => (threadId ? s.diffs[diffKey(threadId)] : undefined))
   const projectId = useStore((s) => (threadId ? s.threads[threadId]?.project_id : undefined) ?? (s.selected.kind === "draft" ? s.selected.draft.projectId : undefined))
+  const projectCoordinator = useStore((s) => !!(threadId && s.threads[threadId]?.coordinator_project_id))
   const [adds, dels] = useMemo(() => [diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0, diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0], [diff])
   const activeTasks = useStore((s) => (threadId ? (s.runtimeTasks[threadId] ?? []).filter(isRuntimeTaskActive).length : 0))
-  const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(tab)
+  const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(`${tab}:${tabs.join(",")}`)
+  const headerRef = useRef<HTMLDivElement>(null)
+  const closeTab = (id: RightTab) => {
+    set((state) => {
+      const remaining = state.rightTabs.filter((item) => item !== id)
+      const index = state.rightTabs.indexOf(id)
+      return {
+        rightTabs: remaining,
+        rightTab: state.rightTab === id ? remaining[Math.min(index, remaining.length - 1)] ?? null : state.rightTab,
+      }
+    })
+    requestAnimationFrame(() => {
+      const header = headerRef.current
+      const target = header?.querySelector<HTMLButtonElement>('[data-tab-active="true"] button')
+        ?? header?.querySelector<HTMLButtonElement>('[aria-label="Add panel"]')
+      target?.focus()
+    })
+  }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
       <div
+        ref={headerRef}
         data-tauri-drag-region="deep"
         className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "drag-region gap-1 px-1.5")}
       >
         <div ref={tabsRef} className="t-tabs flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <span aria-hidden className="t-tabs-pill z-0 rounded-lg bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />
-          <DockTab active={tab === "activity"} onClick={() => set({ rightTab: "activity" })} icon={<WorkflowIcon className="size-3.5 shrink-0 opacity-70" />} label="Activity">
-            {activeTasks > 0 && <span key={activeTasks} className="t-pop ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
-          </DockTab>
-          <DockTab active={tab === "changes"} onClick={() => set({ rightTab: "changes" })} icon={<DiffIcon className="size-3.5 shrink-0 opacity-70" />} label="Diff">
-            {adds + dels > 0 && <span key={`${adds}:${dels}`} className="t-pop inline-flex"><DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" /></span>}
-          </DockTab>
-          <DockTab active={tab === "terminal"} onClick={() => set({ rightTab: "terminal" })} icon={<TerminalIcon className="size-3.5 shrink-0 opacity-70" />} label="Terminal" />
-          <DockTab active={tab === "artifacts"} onClick={() => set({ rightTab: "artifacts" })} icon={<FoldersIcon className="size-3.5 shrink-0 opacity-70" />} label="Artifacts" />
-          <DockTab active={tab === "explorer"} onClick={() => set({ rightTab: "explorer" })} icon={<FoldersIcon className="size-3.5 shrink-0 opacity-70" />} label="Explorer" />
+          {tab && <span aria-hidden className="t-tabs-pill z-0 rounded-lg bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />}
+          {tabs.map((id) => {
+            const { label, Icon } = DOCK_PANELS.find((panel) => panel.id === id)!
+            return <DockTab key={id} active={tab === id} onClick={() => set({ rightTab: id })} onClose={() => closeTab(id)} icon={<Icon className="size-3.5 shrink-0 opacity-70" />} label={id === "collaboration" && projectCoordinator ? "Project" : label}>
+              {id === "activity" && activeTasks > 0 && <span key={activeTasks} className="t-pop ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
+              {id === "changes" && adds + dels > 0 && <span key={`${adds}:${dels}`} className="t-pop inline-flex"><DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" /></span>}
+            </DockTab>
+          })}
         </div>
         <div
           data-tauri-drag-region="false"
           className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]"
         >
           <Menu>
-            <MenuTrigger render={<Button variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON_CLASS} aria-label="Add pane" />}>
+            <MenuTrigger render={<Button variant="chrome" size="icon-xs" className={DOCK_HEADER_ICON_BUTTON_CLASS} aria-label="Add panel" />}>
               <PlusIcon className="size-3.5" />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
               <MenuGroup>
-                <MenuItem onClick={() => set({ rightTab: "activity" })}>
-                  <WorkflowIcon className="size-3.5 shrink-0" />
-                  <span>Activity</span>
-                </MenuItem>
-                <MenuItem onClick={() => set({ rightTab: "changes" })}>
-                  <DiffIcon className="size-3.5 shrink-0" />
-                  <span>Diff</span>
-                </MenuItem>
-                <MenuItem onClick={() => set({ rightTab: "terminal" })}>
-                  <TerminalIcon className="size-3.5 shrink-0" />
-                  <span>Terminal</span>
-                </MenuItem>
-                <MenuItem onClick={() => set({ rightTab: "artifacts" })}><FoldersIcon className="size-3.5 shrink-0" /><span>Artifacts</span></MenuItem>
-                <MenuItem onClick={() => set({ rightTab: "explorer" })}>
-                  <FoldersIcon className="size-3.5 shrink-0" />
-                  <span>Explorer</span>
-                </MenuItem>
+                {DOCK_PANELS.map(({ id, label, Icon }) => (
+                  <MenuItem key={id} onClick={() => set({ rightTab: id })}>
+                    <Icon className="size-3.5 shrink-0" />
+                    <span>{id === "collaboration" && projectCoordinator ? "Project" : label}</span>
+                    {tabs.includes(id) && <span className="ml-auto text-xs text-muted-foreground">Open</span>}
+                  </MenuItem>
+                ))}
               </MenuGroup>
             </ComposerPickerMenuPopup>
           </Menu>
@@ -103,23 +120,28 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
       </div>
 
       <div className="relative min-h-0 flex-1">
-        {!threadId ? (
+        {tabs.length === 0 ? (
+          <div className="flex h-full items-center justify-center p-6 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">Add a panel with +.</div>
+        ) : !threadId ? (
           <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its activity, changes, and terminal.</div>
         ) : (
           <>
-            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={tab === "activity"} aria-hidden={tab !== "activity"}>
+            {tabs.includes("collaboration") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "collaboration" ? "z-[1]" : "z-0")} data-active={tab === "collaboration"} aria-hidden={tab !== "collaboration"}>
+              <CollaborationPane key={threadId} threadId={threadId} active={tab === "collaboration"} />
+            </div>}
+            {tabs.includes("activity") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={tab === "activity"} aria-hidden={tab !== "activity"}>
               <ActivityPane key={threadId} threadId={threadId} visible={tab === "activity"} />
-            </div>
-            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "changes" ? "z-[1]" : "z-0")} data-active={tab === "changes"} aria-hidden={tab !== "changes"}>
+            </div>}
+            {tabs.includes("changes") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "changes" ? "z-[1]" : "z-0")} data-active={tab === "changes"} aria-hidden={tab !== "changes"}>
               <Changes key={threadId} threadId={threadId} active={tab === "changes"} />
-            </div>
-            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "explorer" ? "z-[1]" : "z-0")} data-active={tab === "explorer"} aria-hidden={tab !== "explorer"}>
+            </div>}
+            {tabs.includes("explorer") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "explorer" ? "z-[1]" : "z-0")} data-active={tab === "explorer"} aria-hidden={tab !== "explorer"}>
               {projectId && <ExplorerPane projectId={projectId} active={tab === "explorer"} />}
-            </div>
-            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "artifacts" ? "z-[1]" : "z-0")} data-active={tab === "artifacts"} aria-hidden={tab !== "artifacts"}><ArtifactsPane key={threadId} threadId={threadId} active={tab === "artifacts"} /></div>
-            <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={tab === "terminal"} aria-hidden={tab !== "terminal"}>
+            </div>}
+            {tabs.includes("artifacts") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "artifacts" ? "z-[1]" : "z-0")} data-active={tab === "artifacts"} aria-hidden={tab !== "artifacts"}><ArtifactsPane key={threadId} threadId={threadId} active={tab === "artifacts"} /></div>}
+            {tabs.includes("terminal") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={tab === "terminal"} aria-hidden={tab !== "terminal"}>
               <TerminalWorkspace threadId={threadId} active={tab === "terminal"} />
-            </div>
+            </div>}
           </>
         )}
       </div>
@@ -127,13 +149,18 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   )
 }
 
-function DockTab({ active, onClick, icon, label, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; children?: React.ReactNode }) {
+function DockTab({ active, onClick, onClose, icon, label, children }: { active: boolean; onClick: () => void; onClose: () => void; icon: React.ReactNode; label: string; children?: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} data-pressed={active || undefined} data-tab-active={active} className={cn("group/dock-tab press relative z-[1] [-webkit-app-region:no-drag]", DOCK_TAB_CHIP, active && DOCK_TAB_ACTIVE)}>
-      <span className="relative flex size-4 shrink-0 items-center justify-center">{icon}</span>
-      <span className="max-w-[10rem] truncate">{label}</span>
-      {children}
-    </button>
+    <div data-tab-active={active} className={cn("relative z-[1] [-webkit-app-region:no-drag]", DOCK_TAB_CHIP, active && DOCK_TAB_ACTIVE)}>
+      <button type="button" onClick={onClick} aria-pressed={active} className="press inline-flex h-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+        <span className="relative flex size-4 shrink-0 items-center justify-center">{icon}</span>
+        <span className="max-w-[10rem] truncate">{label}</span>
+        {children}
+      </button>
+      <button type="button" onClick={onClose} aria-label={`Close ${label} panel`} className="press flex h-full w-6 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+        <XIcon className="size-3" />
+      </button>
+    </div>
   )
 }
 

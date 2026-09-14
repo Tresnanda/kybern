@@ -316,8 +316,7 @@
    For work rows that appear while a turn is live: a short rise with a blur
    resolve. Enter-only; rows never animate out. */
 .t-row-enter {
-  animation: t-row-enter var(--duration-fast) var(--ease-smooth-out) both;
-  will-change: opacity, transform, filter;
+  animation: t-row-enter var(--duration-fast) var(--ease-smooth-out);
 }
 @keyframes t-row-enter {
   from {
@@ -328,7 +327,7 @@
   to {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0.01px);
+    filter: none;
   }
 }
 
@@ -358,7 +357,6 @@
 .t-stagger > * {
   animation: t-stagger-in var(--duration-very-slow) var(--ease-smooth-out) both;
   animation-delay: calc(var(--i, 0) * 70ms);
-  will-change: opacity, transform, filter;
 }
 @keyframes t-stagger-in {
   from {
@@ -369,7 +367,7 @@
   to {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0.01px);
+    filter: none;
   }
 }
 

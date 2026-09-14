@@ -75,6 +75,30 @@ expression: schema_for!(Thread)
       "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
       "type": "integer",
       "format": "int64"
+    },
+    "parent_thread_id": {
+      "description": "Immutable parent for a Kybern-managed helper thread.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "coordinator_project_id": {
+      "description": "Set when this thread is the persistent coordinator for a project.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "collaboration_group_id": {
+      "description": "Active collaboration membership, denormalized for efficient navigation.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
     }
   },
   "required": [

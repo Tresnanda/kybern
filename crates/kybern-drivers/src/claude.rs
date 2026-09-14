@@ -8,6 +8,8 @@
 //! `control_request{subtype:"can_use_tool"}` and are answered on stdin.
 
 use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,8 +24,8 @@ use uuid::Uuid;
 use crate::binary::{at_least, resolve, version_of};
 use crate::ndjson::NdjsonChild;
 use crate::{
-    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, ProbeContext, Result, SessionConfig,
-    SpawnedSession, summarize_tool_call,
+    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, NativeToolBridge, ProbeContext,
+    Result, SessionConfig, SpawnedSession, summarize_tool_call,
 };
 
 const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
@@ -98,6 +100,7 @@ impl AgentDriver for ClaudeDriver {
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::ClaudeCode, config.binary.as_ref())?;
+        let native_mcp_config = config.native_tool_bridge.as_ref().map(write_claude_mcp_config).transpose()?;
         let session_id = match (&config.resume_session_id, config.fork) {
             (Some(id), false) => id.clone(),
             _ => Uuid::new_v4().to_string(),
@@ -123,6 +126,26 @@ impl AgentDriver for ClaudeDriver {
             }
         }
         cmd.args(["--permission-mode", mode_arg(config.permission_mode)]);
+        if let Some(native_mcp_config) = &native_mcp_config {
+            cmd.args(["--mcp-config", native_mcp_config.path.to_string_lossy().as_ref()]);
+        }
+        if let Some(bridge) = config.native_tool_bridge.as_ref() {
+            if let Some(instructions) = bridge.coordinator_instructions.as_deref() {
+                cmd.args(["--append-system-prompt", instructions]);
+            }
+            for tool in &bridge.restrictions.denied_tools {
+                let provider_name = claude_tool_name(bridge, tool);
+                cmd.args(["--disallowedTools", &provider_name]);
+            }
+            if bridge.restrictions.require_enforcement {
+                // Claude's `--tools` set is the native built-in catalog. An
+                // empty set leaves the session MCP server available while
+                // preventing shell, file, web, and other built-in tools from
+                // bypassing the coordinator policy. Strict MCP config also
+                // prevents unrelated project/user servers from widening it.
+                cmd.args(["--tools", "", "--strict-mcp-config"]);
+            }
+        }
         if config.permission_mode == PermissionMode::FullAccess {
             cmd.arg("--allow-dangerously-skip-permissions");
         }
@@ -149,6 +172,7 @@ impl AgentDriver for ClaudeDriver {
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
             session_id: Mutex::new(session_id.clone()),
+            _native_mcp_config: native_mcp_config,
         });
 
         // Initialize is optional; we send it to get the catalog and to be a well-behaved client.
@@ -270,6 +294,59 @@ impl ClaudeDriver {
     }
 }
 
+struct NativeMcpConfig {
+    path: PathBuf,
+}
+
+impl Drop for NativeMcpConfig {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn write_claude_mcp_config(bridge: &NativeToolBridge) -> Result<NativeMcpConfig> {
+    bridge.validate()?;
+    let endpoint = bridge
+        .endpoint
+        .as_deref()
+        .ok_or_else(|| DriverError::Unsupported("Claude Code native collaboration tools require a daemon MCP endpoint".into()))?;
+    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
+        DriverError::Unsupported("Claude Code native collaboration tools require a scoped MCP authorization capability".into())
+    })?;
+    let config = json!({
+        "mcpServers": {
+            bridge.server_name.clone(): {
+                "type": "http",
+                "url": endpoint,
+                "headers": { "Authorization": format!("Bearer {authorization}") },
+            }
+        }
+    });
+    let path = std::env::temp_dir().join(format!("kybern-claude-mcp-{}.json", Uuid::new_v4().simple()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
+    let bytes = serde_json::to_vec(&config).map_err(|error| DriverError::Other(error.into()))?;
+    if let Err(error) = file.write_all(&bytes) {
+        let _ = fs::remove_file(&path);
+        return Err(error.into());
+    }
+    Ok(NativeMcpConfig { path })
+}
+
+fn claude_tool_name(bridge: &NativeToolBridge, name: &str) -> String {
+    if name.starts_with("mcp__") || !bridge.tools.iter().any(|tool| tool.name == name) {
+        name.to_string()
+    } else {
+        format!("mcp__{}__{name}", bridge.server_name)
+    }
+}
+
 fn mode_arg(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Supervised => "default",
@@ -388,6 +465,7 @@ struct ClaudeSession {
     pending_permissions: Mutex<HashMap<String, (Value, Vec<Value>)>>,
     state: Mutex<TurnState>,
     session_id: Mutex<String>,
+    _native_mcp_config: Option<NativeMcpConfig>,
 }
 
 /// Thin wrapper so the daemon owns a `Box<dyn AgentSession>` while the reader task keeps an Arc.
@@ -1026,6 +1104,9 @@ fn content_blocks(message: &UserMessage) -> Vec<Value> {
                 trailing.push('@');
                 trailing.push_str(path);
             }
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                trailing.push_str(&thread_reference_text(*thread_id, title));
+            }
             ContentPart::Attachment { name, .. } => {
                 trailing.push_str(&format!("\n[attached file: {name}]"));
             }
@@ -1053,6 +1134,9 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
     match part {
         ContentPart::Text { text } => Some(json!({ "type": "text", "text": text })),
         ContentPart::FileMention { path } => Some(json!({ "type": "text", "text": format!("@{path}") })),
+        ContentPart::ThreadReference { thread_id, title, .. } => {
+            Some(json!({ "type": "text", "text": thread_reference_text(*thread_id, title) }))
+        }
         ContentPart::Skill { name, .. } => Some(json!({ "type": "text", "text": format!("${name}") })),
         ContentPart::Mention { name, .. } => Some(json!({ "type": "text", "text": format!("@{name}") })),
         ContentPart::Image { media_type, data } => {
@@ -1192,6 +1276,7 @@ mod tests {
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
             session_id: Mutex::new("test".into()),
+            _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
         handle.send_message("first-user", &UserMessage::text("Run a background command")).await.unwrap();
@@ -1259,6 +1344,7 @@ mod tests {
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
             session_id: Mutex::new("test".into()),
+            _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
         let questions = json!([{ "question": "Which sections?", "options": [{"label":"Intro"},{"label":"Summary"}], "multiSelect": true }]);
@@ -1302,9 +1388,13 @@ mod tests {
         }
         child.kill().await;
     }
-    use super::{claude_background_task, claude_efforts, claude_model_aliases, claude_task_started, claude_task_update, content_blocks};
+    use super::{
+        claude_background_task, claude_efforts, claude_model_aliases, claude_task_started, claude_task_update, content_blocks,
+        write_claude_mcp_config,
+    };
+    use crate::NativeToolBridge;
     use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStatus, UserMessage};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     const HELP: &str = "\
   --effort <level>  Effort level for the current session\n\
@@ -1318,6 +1408,93 @@ mod tests {
     fn parses_capabilities_reported_by_help() {
         assert_eq!(claude_model_aliases(HELP), ["fable", "opus", "sonnet"]);
         assert_eq!(claude_efforts(HELP), ["low", "medium", "high", "xhigh", "max"]);
+    }
+
+    #[test]
+    fn writes_scoped_mcp_config_and_removes_it_on_drop() {
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: None,
+            tools: vec![],
+            restrictions: Default::default(),
+        };
+        let config = write_claude_mcp_config(&bridge).unwrap();
+        let bytes = std::fs::read(&config.path).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["mcpServers"]["kybern"]["url"], "http://127.0.0.1:4199/native-tools/mcp");
+        assert_eq!(value["mcpServers"]["kybern"]["headers"]["Authorization"], "Bearer session-capability");
+        assert!(config.path.exists());
+        let path = config.path.clone();
+        drop(config);
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_start_resume_and_fork_scope_mcp_and_coordinator_bootstrap() {
+        use crate::{AgentDriver, NativeToolDefinition, SessionConfig};
+        use std::os::unix::fs::PermissionsExt;
+        for (resume, fork, enabled, coordinator) in [
+            (false, false, true, false),
+            (false, false, true, true),
+            (true, false, true, true),
+            (true, true, true, true),
+            (false, false, false, false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("claude-fixture");
+            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let bridge = NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+                authorization: Some("fixture-capability".into()),
+                coordinator_instructions: coordinator.then(|| "COORDINATOR ROLE SENTINEL".into()),
+                tools: ["kybern_thread_read", "kybern_collaboration_spawn"]
+                    .into_iter()
+                    .map(|name| NativeToolDefinition {
+                        name: name.into(),
+                        description: name.into(),
+                        input_schema: json!({"type":"object"}),
+                    })
+                    .collect(),
+                restrictions: Default::default(),
+            };
+            let spawned = super::ClaudeDriver
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: kybern_protocol::PermissionMode::FullAccess,
+                    native_tool_bridge: enabled.then_some(bridge),
+                    resume_session_id: resume.then(|| "existing-provider-session".into()),
+                    fork,
+                    rewind: None,
+                    binary: Some(binary),
+                    env: Default::default(),
+                })
+                .await
+                .unwrap();
+            let argv_path = root.path().join("argv.json");
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !argv_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let args: Vec<String> = serde_json::from_slice(&std::fs::read(argv_path).unwrap()).unwrap();
+            spawned.session.close().await.unwrap();
+            assert_eq!(args.iter().any(|arg| arg == "--mcp-config"), enabled);
+            assert_eq!(args.iter().filter(|arg| arg.as_str() == "--append-system-prompt").count(), usize::from(coordinator));
+            assert_eq!(args.iter().any(|arg| arg == "COORDINATOR ROLE SENTINEL"), coordinator);
+            assert!(
+                !args.iter().any(|arg| ["--system-prompt", "--tools", "--strict-mcp-config"].contains(&arg.as_str())),
+                "ordinary MCP availability must not replace system prompts or disable native plugins"
+            );
+        }
     }
 
     #[test]

@@ -21,8 +21,8 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::binary::{at_least, resolve, version_of};
 use crate::{
-    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, ProbeContext, Result, SessionConfig,
-    SpawnedSession, summarize_tool_call,
+    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, NativeToolBridge, ProbeContext,
+    Result, SessionConfig, SpawnedSession, summarize_tool_call,
 };
 
 const MIN_VERSION: (u64, u64, u64) = (1, 10, 0);
@@ -188,6 +188,11 @@ impl AgentDriver for OpencodeDriver {
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
+        let native_config = config
+            .native_tool_bridge
+            .as_ref()
+            .map(|bridge| opencode_config_content(config.env.get("OPENCODE_CONFIG_CONTENT"), bridge))
+            .transpose()?;
         let bin = resolve(ProviderKind::Opencode, config.binary.as_ref())?;
         let mut cmd = Command::new(&bin);
         cmd.current_dir(&config.cwd)
@@ -198,6 +203,9 @@ impl AgentDriver for OpencodeDriver {
             .kill_on_drop(true);
         for (k, v) in &config.env {
             cmd.env(k, v);
+        }
+        if let Some(native_config) = native_config {
+            cmd.env("OPENCODE_CONFIG_CONTENT", native_config);
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), "spawning opencode serve");
         #[cfg(unix)]
@@ -265,6 +273,11 @@ impl AgentDriver for OpencodeDriver {
                 context_windows: HashMap::new(),
                 session_id: None,
                 model: config.model.clone(),
+                coordinator_instructions: if config.resume_session_id.is_none() {
+                    config.native_tool_bridge.as_ref().and_then(|bridge| bridge.coordinator_instructions.clone())
+                } else {
+                    None
+                },
                 mode: config.permission_mode,
                 parts: HashMap::new(),
                 message_roles: HashMap::new(),
@@ -346,6 +359,51 @@ fn net(e: reqwest::Error) -> DriverError {
 fn split_model(s: &str) -> Option<(String, String)> {
     let (p, m) = s.split_once('/')?;
     Some((p.to_string(), m.to_string()))
+}
+
+fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> Result<String> {
+    bridge.validate()?;
+    let endpoint = bridge
+        .endpoint
+        .as_deref()
+        .ok_or_else(|| DriverError::Unsupported("OpenCode native collaboration tools require a daemon MCP endpoint".into()))?;
+    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
+        DriverError::Unsupported("OpenCode native collaboration tools require a scoped MCP authorization capability".into())
+    })?;
+    let mut config = match base {
+        Some(raw) => serde_json::from_str::<Value>(raw)
+            .map_err(|error| DriverError::Unsupported(format!("OPENCODE_CONFIG_CONTENT is not valid JSON: {error}")))?,
+        None => json!({}),
+    };
+    let Some(config_object) = config.as_object_mut() else {
+        return Err(DriverError::Unsupported("OpenCode inline config must be a JSON object".into()));
+    };
+    let mcp = config_object.entry("mcp").or_insert_with(|| json!({}));
+    let Some(mcp_servers) = mcp.as_object_mut() else {
+        return Err(DriverError::Unsupported("OpenCode inline config has a non-object mcp section".into()));
+    };
+    mcp_servers.insert(
+        bridge.server_name.clone(),
+        json!({
+            "type": "remote",
+            "url": endpoint,
+            "enabled": true,
+            "oauth": false,
+            "headers": { "Authorization": format!("Bearer {authorization}") },
+        }),
+    );
+    if bridge.restrictions.require_enforcement {
+        let tools = config_object.entry("tools").or_insert_with(|| json!({}));
+        let Some(tool_permissions) = tools.as_object_mut() else {
+            return Err(DriverError::Unsupported("OpenCode inline config has a non-object tools section".into()));
+        };
+        // OpenCode registers remote MCP tools with the server name as a prefix.
+        // The gateway's tools/list response applies the exact bridge allow/deny
+        // set, so this wildcard only admits that already-filtered server.
+        tool_permissions.insert("*".into(), json!(false));
+        tool_permissions.insert(format!("{}_*", bridge.server_name), json!(true));
+    }
+    serde_json::to_string(&config).map_err(|error| DriverError::Other(error.into()))
 }
 
 /// Per-session permission ruleset for a kybern mode. Last matching rule wins.
@@ -494,6 +552,9 @@ struct State {
     commands: Vec<kybern_protocol::ProviderCommand>,
     session_id: Option<String>,
     model: Option<String>,
+    /// Consumed by the first ordinary prompt of a newly-created explicit
+    /// coordinator session. OpenCode persists that system part with history.
+    coordinator_instructions: Option<String>,
     mode: PermissionMode,
     parts: HashMap<String, PartInfo>,
     message_roles: HashMap<String, String>,
@@ -1087,6 +1148,9 @@ fn parts(message: &UserMessage) -> Vec<Value> {
         match part {
             ContentPart::Text { text } => out.push(json!({ "type": "text", "text": text })),
             ContentPart::FileMention { path } => out.push(json!({ "type": "text", "text": format!("@{path}") })),
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                out.push(json!({ "type": "text", "text": thread_reference_text(*thread_id, title) }))
+            }
             ContentPart::Skill { name, .. } => out.push(json!({ "type": "text", "text": format!("/{name}") })),
             ContentPart::Mention { name, .. } => out.push(json!({ "type": "text", "text": format!("@{name}") })),
             ContentPart::Image { media_type, data } => out.push(
@@ -1123,6 +1187,9 @@ fn skill_command(message: &UserMessage) -> Option<SkillCommand> {
             ContentPart::FileMention { path } => {
                 arguments.push('@');
                 arguments.push_str(path);
+            }
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                arguments.push_str(&thread_reference_text(*thread_id, title));
             }
             ContentPart::Skill { name, .. } => {
                 arguments.push('/');
@@ -1231,6 +1298,10 @@ impl AgentSession for Handle {
                 body["model"] = json!({ "providerID": provider, "modelID": model });
             }
         }
+        let coordinator_bootstrap = if command.is_none() { s.state.lock().await.coordinator_instructions.take() } else { None };
+        if let Some(instructions) = coordinator_bootstrap.as_ref() {
+            body["system"] = Value::String(instructions.clone());
+        }
         {
             let mut st = s.state.lock().await;
             st.active = true;
@@ -1249,7 +1320,16 @@ impl AgentSession for Handle {
             });
             Ok(())
         } else {
-            s.post(&format!("/session/{session_id}/prompt_async"), body).await.map(|_| ())
+            let result = s.post(&format!("/session/{session_id}/prompt_async"), body).await;
+            if result.is_err()
+                && let Some(instructions) = coordinator_bootstrap
+            {
+                let mut state = s.state.lock().await;
+                if state.coordinator_instructions.is_none() {
+                    state.coordinator_instructions = Some(instructions);
+                }
+            }
+            result.map(|_| ())
         }
     }
 
@@ -1330,7 +1410,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             let mut requests = vec![];
-            for _ in 0..2 {
+            for _ in 0..4 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = vec![];
                 loop {
@@ -1372,6 +1452,7 @@ mod tests {
                 context_windows: HashMap::new(),
                 session_id: Some("root".into()),
                 model: Some("test/model".into()),
+                coordinator_instructions: Some("COORDINATOR ROLE SENTINEL".into()),
                 mode: PermissionMode::Supervised,
                 parts: HashMap::new(),
                 message_roles: HashMap::new(),
@@ -1391,14 +1472,27 @@ mod tests {
         assert!(matches!(rx.recv().await, Some(DriverEvent::Notice { .. })));
         assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { .. })));
         handle.send_message("message", &UserMessage::text("/review changed files")).await.unwrap();
+        handle.send_message("plain", &UserMessage::text("delegate a review")).await.unwrap();
+        handle.send_message("plain-two", &UserMessage::text("continue coordinating")).await.unwrap();
         let requests = tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap();
         assert!(requests[0].starts_with("POST /session/root/summarize?"));
         let body: Value = serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body, json!({"providerID":"test", "modelID":"model", "auto":false}));
-        assert!(requests[1].starts_with("POST /session/root/command?"));
-        let body: Value = serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let command_request = requests.iter().find(|request| request.starts_with("POST /session/root/command?")).unwrap();
+        let body: Value = serde_json::from_str(command_request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["command"], "review");
         assert_eq!(body["arguments"], "changed files");
+        assert!(body.get("system").is_none(), "command dispatch must retain its native payload");
+        let prompt_bodies = requests
+            .iter()
+            .filter(|request| request.starts_with("POST /session/root/prompt_async?"))
+            .map(|request| serde_json::from_str::<Value>(request.split("\r\n\r\n").nth(1).unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(prompt_bodies.len(), 2);
+        assert_eq!(prompt_bodies[0]["system"], "COORDINATOR ROLE SENTINEL");
+        assert_eq!(prompt_bodies[0]["parts"][0]["text"], "delegate a review");
+        assert!(prompt_bodies[1].get("system").is_none(), "coordinator bootstrap must be consumed exactly once");
+        assert_eq!(prompt_bodies[1]["parts"][0]["text"], "continue coordinating");
         session.state.lock().await.context_windows.insert("test/model".into(), 200000);
         session.handle_event(&json!({"type":"message.updated", "properties":{"info":{"id":"context", "sessionID":"root", "role":"assistant", "providerID":"test", "modelID":"model", "time":{"completed":1}, "tokens":{"input":1000,"output":100,"reasoning":10,"cache":{"read":200,"write":0}}}}})).await;
         let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("missing context usage") };
@@ -1458,6 +1552,7 @@ mod tests {
                 context_windows: HashMap::new(),
                 session_id: Some("root".into()),
                 model: None,
+                coordinator_instructions: None,
                 mode: PermissionMode::Supervised,
                 parts: HashMap::new(),
                 message_roles: HashMap::new(),
@@ -1506,9 +1601,48 @@ mod tests {
         assert!(session.state.lock().await.pending.is_empty());
         handle.close().await.unwrap();
     }
-    use super::{MODEL_DISCOVERY_TIMEOUT, opencode_child_session, opencode_child_task, parse_skills, skill_command};
+
+    #[test]
+    fn builds_remote_mcp_config_and_enforces_coordinator_tool_scope() {
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: None,
+            tools: vec![],
+            restrictions: crate::NativeToolRestrictions { require_enforcement: true, ..Default::default() },
+        };
+        let config = opencode_config_content(Some(&r#"{"theme":"dark"}"#.to_string()), &bridge).unwrap();
+        let value: Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(value["mcp"]["kybern"]["type"], "remote");
+        assert_eq!(value["mcp"]["kybern"]["headers"]["Authorization"], "Bearer session-capability");
+        assert_eq!(value["tools"]["*"], false);
+        assert_eq!(value["tools"]["kybern_*"], true);
+    }
+
+    #[test]
+    fn rejects_invalid_inline_opencode_config() {
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: None,
+            tools: vec![],
+            restrictions: Default::default(),
+        };
+        assert!(matches!(
+            opencode_config_content(Some(&"[]".to_string()), &bridge),
+            Err(DriverError::Unsupported(message)) if message.contains("JSON object")
+        ));
+    }
+
+    use super::{
+        MODEL_DISCOVERY_TIMEOUT, opencode_child_session, opencode_child_task, opencode_config_content, parse_skills, skill_command,
+    };
+    use crate::{DriverError, NativeToolBridge};
     use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStatus, SkillScope, UserMessage};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::path::Path;
     use std::time::Duration;
 

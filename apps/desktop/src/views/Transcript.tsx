@@ -18,8 +18,9 @@ import { Markdown } from "@/components/kybern/Markdown"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { Spinner } from "@/components/kybern/bits"
 import { IconSwap, MatrixLoader, StreamWords, TextSwap } from "@/components/kybern/motion"
-import type { InlineTokenKind } from "@/components/kybern/InlineToken"
+import type { InlineTokenValue } from "@/lib/inlineTokens"
 import { partToken } from "@/lib/composerTokens"
+import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/kit/collapsible"
@@ -65,7 +66,7 @@ import {
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
-import { errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
+import { activeRuntime, errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
 
@@ -229,6 +230,10 @@ export function Transcript({
   surfaceMode?: "single" | "split"
 }) {
   const state = useStore((s) => s.transcripts[threadId])
+  const thread = useStore((s) => s.threads[threadId])
+  const coordinatorProjectName = useStore((s) =>
+    thread?.coordinator_project_id ? s.projects[thread.project_id]?.name : undefined
+  )
   const connected = useStore((s) => s.connection.state === "open")
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
@@ -375,7 +380,18 @@ export function Transcript({
         >
           {groups.length === 0 ? (
             <div className="flex h-full items-center justify-center">
-              <p className="text-sm text-muted-foreground/30">Send a message to start the conversation.</p>
+              {thread?.coordinator_project_id ? (
+                <div className="max-w-lg px-5 text-center">
+                  <p className="text-sm font-medium text-foreground/70">
+                    What should we work on in {coordinatorProjectName ?? "this project"}?
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground/50">
+                    I can delegate work, consult earlier threads, and keep project context here.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground/30">Send a message to start the conversation.</p>
+              )}
             </div>
           ) : (
             <TranscriptStateRoot key={threadId}><VirtualRows items={virtualGroups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
@@ -762,20 +778,64 @@ function CopyAction({ text }: { text: string }) {
   )
 }
 
+async function openThreadReference(threadId: ThreadId) {
+  const store = useStore
+  if (store.getState().connection.state !== "open") {
+    toast.error("Reconnect to open this thread")
+    return
+  }
+  let runtime: ReturnType<typeof activeRuntime> | undefined
+  try {
+    runtime = activeRuntime()
+    let thread = store.getState().threads[threadId]
+    if (!thread) {
+      const result = await runtime.rpc().call("threads.get", { thread_id: threadId, transcript_limit: 1 })
+      if (store !== useStore || activeRuntime() !== runtime) return
+      thread = result.thread
+      store.getState().set((state) => ({ threads: { ...state.threads, [threadId]: result.thread } }))
+    }
+    if (store !== useStore || activeRuntime() !== runtime) return
+    store.getState().selectThread(thread.id)
+    void runtime.loadThread(thread.id, true)
+  } catch (error) {
+    if (store !== useStore) return
+    if (runtime) {
+      try { if (activeRuntime() !== runtime) return } catch { return }
+    }
+    toast.error("Unable to open thread", { description: errorText(error) })
+  }
+}
+
 function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: string }) {
   // Structured parts (skills, plugin and file mentions) sit inline in the
   // message at the position they were typed, so the bubble is rebuilt as one
   // string with those tokens rendered as chips. Only attachments and images
   // float above the bubble.
   const { text, tokens } = useMemo(() => {
-    const tokens = new Map<string, InlineTokenKind>()
+    const tokens = new Map<string, InlineTokenValue>()
+    const threadReferences: ComposerThreadReference[] = []
     let text = ""
     for (const p of message.parts) {
       if (p.type === "text") text += p.text
       else {
-        const token = partToken(p)
+        const knownThread = p.type === "thread_reference" ? useStore.getState().threads[p.thread_id] : undefined
+        const reference = p.type === "thread_reference"
+          ? createComposerThreadReference(
+              {
+                id: p.thread_id,
+                title: p.title,
+                project_id: p.project_id ?? knownThread?.project_id ?? "",
+              },
+              threadReferences,
+              p.project_id ? useStore.getState().projects[p.project_id]?.name : undefined,
+            )
+          : undefined
+        if (reference && !threadReferences.some((item) => item.part.thread_id === reference.part.thread_id)) threadReferences.push(reference)
+        const token = reference?.token ?? partToken(p)
         if (!token) continue
-        tokens.set(token, p.type === "skill" ? "skill" : p.type === "mention" ? "plugin" : "file")
+        tokens.set(token, p.type === "thread_reference"
+          ? { kind: "thread", label: `Open ${p.title || "referenced thread"}`, onClick: () => void openThreadReference(p.thread_id) }
+          : p.type === "skill" ? "skill" : p.type === "mention" ? "plugin" : "file")
         text += token
       }
     }

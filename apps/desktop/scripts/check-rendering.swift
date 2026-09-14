@@ -46,6 +46,7 @@ final class Bench: NSObject, WKScriptMessageHandler {
  }
  func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
   print(message.body)
+  fflush(stdout)
   let json = (message.body as? String)?.data(using: .utf8)
   let result = json.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
   if result?["stage"] != nil {

@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::collaboration::*;
 use crate::model::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -50,6 +51,21 @@ pub enum EventPayload {
     },
     ThreadNotesUpdated {
         notes: crate::methods::ThreadNotes,
+    },
+    CollaborationGroupUpdated {
+        group: CollaborationGroup,
+    },
+    CollaborationMemberUpdated {
+        member: GroupMember,
+    },
+    CollaborationAssignmentUpdated {
+        assignment: CollaborationAssignment,
+    },
+    CollaborationMessageUpdated {
+        message: CollaborationMessage,
+    },
+    CollaborationContextUpdated {
+        entry: ContextEntry,
     },
     TurnStarted {
         message_id: MessageId,

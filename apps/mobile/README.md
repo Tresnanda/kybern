@@ -181,6 +181,11 @@ model/reasoning, and usage open picker sheets without expanding the input: custo
 morphing surfaces on Android and native sheets on iOS.
 
 The composer's + menu offers Camera, Photos, Files, Plugins, and Project files.
+It also offers Conversation: search the current project by default, expand the
+search to other projects on the connected computer, and add a stable
+conversation reference as a readable chip. References never wake or read the
+selected conversation by themselves; an agent must explicitly use its thread
+tools after the message is sent.
 Photos opens the system photo library. Camera expands from the composer into a
 rounded bottom panel on both platforms, keeping the conversation visible above it.
 Capture and lens controls sit inside the preview, with Retake and Use photo after capture. Camera
@@ -216,6 +221,24 @@ Task activity retains parent/child relationships, separate agent transcripts,
 live process output, status and provider-supported stop/background controls.
 Reconnecting restores task state from the daemon; foreground completion does not
 hide background activity. Work continues on the computer when the phone sleeps.
+Delegated Kybern helpers appear in a compact strip above the composer. Each item
+opens the helper's normal conversation, and child conversations include a Main
+control back to their coordinator. The full Agents screen keeps assignment,
+message, shared-context, and history controls available without making them part
+of ordinary chat setup.
+
+Project details offer a persistent coordinator conversation. Create coordinator
+opens the normal draft composer with the project, harness, model, effort, and
+permission controls. Nothing is created until the first message is sent. The
+coordinator plans work, delegates helpers, and maintains revisioned project
+knowledge; user corrections remain authoritative. Later visits reopen the same
+conversation, workers, saved knowledge, and results.
+
+The coordinator’s composer can switch harness, model, or effort while its thread
+is idle or failed. The switch keeps that conversation and project records and
+starts a fresh provider session. Claude Code, OpenCode, and Pi/OMP can enforce a
+dedicated coordination-only role. Codex and Cursor coordinate in ordinary mode;
+their native coding tools remain available, so the role restriction is advisory.
 
 Connect a computer supports live camera QR scanning, importing a QR image,
 and manual pairing. Camera permission is requested only when enabling it.

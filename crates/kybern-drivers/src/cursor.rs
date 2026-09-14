@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock, ImageContent, Implementation, InitializeRequest,
-    LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    StopReason as AcpStop, TextContent, ToolCallContent,
+    AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock, HttpHeader, ImageContent, Implementation, InitializeRequest,
+    LoadSessionRequest, McpServer, McpServerHttp, NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, StopReason as AcpStop, TextContent, ToolCallContent,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, JsonRpcRequest, JsonRpcResponse, on_receive_notification, on_receive_request,
@@ -29,7 +29,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::binary::{resolve, version_of};
-use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, ProbeContext, Result, SessionConfig, SpawnedSession};
+use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, NativeToolBridge, ProbeContext, Result, SessionConfig, SpawnedSession};
 
 #[derive(Default)]
 pub struct CursorDriver;
@@ -123,6 +123,43 @@ mod model_catalog_tests {
     }
 }
 
+#[cfg(test)]
+mod native_mcp_tests {
+    use super::*;
+    use crate::NativeToolRestrictions;
+
+    #[test]
+    fn builds_scoped_http_mcp_server_for_acp() {
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: None,
+            tools: vec![],
+            restrictions: Default::default(),
+        };
+        let servers = cursor_mcp_servers(Some(&bridge)).unwrap();
+        let [McpServer::Http(server)] = servers.as_slice() else { panic!("expected one HTTP MCP server") };
+        assert_eq!(server.name, "kybern");
+        assert_eq!(server.url, "http://127.0.0.1:4199/native-tools/mcp");
+        assert_eq!(server.headers[0].name, "Authorization");
+        assert_eq!(server.headers[0].value, "Bearer session-capability");
+    }
+
+    #[test]
+    fn rejects_required_coordinator_restrictions() {
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: None,
+            tools: vec![],
+            restrictions: NativeToolRestrictions { require_enforcement: true, ..Default::default() },
+        };
+        assert!(matches!(cursor_mcp_servers(Some(&bridge)), Err(DriverError::Unsupported(message)) if message.contains("cannot enforce")));
+    }
+}
+
 /// Cursor extension: the agent asks the user a question.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
 #[request(method = "cursor/ask_question", response = CursorAskQuestionResponse)]
@@ -187,6 +224,9 @@ impl AgentDriver for CursorDriver {
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
+        if let Some(bridge) = config.native_tool_bridge.as_ref() {
+            cursor_mcp_servers(Some(bridge))?;
+        }
         let bin = resolve(ProviderKind::Cursor, config.binary.as_ref())?;
         let (events_tx, events_rx) = mpsc::channel(1024);
         let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
@@ -245,6 +285,27 @@ fn mode_id(mode: PermissionMode) -> &'static str {
     }
 }
 
+fn cursor_mcp_servers(bridge: Option<&NativeToolBridge>) -> Result<Vec<McpServer>> {
+    let Some(bridge) = bridge else { return Ok(Vec::new()) };
+    bridge.validate()?;
+    if bridge.restrictions.require_enforcement {
+        return Err(DriverError::Unsupported(
+            "Cursor ACP can attach Kybern MCP tools but cannot enforce coordinator tool restrictions at the native boundary".into(),
+        ));
+    }
+    let endpoint = bridge
+        .endpoint
+        .as_deref()
+        .ok_or_else(|| DriverError::Unsupported("Cursor native collaboration tools require a daemon MCP endpoint".into()))?;
+    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
+        DriverError::Unsupported("Cursor native collaboration tools require a scoped MCP authorization capability".into())
+    })?;
+    Ok(vec![McpServer::Http(
+        McpServerHttp::new(bridge.server_name.clone(), endpoint.to_string())
+            .headers(vec![HttpHeader::new("Authorization", format!("Bearer {authorization}"))]),
+    )])
+}
+
 /// The whole ACP connection lives inside `connect_with`; commands arrive over a channel.
 async fn run_connection(
     bin: PathBuf,
@@ -292,6 +353,7 @@ async fn run_connection(
     let msg_state_notif = msg_state.clone();
     let loading = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let loading_notif = loading.clone();
+    let native_mcp_servers = cursor_mcp_servers(config.native_tool_bridge.as_ref())?;
 
     let result = Client
         .builder()
@@ -448,14 +510,18 @@ async fn run_connection(
             let session_id = match &config.resume_session_id {
                 Some(id) => {
                     loading.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let r = cx.send_request(LoadSessionRequest::new(id.clone(), cwd.clone())).block_task().await;
+                    let request = LoadSessionRequest::new(id.clone(), cwd.clone()).mcp_servers(native_mcp_servers.clone());
+                    let r = cx.send_request(request).block_task().await;
                     loading.store(false, std::sync::atomic::Ordering::Relaxed);
                     match r {
                         Ok(_) => agent_client_protocol::schema::v1::SessionId::from(id.clone()),
                         Err(error) => return Err(error),
                     }
                 }
-                None => cx.send_request(NewSessionRequest::new(cwd.clone())).block_task().await?.session_id,
+                None => {
+                    let request = NewSessionRequest::new(cwd.clone()).mcp_servers(native_mcp_servers.clone());
+                    cx.send_request(request).block_task().await?.session_id
+                }
             };
             let _ = cx.send_request(SetSessionModeRequest::new(session_id.clone(), mode_id(config.permission_mode))).block_task().await;
             if let Some(model) = &config.model {
@@ -532,6 +598,9 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
         match part {
             ContentPart::Text { text } => out.push(ContentBlock::Text(TextContent::new(text.clone()))),
             ContentPart::FileMention { path } => out.push(ContentBlock::Text(TextContent::new(format!("@{path}")))),
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                out.push(ContentBlock::Text(TextContent::new(thread_reference_text(*thread_id, title))))
+            }
             ContentPart::Skill { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("/{name}")))),
             ContentPart::Mention { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("@{name}")))),
             ContentPart::Image { media_type, data } => out.push(ContentBlock::Image(ImageContent::new(data.clone(), media_type.clone()))),

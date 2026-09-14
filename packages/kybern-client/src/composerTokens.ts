@@ -1,4 +1,5 @@
 import type { ContentPart, SkillInfo } from "./types.ts"
+import { formatThreadReference, type ComposerThreadReference } from "./threadReferences.ts"
 
 export interface StructuredToken {
   start: number
@@ -22,11 +23,11 @@ export function pluginMentionNames(item: SkillInfo): string[] {
  * catalog and may contain spaces, punctuation, or plugin namespaces.
  * Catalog entries scoped `plugin` are `@` mentions; everything else is a `$` skill.
  */
-export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[]): ContentPart[] {
+export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = []): ContentPart[] {
   const value = text.trim()
   if (!value) return []
   const parts: ContentPart[] = []
-  for (const segment of structuredSegments(value, mentionedPaths, skillItems)) {
+  for (const segment of structuredSegments(value, mentionedPaths, skillItems, threadReferences)) {
     if (segment.kind === "token") parts.push(segment.part)
     else if (segment.text) parts.push({ type: "text", text: segment.text })
   }
@@ -38,10 +39,10 @@ export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlyS
  * Split text into plain runs and recognised tokens, in order, without trimming,
  * so the composer can paint the same tokens it will send exactly where they sit.
  */
-export function structuredSegments(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[]): StructuredSegment[] {
+export function structuredSegments(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = []): StructuredSegment[] {
   const segments: StructuredSegment[] = []
   let last = 0
-  for (const token of structuredTokens(value, mentionedPaths, skillItems)) {
+  for (const token of structuredTokens(value, mentionedPaths, skillItems, threadReferences)) {
     if (token.start < last) continue
     const before = value.slice(last, token.start)
     if (before) segments.push({ kind: "text", text: before })
@@ -54,8 +55,23 @@ export function structuredSegments(value: string, mentionedPaths: ReadonlySet<st
 }
 
 /** Every recognised `@file`, `@plugin` and `$skill` token in `value`, sorted by position. */
-export function structuredTokens(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[]): StructuredToken[] {
+export function structuredTokens(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = []): StructuredToken[] {
   const tokens: StructuredToken[] = []
+  const references = new Map<string, ComposerThreadReference | null>()
+  for (const reference of threadReferences) {
+    if (!reference.token || !reference.part.thread_id) continue
+    const previous = references.get(reference.token)
+    references.set(reference.token, previous === null || (previous && previous.part.thread_id !== reference.part.thread_id) ? null : reference)
+  }
+  for (const reference of references.values()) {
+    if (!reference) continue
+    const pattern = new RegExp(`(^|\\s)${escapeRegExp(reference.token)}(?=[\\s,.;:!?]|$)`, "g")
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(value))) {
+      const start = match.index + match[1]!.length
+      tokens.push({ start, end: start + reference.token.length, part: reference.part })
+    }
+  }
   for (const path of [...mentionedPaths].sort((a, b) => b.length - a.length)) {
     const pattern = new RegExp(`(^|\\s)@${escapeRegExp(path)}(?=[\\s,.;:!?]|$)`, "g")
     let match: RegExpExecArray | null
@@ -104,6 +120,8 @@ export function structuredTokens(value: string, mentionedPaths: ReadonlySet<stri
 /** The literal text a structured part occupies in the message ("$skill", "@path"). */
 export function partToken(part: ContentPart): string | null {
   switch (part.type) {
+    case "thread_reference":
+      return formatThreadReference(part)
     case "skill":
       return `$${part.name}`
     case "mention":

@@ -173,6 +173,46 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .collect();
             ok(ThreadsListResult { threads, activity })
         }
+        ThreadsSearch::NAME => {
+            let p: ThreadsSearchParams = parse_or_default(params)?;
+            let project_id = (!p.all_projects).then_some(p.project_id).flatten();
+            let preferred_project_id = p.all_projects.then_some(p.project_id).flatten();
+            let page = state
+                .store
+                .search_thread_history(
+                    project_id,
+                    preferred_project_id,
+                    p.query.as_deref(),
+                    p.include_archived,
+                    p.cursor.as_deref(),
+                    p.limit,
+                )
+                .map_err(bad)?;
+            ok(ThreadsSearchResult { threads: page.threads, next_cursor: page.next_cursor })
+        }
+        ThreadsRead::NAME => {
+            let p: ThreadsReadParams = parse(params)?;
+            let page = state
+                .store
+                .read_thread_history(p.thread_id, p.before_seq, p.through_seq, p.limit, p.message_seq, p.text_offset)
+                .map_err(bad)?;
+            let messages = page
+                .messages
+                .into_iter()
+                .map(|message| ThreadReadMessage {
+                    seq: message.seq,
+                    turn_id: message.turn_id,
+                    role: message.role,
+                    text: message.text,
+                    created_at: message.created_at,
+                    attribution: message.attribution,
+                    text_offset: message.text_offset,
+                    next_text_offset: message.next_text_offset,
+                    text_truncated: message.text_truncated,
+                })
+                .collect();
+            ok(ThreadsReadResult { thread: page.thread, messages, next_before_seq: page.next_before_seq, through_seq: page.through_seq })
+        }
         ThreadsCreate::NAME => {
             let p: ThreadsCreateParams = parse(params)?;
             ok(state.orchestrator.create_thread(p).await.map_err(bad)?)
@@ -229,11 +269,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsSend::NAME => {
             let p: ThreadsSendParams = parse(params)?;
-            let (turn_id, message_id) = state.orchestrator.send(p.thread_id, p.message).await.map_err(|e| {
+            let sent = state.orchestrator.send_client_message(p).await.map_err(|e| {
                 let msg = e.to_string();
                 if msg.contains("busy") { RpcError::new(codes::THREAD_BUSY, msg) } else { bad(e) }
             })?;
-            ok(ThreadsSendResult { turn_id, message_id })
+            ok(sent)
         }
         ThreadsSteer::NAME => ok(state.orchestrator.steer(parse(params)?).await.map_err(bad)?),
         ThreadNotesGet::NAME => {
@@ -278,6 +318,64 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.interrupt(p.thread_id).await.map_err(bad)?;
             ok(Empty {})
         }
+        CollaborationGroupsCreate::NAME => ok(state.orchestrator.collaboration_group_create(parse(params)?).map_err(bad)?),
+        CollaborationCoordinatorGet::NAME => {
+            let p: CollaborationCoordinatorGetParams = parse(params)?;
+            ok(state.orchestrator.project_coordinator_get(p.project_id).map_err(bad)?)
+        }
+        CollaborationCoordinatorGetOrCreate::NAME => {
+            ok(state.orchestrator.project_coordinator_get_or_create(parse(params)?).await.map_err(bad)?)
+        }
+        CollaborationCoordinatorSwitchHarness::NAME => {
+            ok(state.orchestrator.project_coordinator_switch_harness(parse(params)?).await.map_err(bad)?)
+        }
+        CollaborationGroupsGet::NAME => {
+            let p: CollaborationGroupsGetParams = parse(params)?;
+            ok(state.orchestrator.collaboration_group_detail(p.group_id).map_err(bad)?)
+        }
+        CollaborationGroupsList::NAME => ok(state.orchestrator.collaboration_groups_list(parse(params)?).map_err(bad)?),
+        CollaborationGroupsUpdate::NAME => ok(state.orchestrator.collaboration_group_update(parse(params)?).map_err(bad)?),
+        CollaborationGroupsControl::NAME => ok(state.orchestrator.collaboration_group_control(parse(params)?).await.map_err(bad)?),
+        CollaborationMembersAttach::NAME => ok(state.orchestrator.collaboration_member_attach(parse(params)?).map_err(bad)?),
+        CollaborationMembersDetach::NAME => {
+            state.orchestrator.collaboration_member_detach(parse(params)?).map_err(bad)?;
+            ok(Empty {})
+        }
+        CollaborationAssignmentsCreate::NAME => {
+            ok(state.orchestrator.collaboration_assignment_create(parse(params)?, None, None).await.map_err(bad)?)
+        }
+        CollaborationAssignmentsGet::NAME => {
+            let p: CollaborationAssignmentsGetParams = parse(params)?;
+            ok(state
+                .store
+                .collaboration_assignment_get(p.assignment_id)
+                .map_err(internal)?
+                .ok_or_else(|| RpcError::not_found("assignment"))?)
+        }
+        CollaborationAssignmentsList::NAME => ok(state.orchestrator.collaboration_assignments_list(parse(params)?).map_err(bad)?),
+        CollaborationAssignmentsUpdate::NAME => {
+            ok(state.orchestrator.collaboration_assignment_update(parse(params)?, None).map_err(bad)?)
+        }
+        CollaborationAssignmentsComplete::NAME => {
+            ok(state.orchestrator.collaboration_assignment_complete(parse(params)?, None).map_err(bad)?)
+        }
+        CollaborationAssignmentsCancel::NAME => {
+            ok(state.orchestrator.collaboration_assignment_cancel(parse(params)?, None, None).await.map_err(bad)?)
+        }
+        CollaborationMessagesSend::NAME => ok(state.orchestrator.collaboration_message_send(parse(params)?, None).map_err(bad)?),
+        CollaborationMessagesList::NAME => ok(state.orchestrator.collaboration_messages_list(parse(params)?).map_err(bad)?),
+        CollaborationContextPut::NAME => {
+            let mut p: CollaborationContextPutParams = parse(params)?;
+            p.author_thread_id = None;
+            p.user_authored = true;
+            ok(state.orchestrator.collaboration_context_put(p, None).map_err(bad)?)
+        }
+        CollaborationContextList::NAME => ok(state.orchestrator.collaboration_context_list(parse(params)?).map_err(bad)?),
+        CollaborationContextHistoryMethod::NAME => {
+            let p: CollaborationContextHistoryParams = parse(params)?;
+            ok(state.orchestrator.collaboration_context_history(p).map_err(bad)?)
+        }
+        CollaborationWait::NAME => ok(state.orchestrator.collaboration_wait(parse(params)?).await.map_err(bad)?),
         TasksList::NAME => {
             let p: TasksListParams = parse(params)?;
             let mut tasks = state.store.runtime_tasks_for_thread(p.thread_id).map_err(internal)?;

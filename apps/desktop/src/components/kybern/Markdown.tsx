@@ -16,8 +16,7 @@ import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
 import { ChatFileLink } from "./ChatFileLink"
 import { cn } from "@/lib/utils"
 import { IconSwap, StreamWords } from "@/components/kybern/motion"
-import type { InlineTokenKind } from "@/components/kybern/InlineToken"
-import { renderWithTokens } from "@/lib/inlineTokens"
+import { renderWithTokens, type InlineTokenValue } from "@/lib/inlineTokens"
 import { shouldHighlightSource, streamingHighlightInterval } from "@/lib/workload"
 
 import { highlightToHtml } from "@/lib/highlight"
@@ -266,7 +265,7 @@ export const Markdown = memo(function Markdown({
   /** While streaming, each newly arrived word resolves through a short blur. */
   live?: boolean
   /** Literal tokens ("$skill", "@path") to render as inline chips wherever they appear in text. */
-  tokens?: ReadonlyMap<string, InlineTokenKind>
+  tokens?: ReadonlyMap<string, InlineTokenValue>
 }) {
   const tokenComponents = useMemo(
     () => (tokens && tokens.size > 0 ? textComponents((text, key) => <Fragment key={key}>{renderWithTokens(text, tokens)}</Fragment>) : null),

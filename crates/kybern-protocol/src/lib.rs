@@ -10,6 +10,7 @@
 //! bump it; clients must ignore unknown event kinds and fields.
 
 pub mod auth;
+pub mod collaboration;
 pub mod event;
 pub mod integrations;
 pub mod methods;
@@ -17,6 +18,7 @@ pub mod model;
 pub mod rpc;
 
 pub use auth::*;
+pub use collaboration::*;
 pub use event::*;
 pub use integrations::*;
 pub use model::*;

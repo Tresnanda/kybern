@@ -10,8 +10,27 @@ export default mergeConfig(base, {
     __SCROLL_FRAMES__: JSON.stringify(Number(process.env.KYBERN_SCROLL_FRAMES ?? 100)),
     __SCROLL_MEMORY__: JSON.stringify(process.env.KYBERN_SCROLL_MEMORY === "1"),
     __COMPOSER_STACK_MODE__: JSON.stringify(process.env.KYBERN_COMPOSER_STACK_MODE ?? "queue"),
+    __COLLAB_THEME__: JSON.stringify(process.env.KYBERN_COLLAB_THEME ?? "dark"),
+    __COLLAB_REPLAY__: process.env.KYBERN_COLLAB_REPLAY ? readFileSync(process.env.KYBERN_COLLAB_REPLAY, "utf8") : "null",
+    __COLLAB_VIEW__: JSON.stringify(process.env.KYBERN_COLLAB_VIEW ?? "work"),
+    __COLLAB_STRESS__: JSON.stringify(process.env.KYBERN_COLLAB_STRESS ?? ""),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "history" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "chat-collaboration" ? [{
+    name: "chat-collaboration-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.includes("/src/") || id.includes("/src/state/")) return
+      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "chat-collaboration-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "collaboration" ? [{
+    name: "collaboration-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/\/Collaboration\.tsx$/.test(id)) return
+      const source = process.env.KYBERN_COLLAB_BASELINE ? readFileSync(process.env.KYBERN_COLLAB_BASELINE, "utf8") : code
+      return source.replace('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "collaboration-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "history" ? [{
     name: "history-fixture-transport",
     enforce: "pre",
     transform(code, id) {

@@ -10,6 +10,7 @@ const PERMISSION_PREFIX = "kybern_permission_request:";
 const APP_TOOL_PREFIX = "kybern_app_tool_request:";
 const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000;
 const APP_TOOL_TIMEOUT_MS = 30 * 1000;
+const COORDINATOR_BOOTSTRAP_TYPE = "kybern-coordinator-bootstrap-v1";
 const MAX_EXACT_CALL_GRANTS = 256;
 const MAX_APP_ARGUMENT_BYTES = 64 * 1024;
 const MAX_PERMISSION_INPUT_BYTES = 192 * 1024;
@@ -28,7 +29,58 @@ const APP_TOOL_NAMES = new Set([
   "kybern_runtime_tasks",
   "kybern_list_terminals",
   "kybern_read_terminal",
+  "kybern_threads_search",
+  "kybern_thread_read",
+  "kybern_thread_send",
+  "kybern_collaboration_spawn",
+  "kybern_collaboration_send",
+  "kybern_collaboration_read",
+  "kybern_collaboration_wait",
+  "kybern_collaboration_report",
+  "kybern_collaboration_cancel",
+  "kybern_collaboration_context_read",
+  "kybern_collaboration_context_put",
 ]);
+function configuredToolSet(environmentName) {
+  if (process.env[environmentName] === undefined) return new Set();
+  try {
+    const value = JSON.parse(process.env[environmentName] || "");
+    if (Array.isArray(value) && value.every((name) => typeof name === "string" && name.length > 0 && name.length <= 128)) {
+      return new Set(value);
+    }
+  } catch {
+    // Invalid policy input fails closed below.
+  }
+  return new Set();
+}
+
+function configuredAppTools(fallback) {
+  if (process.env.KYBERN_PI_APP_TOOLS === undefined) return fallback;
+  try {
+    const value = JSON.parse(process.env.KYBERN_PI_APP_TOOLS || "");
+    if (!Array.isArray(value)) return [];
+    const names = new Set();
+    return value.filter((tool) => {
+      if (
+        !tool ||
+        typeof tool !== "object" ||
+        typeof tool.name !== "string" ||
+        !APP_TOOL_NAMES.has(tool.name) ||
+        names.has(tool.name) ||
+        typeof tool.description !== "string" ||
+        !tool.parameters ||
+        typeof tool.parameters !== "object" ||
+        Array.isArray(tool.parameters)
+      ) {
+        return false;
+      }
+      names.add(tool.name);
+      return true;
+    });
+  } catch {
+    return [];
+  }
+}
 
 function normalizeMode(value) {
   switch (String(value || "").trim().toLowerCase().replaceAll("-", "_")) {
@@ -72,9 +124,9 @@ function requestId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
-function isAllowedWithoutPrompt(mode, toolName) {
+function isAllowedWithoutPrompt(mode, toolName, appToolNames) {
   if (mode === "full_access") return true;
-  if (APP_TOOL_NAMES.has(toolName) || READ_ONLY_TOOLS.has(toolName)) return true;
+  if (appToolNames.has(toolName) || READ_ONLY_TOOLS.has(toolName)) return true;
   return mode === "accept_edits" && EDIT_TOOLS.has(toolName);
 }
 
@@ -221,6 +273,42 @@ export default function kybernExtension(pi) {
   let mode = normalizeMode(process.env.KYBERN_PI_PERMISSION_MODE);
   let modeRevision = 0;
   const exactCallGrants = new Set();
+  const configuredTools = configuredAppTools(appTools);
+  const appToolNames = new Set(configuredTools.map((tool) => tool.name));
+  const deniedTools = configuredToolSet("KYBERN_PI_DENIED_TOOLS");
+  const coordinatorOnly = process.env.KYBERN_PI_COORDINATOR_ONLY === "1";
+  const coordinatorInstructions = process.env.KYBERN_PI_SYSTEM_PROMPT || "";
+  let coordinatorBootstrapPending = coordinatorInstructions.length > 0;
+
+  function restoreCoordinatorBootstrap(ctx) {
+    if (!coordinatorInstructions) {
+      coordinatorBootstrapPending = false;
+      return;
+    }
+    const branch = ctx.sessionManager?.getBranch?.() || [];
+    coordinatorBootstrapPending = !branch.some(
+      (entry) =>
+        entry?.type === "custom_message" &&
+        entry.customType === COORDINATOR_BOOTSTRAP_TYPE &&
+        entry.content === coordinatorInstructions,
+    );
+  }
+
+  pi.on("session_start", async (_event, ctx) => restoreCoordinatorBootstrap(ctx));
+  pi.on("session_tree", async (_event, ctx) => restoreCoordinatorBootstrap(ctx));
+
+  pi.on("before_agent_start", async (event) => {
+    if (!coordinatorBootstrapPending) return;
+    coordinatorBootstrapPending = false;
+    return {
+      message: {
+        customType: COORDINATOR_BOOTSTRAP_TYPE,
+        content: coordinatorInstructions,
+        display: false,
+      },
+      systemPrompt: `${event.systemPrompt || ""}\n\n${coordinatorInstructions}`,
+    };
+  });
 
   pi.registerCommand(COMMAND_SENTINEL, {
     description: `Kybern extension protocol ${PROTOCOL_VERSION}`,
@@ -240,9 +328,10 @@ export default function kybernExtension(pi) {
     },
   });
 
-  for (const tool of appTools) {
+  for (const tool of configuredTools) {
     pi.registerTool({
       ...tool,
+      label: tool.label || tool.name,
       executionMode: "parallel",
       async execute(toolCallId, args, signal, _onUpdate, ctx) {
         return executeAppTool(tool.name, toolCallId, args, signal, ctx);
@@ -254,7 +343,13 @@ export default function kybernExtension(pi) {
     try {
       const toolName = String(event.toolName || "");
       const input = event.input && typeof event.input === "object" ? event.input : {};
-      if (isAllowedWithoutPrompt(mode, toolName)) return;
+      if (deniedTools.has(toolName)) {
+        return { block: true, reason: `Kybern coordinator policy denied ${toolName}.` };
+      }
+      if (coordinatorOnly && !appToolNames.has(toolName)) {
+        return { block: true, reason: "Kybern coordinator policy permits only collaboration tools." };
+      }
+      if (isAllowedWithoutPrompt(mode, toolName, appToolNames)) return;
 
       const serializedInput = JSON.stringify(input);
       if (
@@ -311,5 +406,6 @@ export default function kybernExtension(pi) {
 
   pi.on("session_shutdown", () => {
     exactCallGrants.clear();
+    coordinatorBootstrapPending = false;
   });
 }

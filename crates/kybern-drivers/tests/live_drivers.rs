@@ -5,11 +5,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kybern_drivers::registry::DriverRegistry;
-use kybern_drivers::{DriverEvent, SessionConfig};
+use kybern_drivers::{DriverEvent, NativeToolBridge, NativeToolDefinition, NativeToolRestrictions, SessionConfig};
 use kybern_protocol::*;
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn skip_or_fail(kind: ProviderKind) -> bool {
     if which::which(kind.default_binary()).is_ok() {
@@ -36,6 +39,7 @@ async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> 
             model: None,
             effort: None,
             permission_mode: mode,
+            native_tool_bridge: None,
             resume_session_id: None,
             fork: false,
             rewind: None,
@@ -93,6 +97,174 @@ fn assert_completed_with_text(kind: ProviderKind, events: &[DriverEvent]) {
         events.iter().any(|e| matches!(e, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })),
         "{kind}: turn did not complete: {events:?}"
     );
+}
+
+async fn spawn_probe_mcp() -> (String, Arc<Mutex<Vec<(Option<String>, String)>>>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let server_received = received.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let received = server_received.clone();
+            tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0_u8; 4096];
+                    let Ok(count) = socket.read(&mut chunk).await else { return };
+                    if count == 0 {
+                        return;
+                    }
+                    bytes.extend_from_slice(&chunk[..count]);
+                    let text = String::from_utf8_lossy(&bytes);
+                    let Some(header_end) = text.find("\r\n\r\n") else { continue };
+                    let length = text[..header_end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase().strip_prefix("content-length:").and_then(|value| value.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= header_end + 4 + length {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&bytes);
+                let header_end = request.find("\r\n\r\n").unwrap();
+                let authorization = request[..header_end]
+                    .lines()
+                    .find_map(|line| line.split_once(':').filter(|(name, _)| name.eq_ignore_ascii_case("authorization")))
+                    .map(|(_, value)| value.trim().to_string());
+                let Ok(value) = serde_json::from_str::<Value>(&request[header_end + 4..]) else { return };
+                let method = value.get("method").and_then(Value::as_str).unwrap_or("").to_string();
+                received.lock().unwrap().push((authorization, method.clone()));
+                let Some(id) = value.get("id") else {
+                    let _ = socket.write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                    return;
+                };
+                let result = match method.as_str() {
+                    "initialize" => json!({
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "kybern-live-probe", "version": "1"}
+                    }),
+                    "tools/list" => json!({"tools": [{
+                        "name": "kybern_thread_context",
+                        "description": "Return the Kybern native bridge acceptance sentinel.",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
+                    }]}),
+                    "tools/call" => json!({"content": [{"type": "text", "text": "KYBERN_NATIVE_BRIDGE_OK"}]}),
+                    _ => json!({}),
+                };
+                let response = json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response.len()
+                );
+                let _ = socket.write_all(headers.as_bytes()).await;
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    (endpoint, received, task)
+}
+
+async fn run_native_bridge_turn(kind: ProviderKind) {
+    if skip_or_fail(kind) {
+        return;
+    }
+    let (endpoint, mcp_requests, mcp_task) = spawn_probe_mcp().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::process::Command::new("git").arg("-C").arg(dir.path()).arg("init").arg("-q").status().unwrap();
+    let strict = matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Omp);
+    let bridge = NativeToolBridge {
+        server_name: "kybern".into(),
+        endpoint: Some(endpoint),
+        authorization: Some("live-scoped-capability".into()),
+        coordinator_instructions: Some(
+            "You are the explicit Kybern test coordinator. Call kybern_thread_context exactly once before answering.".into(),
+        ),
+        tools: vec![NativeToolDefinition {
+            name: "kybern_thread_context".into(),
+            description: "Return the Kybern native bridge acceptance sentinel.".into(),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        }],
+        restrictions: NativeToolRestrictions {
+            allowed_tools: vec!["kybern_thread_context".into()],
+            denied_tools: vec!["write".into(), "edit".into(), "bash".into()],
+            require_enforcement: strict,
+        },
+    };
+    let driver = DriverRegistry::with_defaults().get(kind).expect("driver registered");
+    let spawned = driver
+        .spawn(SessionConfig {
+            cwd: dir.path().into(),
+            model: None,
+            effort: None,
+            permission_mode: if kind == ProviderKind::Pi { PermissionMode::FullAccess } else { PermissionMode::Auto },
+            native_tool_bridge: Some(bridge),
+            resume_session_id: None,
+            fork: false,
+            rewind: None,
+            binary: None,
+            env: HashMap::new(),
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{kind}: native bridge spawn failed: {error}"));
+    let session = spawned.session;
+    let mut events = spawned.events;
+    session
+        .send_message(
+            &uuid::Uuid::new_v4().to_string(),
+            &UserMessage::text("Use the Kybern thread-context tool now. Then reply with exactly KYBERN_NATIVE_BRIDGE_OK."),
+        )
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    let mut saw_app_tool = false;
+    let mut completed_text = String::new();
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{kind}: native bridge turn timed out"))
+            .unwrap_or_else(|| panic!("{kind}: native bridge event stream closed"));
+        match event {
+            DriverEvent::AppToolRequest { request_id, name, .. } => {
+                assert_eq!(name, "kybern_thread_context");
+                saw_app_tool = true;
+                session.respond_app_tool(&request_id, Ok(json!({"sentinel": "KYBERN_NATIVE_BRIDGE_OK"}))).await.unwrap();
+            }
+            DriverEvent::MessageCompleted { text, .. } => completed_text.push_str(&text),
+            DriverEvent::TextDelta { delta, .. } => completed_text.push_str(&delta),
+            DriverEvent::TurnCompleted { .. } => break,
+            DriverEvent::TurnFailed { error } => panic!("{kind}: native bridge turn failed: {error}"),
+            DriverEvent::Exited { error, .. } => panic!("{kind}: native bridge provider exited: {error:?}"),
+            _ => {}
+        }
+    }
+    session.close().await.ok();
+    let requests = mcp_requests.lock().unwrap().clone();
+    let saw_mcp_call = requests.iter().any(|(_, method)| method == "tools/call");
+    assert!(saw_app_tool || saw_mcp_call, "{kind}: model never called the native Kybern bridge; MCP requests: {requests:?}");
+    if saw_mcp_call {
+        assert!(
+            requests.iter().all(|(authorization, _)| authorization.as_deref() == Some("Bearer live-scoped-capability")),
+            "{kind}: MCP request did not preserve scoped authorization: {requests:?}"
+        );
+    }
+    assert!(completed_text.contains("KYBERN_NATIVE_BRIDGE_OK"), "{kind}: missing sentinel response: {completed_text:?}");
+    mcp_task.abort();
+}
+
+#[tokio::test]
+async fn installed_harnesses_round_trip_a_scoped_native_bridge_tool() {
+    let selected = std::env::var("KYBERN_LIVE_PROVIDER").ok();
+    for kind in ProviderKind::ALL {
+        if selected.as_deref().is_some_and(|name| name != kind.as_str()) {
+            continue;
+        }
+        run_native_bridge_turn(kind).await;
+    }
 }
 
 #[tokio::test]

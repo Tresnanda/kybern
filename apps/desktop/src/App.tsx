@@ -123,8 +123,8 @@ function Workspace() {
                     <PullRequests />
                   </ErrorBoundary>
                 ) : selected.kind === "draft" ? (
-                  <ErrorBoundary key={selected.draft.projectId} label="the home screen">
-                    <Draft key={selected.draft.projectId} projectId={selected.draft.projectId} />
+                  <ErrorBoundary key={`${selected.draft.projectId}:${selected.draft.purpose ?? "thread"}`} label="the home screen">
+                    <Draft key={`${selected.draft.projectId}:${selected.draft.purpose ?? "thread"}`} projectId={selected.draft.projectId} purpose={selected.draft.purpose} />
                   </ErrorBoundary>
                 ) : (
                   <Welcome />

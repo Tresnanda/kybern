@@ -21,6 +21,7 @@ pub mod sessions;
 pub mod update;
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -68,6 +69,13 @@ pub struct SessionConfig {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub permission_mode: PermissionMode,
+    /// Optional daemon-owned tool bridge for this provider session.
+    ///
+    /// The bridge is deliberately session-scoped.  A driver may expose it
+    /// through the provider's native MCP or dynamic-tool mechanism, but must
+    /// never turn the opaque credential into a general daemon credential or
+    /// interpolate it into a shell prompt.
+    pub native_tool_bridge: Option<NativeToolBridge>,
     /// Resume this provider session instead of starting fresh.
     pub resume_session_id: Option<String>,
     /// When resuming, fork into a new provider session (used by rewind).
@@ -77,6 +85,100 @@ pub struct SessionConfig {
     /// Absolute path to the provider binary; `None` means look up on PATH.
     pub binary: Option<PathBuf>,
     pub env: HashMap<String, String>,
+}
+
+/// A provider-neutral description of tools that the daemon is willing to
+/// expose to one live provider session.
+///
+/// `endpoint` is optional because Codex app-server can carry the same tool
+/// definitions as experimental dynamic tools over its existing JSON-RPC
+/// transport.  MCP-capable providers use the endpoint and authorization
+/// fields.  The authorization value must be an opaque, per-session capability
+/// issued by the daemon; it must not be the daemon's normal client token.
+#[derive(Clone, PartialEq)]
+pub struct NativeToolBridge {
+    pub server_name: String,
+    pub endpoint: Option<String>,
+    pub authorization: Option<String>,
+    /// Role and bounded project context for an explicitly opted-in project
+    /// coordinator. Ordinary threads always leave this unset.
+    pub coordinator_instructions: Option<String>,
+    pub tools: Vec<NativeToolDefinition>,
+    pub restrictions: NativeToolRestrictions,
+}
+
+impl fmt::Debug for NativeToolBridge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NativeToolBridge")
+            .field("server_name", &self.server_name)
+            .field("endpoint", &self.endpoint)
+            .field("authorization", &self.authorization.as_ref().map(|_| "<redacted>"))
+            .field("coordinator_instructions", &self.coordinator_instructions.as_ref().map(|_| "<coordinator-scoped>"))
+            .field("tools", &self.tools)
+            .field("restrictions", &self.restrictions)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeToolDefinition {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema object accepted by the provider's native tool protocol.
+    pub input_schema: Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeToolRestrictions {
+    /// If non-empty, only these bridge tool names may be exposed.
+    pub allowed_tools: Vec<String>,
+    /// Bridge tool names to omit even when present in `allowed_tools` or in
+    /// the bridge's tool list. Provider-specific built-in names are handled
+    /// by each driver's native restriction mechanism.
+    pub denied_tools: Vec<String>,
+    /// The coordinator policy requires the provider to enforce the restriction
+    /// at the native tool boundary.  Drivers return an explicit unsupported
+    /// error when their harness cannot do that.
+    pub require_enforcement: bool,
+}
+
+impl NativeToolBridge {
+    pub fn tools(&self) -> impl Iterator<Item = &NativeToolDefinition> {
+        self.tools.iter().filter(|tool| {
+            (self.restrictions.allowed_tools.is_empty() || self.restrictions.allowed_tools.iter().any(|name| name == &tool.name))
+                && !self.restrictions.denied_tools.iter().any(|name| name == &tool.name)
+        })
+    }
+
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.tools().any(|tool| tool.name == name)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.server_name.is_empty() || self.server_name.len() > 64 {
+            return Err(DriverError::Unsupported("native tool bridge has an invalid server name".into()));
+        }
+        if self.tools.len() > 64 {
+            return Err(DriverError::Unsupported("native tool bridge exposes too many tools".into()));
+        }
+        if self.coordinator_instructions.as_ref().is_some_and(|instructions| instructions.is_empty() || instructions.len() > 64 * 1024) {
+            return Err(DriverError::Unsupported("native tool bridge has invalid coordinator instructions".into()));
+        }
+        for tool in &self.tools {
+            if tool.name.is_empty()
+                || tool.name.len() > 128
+                || !tool.name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                || !tool.input_schema.is_object()
+            {
+                return Err(DriverError::Unsupported(format!("native tool bridge has invalid tool `{}`", tool.name)));
+            }
+        }
+        if self.endpoint.is_some() != self.authorization.is_some() {
+            return Err(DriverError::Unsupported("native tool bridge endpoint and authorization must be provided together".into()));
+        }
+        Ok(())
+    }
 }
 
 /// Provider-side identifiers of a turn boundary, recorded when the turn completed.
@@ -339,6 +441,23 @@ mod lifecycle_tests {
     use super::*;
     use std::{os::unix::fs::PermissionsExt, time::Duration};
 
+    #[test]
+    fn native_bridge_debug_redacts_session_capability() {
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
+            authorization: Some("secret-capability".into()),
+            coordinator_instructions: Some("secret-coordinator-context".into()),
+            tools: Vec::new(),
+            restrictions: NativeToolRestrictions::default(),
+        };
+        let debug = format!("{bridge:?}");
+        assert!(!debug.contains("secret-capability"));
+        assert!(!debug.contains("secret-coordinator-context"));
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("<coordinator-scoped>"));
+    }
+
     #[tokio::test]
     async fn every_driver_cleans_up_cancelled_startup_or_dropped_handle() {
         let registry = registry::DriverRegistry::with_defaults();
@@ -352,6 +471,7 @@ mod lifecycle_tests {
                 model: None,
                 effort: None,
                 permission_mode: PermissionMode::Supervised,
+                native_tool_bridge: None,
                 resume_session_id: None,
                 fork: false,
                 rewind: None,

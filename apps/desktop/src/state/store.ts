@@ -56,11 +56,12 @@ export type Connection =
   | { state: "reconnecting"; detail?: string }
   | { state: "failed"; detail: string }
 
-export type RightTab = "activity" | "changes" | "terminal" | "explorer" | "artifacts"
+export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts"
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {
   projectId: ProjectId
+  purpose?: "thread" | "coordinator"
 }
 
 export interface TerminalTab {
@@ -111,7 +112,8 @@ export interface AppState {
   splitView: SplitView | null
   sidebarOpen: boolean
   rightOpen: boolean
-  rightTab: RightTab
+  rightTabs: RightTab[]
+  rightTab: RightTab | null
   /** The floating Environment card at the right edge of a thread. */
   envOpen: boolean
   /** File to show in the explorer pane, per project. */
@@ -141,6 +143,7 @@ export interface AppState {
       }[]
       mentions: string[]
       skills: import("@/protocol").SkillInfo[]
+      threadReferences: import("../../../../packages/kybern-client/src/threadReferences").ComposerThreadReference[]
     }
   >
   /** Thread being handed off to another agent, when the picker is open. */
@@ -156,7 +159,7 @@ export interface AppActions {
   transcript: (id: ThreadId) => ThreadState
   updateTranscript: (id: ThreadId, f: (t: ThreadState) => ThreadState) => void
   selectThread: (id: ThreadId) => void
-  selectDraft: (projectId: ProjectId) => void
+  selectDraft: (projectId: ProjectId, purpose?: "thread" | "coordinator") => void
   selectPulls: () => void
   splitFocusedPane: (
     direction: SplitDirection,
@@ -208,7 +211,8 @@ export function createEnvironmentStore(
     splitView: readPersistedSplitView(environmentId),
     sidebarOpen: true,
     rightOpen: false,
-    rightTab: "changes",
+    rightTabs: [],
+    rightTab: null,
     envOpen: false,
     explorerFile: {},
     terminalTabs: {},
@@ -226,7 +230,15 @@ export function createEnvironmentStore(
     handoffTarget: null,
     ...readWorkspace(environmentId),
 
-    set: (patch) => set(typeof patch === "function" ? patch : () => patch),
+    set: (patch) => set((state) => {
+      const next = typeof patch === "function" ? patch(state) : patch
+      // Selecting a panel from a shortcut also opens its tab. Merely expanding
+      // the dock leaves the user's chosen panels (including none) intact.
+      if (next.rightTab && !next.rightTabs && !state.rightTabs.includes(next.rightTab)) {
+        return { ...next, rightTabs: [...state.rightTabs, next.rightTab] }
+      }
+      return next
+    }),
     transcript: (id) => get().transcripts[id] ?? emptyThreadState(),
     receiveEvent: (event) => {
       const current = get()
@@ -283,10 +295,10 @@ export function createEnvironmentStore(
         persistSplitView(next)
         return { selected: { kind: "thread", id }, splitView: next }
       }),
-    selectDraft: (projectId) => {
+    selectDraft: (projectId, purpose) => {
       persistSplitView(null)
       set({
-        selected: { kind: "draft", draft: { projectId } },
+        selected: { kind: "draft", draft: { projectId, ...(purpose ? { purpose } : {}) } },
         splitView: null,
       })
     },
@@ -550,6 +562,7 @@ export function createEnvironmentStore(
         "activeTerminalTab",
         "rightOpen",
         "rightTab",
+        "rightTabs",
         "envOpen",
       ].some(
         (key) => next[key as keyof AppState] !== previous[key as keyof AppState]

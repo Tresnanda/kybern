@@ -407,6 +407,11 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             | EventPayload::ThreadUpdated { .. }
             | EventPayload::MessageQueued { .. }
             | EventPayload::MessageQueueUpdated { .. }
+            | EventPayload::CollaborationGroupUpdated { .. }
+            | EventPayload::CollaborationMemberUpdated { .. }
+            | EventPayload::CollaborationAssignmentUpdated { .. }
+            | EventPayload::CollaborationMessageUpdated { .. }
+            | EventPayload::CollaborationContextUpdated { .. }
             | EventPayload::ThreadNotesUpdated { .. }
             | EventPayload::MessageRemoved { .. }
             | EventPayload::ThreadArchived

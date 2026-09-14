@@ -41,15 +41,16 @@ import { Kbd } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { buildStructuredTextParts, structuredSegments } from "@/lib/composerTokens"
+import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
 import { CentralIcon } from "@/lib/kit/central-icons"
-import { ChevronDownIcon, ComposerSendArrowIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
+import { ChevronDownIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
   SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
 import { InlineToken } from "@/components/kybern/InlineToken"
-import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, UserMessage } from "@/protocol"
-import { errorText, listSkills, refreshProviders, searchFiles, uploadFile } from "@/state/rpc"
+import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, Thread, UserMessage } from "@/protocol"
+import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { customModelId, modelChoices } from "../../../../packages/kybern-client/src/models"
 
@@ -93,7 +94,7 @@ export interface ComposerProps {
   onModeChange: (m: PermissionMode) => void
   provider: ProviderInstance | null
   providers: ProviderStatus[]
-  onProviderChange?: (p: ProviderInstance) => void
+  onProviderChange?: (p: ProviderInstance) => Promise<void> | void
   model?: string | null
   effort?: string | null
   onModelChange?: (model: string | undefined, effort: string | undefined) => Promise<void> | void
@@ -155,9 +156,10 @@ function growEditor(editor: HTMLTextAreaElement, layer: HTMLDivElement | null) {
   requestAnimationFrame(() => syncEditorBackdrop(editor, layer))
 }
 
-const DEFAULT_PLACEHOLDER = "Ask anything, @ files, $ skills, or / commands"
+const DEFAULT_PLACEHOLDER = "Ask anything, @ threads or files, $ skills, or / commands"
 
 type ComposerMenuItem =
+  | { id: string; type: "thread"; thread: Thread; snippet?: string | null }
   | { id: string; type: "file"; path: string }
   | { id: string; type: "command"; command: SlashCommand }
   | { id: string; type: "skill"; skill: SkillInfo }
@@ -256,6 +258,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [ownerStore] = useState(() => useStore)
   const [savedDraft] = useState(() => props.draftKey ? ownerStore.getState().composerDrafts[props.draftKey] : undefined)
   const connected = useStore((s) => s.connection.state === "open")
+  const projects = useStore((s) => s.projects)
+  const threads = useStore((s) => s.threads)
   const disabled = disabledByParent || !connected
   const [text, setText] = useState(savedDraft?.text ?? "")
   const [caret, setCaret] = useState(0)
@@ -270,15 +274,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const customModelFieldId = useId()
   const [dragOver, setDragOver] = useState(false)
   const [fileResult, setFileResult] = useState<{ query: string; files: string[] }>({ query: "", files: [] })
+  const [threadResult, setThreadResult] = useState<{ query: string; threads: { thread: Thread; snippet?: string | null }[] }>({ query: "", threads: [] })
   const [skillCatalog, setSkillCatalog] = useState<{ key: string; skills: SkillInfo[] }>({ key: "", skills: [] })
   const [menuSel, setMenuSel] = useState<{ sig: string; index: number }>({ sig: "", index: 0 })
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
   const mentioned = useRef(new Set<string>(savedDraft?.mentions ?? []))
   const selectedSkills = useRef(new Map<string, SkillInfo>((savedDraft?.skills ?? []).map((skill) => [skill.name.toLowerCase(), skill])))
+  const selectedThreadReferences = useRef<ComposerThreadReference[]>(savedDraft?.threadReferences ?? [])
   // Render-safe snapshot of the two refs above for the highlight layer; refreshed
   // after every pick and send so painted tokens match what buildParts will send.
-  const [tokenSources, setTokenSources] = useState(() => ({ mentions: new Set<string>(savedDraft?.mentions ?? []), skills: [...(savedDraft?.skills ?? [])] }))
-  const syncTokenSources = () => setTokenSources({ mentions: new Set(mentioned.current), skills: [...selectedSkills.current.values()] })
+  const [tokenSources, setTokenSources] = useState(() => ({ mentions: new Set<string>(savedDraft?.mentions ?? []), skills: [...(savedDraft?.skills ?? [])], threadReferences: [...(savedDraft?.threadReferences ?? [])] }))
+  const syncTokenSources = () => setTokenSources({ mentions: new Set(mentioned.current), skills: [...selectedSkills.current.values()], threadReferences: [...selectedThreadReferences.current] })
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const menuList = useRef<HTMLDivElement>(null)
@@ -293,6 +299,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         composerDrafts[key] = {
           text, attachments: attachments.map(({ id, name, media_type, size }) => ({ id, name, media_type, size })),
           mentions: [...mentioned.current], skills: [...selectedSkills.current.values()],
+          threadReferences: [...selectedThreadReferences.current],
         }
       } else delete composerDrafts[key]
       return { composerDrafts }
@@ -367,9 +374,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!mention || !projectId) return
     let live = true
     const id = setTimeout(() => {
-      searchFiles(projectId, mention.query, 12)
+      void searchFiles(projectId, mention.query, 12)
         .then((files) => live && setFileResult({ query: mention.query, files }))
         .catch(() => live && setFileResult({ query: mention.query, files: [] }))
+      if (mention.query) {
+        void rpc().call("threads.search", { project_id: projectId, all_projects: true, query: mention.query, limit: 12 })
+          .then((result) => live && setThreadResult({ query: mention.query, threads: result.threads }))
+          .catch(() => live && setThreadResult({ query: mention.query, threads: [] }))
+      } else {
+        setThreadResult({ query: "", threads: [] })
+      }
     }, 60)
     return () => {
       live = false
@@ -395,9 +409,23 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const skills = useMemo(() => (skillCatalog.key === skillCatalogKey ? skillCatalog.skills : []), [skillCatalog, skillCatalogKey])
   const files = useMemo(() => (fileResult.query === mention?.query ? fileResult.files : []), [fileResult, mention?.query])
+  const currentThreadId = props.draftKey?.startsWith("thread:") ? props.draftKey.slice("thread:".length) : null
+  const threadHits = useMemo(
+    () => mention?.query === ""
+      ? Object.values(threads)
+          .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived")
+          .sort((left, right) => Number(right.project_id === projectId) - Number(left.project_id === projectId) || Date.parse(right.updated_at) - Date.parse(left.updated_at))
+          .slice(0, 12)
+          .map((thread) => ({ thread }))
+      : threadResult.query === mention?.query
+        ? threadResult.threads.filter((hit) => hit.thread.id !== currentThreadId)
+        : [],
+    [currentThreadId, mention?.query, projectId, threadResult, threads],
+  )
   const menuItems = useMemo<ComposerMenuItem[]>(() => {
     if (mention)
       return [
+        ...threadHits.map((hit) => ({ id: `thread:${hit.thread.id}`, type: "thread" as const, ...hit })),
         ...rankSkills(skills, mention.query, 6, "plugin").map((item) => ({ id: `plugin:${item.path}`, type: "plugin" as const, skill: item })),
         ...files.map((path) => ({ id: `file:${path}`, type: "file" as const, path })),
       ]
@@ -414,7 +442,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           .map(({ command }) => ({ id: `command:${command.name}`, type: "command" as const, command }))
     const skillItems = rankSkills(skills, slash.query).map((item) => ({ id: `skill:${item.name}`, type: "skill" as const, skill: item }))
     return [...commandItems, ...skillItems].slice(0, 16)
-  }, [commands, files, mention, skill, skills, slash])
+  }, [commands, files, mention, skill, skills, slash, threadHits])
   const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? `/${slash.start}` : null
   const menuOpen = !!menuKey && menuDismissed !== menuKey
   const menuSignature = `${menuKey}:${menuItems.map((item) => item.id).join("|")}`
@@ -432,6 +460,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     syncTokenSources()
     const next = `${text.slice(0, mention.start)}@${path} ${text.slice(caret)}`
     setTextAndCaret(next, mention.start + path.length + 2)
+  }
+  const pickThread = (thread: Thread) => {
+    if (!mention) return
+    const projectName = projects[thread.project_id]?.name
+    const reference = createComposerThreadReference(thread, selectedThreadReferences.current, projectName)
+    selectedThreadReferences.current = [...selectedThreadReferences.current.filter((item) => item.part.thread_id !== thread.id), reference]
+    syncTokenSources()
+    const next = `${text.slice(0, mention.start)}${reference.token} ${text.slice(caret)}`
+    setTextAndCaret(next, mention.start + reference.token.length + 1)
   }
   const pickCommand = (cmd: SlashCommand) => {
     if (!slash) return
@@ -464,7 +501,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const pick = (i: number) => {
     const item = menuItems[i]
     if (!item) return
-    if (item.type === "file") pickMention(item.path)
+    if (item.type === "thread") pickThread(item.thread)
+    else if (item.type === "file") pickMention(item.path)
     else if (item.type === "command") pickCommand(item.command)
     else if (item.type === "plugin") pickPlugin(item.skill)
     else pickSkill(item.skill)
@@ -492,13 +530,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [hideInput])
 
   const segments = useMemo(
-    () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills]),
+    () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills], tokenSources.threadReferences),
     [text, skills, tokenSources],
   )
 
   const buildParts = (): ContentPart[] => {
     const skillItems = [...skills, ...selectedSkills.current.values()]
-    const parts = buildStructuredTextParts(text, mentioned.current, skillItems)
+    const parts = buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current)
     for (const a of attachments) parts.push({ type: "attachment", asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size })
     return parts
   }
@@ -523,6 +561,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       setAttachments([])
       mentioned.current.clear()
       selectedSkills.current.clear()
+      selectedThreadReferences.current = []
       syncTokenSources()
       if (ta.current) {
         ta.current.style.height = "auto"
@@ -617,15 +656,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch && models.length === 0
   const canPickProvider = !!onProviderChange
   const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
-  const menuLoading = mention ? fileResult.query !== mention.query : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
+  const menuLoading = mention ? fileResult.query !== mention.query || threadResult.query !== mention.query : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
   const menuEmptyText = menuLoading
     ? mention
       ? "Searching project files…"
       : "Loading agent skills…"
     : mention
       ? mention.query
-        ? "No matching files"
-        : "Type to search project files"
+        ? "No matching threads or files"
+        : "Type to search threads and project files"
       : skill
         ? "No matching skills"
         : "No matching commands or skills"
@@ -638,6 +677,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       return true
     } catch (error) {
       toast.error("Unable to change model", { description: errorText(error) })
+      return false
+    } finally {
+      setChangingModel(false)
+    }
+  }
+
+  async function changeProvider(nextProvider: ProviderInstance) {
+    if (changingModel) return false
+    setChangingModel(true)
+    try {
+      await onProviderChange?.(nextProvider)
+      return true
+    } catch (error) {
+      toast.error("Unable to change harness", { description: errorText(error) })
       return false
     } finally {
       setChangingModel(false)
@@ -692,18 +745,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         const active = i === menuIndex
                         const previous = menuItems[i - 1]
                         const sectionOf = (entry: ComposerMenuItem | undefined) =>
-                          !entry ? null : entry.type === "file" ? "Files" : entry.type === "command" ? "Commands" : entry.type === "plugin" ? "Plugins" : "Skills"
+                          !entry ? null : entry.type === "thread" ? "Threads" : entry.type === "file" ? "Files" : entry.type === "command" ? "Commands" : entry.type === "plugin" ? "Plugins" : "Skills"
                         const section = sectionOf(item)
                         const previousSection = sectionOf(previous)
                         const title =
-                          item.type === "file"
+                          item.type === "thread"
+                            ? item.thread.title || "Untitled thread"
+                            : item.type === "file"
                             ? basename(item.path)
                             : item.type === "command"
                               ? titleCase(item.command.name)
                               : item.type === "plugin"
                                 ? `@${item.skill.display_name ?? item.skill.name}`
                                 : `$${item.skill.name}`
-                        const description = item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
+                        const description = item.type === "thread" ? item.snippet : item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
                         return (
                           <Fragment key={item.id}>
                             {section !== previousSection && (
@@ -722,7 +777,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               className={cn("w-full", COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME, active && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME)}
                             >
                               <span className={cn("flex size-4 shrink-0 items-center justify-center", active ? "text-foreground/80" : "text-muted-foreground/70")}>
-                                {item.type === "file" ? (
+                                {item.type === "thread" ? (
+                                  <MessageCircleIcon className="size-4" />
+                                ) : item.type === "file" ? (
                                   <FileEntryIcon pathValue={item.path} kind="file" className="size-4" />
                                 ) : item.type === "skill" ? (
                                   <SkillCubeIcon className="size-4" />
@@ -737,7 +794,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                   <span className="max-w-full truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/90">{title}</span>
                                   {description && <span className="w-full min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">{description}</span>}
                                 </div>
-                                {item.type === "file" ? (
+                                {item.type === "thread" ? (
+                                  <span className="max-w-[42%] shrink truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{projects[item.thread.project_id]?.name ?? "Project"}</span>
+                                ) : item.type === "file" ? (
                                   <span className="max-w-[42%] shrink truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
                                 ) : item.type === "command" ? (
                                   <span className="shrink-0 text-end font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">/{item.command.name}</span>
@@ -790,7 +849,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             <div ref={backdrop} aria-hidden className={cn(EDITOR_BACKDROP_CLASS, disabled && "opacity-60")}>
               {segments.map((segment, i) =>
                 segment.kind === "token" ? (
-                  <InlineToken key={i} plain kind={segment.part.type === "skill" ? "skill" : segment.part.type === "mention" ? "plugin" : "file"} text={segment.text} />
+                  <InlineToken key={i} plain kind={segment.part.type === "thread_reference" ? "thread" : segment.part.type === "skill" ? "skill" : segment.part.type === "mention" ? "plugin" : "file"} text={segment.text} />
                 ) : (
                   <Fragment key={i}>{segment.text}</Fragment>
                 ),
@@ -1030,9 +1089,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           {(canPickModel || efforts.length > 0 || canReloadModels) && <MenuSeparator />}
                           <MenuGroup>
                             <MenuGroupLabel>Agent</MenuGroupLabel>
-                            <MenuRadioGroup value={provider.kind} onValueChange={(v) => onProviderChange?.({ kind: v as ProviderStatus["kind"], instance: "default" })}>
+                            <MenuRadioGroup value={provider.kind} onValueChange={(v) => void changeProvider({ kind: v as ProviderStatus["kind"], instance: "default" })}>
                               {providers.map((p) => (
-                                <MenuRadioItem key={p.kind} value={p.kind} disabled={!p.available}>
+                                <MenuRadioItem key={p.kind} value={p.kind} disabled={!p.available || changingModel}>
                                   <ProviderMark kind={p.kind} size={12} className="size-3 shrink-0" />
                                   <span className="truncate">{p.display_name}</span>
                                   {!p.available && <span className="ml-auto text-[10px] text-muted-foreground/60">Not found</span>}

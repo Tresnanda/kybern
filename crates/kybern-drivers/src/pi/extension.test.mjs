@@ -6,8 +6,16 @@ import { pathToFileURL } from "node:url";
 const extensionPath = process.argv.at(-1);
 const { default: loadExtension } = await import(pathToFileURL(extensionPath));
 
-function fakePi(initialMode = "supervised") {
+function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
   process.env.KYBERN_PI_PERMISSION_MODE = initialMode;
+  if (configuredTools) process.env.KYBERN_PI_APP_TOOLS = JSON.stringify(configuredTools);
+  else delete process.env.KYBERN_PI_APP_TOOLS;
+  if (policy.systemPrompt) process.env.KYBERN_PI_SYSTEM_PROMPT = policy.systemPrompt;
+  else delete process.env.KYBERN_PI_SYSTEM_PROMPT;
+  if (policy.coordinatorOnly) process.env.KYBERN_PI_COORDINATOR_ONLY = "1";
+  else delete process.env.KYBERN_PI_COORDINATOR_ONLY;
+  if (policy.deniedTools) process.env.KYBERN_PI_DENIED_TOOLS = JSON.stringify(policy.deniedTools);
+  else delete process.env.KYBERN_PI_DENIED_TOOLS;
   const commands = new Map();
   const tools = new Map();
   const handlers = new Map();
@@ -51,6 +59,129 @@ test("registers the handshake, mode control, and thread-scoped tools", () => {
     "kybern_list_terminals",
     "kybern_read_terminal",
   ]);
+});
+
+test("native collaboration tools are exposed only for a configured bridge", () => {
+  const definitions = [
+    {
+      name: "kybern_threads_search",
+      description: "Find persisted threads.",
+      parameters: { type: "object", properties: { query: { type: ["string", "null"] } }, additionalProperties: false },
+    },
+    {
+      name: "kybern_thread_read",
+      description: "Read a persisted thread.",
+      parameters: {
+        type: "object",
+        properties: { thread_id: { type: "string", format: "uuid" } },
+        required: ["thread_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kybern_thread_send",
+      description: "Send a durable message.",
+      parameters: {
+        type: "object",
+        properties: { thread_id: { type: "string" }, message: { type: "string", minLength: 1 } },
+        required: ["thread_id", "message"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kybern_collaboration_spawn",
+      description: "Delegate bounded work.",
+      parameters: {
+        type: "object",
+        properties: { assignment: { type: "string", minLength: 1 }, provider: { enum: ["pi", "omp"] } },
+        required: ["assignment"],
+        additionalProperties: false,
+      },
+    },
+  ];
+  const harness = fakePi("supervised", definitions);
+  assert.deepEqual([...harness.tools.keys()], definitions.map((tool) => tool.name));
+  for (const definition of definitions) {
+    const registered = harness.tools.get(definition.name);
+    assert.equal(registered.description, definition.description);
+    assert.deepEqual(registered.parameters, definition.parameters);
+  }
+});
+
+test("configured bridge rejects names that the daemon bridge cannot serve", () => {
+  const harness = fakePi("supervised", [
+    { name: "third_party_tool", description: "Unsafe", parameters: { type: "object" } },
+    { name: "kybern_thread_read", description: "Read", parameters: { type: "object" } },
+  ]);
+  assert.deepEqual([...harness.tools.keys()], ["kybern_thread_read"]);
+});
+
+test("ordinary tool registration does not install coordinator guidance", async () => {
+  const withoutBridge = fakePi();
+  const hook = withoutBridge.handlers.get("before_agent_start");
+  assert.equal(typeof hook, "function");
+  assert.equal(await hook({ systemPrompt: "native" }), undefined);
+});
+
+test("explicit coordinator guidance is added once", async () => {
+  const withBridge = fakePi("supervised", [], { systemPrompt: "Use kybern_thread_send for durable routing." });
+  const hook = withBridge.handlers.get("before_agent_start");
+  assert.deepEqual(await hook({ systemPrompt: "native" }), {
+    message: {
+      customType: "kybern-coordinator-bootstrap-v1",
+      content: "Use kybern_thread_send for durable routing.",
+      display: false,
+    },
+    systemPrompt: "native\n\nUse kybern_thread_send for durable routing.",
+  });
+  assert.equal(await hook({ systemPrompt: "native" }), undefined);
+});
+
+test("saved coordinator sessions backfill only when the durable marker is absent", async () => {
+  const oldCoordinator = fakePi("supervised", [], { systemPrompt: "Coordinator role." });
+  await oldCoordinator.handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+  assert.equal((await oldCoordinator.handlers.get("before_agent_start")({ systemPrompt: "native" })).message.customType, "kybern-coordinator-bootstrap-v1");
+
+  const bootstrappedCoordinator = fakePi("supervised", [], { systemPrompt: "Coordinator role." });
+  await bootstrappedCoordinator.handlers.get("session_start")({}, {
+    sessionManager: {
+      getBranch: () => [{ type: "custom_message", customType: "kybern-coordinator-bootstrap-v1", content: "Coordinator role." }],
+    },
+  });
+  assert.equal(await bootstrappedCoordinator.handlers.get("before_agent_start")({ systemPrompt: "native" }), undefined);
+  await bootstrappedCoordinator.handlers.get("session_tree")({}, {
+    sessionManager: {
+      getBranch: () => [{ type: "custom_message", customType: "kybern-coordinator-bootstrap-v1", content: "stale role" }],
+    },
+  });
+  assert.equal((await bootstrappedCoordinator.handlers.get("before_agent_start")({ systemPrompt: "native" })).message.content, "Coordinator role.");
+});
+
+test("routing guidance does not change supervised tool permissions", async () => {
+  const harness = fakePi("supervised", [], { systemPrompt: "Kybern routing guidance." });
+  let prompts = 0;
+  const result = await harness.handlers.get("tool_call")(
+    { toolName: "bash", toolCallId: "bash-1", input: { command: "pwd" } },
+    context(async () => {
+      prompts += 1;
+      return "Deny";
+    }),
+  );
+  assert.equal(prompts, 1);
+  assert.equal(result.block, true);
+});
+
+test("coordinator policy blocks third-party extension tools", async () => {
+  const harness = fakePi(
+    "full_access",
+    [{ name: "kybern_collaboration_read", description: "Read", parameters: { type: "object" } }],
+    { coordinatorOnly: true },
+  );
+  const blocked = await harness.handlers.get("tool_call")(
+    { toolName: "third_party_extension", toolCallId: "extension-1", input: {} },
+    context(async () => "Deny"),
+  );
+  assert.deepEqual(blocked, { block: true, reason: "Kybern coordinator policy permits only collaboration tools." });
 });
 
 test("supervised gates shell and remembers only an exact always grant", async () => {

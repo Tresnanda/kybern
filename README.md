@@ -423,6 +423,106 @@ kybern artifacts read <thread-id> artifacts/dashboard.html
 These additive RPCs require a daemon containing this feature. Updating only the
 phone’s JavaScript does not add the corresponding daemon support.
 
+### Working with other threads
+
+Start an ordinary chat and ask for help: “Have Codex implement this and Claude
+review it.” Kybern creates the collaboration group when the agent first delegates.
+Helpers appear beside the composer and as child conversations in the sidebar.
+Open a helper to follow its work or give it direction, then use **Main thread**
+to return. Each helper is a real, resumable conversation and can use a different
+installed harness.
+
+Use **@** in the desktop composer, or add a conversation from the mobile
+composer, to reference an earlier thread. Agents can also search and read past
+conversations, including other projects on the connected daemon. Reading a
+reference does not start a turn in that thread. Asking an agent to contact it
+sends an attributed question; a busy recipient receives queued work and replies
+return to the requesting conversation.
+Sends respect permission boundaries: an isolated worker cannot wake a thread
+in the main checkout and should return its work through the coordinator.
+
+Each project also offers **Create coordinator**. It opens the same draft composer
+used for an ordinary chat, with the full installed harness, model, effort, and
+permission controls. Describe the goal and send it when ready. Leaving the draft
+does not create a coordinator or start work. The first send creates or reopens
+the project's coordinator and preserves that goal as its original brief.
+
+The coordinator remains one normal, resumable chat for the project. **Workers**,
+**Project knowledge**, and **Results** stay beside its composer while the chat
+remains the main surface. Project knowledge includes the coordinator's current
+plan, useful findings, decisions, learned commands, and references to returned
+work. Expand any saved item to see its source and revision history. You can add
+instructions or correct an agent-authored item; your correction becomes the
+authoritative user revision while the earlier version remains in history.
+
+Groups belong to one project and daemon. The default policy permits four active
+worker assignments and two levels of nested delegation. New children start from
+the source thread's current Git commit unless the agent specifies another
+revision. Editing and integration workers use isolated Git worktrees, and parent
+uncommitted changes are not copied into a child. Research and review workers can
+also run in projects without Git.
+Review the worker's changes before integrating them into another workspace.
+
+When the coordinator is idle, or after a failed turn, use the normal harness
+picker in its composer to change harness, model, or effort. Kybern keeps the
+same conversation, collaboration group, workers, project knowledge, and results;
+the selected harness begins with a fresh provider session. Finish or stop a
+running turn before switching.
+
+The desktop right sidebar starts empty. Use **+** to add the panels you need
+and **×** to close them; Kybern remembers your choices for each environment.
+Conversation shortcuts also open their corresponding panel.
+
+Project coordinators plan work, delegate implementation, and review results.
+Claude Code, OpenCode, and Pi/OMP enforce this role by restricting native tools
+to coordination and read-only inspection. Codex and Cursor follow the same role
+through guidance, but their native coding tools remain available, so Kybern does
+not claim the same strict non-coding guarantee. Agents receive native collaboration tools for
+spawning workers, reading peers, sending questions and replies, waiting for
+updates, reporting structured results, and maintaining shared context. User
+instructions and corrections retain authorship and revision checks.
+
+**Pause** holds new work while running turns finish. **Stop** cancels outstanding
+assignments and interrupts group work; **Resume** explicitly reopens a stopped
+group. **Complete** closes an ordinary objective after its assignments finish;
+a persistent project coordinator stays reusable and uses **Pause** instead. Individual
+assignments also have a cancellation control. After a restart, execution that
+cannot be confirmed is shown as needing attention instead of silently repeated.
+
+The CLI exposes the same operations. Mutation commands accept a JSON request
+file matching the RPC schema; use `--input -` for standard input.
+
+```sh
+kybern collaboration threads search --all-projects --query authentication
+kybern collaboration threads read <thread-id>
+kybern collaboration coordinator get <project-id>
+kybern collaboration coordinator switch-harness --input coordinator-harness.json
+kybern collaboration groups list
+kybern collaboration groups create --input group.json
+kybern collaboration assignments create --input assignment.json
+kybern collaboration assignments list <group-id> --include-finished
+kybern collaboration messages list <group-id>
+kybern collaboration context history <entry-id>
+kybern collaboration wait <group-id> --timeout-seconds 30
+```
+
+For example, `group.json` contains the existing project and coordinator IDs:
+
+```json
+{
+  "project_id": "<project-uuid>",
+  "coordinator_thread_id": "<thread-uuid>",
+  "objective": "Add export support",
+  "success_criteria": ["Exports preserve all records", "Relevant checks pass"]
+}
+```
+
+The CLI prints an operation ID before sending each mutation. Preserve that ID
+in the request file or pass `--operation-id` when retrying after a lost response.
+List commands accept cursors for older records. Collaboration requires a daemon
+and client containing these additive RPCs; recurring triggers and coordination
+across separate daemons are not included.
+
 ### Background behaviour
 
 The daemon outlives the app, so it trims what it keeps alive once work
