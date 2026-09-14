@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from "react"
 import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range, type ReactVirtualizer } from "@tanstack/react-virtual"
+import { reconcileVirtualTopology, type VirtualTopology } from "@/lib/virtualTopology"
 import { TranscriptStateScope } from "./TranscriptStateScope"
 
 export type VirtualRowsController = ReactVirtualizer<HTMLElement, HTMLDivElement>
@@ -123,8 +124,19 @@ function VirtualizedRows<T>({
     }
     return [...indices].sort((a, b) => a - b)
   }, [pinned, items, getKey])
-  const getItemKey = useCallback((index: number) => getKey(items[index]!, index), [getKey, items])
-  const estimate = useCallback((index: number) => estimateSize(items[index]!, index), [estimateSize, items])
+  // TanStack Virtual treats getItemKey identity as measurement topology. An
+  // immutable streaming update used to replace this callback every render and
+  // rebuild every measurement even when all row keys and estimates were
+  // unchanged. State provides a concurrency-safe prior snapshot; unlike a ref,
+  // it is never mutated during render. React immediately retries the uncommon
+  // topology-changing render before committing its children.
+  const [previousTopology, setPreviousTopology] = useState<VirtualTopology>(() =>
+    reconcileVirtualTopology(null, items, getKey, estimateSize),
+  )
+  const topology = reconcileVirtualTopology(previousTopology, items, getKey, estimateSize)
+  if (topology !== previousTopology) setPreviousTopology(topology)
+  const getItemKey = useCallback((index: number) => topology.keys[index]!, [topology])
+  const estimate = useCallback((index: number) => topology.estimates[index]!, [topology])
   // This component reads the mutable virtualizer directly; it must not be compiler-memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({

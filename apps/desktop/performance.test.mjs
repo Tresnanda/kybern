@@ -11,6 +11,7 @@ import {
 } from "./src/lib/workload.ts"
 import { advanceSequence, mergeSequencedSnapshot } from "./src/state/bootstrap.ts"
 import { advanceIconSwap, settleIconSwap } from "./src/lib/iconSwap.ts"
+import { reconcileVirtualTopology } from "./src/lib/virtualTopology.ts"
 
 test("thread and history diff summaries never transfer eager patches", () => {
   assert.deepEqual(diffSummaryRequest("thread-1"), { thread_id: "thread-1", include_patch: false })
@@ -108,4 +109,48 @@ test("workspace hydration respects the transcript cursor without publishing toke
   assert.equal(mergeSequencedSnapshot({ "thread-1": live }, [stale], cursors)["thread-1"], live)
   const fresh = { ...stale, last_seq: 21, title: "Fresh" }
   assert.equal(mergeSequencedSnapshot({ "thread-1": live }, [fresh], cursors)["thread-1"], fresh)
+})
+
+test("virtual topology stays stable across content-only replacements", () => {
+  const key = item => item.id
+  const estimate = item => item.estimate
+  const first = reconcileVirtualTopology(null, [
+    { id: "a", estimate: 40, text: "old" },
+    { id: "b", estimate: 60, text: "settled" },
+  ], key, estimate)
+  const streamed = reconcileVirtualTopology(first, [
+    { id: "a", estimate: 40, text: "new streamed content" },
+    { id: "b", estimate: 60, text: "settled" },
+  ], key, estimate)
+  assert.equal(streamed, first)
+})
+
+test("virtual topology changes for keys, order, count, or estimates", () => {
+  const key = item => item.id
+  const estimate = item => item.estimate
+  const first = reconcileVirtualTopology(null, [
+    { id: "a", estimate: 40 },
+    { id: "b", estimate: 60 },
+  ], key, estimate)
+  const changedEstimate = reconcileVirtualTopology(first, [
+    { id: "a", estimate: 41 },
+    { id: "b", estimate: 60 },
+  ], key, estimate)
+  assert.notEqual(changedEstimate, first)
+  assert.deepEqual(changedEstimate, { keys: ["a", "b"], estimates: [41, 60] })
+
+  const reordered = reconcileVirtualTopology(first, [
+    { id: "b", estimate: 60 },
+    { id: "a", estimate: 40 },
+  ], key, estimate)
+  assert.notEqual(reordered, first)
+  assert.deepEqual(reordered.keys, ["b", "a"])
+
+  const appended = reconcileVirtualTopology(first, [
+    { id: "a", estimate: 40 },
+    { id: "b", estimate: 60 },
+    { id: "c", estimate: 80 },
+  ], key, estimate)
+  assert.notEqual(appended, first)
+  assert.deepEqual(appended.keys, ["a", "b", "c"])
 })
