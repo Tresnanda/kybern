@@ -459,12 +459,17 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
     <>
     <ContextMenu>
       <ContextMenuTrigger render={<li className="group/menu-sub-item group/thread-row relative w-full" />}>
+        {Array.from({ length: depth }, (_, level) => (
+          <span key={level} aria-hidden="true"
+            className="pointer-events-none absolute -top-0.5 bottom-0 z-10 w-px bg-sidebar-foreground/15 contrast-more:bg-sidebar-foreground/40"
+            style={{ insetInlineStart: 17 + level * 20 }} />
+        ))}
         {childCount > 0 && <button type="button"
           aria-label={`${childrenOpen ? "Collapse" : "Expand"} ${childCount} helpers for ${thread.title || "Untitled"}`}
           aria-expanded={childrenOpen}
           onClick={onToggleChildren}
           className="absolute z-20 top-1/2 -translate-y-1/2 inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          style={{ insetInlineStart: depth === 0 ? 5 : depth === 1 ? 17 : 29 }}>
+          style={{ insetInlineStart: 5 + depth * 20 }}>
           <DisclosureChevron open={childrenOpen} />
         </button>}
         <div
@@ -483,6 +488,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
           }}
           data-active={selected || undefined}
           data-marquee-host
+          style={{ paddingInlineStart: 32 + depth * 20 }}
           onPointerEnter={(event) => primeMarquee(event.currentTarget)}
           onFocus={(event) => primeMarquee(event.currentTarget)}
           aria-current={selected ? "page" : undefined}
@@ -490,7 +496,6 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
             fresh && "t-row-enter",
             "flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
-            depth === 0 ? "ps-8" : depth === 1 ? "ps-11" : "ps-14",
             "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]",
             hasGlyph || thread.pinned ? "pr-[1.75rem]" : "pr-2",
             selected ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, inSplit && "bg-sidebar-accent/55"),
