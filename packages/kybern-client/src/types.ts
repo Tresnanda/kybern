@@ -375,6 +375,7 @@ export interface ContextEntry {
 }
 
 export interface CollaborationGroupDetail {
+  coordinator_setup_complete?: boolean | null;
   group: CollaborationGroup;
   members: GroupMember[];
   assignments: CollaborationAssignment[];
@@ -638,6 +639,7 @@ export type EventPayload =
   | { kind: "thread_created"; thread: Thread }
   | { kind: "thread_updated"; thread: Thread }
   | { kind: "thread_archived" }
+  | { kind: "project_coordinator_deleted"; project_id: ProjectId; coordinator_thread_id: ThreadId }
   | { kind: "message_queued"; message: QueuedMessage }
   | { kind: "message_removed"; message_id: MessageId }
   | { kind: "message_queue_updated"; message: QueuedMessage }
@@ -1390,6 +1392,7 @@ export interface Methods {
   "threads.interrupt": [ThreadsInterruptParams, Empty];
   "collaboration.coordinator.get": [{ project_id: ProjectId }, ProjectCoordinator | null];
   "collaboration.coordinator.get_or_create": [ProjectCoordinatorCreateParams, ProjectCoordinator];
+  "collaboration.coordinator.delete": [{ operation_id: OperationId; project_id: ProjectId; thread_id: ThreadId }, Thread];
   "collaboration.coordinator.switch_harness": [ProjectCoordinatorSwitchHarnessParams, ProjectCoordinator];
   "collaboration.groups.create": [{ operation_id: OperationId; project_id: ProjectId; coordinator_thread_id: ThreadId; objective: string; success_criteria?: string[]; coordinator_mode?: CoordinatorMode | null; policy?: CollaborationPolicy | null }, CollaborationGroup];
   "collaboration.groups.get": [{ group_id: GroupId }, CollaborationGroupDetail];

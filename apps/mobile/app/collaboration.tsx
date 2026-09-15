@@ -1,3 +1,4 @@
+import { confirmDeleteCoordinator } from "../src/features/deleteCoordinator";
 import { randomUUID } from "expo-crypto";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import {
@@ -655,6 +656,10 @@ export default function CollaborationScreen() {
               assignments={assignments}
               onManage={() => openSheet("manage")}
             />
+            {thread.coordinator_project_id && detail.coordinator_setup_complete != null && <View style={{ gap: 4, marginBottom: 12 }}>
+              <T variant="label">{detail.coordinator_setup_complete ? "Project setup complete" : "Project setup"}</T>
+              <T variant="caption" tone="secondary">{detail.coordinator_setup_complete ? "The project overview is saved in Knowledge and reused for later work." : "Your coordinator researches the project and saves its overview before implementation. If interrupted, send a message to continue setup."}</T>
+            </View>}
             <WorkspaceSwitcher
               tab={tab}
               onChange={setTab}
@@ -783,6 +788,7 @@ export default function CollaborationScreen() {
             detail={detail}
             groups={groupChoices}
             persistentCoordinator={Boolean(coordinator?.coordinator_project_id)}
+            coordinator={coordinator}
             busy={busy}
             run={run}
             visible={sheet === "manage"}
@@ -2120,6 +2126,7 @@ function ManageGroupSheet({
   detail,
   groups,
   persistentCoordinator,
+  coordinator,
   busy,
   run,
   visible,
@@ -2130,6 +2137,7 @@ function ManageGroupSheet({
   detail: CollaborationGroupDetail;
   groups: CollaborationGroupDetail[];
   persistentCoordinator: boolean;
+  coordinator?: Thread;
   busy: boolean;
   run: (work: () => Promise<unknown>) => Promise<boolean>;
   visible: boolean;
@@ -2178,6 +2186,7 @@ function ManageGroupSheet({
               Stop agents
             </Button>
           )}
+          {persistentCoordinator && coordinator && <Button danger busy={busy} onPress={() => confirmDeleteCoordinator(coordinator, () => { onClose(); router.dismissTo("/"); })}>Delete coordinator</Button>}
           {!persistentCoordinator && detail.group.status !== "completed" && (
             <Button secondary busy={busy} onPress={() => void control("complete")}>
               Mark complete

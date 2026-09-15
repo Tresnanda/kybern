@@ -52,6 +52,10 @@ pub enum EventPayload {
     ThreadNotesUpdated {
         notes: crate::methods::ThreadNotes,
     },
+    ProjectCoordinatorDeleted {
+        project_id: crate::ProjectId,
+        coordinator_thread_id: ThreadId,
+    },
     CollaborationGroupUpdated {
         group: CollaborationGroup,
     },

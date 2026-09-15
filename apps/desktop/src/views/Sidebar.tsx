@@ -1,3 +1,4 @@
+import { collaborationThreadRows } from "../../../../packages/kybern-client/src/collaboration"
 // Left sidebar: 46px drag-region title bar,
 // brand row, primary nav, "Projects" list with nested thread rows, footer
 // with Settings and Help.
@@ -67,6 +68,7 @@ import { addProject, archiveThread, errorText, loadThread, removeProject, update
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
 import { createProjectThreadsSelector, useStore } from "@/state/store"
 
+import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { ProjectPicker } from "./ProjectPicker"
 import { SidebarUpdateButton } from "./AppUpdate"
@@ -289,37 +291,11 @@ function ProjectItem({ project }: { project: Project }) {
     }
     return undefined
   })
-  const { roots, childrenByParent } = useMemo(() => {
-    const liveIds = new Set(threads.map((thread) => thread.id))
-    const children = new Map<string, Thread[]>()
-    const topLevel: Thread[] = []
-    for (const thread of threads) {
-      if (thread.coordinator_project_id === project.id) continue
-      const parentId = thread.parent_thread_id
-      if (!parentId || !liveIds.has(parentId)) {
-        topLevel.push(thread)
-        continue
-      }
-      const siblings = children.get(parentId) ?? []
-      siblings.push(thread)
-      children.set(parentId, siblings)
-    }
-    return { roots: topLevel, childrenByParent: children }
-  }, [project.id, threads])
+  const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({})
   const orderedRows = useMemo(() => {
-    const rows: { thread: Thread; depth: number }[] = []
-    const visited = new Set<string>()
-    const append = (thread: Thread, depth = 0) => {
-      if (visited.has(thread.id)) return
-      visited.add(thread.id)
-      rows.push({ thread, depth })
-      for (const child of childrenByParent.get(thread.id) ?? []) append(child, Math.min(depth + 1, 2))
-    }
-    if (coordinator) append(coordinator)
-    for (const root of roots) append(root)
-    for (const thread of threads) if (thread.id !== coordinator?.id) append(thread)
-    return rows
-  }, [childrenByParent, coordinator, roots, threads])
+    const ordered = coordinator ? [coordinator, ...threads.filter(thread => thread.id !== coordinator.id)] : threads
+    return collaborationThreadRows(ordered, expandedThreads, selected.kind === "thread" ? selected.id : undefined)
+  }, [coordinator, threads, expandedThreads, selected])
   const visible = showAll ? orderedRows : orderedRows.slice(0, MAX_PROJECT_THREADS)
 
   return (
@@ -386,8 +362,8 @@ function ProjectItem({ project }: { project: Project }) {
           <div className="min-h-0 overflow-hidden">
             <ul className={cn("mx-0 my-0 flex w-full min-w-0 translate-x-0 flex-col border-l-0 px-0 py-0", SIDEBAR_NESTED_LIST_GAP_CLASS_NAME, disclosureContentClassName(open))}>
               {!coordinator && <CreateCoordinatorRow project={project} />}
-              {visible.map(({ thread, depth }) => (
-                <ThreadRow key={thread.id} thread={thread} depth={depth} />
+              {visible.map(({ thread, depth, childCount, open: childrenOpen }) => (
+                <ThreadRow key={thread.id} thread={thread} depth={depth} childCount={childCount} childrenOpen={childrenOpen} onToggleChildren={() => setExpandedThreads(value => ({ ...value, [thread.id]: !childrenOpen }))} />
               ))}
               {orderedRows.length > MAX_PROJECT_THREADS && (
                 <li>
@@ -448,11 +424,12 @@ function StatusGlyph({ status, activity }: { status: Thread["status"]; activity?
   return null
 }
 
-function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
+function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, onToggleChildren }: { thread: Thread; depth?: number; childCount?: number; childrenOpen?: boolean; onToggleChildren?: () => void }) {
   const selected = useStore((s) => s.selected.kind === "thread" && s.selected.id === thread.id)
   const splitView = useStore((s) => s.splitView)
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
   const [renaming, setRenaming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [title, setTitle] = useState(thread.title)
   // Decided once on mount: a row for a thread created just now rises in.
   const [fresh] = useState(() => Date.now() - Date.parse(thread.updated_at) < 3000)
@@ -479,8 +456,17 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
   }
 
   return (
+    <>
     <ContextMenu>
       <ContextMenuTrigger render={<li className="group/menu-sub-item group/thread-row relative w-full" />}>
+        {childCount > 0 && <button type="button"
+          aria-label={`${childrenOpen ? "Collapse" : "Expand"} ${childCount} helpers for ${thread.title || "Untitled"}`}
+          aria-expanded={childrenOpen}
+          onClick={onToggleChildren}
+          className="absolute z-20 top-1/2 -translate-y-1/2 inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          style={{ insetInlineStart: depth === 0 ? 5 : depth === 1 ? 17 : 29 }}>
+          <DisclosureChevron open={childrenOpen} />
+        </button>}
         <div
           role="button"
           tabIndex={0}
@@ -504,7 +490,7 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
             SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
             fresh && "t-row-enter",
             "flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md text-sidebar-foreground outline-hidden [-webkit-user-drag:none]",
-            depth === 0 ? "pl-8" : depth === 1 ? "pl-11" : "pl-14",
+            depth === 0 ? "ps-8" : depth === 1 ? "ps-11" : "ps-14",
             "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]",
             hasGlyph || thread.pinned ? "pr-[1.75rem]" : "pr-2",
             selected ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, inSplit && "bg-sidebar-accent/55"),
@@ -604,11 +590,16 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
             <SquareSplitHorizontal /> Open below
           </ContextMenuItem>
         </ContextMenuGroup>
-        {(thread.worktree || !thread.coordinator_project_id) && <ContextMenuSeparator />}
+        <ContextMenuSeparator />
         <ContextMenuGroup>
           {thread.worktree && (
             <ContextMenuItem disabled>
               <GitBranchIcon /> {thread.worktree.branch}
+            </ContextMenuItem>
+          )}
+          {thread.coordinator_project_id && (
+            <ContextMenuItem variant="destructive" onClick={() => setDeleting(true)}>
+              <ArchiveIcon /> Delete coordinator
             </ContextMenuItem>
           )}
           {!thread.coordinator_project_id && (
@@ -619,5 +610,7 @@ function ThreadRow({ thread, depth = 0 }: { thread: Thread; depth?: number }) {
         </ContextMenuGroup>
       </ContextMenuContent>
     </ContextMenu>
+    {deleting && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}
+    </>
   )
 }

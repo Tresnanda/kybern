@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { createAgentStarter } from "../../../../packages/kybern-client/src/agentStart"
 import { shouldReloadCollaboration } from "../../../../packages/kybern-client/src/collaboration"
 
+import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { Button } from "@/components/kit/button"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import {
@@ -76,6 +77,7 @@ const meta =
   "text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground"
 type CollaborationView = "work" | "messages" | "context" | "results"
 type CollaborationDialog =
+  | "delete"
   | "objective"
   | "settings"
   | "participants"
@@ -815,6 +817,7 @@ export function CollaborationPane({
                           <StopIcon /> Stop agents
                         </MenuItem>
                       )}
+                    {persistentCoordinator && <MenuItem variant="destructive" onClick={() => openDialog("delete")}><StopIcon /> Delete coordinator</MenuItem>}
                     {!persistentCoordinator && group.status !== "completed" && (
                       <MenuItem
                         onClick={() =>
@@ -909,6 +912,12 @@ export function CollaborationPane({
             </details>
           </header>
 
+          {persistentCoordinator && detail.coordinator_setup_complete !== undefined && (
+            <div role="status" className="mb-4 text-xs leading-relaxed text-muted-foreground">
+              <p className="font-medium text-foreground">{detail.coordinator_setup_complete ? "Project setup complete" : "Project setup"}</p>
+              <p>{detail.coordinator_setup_complete ? "The project overview is saved in Knowledge. Your coordinator reuses it for later work." : "Your coordinator researches the project and saves its overview before implementation. If interrupted, send a message to continue setup."}</p>
+            </div>
+          )}
           {error && (
             <p className="mb-4 rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
               {error}
@@ -1050,6 +1059,7 @@ export function CollaborationPane({
             </div>
           )}
 
+          {dialog === "delete" && coordinator && <DeleteCoordinatorDialog thread={coordinator} onClose={() => changeDialog("delete", false)} />}
           <EditObjectiveDialog
             open={dialog === "objective"}
             onOpenChange={(open) => changeDialog("objective", open)}

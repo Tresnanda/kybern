@@ -1262,3 +1262,225 @@ async fn client_message_id_replays_same_turn_and_rejects_changed_content() {
         .count();
     assert_eq!(starts, 1);
 }
+
+#[tokio::test]
+async fn coordinator_setup_requires_reviewed_research_before_editing_and_survives_restart() {
+    let fixture = Fixture::new();
+    let coordinator = fixture.create_project_coordinator(Some("Implement the requested feature")).await;
+    assert_eq!(fixture.orchestrator.collaboration_group_detail(coordinator.group.id).unwrap().coordinator_setup_complete, Some(false));
+    let editing = methods::CollaborationAssignmentsCreateParams {
+        operation_id: Uuid::now_v7(),
+        group_id: coordinator.group.id,
+        parent_assignment_id: None,
+        owner_thread_id: Some(coordinator.thread.id),
+        child: None,
+        title: "Implement".into(),
+        instructions: "Implement feature".into(),
+        kind: AssignmentKind::Edit,
+    };
+    let error = fixture.orchestrator.collaboration_assignment_create(editing, None, None).await.unwrap_err();
+    assert!(error.to_string().contains("Set up the coordinator first"));
+    let mut setup = methods::CollaborationContextPutParams {
+        operation_id: Uuid::now_v7(),
+        group_id: coordinator.group.id,
+        entry_id: None,
+        key: "project.setup".into(),
+        kind: ContextEntryKind::Research,
+        body: "Architecture: empty project. Commands: no test runner yet. Constraints: preserve the user's brief.".into(),
+        expected_revision: None,
+        author_thread_id: None,
+        user_authored: false,
+        source_refs: vec![],
+    };
+    assert!(
+        fixture
+            .orchestrator
+            .collaboration_context_put(setup.clone(), Some(coordinator.thread.id))
+            .unwrap_err()
+            .to_string()
+            .contains("successful research")
+    );
+    assert!(fixture.orchestrator.collaboration_context_put(setup.clone(), None).is_err(), "a client cannot manufacture setup completion");
+    let mut researcher = fixture.worker.clone();
+    researcher.id = Uuid::now_v7();
+    fixture.store.thread_upsert(&researcher).unwrap();
+    fixture
+        .store
+        .collaboration_member_put(&GroupMember {
+            group_id: coordinator.group.id,
+            thread_id: researcher.id,
+            role: GroupMemberRole::Worker,
+            active: true,
+            joined_at: Utc::now(),
+        })
+        .unwrap();
+    let mut research = fixture.assignment(None, Some(researcher.id), AssignmentStatus::Completed);
+    research.group_id = coordinator.group.id;
+    research.result = Some(AssignmentResult {
+        outcome: AssignmentOutcome::Failed,
+        summary: "Could not inspect".into(),
+        changes: vec![],
+        checks: vec![],
+        artifacts: vec![],
+        unresolved: vec![],
+        completed_at: Utc::now(),
+    });
+    fixture.put_assignment(&research);
+    setup.source_refs = vec![research.id.to_string()];
+    assert!(fixture.orchestrator.collaboration_context_put(setup.clone(), Some(coordinator.thread.id)).is_err());
+    research.result.as_mut().unwrap().outcome = AssignmentOutcome::Success;
+    research.result.as_mut().unwrap().summary = "Inspected repository and recorded missing tooling".into();
+    fixture.put_assignment(&research);
+    let overview = fixture.orchestrator.collaboration_context_put(setup.clone(), Some(coordinator.thread.id)).unwrap();
+    let retry = fixture.orchestrator.collaboration_context_put(setup, Some(coordinator.thread.id)).unwrap();
+    assert_eq!(overview.id, retry.id);
+    let corrected = fixture
+        .orchestrator
+        .collaboration_context_put(
+            methods::CollaborationContextPutParams {
+                operation_id: Uuid::now_v7(),
+                group_id: coordinator.group.id,
+                entry_id: Some(overview.id),
+                key: "project.setup".into(),
+                kind: ContextEntryKind::Research,
+                body: "Corrected test command: cargo test".into(),
+                expected_revision: Some(overview.revision),
+                author_thread_id: None,
+                user_authored: true,
+                source_refs: vec![],
+            },
+            None,
+        )
+        .unwrap();
+    assert!(corrected.user_authored);
+    assert_eq!(corrected.source_refs, overview.source_refs);
+    assert_eq!(fixture.store.collaboration_context_history(overview.id).unwrap().len(), 2);
+    fixture.orchestrator.recover_after_restart().await.unwrap();
+    assert_eq!(fixture.orchestrator.collaboration_group_detail(coordinator.group.id).unwrap().coordinator_setup_complete, Some(true));
+    assert_eq!(
+        fixture.store.collaboration_context_by_key(coordinator.group.id, "project.brief").unwrap().unwrap().body,
+        "Implement the requested feature"
+    );
+    let mut policy = coordinator.group.policy.clone();
+    policy.require_worktree_for_editing = false;
+    fixture
+        .orchestrator
+        .collaboration_group_update(methods::CollaborationGroupsUpdateParams {
+            operation_id: Uuid::now_v7(),
+            group_id: coordinator.group.id,
+            expected_revision: coordinator.group.revision,
+            objective: None,
+            success_criteria: None,
+            coordinator_thread_id: None,
+            coordinator_mode: None,
+            policy: Some(policy),
+        })
+        .unwrap();
+    let accepted = fixture
+        .orchestrator
+        .collaboration_assignment_create(
+            methods::CollaborationAssignmentsCreateParams {
+                operation_id: Uuid::now_v7(),
+                group_id: coordinator.group.id,
+                parent_assignment_id: None,
+                owner_thread_id: Some(coordinator.thread.id),
+                child: None,
+                title: "Implement".into(),
+                instructions: "Implement feature".into(),
+                kind: AssignmentKind::Edit,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.kind, AssignmentKind::Edit);
+}
+
+#[tokio::test]
+async fn coordinator_deletion_retains_history_and_allows_fresh_creation_without_stale_retries() {
+    let fixture = Fixture::new();
+    let create = methods::CollaborationCoordinatorGetOrCreateParams {
+        operation_id: Uuid::now_v7(),
+        project_id: fixture.coordinator.project_id,
+        provider: ProviderInstance::default_for(ProviderKind::Codex),
+        model: None,
+        effort: None,
+        permission_mode: None,
+        coordinator_mode: None,
+        initial_goal: Some("Original brief".into()),
+    };
+    let original = fixture.orchestrator.project_coordinator_get_or_create(create.clone()).await.unwrap();
+    assert!(fixture.orchestrator.archive_thread(original.thread.id).await.is_err());
+    let delete = methods::CollaborationCoordinatorDeleteParams {
+        operation_id: Uuid::now_v7(),
+        project_id: original.thread.project_id,
+        thread_id: original.thread.id,
+    };
+    let archived = fixture.orchestrator.project_coordinator_delete(delete.clone()).await.unwrap();
+    assert_eq!(archived.status, ThreadStatus::Archived);
+    assert_eq!(archived.coordinator_project_id, None);
+    assert!(fixture.orchestrator.project_coordinator_get(original.thread.project_id).unwrap().is_none());
+    assert!(fixture.store.collaboration_members(original.group.id).unwrap().iter().all(|member| !member.active));
+    assert_eq!(fixture.store.collaboration_context_by_key(original.group.id, "project.brief").unwrap().unwrap().body, "Original brief");
+    assert!(
+        fixture
+            .store
+            .events_for_thread(original.thread.id)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::ProjectCoordinatorDeleted { .. }))
+    );
+    fixture.orchestrator.recover_after_restart().await.unwrap();
+    let fresh = fixture.create_project_coordinator(Some("Fresh brief")).await;
+    assert_ne!(fresh.thread.id, original.thread.id);
+    assert_ne!(fresh.group.id, original.group.id);
+    assert_eq!(fixture.orchestrator.collaboration_group_detail(fresh.group.id).unwrap().coordinator_setup_complete, Some(false));
+    let retry = fixture.orchestrator.project_coordinator_delete(delete.clone()).await.unwrap();
+    assert_eq!(retry.id, original.thread.id);
+    assert_eq!(fixture.orchestrator.project_coordinator_get(fresh.thread.project_id).unwrap().unwrap().thread.id, fresh.thread.id);
+    let mut stale = delete;
+    stale.operation_id = Uuid::now_v7();
+    assert!(fixture.orchestrator.project_coordinator_delete(stale).await.unwrap_err().to_string().contains("coordinator changed"));
+    assert!(fixture.orchestrator.project_coordinator_get_or_create(create).await.unwrap_err().to_string().contains("deleted"));
+    let old_knowledge = fixture
+        .orchestrator
+        .collaboration_context_list(methods::CollaborationContextListParams {
+            group_id: original.group.id,
+            cursor: None,
+            limit: 100,
+            keys: vec![],
+            kinds: vec![],
+        })
+        .unwrap();
+    assert!(old_knowledge.entries.iter().any(|entry| entry.body == "Original brief"));
+    assert!(!old_knowledge.entries.iter().any(|entry| entry.body == "Fresh brief"));
+}
+
+#[tokio::test]
+async fn coordinator_deletion_rejects_active_and_queued_work() {
+    let fixture = Fixture::new();
+    let coordinator = fixture.create_project_coordinator(None).await;
+    let delete = methods::CollaborationCoordinatorDeleteParams {
+        operation_id: Uuid::now_v7(),
+        project_id: coordinator.thread.project_id,
+        thread_id: coordinator.thread.id,
+    };
+    let mut busy = coordinator.thread.clone();
+    busy.status = ThreadStatus::Running;
+    fixture.store.thread_upsert(&busy).unwrap();
+    assert!(fixture.orchestrator.project_coordinator_delete(delete.clone()).await.is_err());
+    busy.status = ThreadStatus::Idle;
+    fixture.store.thread_upsert(&busy).unwrap();
+    let assignment =
+        CollaborationAssignment { group_id: coordinator.group.id, ..fixture.assignment(None, None, AssignmentStatus::Pending) };
+    fixture.put_assignment(&assignment);
+    assert!(
+        fixture.orchestrator.project_coordinator_delete(delete.clone()).await.unwrap_err().to_string().contains("unfinished assignments")
+    );
+    fixture.put_assignment(&CollaborationAssignment { status: AssignmentStatus::Cancelled, ..assignment });
+    let queued = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: busy.id, message: UserMessage::text("Do more work") };
+    fixture.orchestrator.enqueue(queued.clone()).unwrap();
+    assert!(fixture.orchestrator.project_coordinator_delete(delete).await.unwrap_err().to_string().contains("queued messages"));
+    assert!(fixture.orchestrator.project_coordinator_get(coordinator.thread.project_id).unwrap().is_some());
+}

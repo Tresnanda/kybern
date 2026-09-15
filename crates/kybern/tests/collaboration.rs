@@ -416,3 +416,46 @@ async fn collaboration_public_api_preserves_authority_and_concurrent_revision_ch
         "completion must remain final"
     );
 }
+
+#[tokio::test]
+async fn coordinator_delete_and_recreate_survive_public_transport_restart() {
+    let mut daemon = ScratchDaemon::new();
+    let client = daemon.start().await;
+    let project = call(&client, "projects.add", json!({ "path": daemon.root.join("project") })).await;
+    let create = json!({
+        "operation_id": Uuid::new_v4(), "project_id": project["id"],
+        "provider": { "kind": "codex", "instance": "default" }, "initial_goal": "Inspect the project before implementing",
+    });
+    let original = call(&client, "collaboration.coordinator.get_or_create", create.clone()).await;
+    let group = call(&client, "collaboration.groups.get", json!({ "group_id": original["group"]["id"] })).await;
+    assert_eq!(group["coordinator_setup_complete"], false);
+    assert!(client.call_raw("threads.archive", json!({ "thread_id": original["thread"]["id"] })).await.is_err());
+    let delete = json!({ "operation_id": Uuid::new_v4(), "project_id": project["id"], "thread_id": original["thread"]["id"] });
+    let (first, duplicate) = tokio::join!(
+        call(&client, "collaboration.coordinator.delete", delete.clone()),
+        call(&client, "collaboration.coordinator.delete", delete.clone()),
+    );
+    assert_eq!(first, duplicate);
+    assert_eq!(first["status"], "archived");
+    assert!(first["coordinator_project_id"].is_null());
+    drop(client);
+    daemon.stop();
+    let client = daemon.start().await;
+    assert!(call(&client, "collaboration.coordinator.get", json!({ "project_id": project["id"] })).await.is_null());
+    let mut next = create.clone();
+    next["operation_id"] = json!(Uuid::new_v4());
+    let fresh = call(&client, "collaboration.coordinator.get_or_create", next).await;
+    assert_ne!(fresh["thread"]["id"], original["thread"]["id"]);
+    assert_ne!(fresh["group"]["id"], original["group"]["id"]);
+    assert_eq!(call(&client, "collaboration.coordinator.delete", delete.clone()).await["id"], original["thread"]["id"]);
+    let current = call(&client, "collaboration.coordinator.get", json!({ "project_id": project["id"] })).await;
+    assert_eq!(current["thread"]["id"], fresh["thread"]["id"]);
+    assert!(client.call_raw("collaboration.coordinator.get_or_create", create).await.is_err());
+    let history = call(&client, "threads.get", json!({ "thread_id": original["thread"]["id"] })).await;
+    assert_eq!(history["thread"]["status"], "archived");
+    let knowledge = call(&client, "collaboration.context.list", json!({ "group_id": original["group"]["id"] })).await;
+    assert_eq!(knowledge["entries"][0]["body"], "Inspect the project before implementing");
+    let input = daemon.root.join("coordinator-delete.json");
+    std::fs::write(&input, serde_json::to_vec(&delete).unwrap()).unwrap();
+    assert_eq!(daemon.cli(&["collaboration", "coordinator", "delete", "--input", input.to_str().unwrap()])["id"], original["thread"]["id"]);
+}

@@ -5,7 +5,7 @@ import type { CollaborationAssignment, ContextEntry, Thread, ThreadEvent, UserMe
 
 export * from "../src/state/rpc"
 const listeners = new Set<(event: ThreadEvent | null) => void>()
-export const chatFixture = { calls: [] as { method: string; params: any }[], sent: [] as { threadId: string; message: UserMessage; messageId?: string }[], coordinatorCreates: 0 }
+export const chatFixture = { calls: [] as { method: string; params: any }[], sent: [] as { threadId: string; message: UserMessage; messageId?: string }[], coordinatorCreates: 0, setupComplete: false, deleteError: false, completeSetup() { this.setupComplete = true; listeners.forEach((listener) => listener(null)) } }
 const coordinators = new Map<string, any>()
 const at = "2026-09-14T10:00:00Z"
 const coordinatorPlan: ContextEntry = { id: "coordinator-plan", group_id: "coordinator-group", key: "current-plan", kind: "plan", body: "Confirm the local workflow, delegate the desktop and mobile changes, then review both results.", author_thread_id: "project-coordinator", user_authored: false, revision: 2, source_refs: [], created_at: at, updated_at: at }
@@ -46,10 +46,18 @@ async function call(method: string, params: any): Promise<any> {
   if (method === "collaboration.coordinator.get_or_create") {
     const existing = coordinators.get(params.project_id)
     if (existing) return { ...existing, created: false }
-    const thread: Thread = { id: "project-coordinator", project_id: params.project_id, coordinator_project_id: params.project_id, collaboration_group_id: "coordinator-group", title: "Project coordinator", provider: params.provider, model: params.model ?? null, effort: params.effort ?? null, permission_mode: params.permission_mode ?? "supervised", status: "idle", cwd: "/project", pinned: true, created_at: at, updated_at: at, last_seq: 0 }
+    const thread: Thread = { id: chatFixture.coordinatorCreates ? `project-coordinator-${chatFixture.coordinatorCreates + 1}` : "project-coordinator", project_id: params.project_id, coordinator_project_id: params.project_id, collaboration_group_id: "coordinator-group", title: "Project coordinator", provider: params.provider, model: params.model ?? null, effort: params.effort ?? null, permission_mode: params.permission_mode ?? "supervised", status: "idle", cwd: "/project", pinned: true, created_at: at, updated_at: at, last_seq: 0 }
     const result = { thread, group: groupFor(thread), created: true }
     coordinators.set(params.project_id, result); chatFixture.coordinatorCreates += 1
     return result
+  }
+  if (method === "collaboration.coordinator.delete") {
+    if (chatFixture.deleteError) throw new Error("Stop agents before deleting the coordinator; unfinished assignments remain.")
+    const current = coordinators.get(params.project_id)
+    if (!current || current.thread.id !== params.thread_id) throw new Error("coordinator changed")
+    coordinators.delete(params.project_id)
+    chatFixture.setupComplete = false
+    return { ...state.threads[params.thread_id], status: "archived", coordinator_project_id: null }
   }
   if (method === "collaboration.coordinator.switch_harness") {
     const current = coordinators.get(params.project_id)
@@ -67,7 +75,7 @@ async function call(method: string, params: any): Promise<any> {
   if (method === "collaboration.groups.get") {
     const main = Object.values(state.threads).find((thread) => thread.collaboration_group_id === params.group_id && !thread.parent_thread_id)!
     const assignments = params.group_id === "coordinator-group" ? [coordinatorResult] : []
-    return { group: groupFor(main), members: Object.values(state.threads).filter((thread) => thread.collaboration_group_id === params.group_id).map((thread) => ({ group_id: params.group_id, thread_id: thread.id, role: thread.parent_thread_id ? "worker" : "coordinator", active: true, joined_at: at })), assignments, pending_messages: [] }
+    return { coordinator_setup_complete: main.coordinator_project_id ? chatFixture.setupComplete : undefined, group: groupFor(main), members: Object.values(state.threads).filter((thread) => thread.collaboration_group_id === params.group_id).map((thread) => ({ group_id: params.group_id, thread_id: thread.id, role: thread.parent_thread_id ? "worker" : "coordinator", active: true, joined_at: at })), assignments, pending_messages: [] }
   }
   if (method === "collaboration.assignments.list") return { assignments: params.group_id === "coordinator-group" ? [coordinatorResult] : [], next_cursor: null }
   if (method === "collaboration.messages.list") return { messages: [], next_cursor: null }
