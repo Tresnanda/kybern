@@ -478,6 +478,22 @@ method!(
     ProjectCoordinator
 );
 
+/// Remove the current coordinator identity, retaining its archived history.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CollaborationCoordinatorDeleteParams {
+    pub operation_id: OperationId,
+    pub project_id: ProjectId,
+    /// Compare against the coordinator the user reviewed, never a replacement.
+    pub thread_id: ThreadId,
+}
+method!(
+    CollaborationCoordinatorDelete,
+    "collaboration.coordinator.delete",
+    Some(Scope::OrchestrationOperate),
+    CollaborationCoordinatorDeleteParams,
+    crate::Thread
+);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CollaborationCoordinatorSwitchHarnessParams {
     pub operation_id: OperationId,
@@ -1586,6 +1602,7 @@ registry!(
     CollaborationCoordinatorGet,
     CollaborationCoordinatorGetOrCreate,
     CollaborationCoordinatorSwitchHarness,
+    CollaborationCoordinatorDelete,
     CollaborationGroupsGet,
     CollaborationGroupsList,
     CollaborationGroupsUpdate,

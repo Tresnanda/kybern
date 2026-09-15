@@ -41,6 +41,7 @@ expression: names
 - collaboration.coordinator.get
 - collaboration.coordinator.get_or_create
 - collaboration.coordinator.switch_harness
+- collaboration.coordinator.delete
 - collaboration.groups.get
 - collaboration.groups.list
 - collaboration.groups.update

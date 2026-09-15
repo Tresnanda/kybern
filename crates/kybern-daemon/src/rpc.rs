@@ -327,6 +327,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         CollaborationCoordinatorGetOrCreate::NAME => {
             ok(state.orchestrator.project_coordinator_get_or_create(parse(params)?).await.map_err(bad)?)
         }
+        CollaborationCoordinatorDelete::NAME => ok(state.orchestrator.project_coordinator_delete(parse(params)?).await.map_err(bad)?),
         CollaborationCoordinatorSwitchHarness::NAME => {
             ok(state.orchestrator.project_coordinator_switch_harness(parse(params)?).await.map_err(bad)?)
         }

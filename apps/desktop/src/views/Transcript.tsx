@@ -1,4 +1,5 @@
 import { useFollowingHistory } from "@/lib/useFollowingHistory"
+import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { useEarlierHistory } from "@/lib/useEarlierHistory"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
@@ -811,6 +812,22 @@ async function openThreadReference(threadId: ThreadId) {
   }
 }
 
+function CollaborationMessageNotice({ text }: { text: string }) {
+  const preview = collaborationPreview(text)!
+  const sender = useStore(state => preview.senderId ? state.threads[preview.senderId]?.title || "Helper" : "You")
+  const [open, setOpen] = useTranscriptRowState("collaboration-message", false)
+  return <div className="my-3 min-w-0 rounded-lg bg-muted/30 px-3">
+    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}
+      className="flex min-h-10 w-full items-center gap-2 py-2 text-start text-sm text-muted-foreground hover:text-foreground">
+      <DisclosureChevron open={open} /><span className="min-w-0 break-words">{preview.purpose} · {sender}</span>
+    </button>
+    <DisclosureRegion open={open}>
+      <div className="max-w-prose pb-3 text-sm leading-relaxed"><Markdown text={preview.body} /></div>
+      <details className="pb-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Message metadata</summary><pre className="whitespace-pre-wrap break-words pt-2">{text}</pre></details>
+    </DisclosureRegion>
+  </div>
+}
+
 function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: string }) {
   // Structured parts (skills, plugin and file mentions) sit inline in the
   // message at the position they were typed, so the bubble is rebuilt as one
@@ -849,6 +866,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
   const files = message.parts.filter((p) => p.type === "image" || p.type === "attachment")
   // Decided once on mount: only a bubble that was sent just now plays the send animation.
   const [fresh] = useState(() => Date.now() - new Date(at).getTime() < 3000)
+  if (files.length === 0 && tokens.size === 0 && collaborationPreview(text)) return <CollaborationMessageNotice text={text} />
   return (
     <div className={cn("flex w-full justify-end", fresh && "chat-message-send-enter")}>
       <div className="group relative flex max-w-[80%] flex-col items-end gap-px">

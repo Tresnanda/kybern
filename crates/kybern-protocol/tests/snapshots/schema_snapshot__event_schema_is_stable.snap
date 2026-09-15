@@ -188,6 +188,28 @@ expression: schema_for!(ThreadEvent)
     {
       "type": "object",
       "properties": {
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "coordinator_thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "const": "project_coordinator_deleted"
+        }
+      },
+      "required": [
+        "kind",
+        "project_id",
+        "coordinator_thread_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "group": {
           "$ref": "#/$defs/CollaborationGroup"
         },

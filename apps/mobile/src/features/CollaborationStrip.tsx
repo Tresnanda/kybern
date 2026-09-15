@@ -35,13 +35,13 @@ export function CollaborationStrip({ thread }: { thread?: Thread | null }) {
   const { colors } = useTheme();
   const [detail, setDetail] = useState<CollaborationGroupDetail | null>(null);
   const generation = useRef(0);
+  const [expanded, setExpanded] = useState(false);
   const load = useCallback(async () => {
     if (!thread?.collaboration_group_id) {
       setDetail(null);
       return;
     }
     const current = ++generation.current;
-    setDetail(null);
     try {
       const candidate = await rpc("collaboration.groups.get", {
         group_id: thread.collaboration_group_id,
@@ -53,6 +53,8 @@ export function CollaborationStrip({ thread }: { thread?: Thread | null }) {
   }, [thread?.collaboration_group_id, app.activeId]);
 
   useEffect(() => {
+    setDetail(null);
+    setExpanded(false);
     void load();
     return () => {
       generation.current++;
@@ -85,7 +87,6 @@ export function CollaborationStrip({ thread }: { thread?: Thread | null }) {
           assignment.owner_thread_id && live.has(assignment.status),
       )
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-      .slice(0, 4)
       .map((assignment) => ({
         assignment,
         thread: app.threads.find(
@@ -98,21 +99,29 @@ export function CollaborationStrip({ thread }: { thread?: Thread | null }) {
   const mainId =
     detail?.group.coordinator_thread_id ?? thread.parent_thread_id;
   const main = app.threads.find((item) => item.id === mainId);
+  const attentionCount = helpers.filter(({ assignment }) => ["blocked", "attention_needed"].includes(assignment.status)).length;
   const pill = {
-    minHeight: 44,
+    minHeight: 48,
     borderRadius: 20,
     backgroundColor: colors.surface,
     paddingHorizontal: 12,
     gap: 7,
   } as const;
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      keyboardShouldPersistTaps="always"
-      contentContainerStyle={{ paddingHorizontal: 20, gap: 8 }}
-      style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}
-    >
+    <View style={{ width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 20 }}>
+      <Tap label={`${expanded ? "Hide" : "Show"} helpers`} expanded={expanded} static
+        onPress={() => setExpanded(value => !value)} style={[styles.line, { minHeight: 48, gap: 8 }]}>
+        <Icon name="person.2" size={18} />
+        <T variant="caption" style={{ flex: 1 }}>{thread.coordinator_project_id && detail?.coordinator_setup_complete === false ? "Project setup" : `${detail?.members.filter(member => member.thread_id !== mainId && member.active).length ?? helpers.length} helpers`}</T>
+        {helpers.length > 0 && <T variant="caption" tone="secondary">{attentionCount > 0 ? `${attentionCount} need attention` : `${helpers.length} active`}</T>}
+        <Icon name={expanded ? "chevron.up" : "chevron.down"} size={12} />
+      </Tap>
+      {expanded && <ScrollView keyboardShouldPersistTaps="always" style={{ maxHeight: 240 }} contentContainerStyle={{ gap: 8, paddingBottom: 8 }}>
+      {thread.coordinator_project_id && detail?.coordinator_setup_complete === false && <Tap
+        label="Project setup: view research progress"
+        onPress={() => router.push({ pathname: "/collaboration", params: { threadId: thread.id } })}
+        style={[styles.line, pill]}
+      ><T variant="caption">Project setup</T></Tap>}
       {mainId && mainId !== thread.id && (
         <Tap
           label={`Back to main conversation${main?.title ? `, ${main.title}` : ""}`}
@@ -146,8 +155,8 @@ export function CollaborationStrip({ thread }: { thread?: Thread | null }) {
           ) : (
             <Icon name="person.crop.circle" size={15} />
           )}
-          <View style={{ maxWidth: 150 }}>
-            <T variant="caption" numberOfLines={1}>
+          <View style={{ flex: 1, gap: 3 }}>
+            <T variant="caption" numberOfLines={2}>
               {helper?.title || assignment.title}
             </T>
             <T variant="caption" tone="secondary" numberOfLines={1}>
@@ -182,6 +191,7 @@ export function CollaborationStrip({ thread }: { thread?: Thread | null }) {
           <T variant="caption">{item.label}</T>
         </Tap>
       ))}
-    </ScrollView>
+    </ScrollView>}
+    </View>
   );
 }

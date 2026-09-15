@@ -1,3 +1,5 @@
+import { collaborationThreadRows } from "../../../../packages/kybern-client/src/collaboration";
+import { confirmDeleteCoordinator } from "./deleteCoordinator";
 import * as Haptics from "expo-haptics";
 import { router, useGlobalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
@@ -83,7 +85,9 @@ function ProjectGroup({
   threads,
   activeId,
   onOptions,
+  disclose,
 }: {
+  disclose: boolean;
   name: string;
   threads: Thread[];
   activeId?: string;
@@ -94,11 +98,10 @@ function ProjectGroup({
   const [collapsed, setCollapsed] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const open = collapsed && !hasActive ? false : true;
-  const shown =
-    showAll || threads.length <= MAX_PROJECT_THREADS
-      ? threads
-      : threads.slice(0, MAX_PROJECT_THREADS);
-  const hidden = threads.length - shown.length;
+  const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({});
+  const rows = disclose ? collaborationThreadRows(threads, expandedThreads, activeId) : threads.map(thread => ({ thread, depth: 0, childCount: 0, open: false }));
+  const shown = showAll ? rows : rows.slice(0, MAX_PROJECT_THREADS);
+  const hidden = rows.length - shown.length;
   return (
     <View style={{ marginBottom: 6 }}>
       <Tap
@@ -132,13 +135,17 @@ function ProjectGroup({
       </Tap>
       {open && (
         <View>
-          {shown.map((t) => (
-            <ThreadRow
-              key={t.id}
-              thread={t}
-              active={t.id === activeId}
-              onOptions={onOptions}
-            />
+          {shown.map(({ thread: t, depth, childCount, open: childrenOpen }) => (
+            <View key={t.id} style={{ paddingStart: Math.min(depth, 2) * 16 }}>
+              <ThreadRow thread={t} active={t.id === activeId} onOptions={onOptions} />
+              {childCount > 0 && <Tap static expanded={childrenOpen}
+                label={`${childrenOpen ? "Hide" : "Show"} ${childCount} helpers for ${t.title || "Untitled thread"}`}
+                onPress={() => setExpandedThreads(value => ({ ...value, [t.id]: !childrenOpen }))}
+                style={[styles.line, { minHeight: 48, paddingStart: 12, gap: 8 }]}>
+                <Icon name={childrenOpen ? "chevron.down" : "chevron.right"} size={12} />
+                <T variant="caption" tone="secondary">{childCount} helpers</T>
+              </Tap>}
+            </View>
           ))}
           {hidden > 0 && (
             <Tap
@@ -209,7 +216,8 @@ export function Sidebar() {
             .catch(() => {});
         },
       },
-      ...(t.status !== "archived"
+      ...(t.coordinator_project_id ? [{ text: "Delete coordinator", style: "destructive" as const, onPress: () => confirmDeleteCoordinator(t) }] : []),
+      ...(t.status !== "archived" && !t.coordinator_project_id
         ? [
             {
               text: "Archive thread",
@@ -321,6 +329,7 @@ export function Sidebar() {
           <ProjectGroup
             key={g.projectId}
             name={g.name}
+            disclose={!query.trim() && filter === "All"}
             threads={g.threads}
             activeId={activeId}
             onOptions={options}

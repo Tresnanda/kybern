@@ -505,6 +505,24 @@ permission controls. Describe the goal and send it when ready. Leaving the draft
 does not create a coordinator or start work. The first send creates or reopens
 the project's coordinator and preserves that goal as its original brief.
 
+Before implementation, the coordinator delegates research of the repository's
+instructions, architecture, development/test commands, and relevant constraints.
+It reviews a successful research result and saves a project overview in
+**Knowledge** before editing or integration assignments are accepted. The chat
+shows **Setting up project** / **Project setup**, then **Setup complete**. It
+continues the original request after setup; you do not need to send it again.
+If setup is interrupted or blocked, send a follow-up to resume it. Existing
+coordinators without an overview complete this step on their next provider session;
+previous project knowledge remains available. Setup is research, not dependency
+installation or environment provisioning, and an empty repository is supported.
+
+Use **Delete coordinator** from its sidebar menu, chat menu, or Project panel.
+Stop active agents and clear queued messages first. Deletion archives the
+coordinator conversation and retires its group. Worker conversations, files,
+results, and old knowledge remain available as history. **Create coordinator**
+then starts a fresh coordinator with fresh knowledge and a new setup pass.
+Deletion retries target the exact coordinator reviewed, never a replacement.
+
 The coordinator remains one normal, resumable chat for the project. **Workers**,
 **Project knowledge**, and **Results** stay beside its composer while the chat
 remains the main surface. Project knowledge includes the coordinator's current
@@ -555,6 +573,7 @@ kybern collaboration threads search --all-projects --query authentication
 kybern collaboration threads read <thread-id>
 kybern collaboration coordinator get <project-id>
 kybern collaboration coordinator switch-harness --input coordinator-harness.json
+kybern collaboration coordinator delete --input coordinator-delete.json
 kybern collaboration groups list
 kybern collaboration groups create --input group.json
 kybern collaboration assignments create --input assignment.json
@@ -563,6 +582,9 @@ kybern collaboration messages list <group-id>
 kybern collaboration context history <entry-id>
 kybern collaboration wait <group-id> --timeout-seconds 30
 ```
+
+`coordinator-delete.json` contains `operation_id` (a retry UUID), `project_id`,
+and `thread_id` (the coordinator being deleted).
 
 For example, `group.json` contains the existing project and coordinator IDs:
 

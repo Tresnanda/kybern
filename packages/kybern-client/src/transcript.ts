@@ -145,6 +145,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
   if (event.seq <= state.lastSeq) return state
   const compact = compactThreadState(state)
   switch (event.kind) {
+    case "project_coordinator_deleted":
     case "thread_created": case "thread_updated": case "thread_archived":
     case "thread_notes_updated":
     case "approval_requested": case "user_input_requested": case "approval_resolved":

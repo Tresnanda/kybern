@@ -795,10 +795,16 @@ impl Store {
     pub fn collaboration_message_observed(&self, message: &CollaborationMessage, turn_id: TurnId) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
-            tx.execute(
-                "UPDATE collaboration_messages SET state=?2,delivery_message_id=?3,payload=?4 WHERE id=?1",
+            let changed = tx.execute(
+                "UPDATE collaboration_messages SET state=?2,delivery_message_id=?3,payload=?4 WHERE id=?1 AND state IN ('persisted','queued')",
                 params![message.id.to_string(), snake(message.state)?, message.id.to_string(), serde_json::to_string(message)?],
             )?;
+            // A cancellation, answer or another delivery may have won since the
+            // snapshot was read. Never resurrect it or emit a second receipt.
+            if changed == 0 {
+                tx.commit()?;
+                return Ok(Vec::new());
+            }
             let mut events = vec![append_event_in_transaction(
                 &tx,
                 message.to_thread_id,
@@ -1305,6 +1311,68 @@ impl Store {
             stored.thread.last_seq = event.seq;
             write_thread(&tx, &stored.thread)?;
             collaboration_tx_complete(&tx, operation_id, "human", "coordinator.switch_harness", &request, &stored)?;
+            tx.commit()?;
+            Ok((stored, events))
+        })
+    }
+
+    /// Retire a coordinator atomically. Historical events, knowledge, workers,
+    /// and worktrees remain available; a new coordinator starts with fresh IDs.
+    pub fn project_coordinator_delete_operation(
+        &self,
+        params: &methods::CollaborationCoordinatorDeleteParams,
+        thread: &Thread,
+        group: &CollaborationGroup,
+    ) -> Result<(Thread, Vec<ThreadEvent>)> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let request = serde_json::to_string(params)?;
+            if let Some(stored) = collaboration_tx_receipt(&tx, params.operation_id, "human", "coordinator.delete", &request)? {
+                return Ok((serde_json::from_str(&stored)?, Vec::new()));
+            }
+            let removed = tx.execute(
+                "DELETE FROM project_coordinators WHERE project_id=?1 AND thread_id=?2",
+                params![params.project_id.to_string(), params.thread_id.to_string()],
+            )?;
+            if removed != 1 {
+                anyhow::bail!("coordinator changed; reopen the project before deleting it");
+            }
+            tx.execute("DELETE FROM project_coordinator_reservations WHERE project_id=?1", [params.project_id.to_string()])?;
+            tx.execute(
+                "UPDATE collaboration_groups SET status=?2,payload=?3 WHERE id=?1",
+                params![group.id.to_string(), snake(group.status)?, serde_json::to_string(group)?],
+            )?;
+            let mut events = append_collaboration_events_in_transaction(
+                &tx,
+                group.id,
+                EventPayload::CollaborationGroupUpdated { group: group.clone() },
+            )?;
+            // Keep members for historical navigation, but revoke agent authority.
+            let members = {
+                let mut statement = tx.prepare("SELECT payload FROM collaboration_members WHERE group_id=?1")?;
+                statement.query_map([group.id.to_string()], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for payload in members {
+                let mut member: GroupMember = serde_json::from_str(&payload)?;
+                member.active = false;
+                tx.execute(
+                    "UPDATE collaboration_members SET active=0,payload=?3 WHERE group_id=?1 AND thread_id=?2",
+                    params![group.id.to_string(), member.thread_id.to_string(), serde_json::to_string(&member)?],
+                )?;
+            }
+            let mut stored = thread.clone();
+            write_thread(&tx, &stored)?;
+            for payload in [
+                EventPayload::ThreadUpdated { thread: stored.clone() },
+                EventPayload::ThreadArchived,
+                EventPayload::ProjectCoordinatorDeleted { project_id: params.project_id, coordinator_thread_id: stored.id },
+            ] {
+                let event = append_event_in_transaction(&tx, stored.id, None, payload)?;
+                stored.last_seq = event.seq;
+                events.push(event);
+            }
+            write_thread(&tx, &stored)?;
+            collaboration_tx_complete(&tx, params.operation_id, "human", "coordinator.delete", &request, &stored)?;
             tx.commit()?;
             Ok((stored, events))
         })
@@ -2281,6 +2349,11 @@ mod tests {
         let stored = store.collaboration_message_get(intended.id).unwrap().unwrap();
         assert_eq!(stored.state, CollaborationDeliveryState::Submitted);
         assert_eq!(stored.delivery_turn_id, Some(turn_id));
+        assert!(store.collaboration_message_observed(&observed, turn_id).unwrap().is_empty(), "delivery is idempotent");
+        let mut stale = cancelled.clone();
+        stale.state = CollaborationDeliveryState::Submitted;
+        stale.delivery_turn_id = Some(turn_id);
+        assert!(store.collaboration_message_observed(&stale, turn_id).unwrap().is_empty(), "cancellation wins over an old read");
         assert!(!store.queue_is_pending(intended.id).unwrap());
         assert!(store.queue_is_pending(other.id).unwrap());
         assert_eq!(store.collaboration_message_get(cancelled.id).unwrap().unwrap().state, CollaborationDeliveryState::Cancelled);

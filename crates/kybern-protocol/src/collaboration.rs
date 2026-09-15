@@ -298,6 +298,9 @@ pub struct ContextEntryHistory {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CollaborationGroupDetail {
+    /// Present only for the current persistent coordinator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator_setup_complete: Option<bool>,
     pub group: CollaborationGroup,
     pub members: Vec<GroupMember>,
     pub assignments: Vec<CollaborationAssignment>,

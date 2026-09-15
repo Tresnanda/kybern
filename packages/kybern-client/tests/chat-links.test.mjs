@@ -34,3 +34,23 @@ test("history prefetch waits for reading intent and loads each nearby cursor onc
   assert.equal(gate.claim(null, 0, 600, true), false, "oldest page stops loading");
   assert.equal(gate.claim(20, 0, 0, true), false, "hidden viewport does not fetch");
 });
+
+test("collaboration disclosure hides branches without losing orphan or selected threads", async () => {
+  const { collaborationThreadRows } = await import("../src/collaboration.ts");
+  const threads = [{ id: "root" }, { id: "child", parent_thread_id: "root" }, { id: "leaf", parent_thread_id: "child" }, { id: "orphan", parent_thread_id: "gone" }];
+  assert.deepEqual(collaborationThreadRows(threads, {}).map(row => row.thread.id), ["root", "orphan"]);
+  assert.deepEqual(collaborationThreadRows(threads, { root: true }).map(row => row.thread.id), ["root", "child", "orphan"]);
+  assert.deepEqual(collaborationThreadRows(threads, {}, "leaf").map(row => row.thread.id), ["root", "child", "leaf", "orphan"]);
+  assert.deepEqual(collaborationThreadRows(threads, { root: false }, "leaf").map(row => row.thread.id), ["root", "orphan"]);
+  assert.equal(collaborationThreadRows([{id:"a",parent_thread_id:"b"},{id:"b",parent_thread_id:"a"}], {a:true,b:true}).length, 2);
+});
+
+test("collaboration preview keeps result text and leaves ordinary prompts alone", async () => {
+  const { collaborationPreview } = await import("../src/collaboration.ts");
+  const id = "01a0a0e6-85d2-7c01-adfc-8ce6a93c5b0e";
+  const body = "Revised commit: abc.\n\nTests passed.";
+  const raw = `Kybern collaboration Result from thread ${id} (message ${id}, reply_to None):\n${body}\n\nDo not send an acknowledgement wakeup. Continue only if this message gives you actual work; otherwise record progress without waking the sender.`;
+  assert.deepEqual(collaborationPreview(raw), { purpose: "Result", senderId: id, body });
+  assert.equal(collaborationPreview("Can you explain Kybern collaboration Result?"), null);
+  assert.equal(collaborationPreview("Kybern collaboration Result from thread nonsense"), null);
+});

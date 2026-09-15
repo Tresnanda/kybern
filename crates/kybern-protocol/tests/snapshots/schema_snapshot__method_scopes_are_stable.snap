@@ -80,6 +80,8 @@ expression: scopes
   - "orchestration:operate"
 - - collaboration.coordinator.switch_harness
   - "orchestration:operate"
+- - collaboration.coordinator.delete
+  - "orchestration:operate"
 - - collaboration.groups.get
   - "orchestration:read"
 - - collaboration.groups.list

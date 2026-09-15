@@ -93,7 +93,7 @@ export default function CoordinatorSetup() {
           <T variant="caption" tone="secondary">Project coordinator</T>
           <T variant="title" style={{ textAlign: "center" }}>{`What should we work on in ${project.name}?`}</T>
           <T tone="secondary" style={{ textAlign: "center", maxWidth: 480 }}>
-            Describe the goal. Your coordinator plans the work, delegates tasks, and keeps project knowledge for next time.
+            Describe the goal. On your first Send, the coordinator researches this project and saves what it learns, then plans and delegates your work. Later tasks reuse that knowledge.
           </T>
         </View>
       </ScrollView>
