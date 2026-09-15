@@ -50,6 +50,7 @@ const DIFF_FILES_BATCH = 50
 
 export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const tab = useStore((s) => s.rightTab)
+  const workspaceActive = useStore((s) => !s.settingsOpen)
   const tabs = useStore((s) => s.rightTabs)
   const set = useStore((s) => s.set)
   const diff = useStore((s) => (threadId ? s.diffs[diffKey(threadId)] : undefined))
@@ -87,7 +88,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
           {tab && <span aria-hidden className="t-tabs-pill z-0 rounded-lg bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />}
           {tabs.map((id) => {
             const { label, Icon } = DOCK_PANELS.find((panel) => panel.id === id)!
-            return <DockTab key={id} active={tab === id} onClick={() => set({ rightTab: id })} onClose={() => closeTab(id)} icon={<Icon className="size-3.5 shrink-0 opacity-70" />} label={id === "collaboration" && projectCoordinator ? "Project" : label}>
+            return <DockTab key={id} active={workspaceActive && tab === id} onClick={() => set({ rightTab: id })} onClose={() => closeTab(id)} icon={<Icon className="size-3.5 shrink-0 opacity-70" />} label={id === "collaboration" && projectCoordinator ? "Project" : label}>
               {id === "activity" && activeTasks > 0 && <span key={activeTasks} className="t-pop ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
               {id === "changes" && adds + dels > 0 && <span key={`${adds}:${dels}`} className="t-pop inline-flex"><DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" /></span>}
             </DockTab>
@@ -126,21 +127,21 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
           <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its activity, changes, and terminal.</div>
         ) : (
           <>
-            {tabs.includes("collaboration") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "collaboration" ? "z-[1]" : "z-0")} data-active={tab === "collaboration"} aria-hidden={tab !== "collaboration"}>
-              <CollaborationPane key={threadId} threadId={threadId} active={tab === "collaboration"} />
+            {tabs.includes("collaboration") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "collaboration" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "collaboration"} aria-hidden={tab !== "collaboration"}>
+              <CollaborationPane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />
             </div>}
-            {tabs.includes("activity") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={tab === "activity"} aria-hidden={tab !== "activity"}>
-              <ActivityPane key={threadId} threadId={threadId} visible={tab === "activity"} />
+            {tabs.includes("activity") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "activity"} aria-hidden={tab !== "activity"}>
+              <ActivityPane key={threadId} threadId={threadId} visible={workspaceActive && tab === "activity"} />
             </div>}
-            {tabs.includes("changes") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "changes" ? "z-[1]" : "z-0")} data-active={tab === "changes"} aria-hidden={tab !== "changes"}>
-              <Changes key={threadId} threadId={threadId} active={tab === "changes"} />
+            {tabs.includes("changes") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "changes" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "changes"} aria-hidden={tab !== "changes"}>
+              <Changes key={threadId} threadId={threadId} active={workspaceActive && tab === "changes"} />
             </div>}
-            {tabs.includes("explorer") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "explorer" ? "z-[1]" : "z-0")} data-active={tab === "explorer"} aria-hidden={tab !== "explorer"}>
-              {projectId && <ExplorerPane projectId={projectId} active={tab === "explorer"} />}
+            {tabs.includes("explorer") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "explorer" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "explorer"} aria-hidden={tab !== "explorer"}>
+              {projectId && <ExplorerPane projectId={projectId} active={workspaceActive && tab === "explorer"} />}
             </div>}
-            {tabs.includes("artifacts") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "artifacts" ? "z-[1]" : "z-0")} data-active={tab === "artifacts"} aria-hidden={tab !== "artifacts"}><ArtifactsPane key={threadId} threadId={threadId} active={tab === "artifacts"} /></div>}
-            {tabs.includes("terminal") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={tab === "terminal"} aria-hidden={tab !== "terminal"}>
-              <TerminalWorkspace threadId={threadId} active={tab === "terminal"} />
+            {tabs.includes("artifacts") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "artifacts" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "artifacts"} aria-hidden={tab !== "artifacts"}><ArtifactsPane key={threadId} threadId={threadId} active={workspaceActive && tab === "artifacts"} /></div>}
+            {tabs.includes("terminal") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "terminal"} aria-hidden={tab !== "terminal"}>
+              <TerminalWorkspace threadId={threadId} active={workspaceActive && tab === "terminal"} />
             </div>}
           </>
         )}

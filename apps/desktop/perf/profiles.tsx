@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
-import { OmpProfiles } from "../src/views/SettingsDialog"
+import { OmpProfiles } from "../src/views/SettingsScreen"
 import { useStore } from "../src/state/store"
 import type { Settings } from "../src/protocol"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"

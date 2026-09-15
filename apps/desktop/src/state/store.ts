@@ -127,7 +127,7 @@ export interface AppState {
   sessionsProjectId: ProjectId | null
   paletteOpen: boolean
   settingsOpen: boolean
-  settingsTab: "general" | "agents" | "integrations" | "appearance" | "usage" | "about"
+  settingsTab: "general" | "agents" | "integrations" | "appearance" | "notifications" | "background" | "usage" | "about"
   collapsedProjects: Record<ProjectId, boolean>
   /** Messages waiting for the current turn to finish, per thread. */
   queued: Record<ThreadId, QueuedMessage[]>

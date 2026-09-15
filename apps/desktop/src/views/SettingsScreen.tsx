@@ -1,16 +1,16 @@
 import { Integrations } from "./Integrations"
 import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from "@/lib/appUpdate"
 import { notificationPermission, notify, type NotificationPermissionState } from "@/lib/tauri"
-// Settings, in a dialog: a 16rem nav column of sidebar rows and a
-// content column of SettingsSection / SettingsCard / SettingsRow blocks.
+// Dedicated settings screen. The workspace remains mounted behind it for a lossless return.
 
-import { useEffect, useId, useRef, useState } from "react"
+import { Fragment, useEffect, useId, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
 import { useTheme } from "@/components/theme-context"
 import { Button } from "@/components/kit/button"
-import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "@/components/kit/dialog"
+import { UsagePage } from "./UsagePage"
+import { ArrowLeftIcon, SearchIcon, PluginIcon, BellIcon, BackgroundTrayIcon } from "@/lib/kit/icons"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { ChevronDownIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
@@ -18,7 +18,7 @@ import { Switch } from "@/components/kit/switch"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/kit/collapsible"
 import { MatrixLoader, TextSwap } from "@/components/kybern/motion"
-import { PERMISSION_HINT, PERMISSION_LABEL, tokens, usd } from "@/lib/format"
+import { PERMISSION_HINT, PERMISSION_LABEL } from "@/lib/format"
 import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/kit/icons"
 import {
   SETTINGS_CARD_CLASS_NAME,
@@ -33,75 +33,131 @@ import {
 import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
-import type { BackgroundSettings, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, UsageSummaryResult, HarnessUpdate } from "@/protocol"
+import type { BackgroundSettings, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 
-type Tab = "general" | "agents" | "integrations" | "appearance" | "usage" | "about"
+type Tab = "general" | "agents" | "integrations" | "appearance" | "notifications" | "background" | "usage" | "about"
 
 const TABS: [Tab, string, string][] = [
-  ["general", "General", "Defaults for new threads and notifications."],
-  ["agents", "Agents", "Availability on the connected machine."],
+  ["general", "General", "Defaults for new threads and workspace behavior."],
+  ["agents", "Agent providers", "Manage the coding agents on your connected machine."],
   ["integrations", "Integrations", "Plugins and connectors for your agents."],
-  ["appearance", "Appearance", "Theme and window material."],
-  ["usage", "Usage", "Tokens and cost by agent, model or day."],
-  ["about", "About", "Daemon, protocol and data folder."],
+  ["appearance", "Appearance", "Make Kybern feel at home on your desktop."],
+  ["notifications", "Notifications", "Choose when Kybern gets your attention."],
+  ["background", "Background activity", "Manage idle agents, terminals, and power use."],
+  ["usage", "Usage", "Understand your activity, token use, and reported costs."],
+  ["about", "About", "App version, updates, and connected machine."],
 ]
 
-export function SettingsDialog() {
-  const open = useStore((s) => s.settingsOpen)
+const NAV_GROUPS: { label: string; tabs: Tab[] }[] = [
+  { label: "Personal", tabs: ["general", "appearance", "notifications", "usage"] },
+  { label: "Coding", tabs: ["agents", "integrations"] },
+  { label: "System", tabs: ["background", "about"] },
+]
+
+const SEARCH_TERMS: Record<Tab, string> = {
+  general: "default agent permissions worktree thread titles close workspace",
+  notifications: "alerts sound permission work finishes fails input",
+  background: "idle memory warm shells daemon battery power activity",
+  agents: "provider harness install updates claude codex cursor opencode pi omp profiles",
+  integrations: "plugins connectors tools mcp skills sign in authentication",
+  appearance: "theme light dark system translucent glass window",
+  usage: "tokens cost spending activity model day cache history",
+  about: "version update protocol host data folder machine",
+}
+
+export function SettingsScreen() {
   const set = useStore((s) => s.set)
   const tab = useStore((s) => s.settingsTab)
   const environmentId = useStore((s) => s.environmentId)
+  const [query, setQuery] = useState("")
+  const [keyboard, setKeyboard] = useState(false)
+  const heading = useRef<HTMLHeadingElement>(null)
+  const scroll = useRef<HTMLDivElement>(null)
   const current = TABS.find((t) => t[0] === tab) ?? TABS[0]!
-  const [navRef, pillStyle, pillReady] = useSlidingPill<HTMLUListElement>(tab)
+  const [navRef, pillStyle, pillReady] = useSlidingPill<HTMLUListElement>(`${tab}:${query}`)
+  const matches = TABS.filter(([id, title, description]) => `${title} ${description} ${SEARCH_TERMS[id]}`.toLowerCase().includes(query.trim().toLowerCase()))
+  const close = () => set({ settingsOpen: false })
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true })
+  }, [])
+  useEffect(() => { scroll.current?.scrollTo({ top: 0 }) }, [tab])
+  const select = (next: Tab, fromKeyboard = false) => {
+    setKeyboard(fromKeyboard)
+    set({ settingsTab: next })
+    setQuery("")
+  }
   return (
-    <Dialog open={open} onOpenChange={(o) => set({ settingsOpen: o })}>
-      <DialogPopup className="app-settings-surface h-[min(680px,90dvh)] max-w-[920px] flex-col sm:flex-row overflow-hidden p-0" bottomStickOnMobile={false}>
-        <DialogTitle className="sr-only">Settings</DialogTitle>
-        <DialogDescription className="sr-only">Configure kybern</DialogDescription>
-        <nav className="flex shrink-0 flex-col border-b border-[color:var(--color-border-light)] bg-[var(--color-background-button-secondary)] p-3 sm:w-44 sm:border-r sm:border-b-0 sm:py-5 font-system-ui">
-          <h2 className="px-2 py-1 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground">Settings</h2>
-          <ul ref={navRef} className="t-tabs mt-3 flex gap-1 overflow-x-auto sm:flex-col">
-            <li aria-hidden className="t-tabs-pill z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />
-            {TABS.map(([v, label]) => (
-              <li key={v} className="relative z-[1]">
-                <button
-                  type="button"
-                  aria-current={tab === v ? "page" : undefined}
-                  data-tab-active={tab === v}
-                  onClick={() => set({ settingsTab: v })}
-                  className={cn("w-full", SIDEBAR_HEADER_ROW_CLASS_NAME, tab === v ? "text-[var(--sidebar-accent-foreground)]" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}
-                >
-                  {(() => { const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: SettingsIcon, appearance: AppearanceIcon, usage: ClockIcon, about: InfoIcon }[v]; return <Icon className="size-4 shrink-0" /> })()}
-                  <span className="truncate">{label}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-          <div key={tab} className="t-section-enter mx-auto w-full max-w-2xl px-5 py-6 sm:px-8 sm:py-8">
-            <div className="mb-7 flex items-start justify-between gap-4">
-              <div>
-                <h1 className="text-lg font-semibold tracking-tight text-foreground">{current[1]}</h1>
-                <p className="mt-1 text-[length:var(--app-font-size-ui)] leading-relaxed text-muted-foreground">{current[2]}</p>
-              </div>
-            </div>
-            <div className="space-y-6">
+    <section className="settings-screen" aria-label="Settings" data-keyboard={keyboard || undefined}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented || (event.target as HTMLElement).closest('[role="dialog"], [role="menu"], [data-slot="menu-popup"]')) return
+        event.stopPropagation()
+        if (query) setQuery("")
+        else close()
+      }}>
+      <aside className="settings-navigation app-sidebar-surface">
+        <div className="drag-region h-[46px] shrink-0" />
+        <div className="settings-navigation-inner">
+          <Button variant="ghost" size="sm" className="settings-back justify-start" onClick={close}>
+            <ArrowLeftIcon className="size-4" /> Back to workspace
+          </Button>
+          <InputGroup className="settings-search">
+            <SearchIcon className="ms-3 size-3.5 shrink-0 text-muted-foreground" />
+            <InputGroupInput aria-label="Search settings" placeholder="Search settings…" value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter" && matches[0]) { select(matches[0][0], true); heading.current?.focus() } }} />
+          </InputGroup>
+          <nav aria-label="Settings sections">
+            <ul ref={navRef} className="t-tabs settings-nav-list">
+              {!query && <li aria-hidden className="t-tabs-pill z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />}
+              {NAV_GROUPS.map((group) => {
+                const items = group.tabs.flatMap((id) => matches.filter((item) => item[0] === id))
+                if (!items.length) return null
+                return <Fragment key={group.label}>
+                  <li className="settings-nav-category"><h2>{group.label}</h2></li>
+                  {items.map(([id, label]) => {
+                    const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: PluginIcon, appearance: AppearanceIcon, usage: ClockIcon, notifications: BellIcon, background: BackgroundTrayIcon, about: InfoIcon }[id]
+                    return <li key={id} className="relative z-[1]">
+                      <button type="button" aria-current={tab === id ? "page" : undefined} data-tab-active={tab === id}
+                        onClick={(event) => select(id, event.detail === 0)}
+                        className={cn(SIDEBAR_HEADER_ROW_CLASS_NAME, "settings-nav-item", tab === id ? "text-foreground" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}>
+                        <span className="settings-nav-icon"><Icon className="size-4 shrink-0" /></span><span>{label}</span>
+                      </button>
+                    </li>
+                  })}
+                </Fragment>
+              })}
+            </ul>
+            {matches.length === 0 && <div className="settings-search-empty"><p>No settings match “{query}”.</p><Button variant="ghost" size="sm" onClick={() => setQuery("")}>Clear search</Button></div>}
+          </nav>
+          <div className="settings-nav-footer"><span className="size-1.5 rounded-full bg-muted-foreground/50" />{activeEnvironment()?.name ?? "This machine"}</div>
+        </div>
+      </aside>
+      <main className="settings-content app-settings-surface">
+        <div className="drag-region settings-titlebar"><span>Settings<span className="mx-2 text-muted-foreground/40">/</span>{current[1]}</span></div>
+        <div ref={scroll} className="settings-scroll">
+          <div className={cn("settings-page", tab === "usage" && "settings-page-wide")}>
+            <header className="settings-page-heading">
+              <h1 ref={heading} tabIndex={-1}>{current[1]}</h1>
+              <p>{current[2]}</p>
+            </header>
+            <div key={`${environmentId}:${tab}`} className="settings-section-content">
               {tab === "general" && <General />}
               {tab === "agents" && <Agents />}
-              {tab === "integrations" && <Integrations key={environmentId} />}
+              {tab === "integrations" && <Integrations />}
               {tab === "appearance" && <Appearance />}
-              {tab === "usage" && <Usage />}
+              {tab === "notifications" && <Notifications />}
+              {tab === "background" && <Background />}
+              {tab === "usage" && <UsagePage />}
               {tab === "about" && <About />}
             </div>
           </div>
         </div>
-      </DialogPopup>
-    </Dialog>
+      </main>
+    </section>
   )
 }
 
@@ -125,8 +181,8 @@ function useSettings() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
-      <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{title}</h2>
+    <section className={cn(SETTINGS_PANEL_SECTION_CLASS_NAME, "settings-group")}>
+      <h2 className={cn(SETTINGS_SECTION_LABEL_CLASS_NAME, "settings-group-title")}>{title}</h2>
       <div className={cn(SETTINGS_CARD_CLASS_NAME, SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME)}>{children}</div>
     </section>
   )
@@ -135,7 +191,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Row({ title, description, status, children }: { title: string; description?: React.ReactNode; status?: string; children?: React.ReactNode }) {
   const labelId = useId()
   return (
-    <div className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "scroll-mt-24 py-4!")}>
+    <div className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "settings-row scroll-mt-24 py-4!")}>
       <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
         <div className="min-w-0 basis-52 flex-1 space-y-1">
           {title && <div className="flex min-h-5 items-center gap-1.5">
@@ -205,15 +261,29 @@ function General() {
         <Row title="Generate thread titles" description="Names the thread from its first message using the agent.">
           <Switch aria-label="Generate thread titles" checked={settings.generate_titles} onCheckedChange={(v) => update({ generate_titles: v })} />
         </Row>
+        <AskBeforeCloseRow />
+      </Section>
+    </>
+  )
+}
+
+function Notifications() {
+  const { settings, update } = useSettings()
+  if (!settings) return null
+  return <>
+    <Section title="Agent activity">
         <Row title="Show agent notifications" description="When work finishes, fails, or needs your input.">
           <Switch aria-label="Show agent notifications" checked={settings.notifications} onCheckedChange={(v) => update({ notifications: v })} />
         </Row>
-        <AskBeforeCloseRow />
-      </Section>
-      <BackgroundSettingsSection background={settings.background} onChange={(background) => update({ background })} />
-      <NotificationSettings />
-    </>
-  )
+    </Section>
+    <NotificationSettings />
+  </>
+}
+
+function Background() {
+  const { settings, update } = useSettings()
+  if (!settings) return null
+  return <BackgroundSettingsSection background={settings.background} onChange={(background) => update({ background })} />
 }
 
 type BackgroundLimitKey = { [K in keyof BackgroundSettings]: BackgroundSettings[K] extends number ? K : never }[keyof BackgroundSettings]
@@ -629,100 +699,29 @@ function DaemonUpdateRows({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; o
 
 function Appearance() {
   const { theme, setTheme, translucent, setTranslucent } = useTheme()
-  return (
-    <Section title="Theme">
-      <Row title="Appearance" description="Follows the system by default.">
-        <SettingsPicker
-          value={theme}
-          onChange={(v) => setTheme(v)}
-          options={[
-            {
-              value: "system",
-              label: (
-                <>
-                  <DeviceLaptopIcon className="size-3.5" /> System
-                </>
-              ),
-            },
-            {
-              value: "light",
-              label: (
-                <>
-                  <SunIcon className="size-3.5" /> Light
-                </>
-              ),
-            },
-            {
-              value: "dark",
-              label: (
-                <>
-                  <MoonIcon className="size-3.5" /> Dark
-                </>
-              ),
-            },
-          ]}
-        />
-      </Row>
-      <Row title="Translucent app" description="Extend frosted glass across the macOS app, including menus and dialogs. Respects reduced transparency.">
-        <SettingsPicker value={translucent ? "on" : "off"} onChange={(value) => setTranslucent(value === "on")} options={[{ value: "off", label: "Off" }, { value: "on", label: "On" }]} />
+  return <>
+    <section className="settings-group">
+      <h2 className="settings-group-title">Theme</h2>
+      <div className="settings-theme-options" role="group" aria-label="Theme">
+        {(["light", "dark", "system"] as const).map((value) => {
+          const Icon = { light: SunIcon, dark: MoonIcon, system: DeviceLaptopIcon }[value]
+          return <button key={value} type="button" className="settings-theme-choice" aria-pressed={theme === value} onClick={() => setTheme(value)}>
+            <div className="settings-theme-preview" data-theme-preview={value} aria-hidden="true">
+              <div className="settings-preview-sidebar"><i /><i /><i /></div>
+              <div className="settings-preview-content"><i /><i /><div /><i /></div>
+            </div>
+            <span className="settings-theme-label"><Icon className="size-4" />{value === "system" ? "System" : value === "light" ? "Light" : "Dark"}<span className="settings-theme-radio" /></span>
+          </button>
+        })}
+      </div>
+      <p className="settings-note">System follows your device’s light and dark appearance.</p>
+    </section>
+    <Section title="Window material">
+      <Row title="Use translucent surfaces" description="Let your desktop show softly through the sidebar and floating controls. Follows your system’s reduced transparency preference.">
+        <Switch aria-label="Use translucent surfaces" checked={translucent} onCheckedChange={setTranslucent} />
       </Row>
     </Section>
-  )
-}
-
-function Usage() {
-  const [data, setData] = useState<UsageSummaryResult | null>(null)
-  const [group, setGroup] = useState<"provider" | "model" | "day">("provider")
-  useEffect(() => {
-    rpc()
-      .call("usage.summary", { group_by: group })
-      .then(setData)
-      .catch(() => setData(null))
-  }, [group])
-  const max = Math.max(1, ...(data?.rows.map((r) => r.usage.input_tokens + r.usage.output_tokens) ?? [1]))
-  return (
-    <>
-      <Section title="Usage">
-        <Row title="Group by">
-          <SettingsPicker
-            value={group}
-            onChange={setGroup}
-            options={[
-              { value: "provider", label: "Agent" },
-              { value: "model", label: "Model" },
-              { value: "day", label: "Day" },
-            ]}
-          />
-        </Row>
-        {data && (
-          <Row title="Total" description={`${tokens(data.total.usage.input_tokens + data.total.usage.output_tokens)} tokens`}>
-            <span className="text-[length:var(--app-font-size-ui,12px)] tabular-nums">{usd(data.total.cost_usd)}</span>
-          </Row>
-        )}
-      </Section>
-      {data && (
-        <Section title="Breakdown">
-          {data.rows.length === 0 && <Row title="No usage recorded yet" />}
-          {data.rows.map((r, i) => {
-            const n = r.usage.input_tokens + r.usage.output_tokens
-            return (
-              <div key={r.key} className={SETTINGS_CARD_ROW_CLASS_NAME}>
-                <div className="flex items-baseline justify-between text-[length:var(--app-font-size-ui,12px)]">
-                  <span className="truncate">{r.key}</span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {tokens(n)} · {usd(r.cost_usd)}
-                  </span>
-                </div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-background-button-secondary-hover)]">
-                  <div className="t-bar h-full rounded-full bg-foreground/70" style={{ width: `${(n / max) * 100}%`, "--i": Math.min(i, 8) } as React.CSSProperties} />
-                </div>
-              </div>
-            )
-          })}
-        </Section>
-      )}
-    </>
-  )
+  </>
 }
 
 function AppUpdateRow() {
