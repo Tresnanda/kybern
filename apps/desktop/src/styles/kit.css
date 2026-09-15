@@ -3131,3 +3131,16 @@ diffs-container {
   width: 100%;
   height: 100%;
 }
+
+/* Paint hosts. WebKit gives an overflow scroller a tiled backing store whose
+   tiles it keeps allocating ahead of fast scrolling and releases only one
+   cohort per second, so a long chat could hold hundreds of 4 MiB tiles. Every
+   painted transcript row lives in its own small compositing layer instead:
+   its backing store is bounded by the row, virtualization bounds the number
+   of rows, and the scroller, turns and work lists paint nothing themselves.
+   Apply to the element that paints (message, header, work list, answer), not
+   to the scroller or a container that could grow beyond 1024px. See
+   perf/memory-tiles-2026-09-15.md. */
+.chat-paint-host {
+  will-change: transform;
+}

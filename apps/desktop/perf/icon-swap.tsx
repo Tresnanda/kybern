@@ -123,6 +123,7 @@ async function run() {
   setThought(true)
   const midChildren = children()
   check(midChildren.length === 2 && icon("spinner", thoughtSwap()) && icon("brain", thoughtSwap()), "Thought cross-blur did not retain both glyphs during the transition")
+  check(midChildren.every((child) => getComputedStyle(child).willChange.includes("transform")), "Swapping icons were not promoted for the cross-blur")
   const childTransitions = midChildren.map((child) => {
     void getComputedStyle(child).opacity
     return child.getAnimations().filter((animation): animation is CSSTransition => animation instanceof CSSTransition)
@@ -145,7 +146,7 @@ async function run() {
   check(near(brainRect.width, 16) && near(brainRect.height, 16), "Settled Brain icon is not 16px")
   check(near(liveSlot.width, 20) && near(liveSlot.height, 20) && near(settledSlot.width, 20) && near(settledSlot.height, 20) && near(label.getBoundingClientRect().x, liveLabelX), "14px/16px glyph swap changed slot or text geometry")
   const activeStyle = getComputedStyle(children()[0]!)
-  check(activeStyle.willChange.includes("transform") && activeStyle.willChange.includes("filter") && activeStyle.filter !== "none", "Resting active icon lost its original promotion styles")
+  check(activeStyle.willChange === "auto" && activeStyle.filter === "none" && activeStyle.transform === "none", "Resting active icon kept promotion styles after the swap settled")
 
   setThought(false, true)
   await frame()
@@ -180,7 +181,7 @@ async function run() {
   check(children().length === 1 && !icon("spinner", thoughtSwap()), "Reduced-motion swap did not release its inactive Spinner")
   restoreMotion()
 
-  native().postMessage(JSON.stringify({ fixture: "icon-swap", pass: true, settledSpinnerUnmounted: true, liveSpinnerRunning: true, crossBlur: true, inactiveReleased: true, rapidReversalIdentity: true, stableGeometry: true, copyCheck: true, reducedMotion: true, activePromotionPreserved: true }))
+  native().postMessage(JSON.stringify({ fixture: "icon-swap", pass: true, settledSpinnerUnmounted: true, liveSpinnerRunning: true, crossBlur: true, inactiveReleased: true, rapidReversalIdentity: true, stableGeometry: true, copyCheck: true, reducedMotion: true, restingPromotionReleased: true }))
 }
 
 run().catch((error) => native().postMessage(JSON.stringify({ fixture: "icon-swap", pass: false, error: String(error) })))

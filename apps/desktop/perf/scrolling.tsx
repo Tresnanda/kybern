@@ -34,11 +34,15 @@ declare const __SCROLL_FRAMES__: number
 declare const __SCROLL_MEMORY__: boolean
 declare const __SCROLL_IDLE_MS__: number
 declare const __SCROLL_COMPOSER__: boolean
+// Diagnostic-only style overrides for attributing native graphics allocations.
+declare const __SCROLL_EXTRA_CSS__: string
+declare const __SCROLL_PROBE__: boolean
 declare const __SCROLL_COMPOSER_GLASS__: boolean
 window.addEventListener("error", e => failures.push(e.message))
 function publish(blocks: Block[]) { useStore.getState().set({ transcripts: { fixture: { ...emptyThreadState(), loaded: true, blocks } } }) }
 async function run() {
   document.documentElement.classList.add("dark")
+  if (__SCROLL_EXTRA_CSS__) document.head.appendChild(Object.assign(document.createElement("style"), { textContent: __SCROLL_EXTRA_CSS__ }))
   publish(histories)
   if (__SCROLL_COMPOSER__) {
     const root = document.documentElement
@@ -121,6 +125,16 @@ async function run() {
     const result = { scenario, initialTop, jumpDetails, frames: intervals.length, movingFrames: movingIntervals.length, anchorFrames: jumps.length, emptyFrames, frameP95: p95(intervals), movingFrameP95: p95(movingIntervals), worstFrame: Math.max(...intervals), over25ms: intervals.filter(x => x > 25).length, correctionP95: p95(corrections), maxCorrection: Math.max(...corrections), maxVisibleJump: Math.max(0, ...jumps), peakNodes }
     samples.push(result)
     native().postMessage(JSON.stringify({ stage: scenario, ...result }))
+    if (__SCROLL_PROBE__) {
+      // Diagnostic: report unusually large boxes and promoted elements to help attribute native layers.
+      const boxes = Array.from(document.querySelectorAll<HTMLElement>("body *")).map(el => ({ el, rect: el.getBoundingClientRect() }))
+      const describe = (el: HTMLElement) => `${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}.${String(el.className).slice(0, 60)}[${Object.keys(el.dataset).slice(0, 3).join(",")}]`
+      const wide = boxes.filter(b => b.rect.width > innerWidth + 8).sort((a, b) => b.rect.width - a.rect.width).slice(0, 8).map(b => `${Math.round(b.rect.width)}x${Math.round(b.rect.height)} ${describe(b.el)}`)
+      const tall = boxes.filter(b => b.rect.height > 1024).sort((a, b) => b.rect.height - a.rect.height).slice(0, 12).map(b => `${Math.round(b.rect.width)}x${Math.round(b.rect.height)} ${describe(b.el)}`)
+      const promoted = boxes.filter(b => getComputedStyle(b.el).willChange !== "auto")
+      const promotedTall = promoted.filter(b => b.rect.height > 1024).map(b => `${Math.round(b.rect.width)}x${Math.round(b.rect.height)} ${describe(b.el)}`)
+      native().postMessage(JSON.stringify({ stage: `${scenario} probe`, elements: boxes.length, wide, tall, promoted: promoted.length, promotedTall, scrollHeight: view.scrollHeight, docHeight: document.documentElement.scrollHeight }))
+    }
     if (__SCROLL_MEMORY__) await new Promise<void>(resolve => {
       Object.assign(window, { __memoryContinue: resolve })
       native().postMessage(JSON.stringify({ stage: `${scenario} memory`, memory: true }))

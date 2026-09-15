@@ -595,7 +595,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   return (
     <>
       {group.user && (
-        <div className={cn(ROW, group.running ? "pb-5" : "pb-4")} data-timeline-row-kind="message" data-message-role="user" data-slot="message" data-from="user">
+        <div className={cn(ROW, "chat-paint-host", group.running ? "pb-5" : "pb-4")} data-timeline-row-kind="message" data-message-role="user" data-slot="message" data-from="user">
           <UserBubble message={group.user.message} at={group.user.at} />
         </div>
       )}
@@ -604,14 +604,14 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
         <div className={cn(ROW, "pb-2")} data-timeline-row-kind="live-work">
           <WorkingHeader since={group.user?.at ?? ""} />
           {hasWork && (
-            <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
+            <div className="chat-paint-host mt-1 space-y-0.5" data-timeline-row-kind="work">
               {/* Every live event stays at its sequence position. Only the tail
                   assistant segment streams; earlier prose never gets reparented. */}
               <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
           {!hasLiveWork && (
-            <div className="t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
+            <div className="chat-paint-host t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
               <span className="t-shimmer" data-text="Thinking">Thinking</span>
             </div>
           )}
@@ -627,7 +627,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             // shares the same gutter, then a hairline separates work from answer.
             <div className="mb-3 space-y-0.5" data-timeline-row-kind="settled-work">
               {hasPrimaryAgentActivity && (
-                <div data-primary-agent-activity="true" className="space-y-0.5">
+                <div data-primary-agent-activity="true" className="chat-paint-host space-y-0.5">
                   <WorkRows
                     blocks={settledWork.agentBlocks}
                     tasksByToolCall={settledWork.tasksByToolCall}
@@ -641,7 +641,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                 <Collapsible open={open} onOpenChange={() => toggle(group.turnId)} className="group/collapsed-work py-1">
                   <CollapsibleTrigger
                     type="button"
-                    className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
+                    className="chat-paint-host group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
                   >
                     <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
                       <HammerIcon className="size-3.5" />
@@ -652,7 +652,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                     <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
                   </CollapsibleTrigger>
                   <CollapsiblePanel>
-                    <div className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
+                    <div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
                       <WorkRows
                         blocks={settledWork.disclosureBlocks}
                         tasksByToolCall={settledWork.tasksByToolCall}
@@ -664,11 +664,11 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                   </CollapsiblePanel>
                 </Collapsible>
               )}
-              <div className="mt-1 h-px w-full bg-border" />
+              <div className="chat-paint-host mt-1 h-px w-full bg-border" />
             </div>
           )}
 
-          <div className="group min-w-0 py-0.5">
+          <div className="chat-paint-host group min-w-0 py-0.5">
             {deliveredImages.length > 0 && <div data-response-images>{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
             {group.answer && (
               <div data-slot="message-content">
@@ -753,7 +753,7 @@ function RuntimeTaskTranscriptRow({ task, onOpenAgentActivity }: { task: Runtime
 function WorkingHeader({ since }: { since: string }) {
   const now = useTicker(true)
   return (
-    <div className="-ml-0.5 flex items-center gap-2 text-muted-foreground" style={CHAT_FONT}>
+    <div className="chat-paint-host -ml-0.5 flex items-center gap-2 text-muted-foreground" style={CHAT_FONT}>
       <MatrixLoader variant="orbit" className="text-foreground/70" />
       <span>
         Working for <span className="tabular-nums">{clockDuration(elapsedSince(since, now))}</span>
@@ -1093,7 +1093,7 @@ function ToolGroupRow({
       <CollapsibleTrigger
         type="button"
         aria-expanded={open}
-        className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
+        className="chat-paint-host group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
       >
         <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
           {workIcon(summary.visual, false)}
@@ -1103,7 +1103,7 @@ function ToolGroupRow({
         </span>
         <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
       </CollapsibleTrigger>
-      <CollapsiblePanel><div className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
+      <CollapsiblePanel><div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
         <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{(block) => (
           <ToolRow
             key={block.id}
@@ -1252,7 +1252,7 @@ function ToolRow({
               <p className="pb-0.5 font-system-ui text-[11px] leading-5 text-muted-foreground/45">
                 {activity.kind === "delegate" ? "Subagent activity" : "Nested activity"}
               </p>
-              <div className="space-y-0.5">
+              <div className="chat-paint-host space-y-0.5">
                 <WorkRows blocks={childBlocks} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
               </div>
             </section>

@@ -227,12 +227,15 @@ function VirtualizedRows<T>({
             data-index={row.index}
             data-virtual-key={String(row.key)}
             data-virtual-owner={owner}
-            style={{ width: "100%", display: "flow-root", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
+            style={{ width: "100%", display: "flow-root", willChange: "transform", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
           >
-            {/* Bound WebKit's graphics allocations while traversing large history
-                gaps. Keep small lists and nested work in their existing paint
-                context. The 8px bleed preserves focus rings, negative icon margins
-                and entry motion without changing row measurements or gutters. */}
+            {/* Each mounted row is its own compositing layer (see .chat-paint-host
+                in kit.css): its backing store is bounded by the row, and the
+                scroller's tiled layer has nothing left to paint, so WebKit stops
+                accumulating scroll tiles. The outer paint boundary additionally
+                clips large history rows; its 8px bleed preserves focus rings,
+                negative icon margins and entry motion without changing row
+                measurements or gutters. */}
             {providedViewport ? <div style={{ contain: items.length > 30 ? "paint" : undefined, margin: -8, padding: 8 }}>{content}</div> : content}
           </div>
         )

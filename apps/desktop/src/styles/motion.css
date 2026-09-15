@@ -187,7 +187,6 @@
   transition:
     opacity var(--stream-fade) var(--stream-ease),
     filter var(--stream-fade) var(--stream-ease);
-  will-change: opacity, filter;
 }
 @starting-style {
   .t-stream-w {
@@ -254,6 +253,11 @@
     opacity var(--duration-fast) var(--ease-in-out),
     transform var(--duration-fast) var(--ease-in-out),
     filter var(--duration-fast) var(--ease-in-out);
+}
+/* Promote only while a swap is in flight. A resting icon is plain content in
+   its row's layer; hundreds of permanently promoted glyphs used to cost a
+   compositing layer each and forced their rows to composite around them. */
+.t-icon-swap[data-swapping] > * {
   will-change: transform, filter;
 }
 .t-icon-swap > [data-active="false"] {
@@ -264,8 +268,8 @@
 }
 .t-icon-swap > [data-active="true"] {
   opacity: 1;
-  transform: scale(1);
-  filter: blur(0.01px);
+  transform: none;
+  filter: none;
 }
 @starting-style {
   .t-icon-swap[data-swapping] > [data-active="true"] {
