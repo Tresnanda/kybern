@@ -106,6 +106,7 @@ interface AgentActivityDetail {
   prompt: string | null
   result: string | null
   resultPending: boolean
+  resultLoading: boolean
   failed: boolean
   entries: AgentActivityEntry[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
@@ -215,7 +216,8 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     kind,
     prompt: block ? runtimeActivityPrompt(block.call) : null,
     result: block ? runtimeActivityResult(block.output, block.stream) : null,
-    resultPending: block ? !block.complete || !!block.outputOmitted || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
+    resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
+    resultLoading: !!block?.outputOmitted,
     failed: block?.isError || task?.status === "failed",
     entries,
     tasksByToolCall,
@@ -253,8 +255,12 @@ export function Transcript({
     [groups, runtimeTasks, selectedActivity, threadId],
   )
   useEffect(() => {
-    if (selectedActivity?.kind === "tool") void hydrateToolOutput(threadId, selectedActivity.toolCallId)
-  }, [threadId, selectedActivity])
+    if (selectedActivity?.kind !== "tool") return
+    const omitted = groups.some((group) =>
+      group.work.some((block) => block.kind === "tool" && block.call.id === selectedActivity.toolCallId && block.outputOmitted),
+    )
+    if (omitted) void hydrateToolOutput(threadId, selectedActivity.toolCallId)
+  }, [threadId, selectedActivity, groups])
   const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
     const selection: AgentActivitySelection = { ...target, threadId }
     setAgentActivityTrail((current) => current.at(-1)?.threadId === threadId ? [...current, selection] : [selection])
@@ -450,9 +456,11 @@ function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActiv
   const promptTitle = detail.kind === "process" ? "Command" : detail.kind === "monitor" ? "Request" : "Prompt"
   const resultTitle = detail.kind === "process" ? "Output" : "Result"
   const missingPrompt = detail.kind === "process" ? "The command was not exposed by this harness." : "The delegated prompt was not exposed by this harness."
-  const missingResult = detail.resultPending
-    ? detail.kind === "agent" ? "The agent is still working." : "This work is still running."
-    : detail.failed ? "No additional error details were reported." : "This harness did not expose a final result."
+  const missingResult = detail.resultLoading
+    ? "Loading the saved result."
+    : detail.resultPending
+      ? detail.kind === "agent" ? "The agent is still working." : "This work is still running."
+      : detail.failed ? "No additional error details were reported." : "This harness did not expose a final result."
 
   return (
     <div

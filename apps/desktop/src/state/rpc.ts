@@ -79,8 +79,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const key = `${threadId}:${toolCallId}`
     const pending = toolOutputLoads.get(key)
     if (pending) return pending
-    const request = rpc()
-      .call("threads.tool_output", { thread_id: threadId, tool_call_id: toolCallId })
+    const request = Promise.resolve()
+      .then(() => rpc().call("threads.tool_output", { thread_id: threadId, tool_call_id: toolCallId }))
       .then((result) => {
         useStore.getState().updateTranscript(threadId, (state) => ({
           ...state,
@@ -957,7 +957,7 @@ export const loadEarlier: EnvironmentRuntime["loadEarlier"] = (...args) => activ
 export const loadThread: EnvironmentRuntime["loadThread"] = (...args) =>
   activeRuntime().loadThread(...args)
 export const hydrateToolOutput: EnvironmentRuntime["hydrateToolOutput"] = (...args) =>
-  activeRuntime().hydrateToolOutput(...args)
+  currentRuntime?.hydrateToolOutput(...args) ?? Promise.resolve()
 export const refreshProviders: EnvironmentRuntime["refreshProviders"] = (
   ...args
 ) => activeRuntime().refreshProviders(...args)

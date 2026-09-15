@@ -68,6 +68,27 @@ test("hydrated history keeps large tool results out of retained state until fetc
   assert.ok(retainedSize(full.blocks) > retainedSize(omitted.blocks) * 20)
 })
 
+test("hydrateToolOutput is a no-op without a connected runtime", async () => {
+  const { hydrateToolOutput } = await import("./src/state/rpc.ts")
+  await hydrateToolOutput("t", "c")
+})
+test("hydrateToolOutput skips inlined tool results", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("inlined-tool-output")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  client.reply = async () => { throw new Error("should not fetch inlined tool output") }
+  store.getState().updateTranscript("t", () => seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call: { id: "c", name: "Task", input: { prompt: "Inspect" } }, output: "The agent finished reviewing.", is_error: false, complete: true, at: "2026-09-07T00:00:00Z" }],
+    pending_approvals: [],
+  }))
+  try {
+    await runtime.hydrateToolOutput("t", "c")
+    assert.equal(store.getState().transcripts.t.blocks[0].output, "The agent finished reviewing.")
+  } finally { runtime.disconnect() }
+})
 test("expanding an omitted tool result fetches only that payload", async () => {
   const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
   const store = createEnvironmentStore("tool-output")
