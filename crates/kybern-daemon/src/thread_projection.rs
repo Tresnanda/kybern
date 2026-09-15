@@ -21,6 +21,7 @@ pub struct ThreadProjection {
     pub pending_questions: Vec<AsyncQuestionRequest>,
 }
 impl ThreadProjection {
+    #[cfg(test)]
     pub fn from_events(events: &[ThreadEvent]) -> Self {
         Self {
             transcript: kybern_store::project_transcript(events),

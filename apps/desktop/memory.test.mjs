@@ -48,6 +48,53 @@ test("background payloads are discarded while approval controls and sequence rem
   assert.deepEqual(state.pendingApprovals, [])
 })
 
+test("hydrated history keeps large tool results out of retained state until fetched", async () => {
+  const { retainedSize } = await import("./src/lib/retainedSize.ts")
+  const large = "x".repeat(200_000)
+  const at = "2026-09-07T00:00:00Z"
+  const call = { id: "c", name: "bash", input: {} }
+  const full = seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call, output: large, is_error: false, complete: true, at }],
+    pending_approvals: [],
+  })
+  const omitted = seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call, output_omitted: true, is_error: false, complete: true, at }],
+    pending_approvals: [],
+  })
+  assert.equal(omitted.blocks[0].outputOmitted, true)
+  assert.equal(omitted.blocks[0].output, null)
+  assert.ok(retainedSize(full.blocks) > retainedSize(omitted.blocks) * 20)
+})
+
+test("expanding an omitted tool result fetches only that payload", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("tool-output")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  let fetched
+  client.reply = async (method, params) => {
+    if (method === "threads.tool_output") {
+      fetched = params
+      return { output: "full result", is_error: false }
+    }
+    return { checkpoints: [] }
+  }
+  store.getState().updateTranscript("t", () => seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call: { id: "c", name: "bash", input: {} }, output_omitted: true, is_error: false, complete: true, at: "2026-09-07T00:00:00Z" }],
+    pending_approvals: [],
+  }))
+  try {
+    await runtime.hydrateToolOutput("t", "c")
+    assert.deepEqual(fetched, { thread_id: "t", tool_call_id: "c" })
+    const block = store.getState().transcripts.t.blocks[0]
+    assert.equal(block.output, "full result")
+    assert.equal(block.outputOmitted, false)
+  } finally { runtime.disconnect() }
+})
 test("inactive cache eviction preserves visible split panes and pending user data", () => {
   const store = createEnvironmentStore("retention")
   const a = history("a".repeat(4000)), b = history("b".repeat(4000)), c = history("c".repeat(4000))
@@ -238,6 +285,7 @@ test("refresh of a large loaded history stays paged and replays concurrent outpu
     if (method !== "threads.get") return { checkpoints: [] }
     requests.push(params)
     assert.ok(params.transcript_limit > 0 && params.transcript_limit <= 500, "every refresh request must be bounded")
+    assert.equal(params.include_tool_output, false)
     if (requests.length === 2) {
       assert.equal(params.through_seq, 2000)
       client.event(event(2001, { kind: "assistant_text_delta", message_id: "m1999", delta: " live" }))

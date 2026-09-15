@@ -23,6 +23,7 @@ expression: names
 - threads.read
 - threads.create
 - threads.get
+- threads.tool_output
 - threads.update
 - threads.archive
 - threads.send

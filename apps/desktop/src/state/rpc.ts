@@ -26,6 +26,7 @@ import {
   type SkillInfo,
   type ThreadEvent,
   type ThreadId,
+  type ThreadsGetParams,
   type ThreadsGetResult,
   type TurnId,
   type UserMessage,
@@ -55,6 +56,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const historyLoads = new Map<ThreadId, { promise: Promise<void>; buffer: ReturnType<typeof createSnapshotReplay> }>()
   const providerLoads = new Map<string, Promise<ProviderStatus[]>>()
   const snapshots = new Map<ThreadId, ReturnType<typeof createSnapshotReplay>>()
+  const toolOutputLoads = new Map<string, Promise<void>>()
   let disposed = false
   let hydrationGeneration = 0
   let canReuseSnapshots = false
@@ -65,6 +67,38 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   function rpc(): KybernClient {
     if (!client) throw new ConnectionClosedError("Not connected")
     return client
+  }
+
+  function transcriptGet(threadId: ThreadId, extra: Omit<ThreadsGetParams, "thread_id" | "include_tool_output"> = {}) {
+    return rpc().call("threads.get", { thread_id: threadId, include_tool_output: false, ...extra })
+  }
+
+  function hydrateToolOutput(threadId: ThreadId, toolCallId: string): Promise<void> {
+    const current = useStore.getState().transcripts[threadId]?.blocks.find((block) => block.kind === "tool" && block.call.id === toolCallId)
+    if (!current || current.kind !== "tool" || !current.outputOmitted) return Promise.resolve()
+    const key = `${threadId}:${toolCallId}`
+    const pending = toolOutputLoads.get(key)
+    if (pending) return pending
+    const request = rpc()
+      .call("threads.tool_output", { thread_id: threadId, tool_call_id: toolCallId })
+      .then((result) => {
+        useStore.getState().updateTranscript(threadId, (state) => ({
+          ...state,
+          blocks: state.blocks.map((block) =>
+            block.kind === "tool" && block.call.id === toolCallId && block.outputOmitted
+              ? { ...block, output: result.output, isError: result.is_error, outputOmitted: false }
+              : block,
+          ),
+        }))
+      })
+      .catch((error) => {
+        toast.error("Unable to load tool result", { description: errorText(error) })
+      })
+      .finally(() => {
+        if (toolOutputLoads.get(key) === request) toolOutputLoads.delete(key)
+      })
+    toolOutputLoads.set(key, request)
+    return request
   }
 
   function connect(ep: EndpointInfo): void {
@@ -222,7 +256,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         const oldest = previous?.nextBeforeSeq ?? previous?.blocks[0]?.seq ?? 0
         let res: ThreadsGetResult | undefined
         async function getSnapshot(): Promise<ThreadsGetResult> {
-          const snapshot = await rpc().call("threads.get", { thread_id: id, transcript_limit: Math.min(requested, 500) })
+          const snapshot = await transcriptGet(id, { transcript_limit: Math.min(requested, 500) })
           if (requested <= 500 || snapshot.next_before_seq == null) return snapshot
           // Preserve the already-loaded reading window without falling back to an
           // unlimited response. Every page belongs to the first snapshot's head;
@@ -232,8 +266,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           const entries = new Map(snapshot.transcript.map(entry => [key(entry), entry]))
           while (snapshot.next_before_seq != null && snapshot.next_before_seq > oldest && isCurrentHydration(generation) && isThreadVisible(useStore.getState(), id)) {
             const before: number = snapshot.next_before_seq
-            const page: ThreadsGetResult = await rpc().call("threads.get", {
-              thread_id: id, transcript_limit: Math.min(Math.max(remaining, 60), 500),
+            const page: ThreadsGetResult = await transcriptGet(id, {
+              transcript_limit: Math.min(Math.max(remaining, 60), 500),
               before_seq: before, through_seq: snapshot.thread.last_seq,
             })
             if (page.thread.last_seq !== snapshot.thread.last_seq || (page.next_before_seq != null && page.next_before_seq >= before))
@@ -318,8 +352,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const record = { promise: Promise.resolve(), buffer: createSnapshotReplay() }
     historyLoads.set(id, record)
     useStore.getState().updateTranscript(id, (state) => ({ ...state, loadingEarlier: true }))
-    record.promise = rpc().call("threads.get", {
-      thread_id: id, transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
+    record.promise = transcriptGet(id, {
+      transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
     }).then((page) => {
       if (!isCurrentHydration(generation) || historyLoads.get(id) !== record) return
       const replay = record.buffer.after(base.lastSeq)
@@ -661,7 +695,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const thread = s.threads[threadId]
     if (!thread) throw new Error("Thread not found")
     const cached = s.transcripts[threadId]
-    const t = cached?.loaded ? cached : seedFromGet(await rpc().call("threads.get", { thread_id: threadId }))
+    const t = cached?.loaded ? cached : seedFromGet(await transcriptGet(threadId))
     const lines: string[] = []
     for (const b of t?.blocks ?? []) {
       if (b.kind === "user") {
@@ -875,6 +909,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     rpc,
     loadThread,
     loadEarlier,
+    hydrateToolOutput,
     refreshProviders,
     loadDiff,
     loadFileDiff,
@@ -921,6 +956,8 @@ export const rpc: EnvironmentRuntime["rpc"] = (...args) =>
 export const loadEarlier: EnvironmentRuntime["loadEarlier"] = (...args) => activeRuntime().loadEarlier(...args)
 export const loadThread: EnvironmentRuntime["loadThread"] = (...args) =>
   activeRuntime().loadThread(...args)
+export const hydrateToolOutput: EnvironmentRuntime["hydrateToolOutput"] = (...args) =>
+  activeRuntime().hydrateToolOutput(...args)
 export const refreshProviders: EnvironmentRuntime["refreshProviders"] = (
   ...args
 ) => activeRuntime().refreshProviders(...args)

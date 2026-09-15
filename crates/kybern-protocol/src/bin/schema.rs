@@ -77,6 +77,7 @@ fn main() {
     method::<ThreadsRead>(&mut methods);
     method::<ThreadsCreate>(&mut methods);
     method::<ThreadsGet>(&mut methods);
+    method::<ThreadsToolOutput>(&mut methods);
     method::<ThreadsUpdate>(&mut methods);
     method::<ThreadsArchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);

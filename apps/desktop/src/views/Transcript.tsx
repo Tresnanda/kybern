@@ -11,7 +11,7 @@ import { connectorApproval, isUserInput } from "@/lib/userInput"
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -69,7 +69,7 @@ import {
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
-import { activeRuntime, errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
+import { activeRuntime, errorText, hydrateToolOutput, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
 
@@ -215,7 +215,7 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     kind,
     prompt: block ? runtimeActivityPrompt(block.call) : null,
     result: block ? runtimeActivityResult(block.output, block.stream) : null,
-    resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
+    resultPending: block ? !block.complete || !!block.outputOmitted || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
     failed: block?.isError || task?.status === "failed",
     entries,
     tasksByToolCall,
@@ -252,6 +252,9 @@ export function Transcript({
     () => selectedActivity?.threadId === threadId ? resolveAgentActivityDetail(groups, runtimeTasks, selectedActivity) : null,
     [groups, runtimeTasks, selectedActivity, threadId],
   )
+  useEffect(() => {
+    if (selectedActivity?.kind === "tool") void hydrateToolOutput(threadId, selectedActivity.toolCallId)
+  }, [threadId, selectedActivity])
   const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
     const selection: AgentActivitySelection = { ...target, threadId }
     setAgentActivityTrail((current) => current.at(-1)?.threadId === threadId ? [...current, selection] : [selection])
@@ -795,7 +798,7 @@ async function openThreadReference(threadId: ThreadId) {
     runtime = activeRuntime()
     let thread = store.getState().threads[threadId]
     if (!thread) {
-      const result = await runtime.rpc().call("threads.get", { thread_id: threadId, transcript_limit: 1 })
+      const result = await runtime.rpc().call("threads.get", { thread_id: threadId, transcript_limit: 1, include_tool_output: false })
       if (store !== useStore || activeRuntime() !== runtime) return
       thread = result.thread
       store.getState().set((state) => ({ threads: { ...state.threads, [threadId]: result.thread } }))
@@ -1277,7 +1280,7 @@ function ToolRow({
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
     const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 }
+    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1346,7 +1349,14 @@ function ToolRow({
 
 /** Mounted by DisclosureRegion only while open or completing its exit. */
 function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface: ToolSurface | null; screenshots: string[] }) {
+  const threadId = useContext(ImageThreadContext)
+  useEffect(() => {
+    if (threadId && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id)
+  }, [threadId, block.outputOmitted, block.call.id])
   const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
+  if (block.outputOmitted && !out.trim() && screenshots.length === 0) {
+    return <p className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
+  }
   return (
     <>
       {screenshots.length > 0 && (

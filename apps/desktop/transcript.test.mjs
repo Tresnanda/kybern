@@ -66,6 +66,21 @@ function fold(payloads) {
 const start = { kind: "turn_started", message_id: "u1", message: { parts: [{ type: "text", text: "hi" }] } }
 const done = { kind: "turn_completed", stop_reason: "completed", usage: USAGE, cost_usd: null, duration_ms: 5 }
 
+test("seeded tool rows preserve omitted outputs until a later fetch fills them", () => {
+  const state = seedFromGet({
+    thread: { id: "t", last_seq: 2 },
+    transcript: [
+      { role: "user", id: "u1", turn_id: T, seq: 1, message: { parts: [{ type: "text", text: "hi" }] }, at: AT },
+      { role: "tool_call", turn_id: T, seq: 2, origin: ROOT, call: readTool("read-1"), output_omitted: true, is_error: false, complete: true, at: AT },
+    ],
+    pending_approvals: [],
+  })
+  assert.equal(state.blocks[1].kind, "tool")
+  assert.equal(state.blocks[1].outputOmitted, true)
+  assert.equal(state.blocks[1].output, null)
+  assert.equal(state.blocks[1].complete, true)
+})
+
 test("one message preserves its live segments around a tool, then rejoins only after settlement", () => {
   const state = fold([
     start,
