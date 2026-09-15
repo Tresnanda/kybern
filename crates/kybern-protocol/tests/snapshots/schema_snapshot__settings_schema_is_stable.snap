@@ -94,6 +94,13 @@ expression: schema_for!(Settings)
       "default": {
         "tailscale": false
       }
+    },
+    "computer_use": {
+      "description": "Host-owned computer use via Cua Driver. Codex keeps its bundled plugin path.",
+      "$ref": "#/$defs/ComputerUseSettings",
+      "default": {
+        "enabled": true
+      }
     }
   },
   "$defs": {
@@ -215,6 +222,24 @@ expression: schema_for!(Settings)
           "description": "Also listen on this machine's Tailscale address, so devices on the\nsame tailnet can pair and connect directly.",
           "type": "boolean",
           "default": false
+        }
+      }
+    },
+    "ComputerUseSettings": {
+      "description": "Daemon-owned computer use. Codex is not driven through this path.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Expose the compound `computer_use` tool to harnesses that lack native computer use.",
+          "type": "boolean",
+          "default": true
+        },
+        "binary": {
+          "description": "Absolute path to `cua-driver`. Omit to use PATH.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     }

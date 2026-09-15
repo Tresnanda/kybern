@@ -76,6 +76,7 @@ expression: names
 - terminals.unsubscribe
 - settings.get
 - settings.update
+- computer_use.status
 - usage.summary
 - access.pairing.create
 - access.exposure.get

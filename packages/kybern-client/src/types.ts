@@ -1101,6 +1101,13 @@ export interface AccessSettings {
   tailscale: boolean;
 }
 
+export interface ComputerUseSettings {
+  /** Expose the compound computer_use tool to harnesses that lack native computer use. */
+  enabled: boolean;
+  /** Absolute path to cua-driver. Omit to use PATH. */
+  binary?: string | null;
+}
+
 export interface Settings {
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
@@ -1113,6 +1120,17 @@ export interface Settings {
   auto_update_daemon: boolean;
   background: BackgroundSettings;
   access: AccessSettings;
+  computer_use?: ComputerUseSettings;
+}
+
+export interface ComputerUseStatus {
+  enabled: boolean;
+  installed: boolean;
+  binary?: string | null;
+  version?: string | null;
+  ready: boolean;
+  attached_harnesses: ProviderKind[];
+  message: string;
 }
 
 export interface SettingsUpdateParams {
@@ -1434,6 +1452,7 @@ export interface Methods {
   "events.range": [EventsRangeParams, EventsRangeResult];
   "settings.get": [Empty, Settings];
   "settings.update": [SettingsUpdateParams, Settings];
+  "computer_use.status": [Empty, ComputerUseStatus];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
   "git.status": [GitStatusParams, GitStatus];
   "git.branches": [GitBranchesParams, GitBranchesResult];

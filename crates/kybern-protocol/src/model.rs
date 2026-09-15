@@ -881,6 +881,9 @@ pub struct Settings {
     pub background: BackgroundSettings,
     /// Which networks other devices can reach this daemon on.
     pub access: AccessSettings,
+    /// Host-owned computer use via Cua Driver. Codex keeps its bundled plugin path.
+    #[serde(default)]
+    pub computer_use: ComputerUseSettings,
 }
 
 /// Extra listeners the daemon opens besides its loopback port. Persisted so
@@ -907,8 +910,44 @@ impl Default for Settings {
             auto_update_daemon: false,
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
+            computer_use: ComputerUseSettings::default(),
         }
     }
+}
+
+/// Daemon-owned computer use. Codex is not driven through this path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ComputerUseSettings {
+    /// Expose the compound `computer_use` tool to harnesses that lack native computer use.
+    pub enabled: bool,
+    /// Absolute path to `cua-driver`. Omit to use PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+}
+
+impl Default for ComputerUseSettings {
+    fn default() -> Self {
+        Self { enabled: true, binary: None }
+    }
+}
+
+/// Readiness of Cua Driver on this daemon host. Does not start a coding turn.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerUseStatus {
+    pub enabled: bool,
+    /// `cua-driver` resolved on PATH or from settings.
+    pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// True when the binary is present and the last doctor probe did not fail hard.
+    pub ready: bool,
+    /// Harnesses that will receive the compound `computer_use` tool on the next spawn.
+    pub attached_harnesses: Vec<ProviderKind>,
+    /// What to do next when computer use is missing or not granted.
+    pub message: String,
 }
 
 /// Limits on what the daemon keeps alive after work finishes. Agent processes

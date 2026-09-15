@@ -40,6 +40,7 @@ const APP_TOOL_NAMES = new Set([
   "kybern_collaboration_cancel",
   "kybern_collaboration_context_read",
   "kybern_collaboration_context_put",
+  "computer_use",
 ]);
 function configuredToolSet(environmentName) {
   if (process.env[environmentName] === undefined) return new Set();
@@ -245,7 +246,7 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
 
   const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", {
     signal,
-    timeout: APP_TOOL_TIMEOUT_MS,
+    timeout: name === "computer_use" ? PERMISSION_TIMEOUT_MS : APP_TOOL_TIMEOUT_MS,
   });
   if (encodedResult === undefined) {
     throw new Error(signal?.aborted ? "Kybern app tool was cancelled." : "Kybern app tool timed out.");

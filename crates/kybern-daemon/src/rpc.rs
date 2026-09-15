@@ -481,6 +481,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(Empty {})
         }
         SettingsGet::NAME => ok(state.settings.get()),
+        ComputerUseStatusMethod::NAME => ok(state.orchestrator.computer_use_status().await),
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
             ok(state.settings.set(p.settings).map_err(internal)?)
