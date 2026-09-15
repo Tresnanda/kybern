@@ -2,7 +2,7 @@
 // Purpose: Shared file/folder glyph for composer, diff, and transcript rows.
 
 import { FolderClosed, FolderOpen } from "@/components/kit/FolderClosed"
-import { CentralIcon } from "@/lib/kit/central-icons"
+import { FILE_ENTRY_ICONS } from "@/lib/kit/icons"
 import { getAttachmentIconName, getFileIconName } from "@/lib/kit/fileIcons"
 import { cn } from "@/lib/utils"
 
@@ -54,5 +54,6 @@ export function FileEntryIcon(props: {
 
   const iconName = props.mimeType === undefined ? getFileIconName(props.pathValue) : getAttachmentIconName({ name: props.pathValue, mimeType: props.mimeType })
   const colorClassName = props.colorMode === "inherit" ? undefined : (FILE_ICON_COLOR_CLASS_BY_ICON_NAME[iconName] ?? FILE_ICON_COLOR_CLASS_BY_ICON_NAME["code-brackets"])
-  return <CentralIcon name={iconName} className={cn("size-4 shrink-0", props.className, colorClassName)} />
+  const Icon = FILE_ENTRY_ICONS[iconName] ?? FILE_ENTRY_ICONS["code-brackets"]
+  return <Icon className={cn("size-4 shrink-0", props.className, colorClassName)} />
 }

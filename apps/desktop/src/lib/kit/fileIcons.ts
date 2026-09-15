@@ -1,5 +1,5 @@
 // FILE: fileIcons.ts
-// Purpose: Map file paths and attachments to Central icon names.
+// Purpose: Map file paths and attachments to kit file-icon names.
 // Layer: Shared desktop UI utility.
 
 const DEFAULT_FILE_ICON = "code-brackets"
@@ -55,7 +55,7 @@ const FILE_ICON_BY_BASENAME = createIconTable({
 })
 
 // Compound extensions are tested before their shorter suffixes.
-// The Python Central asset is misspelled upstream as `phyton.svg`.
+// The Python key stays `phyton` to match historical file-icon names.
 const FILE_ICON_BY_EXTENSION = createIconTable({
   ts: "typescript",
   mts: "typescript",

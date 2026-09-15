@@ -4,8 +4,6 @@ import { collaborationThreadRows } from "../../../../packages/kybern-client/src/
 // with Settings and Help.
 
 import { useMemo, useState } from "react"
-import { HiOutlineArchiveBox } from "react-icons/hi2"
-import { IoIosGitCompare } from "react-icons/io"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
@@ -23,9 +21,9 @@ import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger }
 import { SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/kit/sidebar"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { mod } from "@/lib/format"
-import { CentralIcon } from "@/lib/kit/central-icons"
 import {
   AddPlusIcon,
+  AnalyticsIcon,
   ArchiveIcon,
   BellIcon,
   BookIcon,
@@ -34,6 +32,7 @@ import {
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
+  GitCompareIcon,
   HandoffIcon,
   KeyboardIcon,
   NewThreadIcon,
@@ -166,8 +165,8 @@ export function ThreadSidebar() {
             <SidebarMenu className="gap-0.5">
               <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
               <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
-              <PrimaryAction icon={<IoIosGitCompare className="size-[15px] shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
-              <PrimaryAction icon={<CentralIcon name="analytics" className="size-[15px] shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
+              <PrimaryAction icon={<GitCompareIcon className="size-[15px] shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
+              <PrimaryAction icon={<AnalyticsIcon className="size-[15px] shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
             </SidebarMenu>
           </SidebarGroup>
 
@@ -553,7 +552,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
                   }}
                 />
                 <SidebarIconButton
-                  icon={HiOutlineArchiveBox}
+                  icon={ArchiveIcon}
                   label="Archive"
                   size="md"
                   iconClassName="size-[15px] shrink-0"
