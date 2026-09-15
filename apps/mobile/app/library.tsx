@@ -1,3 +1,4 @@
+import { collaborationThreadRows } from "../../../packages/kybern-client/src/collaboration";
 import { confirmDeleteCoordinator } from "../src/features/deleteCoordinator";
 import Animated, {
   useSharedValue,
@@ -56,6 +57,10 @@ export default function Library() {
       }),
     [app.threads, app.projects, app.activity, query, filter],
   );
+  const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({});
+  const visibleRows = useMemo(() => query.trim() || filter !== "All"
+    ? rows.map(thread => ({ thread, depth: 0, childCount: 0, open: false }))
+    : collaborationThreadRows(rows, expandedThreads), [rows, expandedThreads, query, filter]);
   const offset = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -130,8 +135,8 @@ export default function Library() {
         <Animated.FlatList
           onScroll={onScroll}
           scrollEventThrottle={16}
-          data={rows}
-          keyExtractor={(t) => t.id}
+          data={visibleRows}
+          keyExtractor={(row) => row.thread.id}
           keyboardShouldPersistTaps="handled"
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={{
@@ -214,10 +219,11 @@ export default function Library() {
               <ErrorBanner error={error} />
             </>
           }
-          renderItem={({ item, index }) => {
+          renderItem={({ item: { thread: item, depth, childCount, open }, index }) => {
             const project = app.projects.find((p) => p.id === item.project_id);
             const running = threadHasActivity(item, app.activity);
             return (
+              <View style={{ paddingStart: Math.min(depth, 2) * 16 }}>
               <Tap
                 label={`${item.title || "Untitled thread"}, ${running ? "Working" : item.status}`}
                 onPress={() =>
@@ -274,6 +280,14 @@ export default function Library() {
                   </T>
                 </View>
               </Tap>
+              {childCount > 0 && <Tap static expanded={open}
+                label={`${open ? "Hide" : "Show"} ${childCount} helpers for ${item.title || "Untitled thread"}`}
+                onPress={() => setExpandedThreads(value => ({ ...value, [item.id]: !open }))}
+                style={[styles.line, { minHeight: 48, paddingBottom: 8, gap: 8 }]}>
+                <Icon name={open ? "chevron.down" : "chevron.right"} size={12} />
+                <T variant="caption" tone="secondary">{childCount} helpers</T>
+              </Tap>}
+              </View>
             );
           }}
           ListEmptyComponent={

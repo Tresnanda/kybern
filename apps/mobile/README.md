@@ -221,11 +221,23 @@ Task activity retains parent/child relationships, separate agent transcripts,
 live process output, status and provider-supported stop/background controls.
 Reconnecting restores task state from the daemon; foreground completion does not
 hide background activity. Work continues on the computer when the phone sleeps.
-Delegated Kybern helpers appear in a compact strip above the composer. Each item
-opens the helper's normal conversation, and child conversations include a Main
-control back to their coordinator. The full Agents screen keeps assignment,
-message, shared-context, and history controls available without making them part
-of ordinary chat setup.
+Delegated Kybern helpers appear behind a compact **Helpers** disclosure above the
+composer. It shows active and attention counts; expand it for readable helper
+names, status, and navigation. The phone's Threads list and iPad sidebar group
+spawned conversations beneath their parent, collapsed by default. Search and
+filters continue to show matching conversations directly.
+
+Agent updates have their own collapsed queue summary. Expand an update to read
+its contents or remove it; ordinary queued prompts retain editing and attachments.
+Delivered collaboration messages appear as expandable, formatted messages with
+sender names. Copy original message preserves the complete routing metadata.
+The Agents screen keeps assignment, message, shared-context, and history controls.
+
+An agent's successful collaboration read or wait consumes only the incoming
+messages returned to that agent. Those messages no longer run again as queued
+follow-ups. Opening the Agents screen as a user does not consume delivery.
+Unread messages still wait until the current turn and background work finish.
+This behavior is shared by every harness and project coordinators.
 
 Project details offer a persistent coordinator conversation. Create coordinator
 opens the normal draft composer with the project, harness, model, effort, and

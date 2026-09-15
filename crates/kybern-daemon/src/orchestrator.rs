@@ -2123,7 +2123,8 @@ impl Orchestrator {
                         if !object.is_empty() {
                             return Err(anyhow!("unknown collaboration read fields"));
                         }
-                        let mut value = serde_json::to_value(self.collaboration_group_detail(group_id)?)?;
+                        let mut detail = self.collaboration_group_detail(group_id)?;
+                        let mut value = serde_json::to_value(&detail)?;
                         let caller_assignment = self.inner.store.collaboration_active_assignment_for_thread(thread_id)?;
                         value.as_object_mut().expect("detail serializes as object").insert(
                             "caller".into(),
@@ -2147,6 +2148,16 @@ impl Orchestrator {
                                 .collect();
                             value.as_object_mut().expect("detail serializes as object").insert("participant".into(), serde_json::json!({"thread":thread,"transcript":transcript,"assignments":assignments,"diff_reference":{"thread_id":target,"worktree":thread.worktree}}));
                         }
+                        // A successful agent read delivers exactly the messages in this
+                        // bounded snapshot. UI reads remain read-only; other recipients and
+                        // messages arriving after the snapshot must keep their wakeups.
+                        let guard = live.turn.lock().await;
+                        if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
+                            return Err(anyhow!("native tool caller turn ended before read delivery acknowledgement"));
+                        }
+                        self.observe_collaboration_messages(thread_id, turn_id, &mut detail.pending_messages)?;
+                        value["pending_messages"] = serde_json::to_value(detail.pending_messages)?;
+                        drop(guard);
                         value
                     }
                     "kybern_collaboration_wait" => {
@@ -2157,16 +2168,7 @@ impl Orchestrator {
                         if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
                             return Err(anyhow!("native tool caller turn ended before wait delivery acknowledgement"));
                         }
-                        for message in result.messages.iter_mut().filter(|message| {
-                            message.to_thread_id == thread_id
-                                && matches!(message.state, CollaborationDeliveryState::Persisted | CollaborationDeliveryState::Queued)
-                        }) {
-                            message.state = CollaborationDeliveryState::Submitted;
-                            message.delivery_turn_id = Some(turn_id);
-                            message.updated_at = Utc::now();
-                            let events = self.inner.store.collaboration_message_observed(message, turn_id)?;
-                            self.broadcast_committed_collaboration(events);
-                        }
+                        self.observe_collaboration_messages(thread_id, turn_id, &mut result.messages)?;
                         drop(guard);
                         serde_json::to_value(result)?
                     }
@@ -2319,6 +2321,26 @@ impl Orchestrator {
             }
             Ok(value)
         })
+    }
+
+    /// Acknowledge the bounded inbox returned to an active agent tool call.
+    fn observe_collaboration_messages(&self, thread_id: ThreadId, turn_id: TurnId, messages: &mut [CollaborationMessage]) -> Result<()> {
+        for message in messages.iter_mut().filter(|message| {
+            message.to_thread_id == thread_id
+                && matches!(message.state, CollaborationDeliveryState::Persisted | CollaborationDeliveryState::Queued)
+        }) {
+            message.state = CollaborationDeliveryState::Submitted;
+            message.delivery_turn_id = Some(turn_id);
+            message.updated_at = Utc::now();
+            let events = self.inner.store.collaboration_message_observed(message, turn_id)?;
+            if events.is_empty()
+                && let Some(current) = self.inner.store.collaboration_message_get(message.id)?
+            {
+                *message = current;
+            }
+            self.broadcast_committed_collaboration(events);
+        }
+        Ok(())
     }
 
     /// Called only after the native harness accepted a persisted message.
@@ -6226,6 +6248,100 @@ mod tests {
             .execute_native_app_tool_call(thread.id, live.session_instance_id, "allowed-context", "kybern_thread_context", json!({}))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn collaboration_read_consumes_only_returned_inbox_for_every_harness() {
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::ClaudeCode,
+            ProviderKind::Opencode,
+            ProviderKind::Pi,
+            ProviderKind::Omp,
+            ProviderKind::Cursor,
+        ] {
+            for coordinator in [false, true] {
+                let fixture = Fixture::new();
+                let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, provider);
+                let group = fixture
+                    .orchestrator
+                    .collaboration_group_create(methods::CollaborationGroupsCreateParams {
+                        operation_id: Uuid::now_v7(),
+                        project_id: thread.project_id,
+                        coordinator_thread_id: thread.id,
+                        objective: "Read helper results".into(),
+                        success_criteria: vec![],
+                        coordinator_mode: Some(if coordinator && !matches!(provider, ProviderKind::Codex | ProviderKind::Cursor) {
+                            CoordinatorMode::Dedicated
+                        } else {
+                            CoordinatorMode::Ordinary
+                        }),
+                        policy: None,
+                    })
+                    .unwrap();
+                if coordinator {
+                    thread.coordinator_project_id = Some(thread.project_id);
+                    thread.collaboration_group_id = Some(group.id);
+                    fixture.store.thread_upsert(&thread).unwrap();
+                }
+                let peer = fixture.thread_with_provider(ThreadStatus::Idle, provider);
+                // Fill the bounded read snapshot and leave a later message outside it.
+                let mut messages = Vec::new();
+                for i in 0..102 {
+                    let now = chrono::Utc::now();
+                    let message = CollaborationMessage {
+                        id: Uuid::now_v7(),
+                        operation_id: Uuid::now_v7(),
+                        group_id: group.id,
+                        assignment_id: None,
+                        from_thread_id: Some(peer.id),
+                        to_thread_id: if i == 0 { peer.id } else { thread.id },
+                        external_recipient: false,
+                        purpose: CollaborationMessagePurpose::Result,
+                        reply_to: None,
+                        body: format!("Result {i}"),
+                        state: CollaborationDeliveryState::Queued,
+                        delivery_turn_id: None,
+                        wakeup_count: 1,
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    fixture.store.collaboration_message_put(&message, Some(message.id)).unwrap();
+                    fixture.store.collaboration_message_queue(&message).unwrap();
+                    messages.push(message);
+                }
+                // Desktop/mobile inspection must never consume agent delivery.
+                fixture.orchestrator.collaboration_group_detail(group.id).unwrap();
+                assert!(fixture.store.queue_is_pending(messages[1].id).unwrap());
+                let (live, _) = fixture.active_app_tool_session(&thread).await;
+                let invalid = fixture
+                    .orchestrator
+                    .execute_native_app_tool_call(
+                        thread.id,
+                        live.session_instance_id,
+                        "invalid-participant",
+                        "kybern_collaboration_read",
+                        json!({"thread_id":Uuid::now_v7()}),
+                    )
+                    .await;
+                assert!(invalid.is_err());
+                assert!(fixture.store.queue_is_pending(messages[1].id).unwrap(), "failed reads cannot consume delivery");
+                let result = fixture
+                    .orchestrator
+                    .execute_native_app_tool_call(thread.id, live.session_instance_id, "read-inbox", "kybern_collaboration_read", json!({}))
+                    .await
+                    .unwrap();
+                assert_eq!(result["pending_messages"].as_array().unwrap().len(), 100);
+                assert!(fixture.store.queue_is_pending(messages[0].id).unwrap(), "other recipient");
+                for message in &messages[1..100] {
+                    assert!(!fixture.store.queue_is_pending(message.id).unwrap(), "{provider:?}, coordinator={coordinator}");
+                    let stored = fixture.store.collaboration_message_get(message.id).unwrap().unwrap();
+                    assert_eq!(stored.state, CollaborationDeliveryState::Submitted);
+                    assert!(stored.delivery_turn_id.is_some());
+                }
+                assert!(fixture.store.queue_is_pending(messages[100].id).unwrap(), "outside snapshot");
+            }
+        }
     }
 
     #[test]

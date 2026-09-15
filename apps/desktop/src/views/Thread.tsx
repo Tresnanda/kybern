@@ -1,3 +1,4 @@
+import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { Textarea } from "@/components/kit/textarea"
@@ -451,14 +452,25 @@ function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
 
 export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
+  const [expanded, setExpanded] = useState(false)
+  const updates = queued.filter(q => collaborationPreview(promptText(q.message)))
+  const prompts = queued.filter(q => !collaborationPreview(promptText(q.message)))
   return <ComposerStackedPanel className="composer-queue-panel flex max-h-64 flex-col overflow-y-auto">
-    <div className="px-3 pt-2 text-xs text-muted-foreground">Queued · {queued.length}</div>
-    {queued.map((q, i) => <QueuedRow key={q.id} item={{ ...q, thread_id: threadId }} divided={i > 0} />)}
+    {updates.length > 0 && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}
+      className="flex min-h-9 w-full items-center gap-2 px-3 py-2 text-start text-xs text-muted-foreground hover:text-foreground">
+      <DisclosureChevron open={expanded} />
+      <span>{updates.length} agent {updates.length === 1 ? "update" : "updates"} waiting</span>
+    </button>}
+    {prompts.length > 0 && <div className="px-3 pt-2 text-xs text-muted-foreground">Queued · {prompts.length}</div>}
+    {queued.filter(q => expanded || !collaborationPreview(promptText(q.message))).map((q, i) => <QueuedRow key={q.id} item={{ ...q, thread_id: threadId }} divided={i > 0} />)}
   </ComposerStackedPanel>
 }
 
 function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage; divided: boolean }) {
   const [entered, setEntered] = useState(false)
+  const preview = collaborationPreview(promptText(item.message))
+  const sender = useStore(state => preview?.senderId ? state.threads[preview.senderId]?.title || "Helper" : "You")
+  const [showBody, setShowBody] = useState(false)
   const connected = useStore((s) => s.connection.state === "open")
   const [edit, setEdit] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -477,13 +489,16 @@ function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage
     <ComposerStackedPanelRowMain>
       <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
       <div className="min-w-0 flex-1">
-        {edit === null ? <span className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}>{promptText(item.message) || "Queued follow-up"}</span>
+        {edit === null ? <button type="button" aria-expanded={showBody} onClick={() => setShowBody(value => !value)} className="w-full text-start">
+          <span className="flex min-w-0 items-center gap-2"><span className={cn(COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME, "min-w-0 flex-1")}>{preview ? `${preview.purpose} · ${sender}` : promptText(item.message) || "Queued follow-up"}</span><DisclosureChevron open={showBody} /></span>
+          {showBody && <span className="block whitespace-pre-wrap break-words py-2 text-sm font-normal leading-relaxed">{preview?.body ?? promptText(item.message)}</span>}
+        </button>
           : <Textarea aria-label="Edit queued prompt" value={edit} disabled={busy} onChange={(e) => setEdit(e.target.value)} size="sm" />}
         {contextCount > 0 && <span className="block text-xs text-muted-foreground">{contextCount} attached context {contextCount === 1 ? "item" : "items"}</span>}
       </div>
     </ComposerStackedPanelRowMain>
     <div className="flex shrink-0 items-center gap-0">
-      {edit === null ? <Button variant="subtle" size="chip" disabled={!connected || busy} onClick={() => setEdit(promptText(item.message))}><PencilIcon /> Edit</Button>
+      {edit === null ? (!preview && <Button variant="subtle" size="chip" disabled={!connected || busy} onClick={() => setEdit(promptText(item.message))}><PencilIcon /> Edit</Button>)
         : <><Button variant="subtle" size="chip" disabled={!connected || busy || (!edit.trim() && !contextCount)} onClick={() => void run(true)}>Save</Button><Button variant="ghost" size="chip" disabled={busy} onClick={() => setEdit(null)}>Cancel</Button></>}
       <IconButton variant="ghost" size="icon-chip" label="Delete queued follow-up" tooltip="Remove" disabled={!connected || busy} onClick={() => void run(false)}><Trash2 /></IconButton>
     </div>
