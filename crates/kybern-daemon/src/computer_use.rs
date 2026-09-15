@@ -14,7 +14,7 @@ use anyhow::{Result, anyhow, bail, ensure};
 use base64::Engine;
 use kybern_drivers::NativeToolDefinition;
 use kybern_protocol::{ApprovalDecision, ComputerUseSettings, ComputerUseStatus, PermissionMode, ProviderKind, Settings, ThreadId};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
@@ -114,7 +114,16 @@ impl ComputerUseRuntime {
         let binary = resolve_binary(&settings.computer_use).ok_or_else(|| anyhow!("{}", missing_binary_message(&settings.computer_use)))?;
         let mut args = args.clone();
         if args.action == Action::Capture {
-            args.window_id = Some(resolve_capture_window(&binary, &args).await?);
+            let target = resolve_window_target(&binary, &args).await?;
+            refuse_full_desktop(&target)?;
+            args.pid = Some(target.pid);
+            args.window_id = Some(target.window_id.to_string());
+        } else if needs_window_target(args.action)
+            && let Ok(target) = resolve_window_target(&binary, &args).await
+            && refuse_full_desktop(&target).is_ok()
+        {
+            args.pid = Some(target.pid);
+            args.window_id = Some(target.window_id.to_string());
         }
         let calls = cua_calls(&args)?;
         let mut last = json!({ "ok": true, "action": args.action.as_str() });
@@ -128,7 +137,11 @@ impl ComputerUseRuntime {
                 continue;
             }
             let raw = call_cua(&binary, tool, input).await?;
-            last["cua"] = compact_cua_payload(&raw);
+            let mut compact = compact_cua_payload(&raw);
+            if args.action == Action::ListWindows {
+                compact = filter_listed_windows(compact, args.app.as_deref());
+            }
+            last["cua"] = compact;
             if capture {
                 match bound_screenshot_from_cua(&raw)? {
                     None => {
@@ -181,7 +194,8 @@ pub(crate) fn tool_definition() -> NativeToolDefinition {
             "properties": {
                 "action": { "enum": ["status", "list_apps", "list_windows", "capture", "click", "type", "key", "hotkey", "scroll", "drag"] },
                 "app": { "type": "string" },
-                "window_id": { "type": "string" },
+                "window_id": { "type": ["string", "number"] },
+                "pid": { "type": "integer" },
                 "x": { "type": "number" },
                 "y": { "type": "number" },
                 "x2": { "type": "number" },
@@ -321,8 +335,10 @@ pub(crate) struct ComputerUseArgs {
     pub action: Action,
     #[serde(default)]
     pub app: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_id")]
     pub window_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_i64")]
+    pub pid: Option<i64>,
     #[serde(default)]
     pub x: Option<f64>,
     #[serde(default)]
@@ -350,32 +366,34 @@ pub(crate) struct BoundedScreenshot {
 }
 
 fn cua_calls(args: &ComputerUseArgs) -> Result<Vec<(&'static str, Value)>> {
-    let app = args.app.as_deref().filter(|value| !value.is_empty());
     let window_id = args.window_id.as_deref().filter(|value| !value.is_empty());
     match args.action {
         Action::Status => Ok(Vec::new()),
         Action::ListApps => Ok(vec![("list_apps", json!({}))]),
-        Action::ListWindows => {
-            let mut input = json!({});
-            if let Some(app) = app {
-                input["app_id"] = json!(app);
-            }
-            Ok(vec![("list_windows", input)])
-        }
+        Action::ListWindows => Ok(vec![("list_windows", json!({}))]),
         Action::Capture => {
-            let window =
-                window_id.ok_or_else(|| anyhow!("capture needs window_id or app from list_windows; full-desktop dumps are disabled"))?;
-            Ok(vec![("get_window_state", json!({ "include_screenshot": true, "window_id": window }))])
+            let pid =
+                args.pid.ok_or_else(|| anyhow!("capture needs pid and window_id from list_windows; full-desktop dumps are disabled"))?;
+            let window = parse_window_id(window_id)?;
+            Ok(vec![(
+                "get_window_state",
+                json!({
+                    "pid": pid,
+                    "window_id": window,
+                    "include_screenshot": true,
+                    "include_accessibility_tree": false
+                }),
+            )])
         }
         Action::Click => {
             ensure!(args.x.is_some() && args.y.is_some(), "click needs x and y");
-            Ok(vec![("click", target_point(app, window_id, args.x.unwrap(), args.y.unwrap()))])
+            Ok(vec![("click", target_point(args.pid, parse_optional_window_id(window_id)?, args.x.unwrap(), args.y.unwrap()))])
         }
         Action::Type => {
             let text = args.text.as_deref().map(str::trim).filter(|text| !text.is_empty()).ok_or_else(|| anyhow!("type needs text"))?;
             ensure!(text.len() <= 4000, "type text is too long; send a shorter string");
             let mut input = json!({ "text": text });
-            assign_target(&mut input, app, window_id);
+            assign_target(&mut input, args.pid, parse_optional_window_id(window_id)?);
             Ok(vec![("type_text", input)])
         }
         Action::Key => {
@@ -389,18 +407,18 @@ fn cua_calls(args: &ComputerUseArgs) -> Result<Vec<(&'static str, Value)>> {
                 .filter(|key| !key.is_empty())
                 .ok_or_else(|| anyhow!("key needs keys or text"))?;
             let mut input = json!({ "key": key });
-            assign_target(&mut input, app, window_id);
+            assign_target(&mut input, args.pid, parse_optional_window_id(window_id)?);
             Ok(vec![("press_key", input)])
         }
         Action::Hotkey => {
             let keys = args.keys.as_ref().filter(|keys| !keys.is_empty()).ok_or_else(|| anyhow!("hotkey needs keys"))?;
             let mut input = json!({ "keys": keys });
-            assign_target(&mut input, app, window_id);
+            assign_target(&mut input, args.pid, parse_optional_window_id(window_id)?);
             Ok(vec![("hotkey", input)])
         }
         Action::Scroll => {
             let mut input = json!({ "delta_y": args.amount.unwrap_or(-1.0) });
-            assign_target(&mut input, app, window_id);
+            assign_target(&mut input, args.pid, parse_optional_window_id(window_id)?);
             Ok(vec![("scroll", input)])
         }
         Action::Drag => {
@@ -409,48 +427,174 @@ fn cua_calls(args: &ComputerUseArgs) -> Result<Vec<(&'static str, Value)>> {
                 "from": { "x": args.x, "y": args.y },
                 "to": { "x": args.x2, "y": args.y2 }
             });
-            assign_target(&mut input, app, window_id);
+            assign_target(&mut input, args.pid, parse_optional_window_id(window_id)?);
             Ok(vec![("drag", input)])
         }
     }
 }
 
-async fn resolve_capture_window(binary: &Path, args: &ComputerUseArgs) -> Result<String> {
-    if let Some(window_id) = args.window_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        return Ok(window_id.to_owned());
-    }
-    let Some(app) = args.app.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
-        bail!("capture needs window_id or app from list_windows; full-desktop dumps are disabled");
-    };
-    let listed = call_cua(binary, "list_windows", &json!({ "app_id": app })).await?;
-    first_window_id(&compact_cua_payload(&listed)).ok_or_else(|| anyhow!("no windows for {app}; call list_windows and pass window_id"))
+fn needs_window_target(action: Action) -> bool {
+    matches!(action, Action::Capture | Action::Click | Action::Type | Action::Key | Action::Hotkey | Action::Scroll | Action::Drag)
 }
 
-fn first_window_id(value: &Value) -> Option<String> {
-    match value {
-        Value::Array(items) => items.iter().find_map(first_window_id),
-        Value::Object(map) => {
-            if let Some(id) = map.get("window_id").and_then(Value::as_str).map(str::trim).filter(|id| !id.is_empty()) {
-                return Some(id.to_owned());
-            }
-            if let Some(id) = map.get("windows").and_then(first_window_id) {
-                return Some(id);
-            }
-            map.get("id").and_then(Value::as_str).map(str::trim).filter(|id| !id.is_empty()).map(str::to_owned)
+#[derive(Debug, Clone)]
+struct WindowTarget {
+    pid: i64,
+    window_id: i64,
+    app_name: String,
+    title: String,
+    width: i64,
+    height: i64,
+}
+
+async fn resolve_window_target(binary: &Path, args: &ComputerUseArgs) -> Result<WindowTarget> {
+    let listed = call_cua(binary, "list_windows", &json!({})).await?;
+    let mut windows = parse_windows(&compact_cua_payload(&listed));
+    if let (Some(pid), Some(window)) = (args.pid, parse_optional_window_id(args.window_id.as_deref())?) {
+        if let Some(found) = windows.iter().find(|item| item.pid == pid && item.window_id == window).cloned() {
+            return Ok(found);
         }
+        return Ok(WindowTarget {
+            pid,
+            window_id: window,
+            app_name: args.app.clone().unwrap_or_default(),
+            title: String::new(),
+            width: 0,
+            height: 0,
+        });
+    }
+    if let Some(window_id) = args.window_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        windows.retain(|window| window.window_id.to_string() == window_id);
+        ensure!(!windows.is_empty(), "no window {window_id}; call list_windows and pass window_id");
+    } else if let Some(app) = args.app.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        let needle = app.to_lowercase();
+        windows.retain(|window| window.app_name.to_lowercase().contains(&needle) || window.title.to_lowercase().contains(&needle));
+        ensure!(!windows.is_empty(), "no windows for {app}; call list_windows and pass window_id");
+    } else if args.action == Action::Capture {
+        bail!("capture needs window_id or app from list_windows; full-desktop dumps are disabled");
+    }
+    windows.retain(|window| !is_desktop_dump(window));
+    windows.into_iter().next().ok_or_else(|| anyhow!("no on-screen app window; call list_windows and pass window_id"))
+}
+
+fn parse_windows(value: &Value) -> Vec<WindowTarget> {
+    match value {
+        Value::Array(items) => items.iter().flat_map(parse_windows).collect(),
+        Value::Object(map) => {
+            if let Some(windows) = map.get("windows") {
+                return parse_windows(windows);
+            }
+            let Some(window_id) = json_i64(map.get("window_id")).or_else(|| json_i64(map.get("id"))) else {
+                return Vec::new();
+            };
+            let Some(pid) = json_i64(map.get("pid")) else {
+                return Vec::new();
+            };
+            let bounds = map.get("bounds").and_then(Value::as_object);
+            vec![WindowTarget {
+                pid,
+                window_id,
+                app_name: json_string(map.get("app_name")).or_else(|| json_string(map.get("app"))).unwrap_or_default(),
+                title: json_string(map.get("title")).or_else(|| json_string(map.get("window_title"))).unwrap_or_default(),
+                width: json_i64(map.get("width")).or_else(|| bounds.and_then(|bounds| json_i64(bounds.get("width")))).unwrap_or(0),
+                height: json_i64(map.get("height")).or_else(|| bounds.and_then(|bounds| json_i64(bounds.get("height")))).unwrap_or(0),
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn is_desktop_dump(window: &WindowTarget) -> bool {
+    let app = window.app_name.to_lowercase();
+    let title = window.title.to_lowercase();
+    if app.contains("xfdesktop") || app.contains("xfce4-panel") || app == "plank" {
+        return true;
+    }
+    (title == "desktop" || app.contains("desktop")) && window.width >= 800 && window.height >= 600
+}
+
+fn refuse_full_desktop(window: &WindowTarget) -> Result<()> {
+    if is_desktop_dump(window) || (window.width >= 1800 && window.height >= 1000 && window.title.eq_ignore_ascii_case("desktop")) {
+        bail!("full-desktop dumps are disabled; pass a window_id from list_windows");
+    }
+    Ok(())
+}
+
+fn filter_listed_windows(value: Value, app: Option<&str>) -> Value {
+    let Some(app) = app.map(str::trim).filter(|app| !app.is_empty()) else {
+        return value;
+    };
+    let needle = app.to_lowercase();
+    let mut clone = value;
+    let Some(windows) = clone.get_mut("windows").and_then(Value::as_array_mut) else {
+        return clone;
+    };
+    windows.retain(|window| {
+        json_string(window.get("app_name"))
+            .or_else(|| json_string(window.get("title")))
+            .is_some_and(|name| name.to_lowercase().contains(&needle))
+    });
+    clone
+}
+
+fn parse_window_id(window_id: Option<&str>) -> Result<i64> {
+    parse_optional_window_id(window_id)?
+        .ok_or_else(|| anyhow!("capture needs window_id or app from list_windows; full-desktop dumps are disabled"))
+}
+
+fn parse_optional_window_id(window_id: Option<&str>) -> Result<Option<i64>> {
+    let Some(window_id) = window_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    window_id.parse::<i64>().map(Some).map_err(|_| anyhow!("window_id must be the integer from list_windows"))
+}
+
+fn json_id(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(text) => {
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_owned())
+        }
+        Value::Number(number) => Some(number.to_string()),
         _ => None,
     }
 }
 
-fn target_point(app: Option<&str>, window_id: Option<&str>, x: f64, y: f64) -> Value {
+fn json_i64(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Number(number) => number.as_i64().or_else(|| number.as_u64().map(|value| value as i64)),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn json_string(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned)
+}
+
+fn deserialize_opt_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(json_id(Option::<Value>::deserialize(deserializer)?.as_ref()))
+}
+
+fn deserialize_opt_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(json_i64(Option::<Value>::deserialize(deserializer)?.as_ref()))
+}
+
+fn target_point(pid: Option<i64>, window_id: Option<i64>, x: f64, y: f64) -> Value {
     let mut input = json!({ "x": x, "y": y });
-    assign_target(&mut input, app, window_id);
+    assign_target(&mut input, pid, window_id);
     input
 }
 
-fn assign_target(input: &mut Value, app: Option<&str>, window_id: Option<&str>) {
-    if let Some(app) = app {
-        input["app_id"] = json!(app);
+fn assign_target(input: &mut Value, pid: Option<i64>, window_id: Option<i64>) {
+    if let Some(pid) = pid {
+        input["pid"] = json!(pid);
     }
     if let Some(window_id) = window_id {
         input["window_id"] = json!(window_id);
@@ -601,6 +745,12 @@ fn first_image_bytes(raw: &Value) -> Option<Vec<u8>> {
     if let Some(data) = raw.pointer("/screenshot/data").and_then(Value::as_str) {
         return decode_image_bytes(data);
     }
+    if let Some(data) = raw.get("screenshot_png_b64").and_then(Value::as_str) {
+        return decode_image_bytes(data);
+    }
+    if let Some(path) = raw.get("screenshot_file_path").and_then(Value::as_str) {
+        return std::fs::read(path).ok().filter(|bytes| !bytes.is_empty());
+    }
     None
 }
 
@@ -721,6 +871,13 @@ mod tests {
         assert!(!mcp["content"][0]["text"].as_str().unwrap().contains(&huge.data));
         assert_eq!(mcp["content"][1]["type"], "image");
         assert_eq!(mcp["content"][1]["mimeType"], "image/jpeg");
+        let png = png_bytes(32, 24);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        assert_eq!(first_image_bytes(&json!({ "screenshot_png_b64": b64 })), Some(png.clone()));
+        let path = std::env::temp_dir().join(format!("kybern-cua-shot-{}.png", Uuid::now_v7()));
+        std::fs::write(&path, &png).unwrap();
+        assert_eq!(first_image_bytes(&json!({ "screenshot_file_path": path.display().to_string() })), Some(png));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -755,17 +912,43 @@ mod tests {
     #[test]
     fn capture_refuses_full_desktop_dumps() {
         let error = cua_calls(&parse_args(json!({ "action": "capture" })).unwrap()).unwrap_err();
-        assert!(error.to_string().contains("window_id or app"));
+        assert!(error.to_string().contains("window_id or app") || error.to_string().contains("pid"));
         let error = cua_calls(&parse_args(json!({ "action": "capture", "app": "Finder" })).unwrap()).unwrap_err();
-        assert!(error.to_string().contains("window_id or app"));
-        let capture = cua_calls(&parse_args(json!({ "action": "capture", "window_id": "w1" })).unwrap()).unwrap();
+        assert!(error.to_string().contains("window_id or app") || error.to_string().contains("pid"));
+        let capture = cua_calls(&parse_args(json!({ "action": "capture", "pid": 99, "window_id": 27262979 })).unwrap()).unwrap();
         assert_eq!(capture[0].0, "get_window_state");
-        assert_eq!(capture[0].1["window_id"], "w1");
+        assert_eq!(capture[0].1["window_id"], 27262979);
+        assert_eq!(capture[0].1["pid"], 99);
         assert_eq!(capture[0].1["include_screenshot"], true);
-        assert_eq!(first_window_id(&json!({ "windows": [{ "window_id": "w1" }, { "window_id": "w2" }] })), Some("w1".into()));
-        let click = cua_calls(&parse_args(json!({ "action": "click", "x": 10, "y": 20, "app": "Finder" })).unwrap()).unwrap();
+        assert_eq!(capture[0].1["include_accessibility_tree"], false);
+        assert_eq!(
+            parse_windows(&json!({ "windows": [{ "pid": 8, "window_id": 11 }, { "pid": 9, "window_id": 12 }] }))
+                .into_iter()
+                .map(|window| window.window_id)
+                .collect::<Vec<_>>(),
+            vec![11, 12]
+        );
+        assert_eq!(json_id(Some(&json!("w1"))), Some("w1".into()));
+        let parsed = parse_args(json!({ "action": "capture", "window_id": 27262979, "pid": 4 })).unwrap();
+        assert_eq!(parsed.window_id.as_deref(), Some("27262979"));
+        assert_eq!(parsed.pid, Some(4));
+        let click = cua_calls(&parse_args(json!({ "action": "click", "x": 10, "y": 20, "pid": 8, "window_id": 11 })).unwrap()).unwrap();
         assert_eq!(click[0].0, "click");
         assert_eq!(click[0].1["x"], 10.0);
+        assert_eq!(click[0].1["pid"], 8);
+        assert_eq!(click[0].1["window_id"], 11);
+        assert!(click[0].1.get("app_id").is_none());
+        let listed = cua_calls(&parse_args(json!({ "action": "list_windows", "app": "Mousepad" })).unwrap()).unwrap();
+        assert_eq!(listed[0].0, "list_windows");
+        assert!(listed[0].1.get("app_id").is_none());
+        assert!(is_desktop_dump(&WindowTarget {
+            pid: 1,
+            window_id: 2,
+            app_name: "Xfdesktop".into(),
+            title: "Desktop".into(),
+            width: 1920,
+            height: 1200,
+        }));
     }
 
     #[test]
@@ -806,5 +989,28 @@ exit 1
         assert!(status.ready);
         assert!(!status.attached_harnesses.contains(&ProviderKind::Codex));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "needs DISPLAY, cua-driver serve, and a real window"]
+    async fn live_cua_lists_and_captures_a_real_window() {
+        let binary = which::which("cua-driver").expect("cua-driver on PATH");
+        let mut settings = Settings::default();
+        settings.computer_use.binary = Some(binary.display().to_string());
+        let runtime = ComputerUseRuntime::new();
+        let listed = runtime.perform(&settings, Uuid::nil(), &parse_args(json!({ "action": "list_windows" })).unwrap()).await.unwrap();
+        assert!(listed["cua"].get("windows").and_then(Value::as_array).is_some_and(|windows| !windows.is_empty()), "{listed}");
+        let captured = runtime
+            .perform(&settings, Uuid::nil(), &parse_args(json!({ "action": "capture", "app": "Xfce4-terminal" })).unwrap())
+            .await
+            .expect("window-only capture via Kybern computer_use");
+        assert_eq!(captured["ok"], true, "{captured}");
+        assert_eq!(captured["screenshot"]["mime"], "image/jpeg");
+        let data = captured["screenshot"]["data"].as_str().expect("bounded jpeg");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
+        assert!(bytes.len() > 32 && bytes.len() <= MAX_SCREENSHOT_BYTES);
+        assert!(captured["cua"].get("window_id").is_some());
+        assert_ne!(captured["cua"]["app_name"], "Xfdesktop");
     }
 }
