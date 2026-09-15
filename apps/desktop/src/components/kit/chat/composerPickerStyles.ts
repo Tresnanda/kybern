@@ -218,9 +218,9 @@ export const ENVIRONMENT_PANEL_MOTION_CLASS =
 export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
   "transition-[padding-right] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
 
-/** Anchors the command menu above the composer editor without shifting layout. */
+/** Match the composer outer edges, including its 1px surface border. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
-  "pointer-events-auto absolute bottom-full start-0 z-20 mb-2 w-[min(36rem,100%)] overflow-visible pt-2";
+  "pointer-events-auto absolute bottom-full -inset-x-px z-20 mb-2 overflow-visible pt-2";
 
 /** Inline command menu slot for compact composers rendered near the top of a scrollable dialog. */
 export const COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME =

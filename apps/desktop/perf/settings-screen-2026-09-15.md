@@ -58,3 +58,11 @@ The inline icon wrapper introduced font descender space and lifted icons 2.59px
 above their label centers. A flex icon slot removes that baseline dependency.
 The native fixture measures all eight rows: maximum center offset is now 0px
 at normal text size. A light-mode screenshot was also visually inspected.
+
+## Theme and autocomplete follow-up
+Theme choices now use the preview outline alone for selection; aria-pressed and
+keyboard focus remain. The light appearance preview was inspected in WKWebView.
+Autocomplete for /, @ and $ matches the composer's outer border on both sides.
+The composer-stack fixture checks all three triggers at 1000px, 480px and 320px
+with a synthetic transport, then passes its existing 60 layout samples.
+Typecheck and lint pass.

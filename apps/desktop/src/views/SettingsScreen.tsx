@@ -710,7 +710,7 @@ function Appearance() {
               <div className="settings-preview-sidebar"><i /><i /><i /></div>
               <div className="settings-preview-content"><i /><i /><div /><i /></div>
             </div>
-            <span className="settings-theme-label"><Icon className="size-4" />{value === "system" ? "System" : value === "light" ? "Light" : "Dark"}<span className="settings-theme-radio" /></span>
+            <span className="settings-theme-label"><Icon className="size-4" />{value === "system" ? "System" : value === "light" ? "Light" : "Dark"}</span>
           </button>
         })}
       </div>

@@ -38,7 +38,7 @@ export default mergeConfig(base, {
       if (!/\/(AppUpdate|Sidebar)\.tsx$/.test(id)) return
       return code.replaceAll('"@/lib/appUpdate"', JSON.stringify(path.resolve(import.meta.dirname, "app-update-transport.ts")))
     },
-  }] : process.env.KYBERN_PERF_FIXTURE === "chat-collaboration" ? [{
+  }] : ["chat-collaboration", "composer-stack"].includes(process.env.KYBERN_PERF_FIXTURE ?? "") ? [{
     name: "chat-collaboration-fixture-transport",
     enforce: "pre",
     transform(code, id) {
