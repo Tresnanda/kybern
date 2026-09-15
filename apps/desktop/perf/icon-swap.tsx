@@ -73,7 +73,9 @@ function configureReducedMotionRules(enabled: boolean) {
   const changed: { rule: CSSMediaRule; media: string }[] = []
   const visit = (rules: CSSRuleList) => {
     for (const rule of rules) {
-      if (rule instanceof CSSMediaRule && rule.conditionText.replaceAll(" ", "").includes("prefers-reduced-motion:reduce")) {
+      const condition = rule instanceof CSSMediaRule ? rule.conditionText.replaceAll(" ", "") : ""
+      // Lightning CSS can minify `: reduce` to the equivalent boolean query.
+      if (rule instanceof CSSMediaRule && (condition.includes("(prefers-reduced-motion:reduce)") || condition.includes("(prefers-reduced-motion)"))) {
         changed.push({ rule, media: rule.media.mediaText })
         rule.media.mediaText = enabled ? "all" : "not all"
       } else if ("cssRules" in rule) visit((rule as CSSGroupingRule).cssRules)

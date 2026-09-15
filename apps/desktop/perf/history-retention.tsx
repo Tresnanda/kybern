@@ -27,6 +27,10 @@ async function run() {
   useStore.getState().set({ selected: { kind: "thread", id: "history" }, connection: { state: "open" }, transcripts: { history: { ...emptyThreadState(), loaded: true, blocks: fixture.all, lastSeq: 3000 } } })
   const beforeBytes = retainedSize(state().blocks)
   flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex h-screen flex-col"><Transcript threadId="history" bottomInset={0} /></div></ThemeProviderContext>))
+  // Establish the live-edge precondition before injecting extra notifications.
+  // During initial row measurement the mount-follow callback is still pending;
+  // a synthetic scroll at that point incorrectly represents a reader upstream.
+  await waitFor(() => document.body.innerText.includes("Answer 999") && scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 60, "Initial history reaches the live edge")
   // WebKit can keep emitting scroll notifications at the live edge. They must
   // not indefinitely postpone cleanup when there is no reading interaction.
   const notifications = setInterval(() => scroll()?.dispatchEvent(new Event("scroll")), 30)
