@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2
+
+<!-- kybern-release-title: A clearer place for your preferences -->
+<!-- kybern-release-summary: Explore dedicated settings, clearer usage insights, and a sidebar that keeps helper chats connected to their parent. -->
+
+- Settings opens as a dedicated screen with search and grouped navigation. Notifications and background activity have their own pages, and returning keeps your workspace and focus.
+- Preview light, dark, and system themes with a simple selection outline. Screen transitions respect keyboard navigation and reduced motion.
+- Explore usage by date, agent, model, or day, with token and reported-cost summaries. Loading, empty results, and failures have clear recovery actions.
+- Follow helper chats with indentation and connecting guides beneath their parent in the desktop sidebar.
+- Command, file, and skill suggestions now match the composer width, and settings icons align with their labels.
+- Cursor can discover the repository's project Agent Skills.
+
 ## 0.4.1
 
 <!-- kybern-release-title: Lighter, steadier conversations -->
