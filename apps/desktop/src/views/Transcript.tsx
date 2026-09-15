@@ -1,9 +1,10 @@
+import { useFollowingHistory } from "@/lib/useFollowingHistory"
 import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { useEarlierHistory } from "@/lib/useEarlierHistory"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
-import { surfaceOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
+import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
 import { connectorApproval, isUserInput } from "@/lib/userInput"
 // Transcript pane:
 // centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
@@ -33,11 +34,12 @@ import {
   getChatMessageFooterTextStyle,
   getChatTranscriptTextStyle,
 } from "@/components/kit/chat/chatTypography"
-import { clockTime, elapsedSince, outputText, plural, toolLine } from "@/lib/format"
+import { clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
 import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
+import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
 import { TranscriptStateRoot } from "@/components/kybern/TranscriptStateScope"
@@ -69,7 +71,7 @@ import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { activeRuntime, errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
-import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
+import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
 const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
@@ -335,6 +337,7 @@ export function Transcript({
   }, [groups, navigationItems, historyOffset])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
+  useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
     setFollowing(true)
@@ -357,7 +360,7 @@ export function Transcript({
         aria-hidden={agentActivityDetail ? true : undefined}
         inert={agentActivityDetail ? true : undefined}
         className={cn(
-          "relative flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 ease-out motion-reduce:transition-none",
+          "chat-scroll-fade-scope relative flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 ease-out motion-reduce:transition-none",
           agentActivityDetail && "pointer-events-none opacity-0",
         )}
       >
@@ -409,6 +412,8 @@ export function Transcript({
             </VirtualRows></TranscriptStateRoot>
           )}
         </MessageScroller>
+        {/* Maskless bottom fade for opaque content surfaces (see kit.css). */}
+        <div aria-hidden className="chat-scroll-fade" />
         <div
           className={cn(
             "pointer-events-none absolute inset-x-0 z-30 flex justify-center py-1 transition-[opacity,transform,filter] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none",
@@ -594,7 +599,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   return (
     <>
       {group.user && (
-        <div className={cn(ROW, group.running ? "pb-5" : "pb-4")} data-timeline-row-kind="message" data-message-role="user" data-slot="message" data-from="user">
+        <div className={cn(ROW, "chat-paint-host", group.running ? "pb-5" : "pb-4")} data-timeline-row-kind="message" data-message-role="user" data-slot="message" data-from="user">
           <UserBubble message={group.user.message} at={group.user.at} />
         </div>
       )}
@@ -603,14 +608,14 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
         <div className={cn(ROW, "pb-2")} data-timeline-row-kind="live-work">
           <WorkingHeader since={group.user?.at ?? ""} />
           {hasWork && (
-            <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
+            <div className="chat-paint-host mt-1 space-y-0.5" data-timeline-row-kind="work">
               {/* Every live event stays at its sequence position. Only the tail
                   assistant segment streams; earlier prose never gets reparented. */}
               <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
           {!hasLiveWork && (
-            <div className="t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
+            <div className="chat-paint-host t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
               <span className="t-shimmer" data-text="Thinking">Thinking</span>
             </div>
           )}
@@ -626,7 +631,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             // shares the same gutter, then a hairline separates work from answer.
             <div className="mb-3 space-y-0.5" data-timeline-row-kind="settled-work">
               {hasPrimaryAgentActivity && (
-                <div data-primary-agent-activity="true" className="space-y-0.5">
+                <div data-primary-agent-activity="true" className="chat-paint-host space-y-0.5">
                   <WorkRows
                     blocks={settledWork.agentBlocks}
                     tasksByToolCall={settledWork.tasksByToolCall}
@@ -640,7 +645,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                 <Collapsible open={open} onOpenChange={() => toggle(group.turnId)} className="group/collapsed-work py-1">
                   <CollapsibleTrigger
                     type="button"
-                    className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
+                    className="chat-paint-host group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
                   >
                     <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
                       <HammerIcon className="size-3.5" />
@@ -651,7 +656,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                     <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
                   </CollapsibleTrigger>
                   <CollapsiblePanel>
-                    <div className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
+                    <div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
                       <WorkRows
                         blocks={settledWork.disclosureBlocks}
                         tasksByToolCall={settledWork.tasksByToolCall}
@@ -663,26 +668,26 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                   </CollapsiblePanel>
                 </Collapsible>
               )}
-              <div className="mt-1 h-px w-full bg-border" />
+              <div className="chat-paint-host mt-1 h-px w-full bg-border" />
             </div>
           )}
 
-          <div className="group min-w-0 py-0.5">
-            {deliveredImages.length > 0 && <div data-response-images>{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
+          <div className="chat-paint-host group min-w-0 py-0.5">
+            {deliveredImages.length > 0 && <div data-response-images className="chat-paint-host">{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
             {group.answer && (
-              <div data-slot="message-content">
-                <Markdown text={group.answer.text} style={TEXT} />
+              <div data-slot="message-content" className="chat-paint-host">
+                <Markdown text={group.answer.text} className="chat-markdown--hosted" style={TEXT} />
               </div>
             )}
 
             {group.end?.error && (
-              <p className="mt-2 flex items-start gap-2 text-destructive" style={TEXT}>
+              <p className="chat-paint-host mt-2 flex items-start gap-2 text-destructive" style={TEXT}>
                 <CircleAlertIcon className="mt-1 size-3.5 shrink-0" />
                 <span className="selectable">{group.end.error}</span>
               </p>
             )}
             {group.end?.stopReason === "interrupted" && (
-              <p className="text-muted-foreground" style={TEXT}>
+              <p className="chat-paint-host text-muted-foreground" style={TEXT}>
                 Stopped.
               </p>
             )}
@@ -690,13 +695,13 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast && settled} />}
 
             {group.reverted && (
-              <p className="mt-2 flex items-center gap-1.5 text-muted-foreground" style={TEXT}>
+              <p className="chat-paint-host mt-2 flex items-center gap-1.5 text-muted-foreground" style={TEXT}>
                 <Undo2Icon className="size-3" /> Reverted to before this turn
               </p>
             )}
 
             {settled && (group.answer || group.end) && (
-              <div className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]" style={META}>
+              <div className="chat-paint-host mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]" style={META}>
                 <CopyAction text={group.answer?.text ?? ""} />
                 {group.end?.at && <p className="tabular-nums">{clockTime(group.end.at)}</p>}
               </div>
@@ -752,7 +757,7 @@ function RuntimeTaskTranscriptRow({ task, onOpenAgentActivity }: { task: Runtime
 function WorkingHeader({ since }: { since: string }) {
   const now = useTicker(true)
   return (
-    <div className="-ml-0.5 flex items-center gap-2 text-muted-foreground" style={CHAT_FONT}>
+    <div className="chat-paint-host -ml-0.5 flex items-center gap-2 text-muted-foreground" style={CHAT_FONT}>
       <MatrixLoader variant="orbit" className="text-foreground/70" />
       <span>
         Working for <span className="tabular-nums">{clockDuration(elapsedSince(since, now))}</span>
@@ -1022,9 +1027,60 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
   return chunks
 }
 
+/** Derive from a block list, patching the previous result when only the tail
+ * block changed or one block was appended. A stream replaces one reference per
+ * token; rebuilding 1,000+ entries and invalidating every mounted row for that
+ * was most of the streaming allocation. Falls back to a full rebuild whenever
+ * the patch cannot preserve the structure. */
+function useTailDerived<T, R>(items: readonly T[], build: (items: readonly T[]) => R, patch: (previous: R, change: TailChange<T>) => R | null): R {
+  // State rather than a ref: the previous snapshot is read during render, and
+  // React retries this render immediately when it changes, before committing.
+  const [cache, setCache] = useState(() => ({ items, build, result: build(items) }))
+  let result = cache.result
+  if (cache.build !== build) result = build(items)
+  else {
+    const change = diffTail(cache.items, items)
+    if (change.kind !== "same") result = (change.kind === "rebuild" ? null : patch(cache.result, change)) ?? build(items)
+  }
+  if (cache.items !== items || cache.build !== build) setCache({ items, build, result })
+  return result
+}
+
+const isLeafWorkBlock = (block: Block) => block.kind !== "tool" && block.kind !== "runtime_task"
+
+function patchHierarchyTail(previous: WorkHierarchy, change: TailChange<Block>): WorkHierarchy | null {
+  if (change.kind === "append") {
+    if (!isLeafWorkBlock(change.after)) return null
+    return { ...previous, roots: [...previous.roots, change.after] }
+  }
+  if (change.kind !== "tail" || !isLeafWorkBlock(change.before) || !isLeafWorkBlock(change.after)) return null
+  const index = previous.roots.lastIndexOf(change.before)
+  if (index === -1) return null
+  const roots = previous.roots.slice()
+  roots[index] = change.after
+  return { ...previous, roots }
+}
+
+function patchChunksTail(previous: WorkChunk[], change: TailChange<Block>): WorkChunk[] | null {
+  if (change.kind === "append") {
+    if (!isLeafWorkBlock(change.after)) return null
+    return [...previous, { kind: "single", block: change.after }]
+  }
+  if (change.kind !== "tail" || !isLeafWorkBlock(change.before) || !isLeafWorkBlock(change.after)) return null
+  for (let index = previous.length - 1; index >= 0; index--) {
+    const chunk = previous[index]!
+    if (chunk.kind === "single" && chunk.block === change.before) {
+      const chunks = previous.slice()
+      chunks[index] = { kind: "single", block: change.after }
+      return chunks
+    }
+  }
+  return null
+}
+
 function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, tone = "muted", liveTextId = null, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; tone?: WorkTone; liveTextId?: string | null; onOpenAgentActivity: OpenAgentActivity }) {
-  const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
-  const hierarchy = buildWorkHierarchy(blocks)
+  const tasksByToolCall = useMemo(() => new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : []))), [tasks])
+  const hierarchy = useTailDerived(blocks, buildWorkHierarchy, patchHierarchyTail)
   return <WorkRows compact blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
 }
 
@@ -1047,19 +1103,30 @@ function WorkRows({
   compact?: boolean
   onOpenAgentActivity: OpenAgentActivity
 }) {
-  const chunks: WorkChunk[] = compact ? chunkWork(blocks, tasksByToolCall) : blocks.map((block) => ({ kind: "single", block }))
+  const renderBlock = (block: Block) => (
+    <WorkRow
+      key={block.id}
+      block={block}
+      task={block.kind === "tool" ? tasksByToolCall.get(block.call.id) : undefined}
+      tasksByToolCall={tasksByToolCall}
+      childrenByParent={childrenByParent}
+      tone={tone}
+      live={block.kind === "assistant" && block.id === liveTextId}
+      onOpenAgentActivity={onOpenAgentActivity}
+    />
+  )
+  // Consecutive settled tools fold into one group row; a streamed tail patches
+  // the previous chunk list instead of re-chunking every block.
+  const buildChunks = useCallback((items: readonly Block[]) => chunkWork(items, tasksByToolCall), [tasksByToolCall])
+  const chunks = useTailDerived(blocks, buildChunks, patchChunksTail)
+  // Live work is already one row per block. Feed those blocks directly to the
+  // virtualizer instead of allocating a wrapper for every offscreen block on
+  // each streamed tail update. Settled compact work still needs tool chunks.
+  if (!compact) return <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{renderBlock}</VirtualRows>
+
   return <VirtualRows items={chunks} getKey={chunkKey} estimateSize={estimateWorkSize}>{(chunk) =>
     chunk.kind === "single" ? (
-      <WorkRow
-        key={chunk.block.id}
-        block={chunk.block}
-        task={chunk.block.kind === "tool" ? tasksByToolCall.get(chunk.block.call.id) : undefined}
-        tasksByToolCall={tasksByToolCall}
-        childrenByParent={childrenByParent}
-        tone={tone}
-        live={chunk.block.kind === "assistant" && chunk.block.id === liveTextId}
-        onOpenAgentActivity={onOpenAgentActivity}
-      />
+      renderBlock(chunk.block)
     ) : (
       <ToolGroupRow
         key={chunk.blocks[0]!.id}
@@ -1072,7 +1139,7 @@ function WorkRows({
   }</VirtualRows>
 }
 
-function ToolGroupRow({
+const ToolGroupRow = memo(function ToolGroupRow({
   blocks,
   tasksByToolCall,
   childrenByParent,
@@ -1101,7 +1168,7 @@ function ToolGroupRow({
       <CollapsibleTrigger
         type="button"
         aria-expanded={open}
-        className="group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
+        className="chat-paint-host group/tool-row flex w-full cursor-pointer items-center gap-1.5 text-start focus-visible:outline-none"
       >
         <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
           {workIcon(summary.visual, false)}
@@ -1111,7 +1178,7 @@ function ToolGroupRow({
         </span>
         <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
       </CollapsibleTrigger>
-      <CollapsiblePanel><div className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
+      <CollapsiblePanel><div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
         <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{(block) => (
           <ToolRow
             key={block.id}
@@ -1125,9 +1192,9 @@ function ToolGroupRow({
       </div></CollapsiblePanel>
     </Collapsible>
   )
-}
+})
 
-function WorkRow({
+const WorkRow = memo(function WorkRow({
   block,
   task,
   tasksByToolCall,
@@ -1184,7 +1251,7 @@ function WorkRow({
     default:
       return null
   }
-}
+})
 
 function ToolRow({
   block,
@@ -1203,14 +1270,14 @@ function ToolRow({
 }) {
   const [open, setOpen] = useTranscriptRowState("open", false)
   const active = !!task && isRuntimeTaskActive(task)
-  const { activity, visual, surface, screenshots, out, label, hasOutput } = useMemo(() => {
+  const { activity, visual, surface, screenshots, label, hasOutput } = useMemo(() => {
     const activity = toolLine(block.call, block.complete && !active)
     const visual = toolVisualKind(block.call, activity)
     const surface = toolSurface(block.call, block.output)
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
-    const out = surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream)
+    const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
     const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, out, label, hasOutput: out.trim().length > 0 || screenshots.length > 0 }
+    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1260,7 +1327,7 @@ function ToolRow({
               <p className="pb-0.5 font-system-ui text-[11px] leading-5 text-muted-foreground/45">
                 {activity.kind === "delegate" ? "Subagent activity" : "Nested activity"}
               </p>
-              <div className="space-y-0.5">
+              <div className="chat-paint-host space-y-0.5">
                 <WorkRows blocks={childBlocks} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
               </div>
             </section>
@@ -1268,26 +1335,36 @@ function ToolRow({
           {hasOutput && (
             <section aria-label={hasChildActivity ? "Result" : undefined}>
               {hasChildActivity && <p className="pb-1 font-system-ui text-[11px] leading-5 text-muted-foreground/45">Result</p>}
-              {screenshots.length > 0 && (
-                <div className={cn("flex flex-wrap gap-2", out.trim() && "pb-2")}>
-                  {screenshots.map((source, index) => (
-                    <ResponseImage key={source} source={source} label={surface?.app ? `Screenshot of ${surface.app}` : `Screenshot ${index + 1}`} compact />
-                  ))}
-                </div>
-              )}
-              {out.trim() && <pre
-                className={cn(
-                  "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
-                  block.isError ? "text-destructive/90" : "text-foreground/92",
-                )}
-              >
-                {out}
-              </pre>}
+              <ToolResult block={block} surface={surface} screenshots={screenshots} />
             </section>
           )}
         </DisclosureRegion>
       )}
     </div>
+  )
+}
+
+/** Mounted by DisclosureRegion only while open or completing its exit. */
+function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface: ToolSurface | null; screenshots: string[] }) {
+  const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
+  return (
+    <>
+      {screenshots.length > 0 && (
+        <div className={cn("flex flex-wrap gap-2", out.trim() && "pb-2")}>
+          {screenshots.map((source, index) => (
+            <ResponseImage key={source} source={source} label={surface?.app ? `Screenshot of ${surface.app}` : `Screenshot ${index + 1}`} compact />
+          ))}
+        </div>
+      )}
+      {out.trim() && <pre
+        className={cn(
+          "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
+          block.isError ? "text-destructive/90" : "text-foreground/92",
+        )}
+      >
+        {out}
+      </pre>}
+    </>
   )
 }
 
@@ -1328,10 +1405,10 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone = "muted",
       {showText && (
         <div className="chat-message-segment flex flex-col gap-1.5 pr-[2px] pl-[2px]" data-live={live && !block.complete ? "true" : undefined}>
           {tone === "bright" ? (
-            <Markdown text={bodyText} style={TEXT} live={live && !block.complete} />
+            <Markdown text={bodyText} className="chat-markdown--hosted" style={TEXT} live={live && !block.complete} />
           ) : (
             <div className="text-muted-foreground">
-              <Markdown text={bodyText} className="[&_*]:text-muted-foreground" style={TEXT} live={live && !block.complete} />
+              <Markdown text={bodyText} className="chat-markdown--hosted [&_*]:text-muted-foreground" style={TEXT} live={live && !block.complete} />
             </div>
           )}
         </div>
@@ -1372,7 +1449,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   }
 
   return (
-    <div className="mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
+    <div className="chat-paint-host mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
       <div
         className={cn(
           "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-chat-code-surface)_40%,transparent)] px-3 py-1.5",

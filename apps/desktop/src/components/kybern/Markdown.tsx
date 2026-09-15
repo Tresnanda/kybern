@@ -84,10 +84,11 @@ function useParsedMarkdown(text: string, live: boolean) {
   const [consumer] = useState(nextMarkdownConsumer)
   const [parser] = useState(createMarkdownParser)
   const immediate = useMemo(() => text.length <= 1024 ? parser.parse(text) : cachedMarkdown(text), [text, parser])
-  const [result, setResult] = useState<(ParsedMarkdown & { revision: number }) | null>(null)
+  const [result, setResult] = useState<(ParsedMarkdown & { revision?: number }) | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const flight = useRef<{ source: string; abort: AbortController } | null>(null)
   useEffect(() => {
+    let current = true
     const pending = flight.current
     if (pending) {
       if (text.startsWith(pending.source)) return
@@ -95,18 +96,25 @@ function useParsedMarkdown(text: string, live: boolean) {
       pending.abort.abort()
     }
     if (immediate || result?.source === text || failed === text) {
+      // An immediate parse can replace a different worker result while a
+      // virtual row stays mounted. Drop a retained large tree in a microtask
+      // so the cache hit remains synchronous without a render storm on the
+      // usual short streaming updates.
+      if (immediate && result && result.source !== text && (text.length > 1024 || result.source.length > 1024)) {
+        queueMicrotask(() => { if (current) setResult(immediate) })
+      }
       if (!live) {
         const parsed = immediate ?? result
         if (parsed?.source === text) cacheMarkdown(parsed)
       }
-      return
+      return () => { current = false }
     }
     const job = { source: text, abort: new AbortController() }
     flight.current = job
     void parseMarkdown({ consumer, source: text, baseRevision: result?.revision ?? 0 }, job.abort.signal).then((reply) => {
       if (flight.current !== job) return
       flight.current = null
-      if (!reply) { setFailed(text); return }
+      if (!reply) { setFailed(text); setResult(null); return }
       const old = new Map(result?.blocks.map((block) => [block.key, block]))
       const blocks = reply.blocks.map((block) => {
         const existing = old.get(block.key)
@@ -114,6 +122,7 @@ function useParsedMarkdown(text: string, live: boolean) {
       })
       setResult({ source: text, revision: reply.revision, blocks: [...(result?.blocks.slice(0, reply.prefix) ?? []), ...blocks] })
     })
+    return () => { current = false }
   }, [consumer, text, live, immediate, result, failed])
   useEffect(() => () => {
     flight.current?.abort.abort()

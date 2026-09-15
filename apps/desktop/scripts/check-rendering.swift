@@ -35,9 +35,14 @@ final class Bench: NSObject, WKScriptMessageHandler {
   config.websiteDataStore = .nonPersistent()
   config.userContentController.add(self, name: "bench")
   config.setURLSchemeHandler(Assets(), forURLScheme: "tauri")
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1" {
+   // Diagnostic only: WebKit's compositing borders and tiled-layer indicator overlay.
+   for key in ["compositingBordersVisible", "compositingRepaintCountersVisible", "tiledScrollingIndicatorVisible"] { config.preferences.setValue(true, forKey: key) }
+  }
   web = WKWebView(frame: NSRect(x: 0, y: 0, width: Double(ProcessInfo.processInfo.environment["KYBERN_PERF_WIDTH"] ?? "1100") ?? 1100, height: Double(ProcessInfo.processInfo.environment["KYBERN_PERF_HEIGHT"] ?? "720") ?? 720), configuration: config)
   window = NSWindow(contentRect: web.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
   window.title = "Kybern rendering checks"
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1" || ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" { print("Debug window id: \(window.windowNumber)"); fflush(stdout) }
   window.contentView = web
   window.orderFront(nil)
   let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
@@ -53,6 +58,12 @@ final class Bench: NSObject, WKScriptMessageHandler {
    if result?["process"] as? Bool == true, web.responds(to: NSSelectorFromString("_webProcessIdentifier")), let pid = web.value(forKey: "_webProcessIdentifier") as? Int {
     print("{\"webPid\":\(pid)}")
    }
+   if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1", result?["memory"] as? Bool == true {
+    // Diagnostic only: dump whichever private tree descriptions this WebKit exposes.
+    for selector in ["_scrollingTreeAsText", "_layerTreeAsText", "_internalLayerTreeAsText", "_compositingLayerTreeAsText", "_renderTreeAsText"] {
+     if web.responds(to: NSSelectorFromString(selector)), let text = web.value(forKey: selector) as? String { print("=== \(selector)\n\(text)") } else { print("=== \(selector): unavailable") }
+    }
+   }
    if result?["memory"] as? Bool == true, web.responds(to: NSSelectorFromString("_webProcessIdentifier")), let pid = web.value(forKey: "_webProcessIdentifier") as? Int {
     let process = Process(); let pipe = Pipe()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
@@ -60,6 +71,12 @@ final class Bench: NSObject, WKScriptMessageHandler {
     try! process.run()
     let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     process.waitUntilExit()
+    if let directory = ProcessInfo.processInfo.environment["KYBERN_PERF_MEMORY_DIR"] {
+     let folder = URL(fileURLWithPath: directory, isDirectory: true)
+     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+     let stage = (result?["stage"] as? String ?? "sample").replacingOccurrences(of: "/", with: "-")
+     try? output.write(to: folder.appendingPathComponent(stage + ".txt"), atomically: true, encoding: .utf8)
+    }
     let footprint = output.components(separatedBy: "\n").filter { $0.hasPrefix("Physical footprint:") }.first ?? "unavailable"
     let peak = output.components(separatedBy: "\n").filter { $0.hasPrefix("Physical footprint (peak):") }.first ?? "unavailable"
     let record: [String: Any] = ["sample": result!["stage"]!, "footprint": footprint, "peak": peak, "pid": pid]

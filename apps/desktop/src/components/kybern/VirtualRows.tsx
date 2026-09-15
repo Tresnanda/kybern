@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from "react"
 import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range, type ReactVirtualizer } from "@tanstack/react-virtual"
+import { reconcileVirtualTopology, type VirtualTopology } from "@/lib/virtualTopology"
 import { TranscriptStateScope } from "./TranscriptStateScope"
 
 export type VirtualRowsController = ReactVirtualizer<HTMLElement, HTMLDivElement>
@@ -35,8 +36,19 @@ interface VirtualRowsProps<T> {
 }
 
 export function VirtualRows<T>(props: VirtualRowsProps<T>) {
-  if (!props.viewport && props.items.length <= 30) return <>{props.items.map((item, index) => <TranscriptStateScope key={props.getKey(item, index)} name={props.getKey(item, index)}>{props.children(item, index)}</TranscriptStateScope>)}</>
+  if (!props.viewport && props.items.length <= 30) return <PlainRows {...props} />
   return <VirtualizedRows {...props} />
+}
+
+/** Short lists stay in normal flow, but each item is still its own paint host:
+ * one tall item (an opened tool group) would otherwise make the enclosing
+ * work container a tiled layer that paints its siblings and accumulates
+ * scroll tiles. Margins collapse through the wrapper, so spacing is unchanged. */
+function PlainRows<T>({ items, getKey, children }: VirtualRowsProps<T>) {
+  return <>{items.map((item, index) => {
+    const key = getKey(item, index)
+    return <div key={key} className="chat-paint-host" data-virtual-key={key}><TranscriptStateScope name={key}>{children(item, index)}</TranscriptStateScope></div>
+  })}</>
 }
 
 function VirtualizedRows<T>({
@@ -55,7 +67,7 @@ function VirtualizedRows<T>({
   const owner = useId()
   const container = useRef<HTMLDivElement>(null)
   const [margin, setMargin] = useState(0)
-  const [pinned, setPinned] = useState<readonly number[]>([])
+  const [pinned, setPinned] = useState<{ focused: string | null; selection: readonly [string, string] | null }>({ focused: null, selection: null })
 
   useLayoutEffect(() => {
     const list = container.current
@@ -86,23 +98,16 @@ function VirtualizedRows<T>({
 
   useLayoutEffect(() => {
     const update = () => {
-      const next = new Set<number>()
-      const focused = containingRow(document.activeElement, owner)
-      if (focused) next.add(Number(focused.dataset.index))
+      const focused = containingRow(document.activeElement, owner)?.dataset.virtualKey ?? null
       const selection = document.getSelection()
+      let endpoints: readonly [string, string] | null = null
       if (selection && !selection.isCollapsed) {
-        const anchor = containingRow(selection.anchorNode, owner)
-        const focus = containingRow(selection.focusNode, owner)
-        if (anchor && focus) {
-          const a = Number(anchor.dataset.index)
-          const b = Number(focus.dataset.index)
-          for (let index = Math.min(a, b); index <= Math.max(a, b); index++) next.add(index)
-        } else if (anchor || focus) {
-          next.add(Number((anchor ?? focus)!.dataset.index))
-        }
+        const anchor = containingRow(selection.anchorNode, owner)?.dataset.virtualKey
+        const focus = containingRow(selection.focusNode, owner)?.dataset.virtualKey
+        if (anchor || focus) endpoints = [anchor ?? focus!, focus ?? anchor!]
       }
-      const sorted = [...next].sort((a, b) => a - b)
-      setPinned((current) => current.length === sorted.length && current.every((value, index) => value === sorted[index]) ? current : sorted)
+      setPinned(current => current.focused === focused && current.selection?.[0] === endpoints?.[0] && current.selection?.[1] === endpoints?.[1]
+        ? current : { focused, selection: endpoints })
     }
     document.addEventListener("selectionchange", update)
     document.addEventListener("focusin", update)
@@ -117,10 +122,32 @@ function VirtualizedRows<T>({
   const rangeExtractor = useCallback((range: Range) => {
     if (range.count <= 30) return Array.from({ length: range.count }, (_, index) => index)
     const visible = defaultRangeExtractor(range)
-    return [...new Set([...visible, ...pinned.filter((index) => index < range.count)])].sort((a, b) => a - b)
-  }, [pinned])
-  const getItemKey = useCallback((index: number) => getKey(items[index]!, index), [getKey, items])
-  const estimate = useCallback((index: number) => estimateSize(items[index]!, index), [estimateSize, items])
+    // Array positions change on prepend/eviction. Resolve interaction pins from
+    // stable row keys before rendering so focused/selected DOM never drops out.
+    const indexOf = (key: string | null) => key === null ? -1 : items.findIndex((item, index) => String(getKey(item, index)) === key)
+    const indices = new Set(visible)
+    const focused = indexOf(pinned.focused)
+    if (focused >= 0) indices.add(focused)
+    if (pinned.selection) {
+      const a = indexOf(pinned.selection[0]), b = indexOf(pinned.selection[1])
+      if (a >= 0 && b >= 0) for (let index = Math.min(a, b); index <= Math.max(a, b); index++) indices.add(index)
+      else if (a >= 0 || b >= 0) indices.add(Math.max(a, b))
+    }
+    return [...indices].sort((a, b) => a - b)
+  }, [pinned, items, getKey])
+  // TanStack Virtual treats getItemKey identity as measurement topology. An
+  // immutable streaming update used to replace this callback every render and
+  // rebuild every measurement even when all row keys and estimates were
+  // unchanged. State provides a concurrency-safe prior snapshot; unlike a ref,
+  // it is never mutated during render. React immediately retries the uncommon
+  // topology-changing render before committing its children.
+  const [previousTopology, setPreviousTopology] = useState<VirtualTopology>(() =>
+    reconcileVirtualTopology(null, items, getKey, estimateSize),
+  )
+  const topology = reconcileVirtualTopology(previousTopology, items, getKey, estimateSize)
+  if (topology !== previousTopology) setPreviousTopology(topology)
+  const getItemKey = useCallback((index: number) => topology.keys[index]!, [topology])
+  const estimate = useCallback((index: number) => topology.estimates[index]!, [topology])
   // This component reads the mutable virtualizer directly; it must not be compiler-memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
@@ -191,7 +218,7 @@ function VirtualizedRows<T>({
     container.current = element
   }, [])
 
-  if (!viewport) return <>{items.map((item, index) => <TranscriptStateScope key={getKey(item, index)} name={getKey(item, index)}>{children(item, index)}</TranscriptStateScope>)}</>
+  if (!viewport) return <PlainRows items={items} getKey={getKey} estimateSize={estimateSize}>{children}</PlainRows>
   const rows = virtualizer.getVirtualItems()
   return (
     <div ref={setContainer} className={className} data-virtual-list={owner} style={{ position: "relative", width: "100%", display: "flow-root" }}>
@@ -209,13 +236,17 @@ function VirtualizedRows<T>({
             key={row.key}
             ref={measureRow}
             data-index={row.index}
+            data-virtual-key={String(row.key)}
             data-virtual-owner={owner}
-            style={{ width: "100%", display: "flow-root", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
+            style={{ width: "100%", display: "flow-root", willChange: "transform", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
           >
-            {/* Bound WebKit's graphics allocations while traversing large history
-                gaps. Keep small lists and nested work in their existing paint
-                context. The 8px bleed preserves focus rings, negative icon margins
-                and entry motion without changing row measurements or gutters. */}
+            {/* Each mounted row is its own compositing layer (see .chat-paint-host
+                in kit.css): its backing store is bounded by the row, and the
+                scroller's tiled layer has nothing left to paint, so WebKit stops
+                accumulating scroll tiles. The outer paint boundary additionally
+                clips large history rows; its 8px bleed preserves focus rings,
+                negative icon margins and entry motion without changing row
+                measurements or gutters. */}
             {providedViewport ? <div style={{ contain: items.length > 30 ? "paint" : undefined, margin: -8, padding: 8 }}>{content}</div> : content}
           </div>
         )

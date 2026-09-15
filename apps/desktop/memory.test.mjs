@@ -221,3 +221,123 @@ test("desktop history paging freezes the sequence and preserves live text and ro
   assert.equal(current.blocks[1].text, "Hello world")
   runtime.disconnect()
 })
+
+
+test("refresh of a large loaded history stays paged and replays concurrent output", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("large-refresh")
+  store.getState().set({ selected: { kind: "thread", id: "t" } })
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  const all = Array.from({ length: 2000 }, (_, i) => ({ role: "assistant", id: `m${i}`, turn_id: `turn${i}`, text: `Reply ${i}`, thinking: "", complete: i !== 1400 && i !== 1999, seq: i + 1 }))
+  const snapshot = { thread: { id: "t", last_seq: 2000 }, transcript: all.slice(-650), next_before_seq: 1351, pending_approvals: [] }
+  store.getState().updateTranscript("t", () => seedFromGet(snapshot))
+  const requests = []
+  client.reply = async (method, params) => {
+    if (method !== "threads.get") return { checkpoints: [] }
+    requests.push(params)
+    assert.ok(params.transcript_limit > 0 && params.transcript_limit <= 500, "every refresh request must be bounded")
+    if (requests.length === 2) {
+      assert.equal(params.through_seq, 2000)
+      client.event(event(2001, { kind: "assistant_text_delta", message_id: "m1999", delta: " live" }))
+    }
+    const eligible = all.filter(row => !params.before_seq || row.seq < params.before_seq)
+    const page = eligible.slice(-params.transcript_limit)
+    const unfinished = params.before_seq ? [] : all.filter(row => !row.complete && row.seq < page[0].seq)
+    return { ...snapshot, transcript: [...unfinished, ...page], next_before_seq: page[0].seq > 1 ? page[0].seq : null }
+  }
+  try {
+    await runtime.loadThread("t", true)
+    assert.equal(requests.length, 2)
+    const result = store.getState().transcripts.t
+    assert.equal(result.blocks.length, 650)
+    assert.equal(result.blocks[0].seq, 1351)
+    assert.equal(result.blocks.at(-1).text, "Reply 1999 live")
+    assert.equal(result.nextBeforeSeq, 1351)
+    assert.equal(result.lastSeq, 2001)
+  } finally { runtime.disconnect() }
+})
+
+
+test("terminal graphics release without disposing buffers and ignore stale addon loads", async () => {
+  const { createTerminalRenderer } = await import("./src/lib/terminalRenderer.ts")
+  const pending = [], addons = []
+  let loads = 0, disposals = 0
+  class WebglAddon {
+    constructor() { addons.push(this) }
+    onContextLoss(callback) { this.lost = callback }
+    dispose() { disposals++ }
+  }
+  const terminal = { options: {}, rows: 24, loadAddon() { loads++ }, refresh() {} }
+  const resource = createTerminalRenderer(terminal, () => new Promise(resolve => pending.push(() => resolve({ WebglAddon }))))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+  resource.setActive(true)
+  resource.setActive(false)
+  pending.shift()(); await settle()
+  assert.equal(loads, 0, "a hidden tab must not acquire a late GPU context")
+  resource.setActive(true)
+  pending.shift()(); await settle()
+  assert.equal(loads, 1)
+  assert.equal(terminal.options.cursorBlink, true)
+  resource.setActive(false)
+  assert.equal(disposals, 1)
+  assert.equal(terminal.options.cursorBlink, false)
+  resource.setActive(true)
+  pending.shift()(); await settle()
+  assert.equal(loads, 2)
+  addons.at(-1).lost()
+  assert.equal(disposals, 2)
+  resource.setActive(false); resource.setActive(true)
+  resource.dispose()
+  pending.shift()(); await settle()
+  assert.equal(loads, 2)
+  assert.equal(disposals, 2)
+})
+
+
+test("collapsed output availability exactly matches readable result text", async () => {
+  const { outputText, hasOutputText } = await import("./src/lib/format.ts")
+  const { surfaceOutputText, surfaceHasOutputText } = await import("./src/lib/toolSurface.ts")
+  const values = [null, false, 0, "", "  ", "result", [], {}, { stdout: " ", text: "unused" }, { type: "imageGeneration", result: "" }, { output: "data:image/png;base64,YQ==" }, { content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }, { error: " " }, { error: { message: "failed" } }]
+  for (const output of values) for (const stream of ["", " ", "live output"]) {
+    assert.equal(hasOutputText(output, stream), outputText(output, stream).trim().length > 0)
+    assert.equal(surfaceHasOutputText(output), surfaceOutputText(output).trim().length > 0)
+  }
+})
+
+
+test("following history releases only whole old turns and keeps a reload cursor and row identities", async () => {
+  const { trimFollowingHistory } = await import("./src/state/followingHistory.ts")
+  const blocks = Array.from({ length: 2000 }, (_, i) => ({ kind: "assistant", id: `m${i}`, messageId: `m${i}`, turnId: `turn${Math.floor(i / 2)}`, text: "reply", thinking: "", complete: true, seq: i + 1 }))
+  const state = { ...emptyThreadState(), loaded: true, blocks, lastSeq: 2000, pendingQuestions: [{ id: "keep" }] }
+  const trimmed = trimFollowingHistory(state)
+  assert.equal(trimmed.blocks.length, 600)
+  assert.equal(trimmed.blocks[0], blocks[1400])
+  assert.equal(trimmed.blocks.at(-1), blocks.at(-1))
+  assert.equal(trimmed.nextBeforeSeq, 1401)
+  assert.equal(trimmed.lastSeq, 2000)
+  assert.equal(trimmed.pendingQuestions, state.pendingQuestions)
+  assert.equal(trimFollowingHistory(trimmed), trimmed, "hysteresis avoids trimming every update")
+  const loading = { ...state, loadingEarlier: true }
+  assert.equal(trimFollowingHistory(loading), loading)
+  const live = { ...state, blocks: blocks.map((block, i) => i === 1 ? { ...block, complete: false } : block) }
+  assert.equal(trimFollowingHistory(live), live, "unfinished old work pins its whole turn")
+  const large = { ...state, blocks: blocks.slice(-20).map(block => ({ ...block, text: "x".repeat(1024 * 1024) })) }
+  const bounded = trimFollowingHistory(large)
+  assert.ok(bounded.blocks.length < 20 && bounded.blocks.length >= 4)
+  assert.equal(bounded.blocks.at(-1), large.blocks.at(-1))
+})
+
+
+test("following-history cutoffs never split interleaved turns around pinned work", async () => {
+  const { trimFollowingHistory } = await import("./src/state/followingHistory.ts")
+  const blocks = Array.from({ length: 2000 }, (_, i) => ({ kind: "assistant", id: `m${i}`, messageId: `m${i}`, turnId: `turn${i}`, text: "reply", thinking: "", complete: true, seq: i + 1 }))
+  blocks[1000] = { ...blocks[1000], complete: false }
+  blocks[1100] = { ...blocks[1100], turnId: blocks[900].turnId }
+  const trimmed = trimFollowingHistory({ ...emptyThreadState(), loaded: true, blocks })
+  assert.equal(trimmed.blocks[0], blocks[900])
+  for (const block of trimmed.blocks) {
+    assert.equal(trimmed.blocks.filter(row => row.turnId === block.turnId).length, blocks.filter(row => row.turnId === block.turnId).length)
+  }
+})

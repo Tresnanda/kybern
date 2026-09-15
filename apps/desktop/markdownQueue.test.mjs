@@ -50,3 +50,26 @@ test("Markdown queue bounds memory and does not retain cancelled consumers", asy
   assert.equal(await replacement, null)
   assert.equal(await queue.request(input("closed"), signal()), null)
 })
+
+test("Markdown worker restart accepts a full revision and cancels stale work", async () => {
+  const firstSent = []
+  let queue = createMarkdownQueue(job => firstSent.push(job))
+  const first = queue.request(input("settled"), signal())
+  assert.equal(firstSent.length, 1)
+  queue.receive({ id: firstSent[0].id, revision: 7, prefix: 1, blocks: ["settled"] })
+  assert.deepEqual(await first, { id: firstSent[0].id, revision: 7, prefix: 1, blocks: ["settled"] })
+
+  // A released parser has no incremental session, so its first reply must be
+  // treated as a full revision even when the caller supplies the old revision
+  // as a hint. The bounded cache/result owner lives outside this queue.
+  queue.dispose()
+  const restartedSent = []
+  queue = createMarkdownQueue(job => restartedSent.push(job))
+  const canceled = new AbortController()
+  const next = queue.request({ ...input("after restart"), baseRevision: 7 }, canceled.signal)
+  assert.equal(restartedSent[0].baseRevision, 7)
+  canceled.abort()
+  assert.equal(await next, null)
+  queue.receive({ id: restartedSent[0].id, revision: 1, prefix: 0, blocks: ["full revision"] })
+  assert.equal(queue.idle(), true)
+})

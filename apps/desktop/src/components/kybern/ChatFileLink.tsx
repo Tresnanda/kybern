@@ -52,7 +52,7 @@ function ChatFilePreview({ threadId, path, line, returnFocus, onClose }: { threa
     const container = body.current
     if (!container || !file || !line || (markdown && !raw)) return
     const reveal = () => {
-      const row = container.querySelectorAll<HTMLElement>("code > .line")[line - 1]
+      const row = container.querySelectorAll<HTMLElement>("code .line")[line - 1]
       if (!row) return
       row.style.backgroundColor = "var(--color-background-button-secondary)"
       container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - 32

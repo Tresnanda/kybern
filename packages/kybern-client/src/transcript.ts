@@ -343,7 +343,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "tool_call_completed": {
       const idx = findLast(blocks, `tool:${ev.tool_call_id}`)
       const b = blocks[idx]
-      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, output: ev.output, isError: ev.is_error, complete: true })
+      // Final output owns exact duplicate text. Keep distinct/fallback streams,
+      // including transport-only agent/task receipts used by activity views.
+      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, stream: ev.output === b.stream && !/^\s*(?:agent|task)[_ ]?id\s*:/i.test(b.stream) ? "" : b.stream, output: ev.output, isError: ev.is_error, complete: true })
       break
     }
     case "runtime_task_started":
@@ -722,27 +724,87 @@ function joinSegments(segs: AssistantBlock[]): AssistantBlock {
 /** Keep unchanged turns referentially stable while another turn streams.
  * Each transcript owns its cache; rewinds and thread switches release old entries. */
 export function createTurnGrouper(): (blocks: Block[]) => TurnGroup[] {
-  let cache = new Map<TurnId, { blocks: Block[]; group: TurnGroup }>()
-  return (blocks) => {
+  type Entry = { blocks: Block[]; group: TurnGroup; groupIndex: number }
+  let cache = new Map<TurnId, Entry>()
+  let previousBlocks: Block[] | null = null
+  let previousGroups: TurnGroup[] = []
+
+  const rebuild = (blocks: Block[]): TurnGroup[] => {
     const byTurn = new Map<TurnId, Block[]>()
     for (const block of blocks) {
       const turn = byTurn.get(block.turnId)
       if (turn) turn.push(block)
       else byTurn.set(block.turnId, [block])
     }
-    const next = new Map<TurnId, { blocks: Block[]; group: TurnGroup }>()
+    const next = new Map<TurnId, Entry>()
     const groups: TurnGroup[] = []
     for (const [turnId, turnBlocks] of byTurn) {
       const previous = cache.get(turnId)
-      const entry = previous && previous.blocks.length === turnBlocks.length &&
-        turnBlocks.every((block, index) => block === previous.blocks[index])
-        ? previous
-        : { blocks: turnBlocks, group: groupTurns(turnBlocks)[0]! }
+      let entry: Entry
+      if (previous && previous.blocks.length === turnBlocks.length &&
+        turnBlocks.every((block, index) => block === previous.blocks[index])) {
+        previous.groupIndex = groups.length
+        entry = previous
+      } else {
+        entry = { blocks: turnBlocks, group: groupTurns(turnBlocks)[0]!, groupIndex: groups.length }
+      }
       next.set(turnId, entry)
       groups.push(entry.group)
     }
     cache = next
+    previousBlocks = blocks
+    previousGroups = groups
     return groups
+  }
+
+  return (blocks) => {
+    if (blocks === previousBlocks) return previousGroups
+
+    // Streaming reducers preserve every unchanged block reference. The common
+    // case therefore has exactly one replacement: update only that running
+    // turn instead of allocating a map and arrays for the whole transcript.
+    if (previousBlocks && blocks.length === previousBlocks.length) {
+      let changedIndex = -1
+      for (let index = 0; index < blocks.length; index++) {
+        if (blocks[index] === previousBlocks[index]) continue
+        if (changedIndex !== -1) return rebuild(blocks)
+        changedIndex = index
+      }
+      if (changedIndex === -1) {
+        previousBlocks = blocks
+        return previousGroups
+      }
+
+      const before = previousBlocks[changedIndex]!
+      const after = blocks[changedIndex]!
+      const entry = before.turnId === after.turnId ? cache.get(after.turnId) : undefined
+      const turnIndex = entry?.blocks.indexOf(before) ?? -1
+      const workIndex = entry?.group.running ? entry.group.work.indexOf(before) : -1
+      if (entry && turnIndex !== -1 && workIndex !== -1 && before.kind === after.kind) {
+        // `entry.blocks` is private cache state. Updating it in place avoids a
+        // second large pointer array; exposed group arrays remain immutable.
+        entry.blocks[turnIndex] = after
+        const work = entry.group.work.slice()
+        work[workIndex] = after
+        const group = { ...entry.group, work }
+        if (after.kind === "approval") {
+          const approvalIndex = group.approvals.indexOf(before as Extract<Block, { kind: "approval" }>)
+          if (approvalIndex !== -1) {
+            group.approvals = group.approvals.slice()
+            group.approvals[approvalIndex] = after
+          }
+        }
+        const tail = work.at(-1)
+        group.liveTextId = tail?.kind === "assistant" && !tail.complete && tail.text.trim() ? tail.id : null
+        entry.group = group
+        const groups = previousGroups.slice()
+        groups[entry.groupIndex] = group
+        previousBlocks = blocks
+        previousGroups = groups
+        return groups
+      }
+    }
+    return rebuild(blocks)
   }
 }
 

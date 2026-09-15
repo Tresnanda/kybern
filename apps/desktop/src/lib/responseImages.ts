@@ -31,6 +31,13 @@ export function responseImages(value: unknown): ResponseImage[] {
   return [...found.values()]
 }
 
+/** JSON replacer: omit image bytes without cloning the whole result first. */
+export function imageSafeValue(this: unknown, key: string, child: unknown): unknown {
+  const record = this as Record<string, unknown> | null
+  if (!Array.isArray(record) && typeof child === "string" && (child.startsWith("data:image/") || (key === "data" && (record?.type === "base64" || record?.type === "image")) || (key === "result" && record?.type === "imageGeneration"))) return "[Image shown above]"
+  return child
+}
+
 /** Keep binary payloads out of the expandable text view; the gallery displays them. */
 export function imageSafeOutput(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(imageSafeOutput)

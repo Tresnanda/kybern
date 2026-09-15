@@ -13,6 +13,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Streaming history | New turn groups and Markdown component types invalidated settled messages, code controls, and highlighted DOM. | Stable identities, memoized rows, stable component types, retained highlighted markup, and subscriptions scoped to the affected state. |
 | Closed and expanded work | Closed details stayed mounted; large histories and expanded tool groups created tens of thousands of DOM nodes. | Unmount closed content after exit; virtualize large history, work groups, and agent activity while retaining small lists in normal flow. |
 | Rendered-history memory | Fast scrolling reached gigabyte-scale WebKit graphics allocations with a small mounted DOM. | Paint boundaries on large outer virtual rows, with room for gutter controls and focus rings; measure native footprint as well as DOM counts. |
+| Scroll tile accumulation | Any content painted by the scroller's tiled layer (or another tiled layer) made WebKit allocate 4 MiB tiles ahead of fast scrolling and release them one cohort per second; dense work reached 140 tiles. | Every painted row is a small `chat-paint-host` layer (virtual rows, messages, headers, work lists, answers); scrollers and large containers paint nothing. Icons promote only while swapping. |
 | Earlier-history paging | A retry at the top could reuse old scroll intent and download every remaining page. | Consume intent per request; require further reading input before another automatic page, while preserving the anchor. |
 | Markdown and code | Full parsing and highlighting competed with input and scrolling on the renderer thread; serialized equality signatures duplicated retained trees. | Separate module workers, incremental tail parsing, exact structural comparison, bounded queues/caches, cancellation, and source-size limits. Retain prior formatting during updates and readable text on failure. |
 | Diagrams | DOM-based diagram engines and image URLs can outlive visible content. | Load Mermaid only for settled diagrams, bound queued work/cache/output, release its rendering document at idle, and revoke replaced/unmounted image URLs. |
@@ -26,6 +27,20 @@ and motion cadence. Inspect the existing modules before tuning them; justify a
 change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
+
+See [scroll tile accumulation](memory-tiles-2026-09-15.md) for the attribution of
+the remaining native peak to WebKit's scroll tiles, the paint-host layer rule,
+and the diagnostic hooks (`KYBERN_SCROLL_EXTRA_CSS`, `KYBERN_PERF_DEBUG_LAYERS`).
+
+See [further renderer memory work](memory-followup-2026-09-15.md) for redundant
+Markdown metadata, streaming allocation reductions, inactive icon cleanup, and
+the remaining native WebKit footprint. The focused parsed-data guard is 36 MiB;
+Node timing improvements are separate from native memory measurements.
+
+See [long-chat and renderer memory reductions](memory-reductions-2026-09-14.md)
+for bounded refreshes, cleanup while following, stable interaction pins, deferred
+result formatting, and inactive terminal graphics release. Run `history-retention`
+at 1100px/480px plus `tool-memory` and `terminal-memory` for those paths.
 
 See [profile and diagram UI polish](renderer-ui-polish-2026-09-14.md) for explicit
 profile controls, responsive grouping, diagram expansion, and motion/focus checks.

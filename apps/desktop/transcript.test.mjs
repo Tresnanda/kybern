@@ -422,6 +422,62 @@ test("streaming a later turn preserves earlier turn groups for memoized views", 
   assert.equal(group([older, changed])[1], after[1])
 })
 
+test("incremental running-turn updates stay equivalent across live block kinds", () => {
+  const group = createTurnGrouper()
+  const older = { kind: "user", id: "old-user", turnId: "old", at: AT, seq: 1, message: { parts: [{ type: "text", text: "Earlier request" }] } }
+  const olderAnswer = { kind: "assistant", id: "old#0", messageId: "old", turnId: "old", at: AT, seq: 2, origin: ROOT, segment: 0, text: "Done", thinking: "", complete: true }
+  const olderEnd = { kind: "turn_end", id: "end:old", turnId: "old", at: AT, seq: 3, stopReason: "completed", usage: USAGE, costUsd: null, durationMs: 5, terminalMessageId: "old", error: null }
+  const prompt = { kind: "user", id: "current-user", turnId: "current", at: AT, seq: 4, message: { parts: [{ type: "text", text: "Current request" }] } }
+  const tool = { kind: "tool", id: "tool:current", turnId: "current", at: AT, seq: 5, origin: ROOT, call: readTool("current"), stream: "", output: null, isError: false, complete: false }
+  const task = { kind: "runtime_task", id: "task:current", turnId: "current", at: AT, seq: 6, task: runtimeTask("current") }
+  const approval = { kind: "approval", id: "approval:current", turnId: "current", at: AT, seq: 7, approval: { id: "current", summary: "Run it" }, decision: null }
+  const tail = { kind: "assistant", id: "current#0", messageId: "current", turnId: "current", at: AT, seq: 8, origin: ROOT, segment: 0, text: "Hello", thinking: "", complete: false }
+  let blocks = [older, olderAnswer, olderEnd, prompt, tool, task, approval, tail]
+  const before = group(blocks)
+
+  for (const [index, update] of [
+    [4, { ...tool, stream: "partial output" }],
+    [5, { ...task, task: { ...task.task, status: "waiting", detail: "Waiting" } }],
+    [6, { ...approval, decision: { decision: "allow", scope: "once" } }],
+    [7, { ...tail, text: "Hello world" }],
+  ]) {
+    blocks = blocks.map((block, blockIndex) => blockIndex === index ? update : block)
+    const actual = group(blocks)
+    assert.equal(actual[0], before[0], "an unrelated settled turn remains referentially stable")
+    assert.deepEqual(actual, groupTurns(blocks))
+  }
+})
+
+test("incremental grouping falls back exactly across settlement, edits, and rewinds", () => {
+  const group = createTurnGrouper()
+  const prompt = { kind: "user", id: "current-user", turnId: "current", at: AT, seq: 1, message: { parts: [{ type: "text", text: "Current request" }] } }
+  const tool = { kind: "tool", id: "tool:current", turnId: "current", at: AT, seq: 2, origin: ROOT, call: readTool("current"), stream: "", output: null, isError: false, complete: false }
+  const tail = { kind: "assistant", id: "current#0", messageId: "current", turnId: "current", at: AT, seq: 3, origin: ROOT, segment: 0, text: "Hello", thinking: "Working", complete: false }
+  let blocks = [prompt, tool, tail]
+  group(blocks)
+
+  blocks = [prompt, tool, { ...tail, text: "Hello world", thinking: "Finished", complete: true }]
+  let actual = group(blocks)
+  assert.deepEqual(actual, groupTurns(blocks), "assistant settlement stays exact on the incremental path")
+  assert.equal(actual[0].liveTextId, null)
+
+  const turnEnd = { kind: "turn_end", id: "end:current", turnId: "current", at: AT, seq: 4, stopReason: "completed", usage: USAGE, costUsd: null, durationMs: 5, terminalMessageId: "current", error: null }
+  blocks = [...blocks, turnEnd]
+  actual = group(blocks)
+  assert.deepEqual(actual, groupTurns(blocks), "turn-end append settles through the structural fallback")
+
+  blocks = blocks.map((block) => block === tool ? { ...tool, output: "done", complete: true } : block)
+  actual = group(blocks)
+  assert.deepEqual(actual, groupTurns(blocks), "late settled updates use the full grouping semantics")
+
+  blocks = blocks.map((block, index) => index === 0 ? { ...prompt, id: "renamed-user" } : index === 1 ? { ...blocks[1], id: "tool:renamed" } : block)
+  assert.deepEqual(group(blocks), groupTurns(blocks), "multiple replacements fall back exactly")
+
+  blocks = [{ ...prompt, id: "rewound-user", turnId: "rewound" }]
+  assert.deepEqual(group(blocks), groupTurns(blocks), "rewind and turn identity changes reset the cache exactly")
+  assert.deepEqual(group([]), [])
+})
+
 test("turn grouping updates late events, follows ordering, and drops rewound turns", () => {
   const group = createTurnGrouper()
   const a = { kind: "notice", id: "a", turnId: "a", at: AT, seq: 1, level: "info", text: "First" }
@@ -542,3 +598,30 @@ test("artifact publication requires native successful receipts and republishing 
   assert.match(prompt, /only after a successful tool receipt/);
   assert.throws(() => publishArtifactPrompt({ path: null, url: null }));
 });
+
+
+test("completed tool results release duplicate stream text but preserve fallback output", () => {
+  for (const output of ["x".repeat(1024 * 1024), null, 0, false]) {
+    const stream = "x".repeat(1024 * 1024)
+    let state = emptyThreadState()
+    const ev = (seq, payload) => ({ seq, thread_id: "t", turn_id: T, at: AT, ...payload })
+    state = applyEvent(state, ev(1, { kind: "tool_call_started", call: { id: "tool", name: "exec", input: {}, parent_id: null } }))
+    state = applyEvent(state, ev(2, { kind: "tool_call_output_delta", tool_call_id: "tool", delta: stream }))
+    assert.equal(state.blocks[0].stream, stream)
+    state = applyEvent(state, ev(3, { kind: "tool_call_completed", tool_call_id: "tool", output, is_error: false }))
+    assert.equal(state.blocks[0].stream.length, typeof output === "string" ? 0 : stream.length)
+    assert.equal(state.blocks[0].output, output)
+  }
+})
+
+
+test("distinct and transport-only completed tool streams remain available", () => {
+  for (const [stream, output] of [["live details", "final result"], ["agentId: helper send_message", "agentId: helper send_message"]]) {
+    let state = emptyThreadState()
+    const ev = (seq, payload) => ({ seq, thread_id: "t", turn_id: T, at: AT, ...payload })
+    state = applyEvent(state, ev(1, { kind: "tool_call_started", call: { id: "tool", name: "exec", input: {}, parent_id: null } }))
+    state = applyEvent(state, ev(2, { kind: "tool_call_output_delta", tool_call_id: "tool", delta: stream }))
+    state = applyEvent(state, ev(3, { kind: "tool_call_completed", tool_call_id: "tool", output, is_error: false }))
+    assert.equal(state.blocks[0].stream, stream)
+  }
+})

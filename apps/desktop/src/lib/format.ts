@@ -1,4 +1,4 @@
-import { imageSafeOutput } from "./responseImages"
+import { imageSafeValue } from "./responseImages"
 import type { JsonValue, PermissionMode, ProviderKind, ThreadStatus } from "@/protocol"
 
 export { toolLine } from "@/lib/toolActivity"
@@ -99,16 +99,28 @@ export const PROVIDER_LABEL: Record<ProviderKind, string> = {
   cursor: "Cursor",
 }
 
+/** Availability check for collapsed rows; never serialize a full result. */
+export function hasOutputText(output: JsonValue | null, stream: string): boolean {
+  if (typeof output === "string") return output.trim().length > 0
+  if (output && typeof output === "object") {
+    for (const key of ["output", "stdout", "content", "text", "result"]) {
+      const value = (output as Record<string, JsonValue>)[key]
+      if (typeof value === "string") return (imageSafeValue.call(output, key, value) as string).trim().length > 0
+    }
+    return true // JSON arrays/objects always have visible delimiters.
+  }
+  return stream.trim().length > 0
+}
+
 export function outputText(output: JsonValue | null, stream: string): string {
   if (typeof output === "string") return output
   if (output && typeof output === "object") {
-    const safe = imageSafeOutput(output)
-    const o = safe as Record<string, unknown>
+    const o = output as Record<string, unknown>
     for (const k of ["output", "stdout", "content", "text", "result"]) {
       const v = o[k]
-      if (typeof v === "string") return v
+      if (typeof v === "string") return imageSafeValue.call(output, k, v) as string
     }
-    return JSON.stringify(safe, null, 2)
+    return JSON.stringify(output, imageSafeValue, 2)
   }
   return stream
 }

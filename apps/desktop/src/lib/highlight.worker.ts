@@ -34,37 +34,10 @@ async function ensureLang(hl: Highlighter, lang: string): Promise<boolean> {
   await hl.loadLanguage(loader)
   return true
 }
-
-
-const cache = new Map<string, string>()
-let cacheBytes = 0
-const MAX_CACHE_BYTES = 4 * 1024 * 1024
-const MAX_CACHE_ENTRIES = 24
-
 async function highlight(job: HighlightJob): Promise<string | null> {
-  const key = `${job.dark ? "dark" : "light"}\0${job.lang}\0${job.code}`
-  const cached = cache.get(key)
-  if (cached !== undefined) {
-    cache.delete(key)
-    cache.set(key, cached)
-    return cached
-  }
   const h = await getHighlighter()
   if (!(await ensureLang(h, job.lang))) return null
-  const html = h.codeToHtml(job.code, { lang: job.lang, theme: job.dark ? "github-dark-default" : "github-light-default" })
-  const bytes = (key.length + html.length) * 2
-  // Settled code only: don't retain every prefix of a live stream.
-  if (job.cache && bytes <= MAX_CACHE_BYTES) {
-    while (cache.size >= MAX_CACHE_ENTRIES || cacheBytes + bytes > MAX_CACHE_BYTES) {
-      const oldest = cache.entries().next().value
-      if (!oldest) break
-      cache.delete(oldest[0])
-      cacheBytes -= (oldest[0].length + oldest[1].length) * 2
-    }
-    cache.set(key, html)
-    cacheBytes += bytes
-  }
-  return html
+  return h.codeToHtml(job.code, { lang: job.lang, theme: job.dark ? "github-dark-default" : "github-light-default" })
 }
 
 self.onmessage = (event: MessageEvent<HighlightJob>) => {

@@ -4,6 +4,7 @@ import { mergeConfig } from "vite"
 import base from "../vite.config"
 export default mergeConfig(base, {
   define: {
+    __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
     __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]",
     __WORK_REPLAY__: process.env.KYBERN_WORK_REPLAY ? readFileSync(process.env.KYBERN_WORK_REPLAY, "utf8") : "[]",
     __SCROLL_SCENARIO__: JSON.stringify(process.env.KYBERN_SCROLL_SCENARIO ?? ""),
@@ -11,6 +12,9 @@ export default mergeConfig(base, {
     __SCROLL_COMPOSER__: JSON.stringify(process.env.KYBERN_SCROLL_COMPOSER === "1"),
     __SCROLL_COMPOSER_GLASS__: JSON.stringify(process.env.KYBERN_SCROLL_COMPOSER_GLASS === "1"),
     __SCROLL_MEMORY__: JSON.stringify(process.env.KYBERN_SCROLL_MEMORY === "1"),
+    __SCROLL_PROBE__: JSON.stringify(process.env.KYBERN_SCROLL_PROBE === "1"),
+    __SCROLL_EXTRA_CSS__: JSON.stringify(process.env.KYBERN_SCROLL_EXTRA_CSS ?? ""),
+    __SCROLL_IDLE_MS__: JSON.stringify(Math.max(0, Math.min(30000, Number(process.env.KYBERN_SCROLL_IDLE_MS) || 0))),
     __COMPOSER_STACK_MODE__: JSON.stringify(process.env.KYBERN_COMPOSER_STACK_MODE ?? "queue"),
     __COLLAB_THEME__: JSON.stringify(process.env.KYBERN_COLLAB_THEME ?? "dark"),
     __COLLAB_REPLAY__: process.env.KYBERN_COLLAB_REPLAY ? readFileSync(process.env.KYBERN_COLLAB_REPLAY, "utf8") : "null",
@@ -42,7 +46,7 @@ export default mergeConfig(base, {
       const source = process.env.KYBERN_COLLAB_BASELINE ? readFileSync(process.env.KYBERN_COLLAB_BASELINE, "utf8") : code
       return source.replace('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "collaboration-rpc.ts")))
     },
-  }] : process.env.KYBERN_PERF_FIXTURE === "history" ? [{
+  }] : ["history", "history-retention"].includes(process.env.KYBERN_PERF_FIXTURE ?? "") ? [{
     name: "history-fixture-transport",
     enforce: "pre",
     transform(code, id) {

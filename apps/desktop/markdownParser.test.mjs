@@ -71,6 +71,27 @@ test("large code blocks do not retain a second serialized document tree", () => 
   assert.ok(JSON.stringify(parsed).length < source.length * 2.1)
 })
 
+test("only top-level and code nodes retain source positions", () => {
+  const source = "# Heading **strong**\n\nParagraph with `inline code` and [link](https://example.test).\n\n> quoted `code`\n\n```ts\nconst answer = 42\n```"
+  const parsed = createMarkdownParser().parse(source)
+  for (const block of parsed.blocks) {
+    if (block.node.position) assert.equal(block.key.split(":", 1)[0], String(block.node.position.start.offset), "top-level key lost its source offset")
+    else assert.equal(block.node.type === "text" && block.node.value === "\n" && block.key.endsWith(":gap"), true, "source-backed top-level node lost its position")
+  }
+
+  const nested = []
+  const visit = (node, topLevel = false) => {
+    if (!topLevel) nested.push(node)
+    if (node.children) for (const child of node.children) visit(child)
+  }
+  for (const block of parsed.blocks) visit(block.node, true)
+  const code = nested.filter(node => node.type === "element" && (node.tagName === "pre" || node.tagName === "code"))
+  assert.ok(code.length >= 3, "expected inline, quoted, and fenced code nodes")
+  assert.ok(code.every(node => node.position?.start.offset !== undefined), "code node lost the offset used for renderer state")
+  assert.ok(nested.filter(node => !code.includes(node)).every(node => node.position === undefined), "unused nested source position was retained")
+  assert.equal(render(parsed), expected(source))
+})
+
 test("tree identity comparison includes attributes, positions, and text after worker cloning", () => {
   const parser = createMarkdownParser()
   const first = parser.parse("[Example][ref]\n\n[ref]: https://example.test/one")

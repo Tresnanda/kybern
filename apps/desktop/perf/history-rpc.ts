@@ -1,3 +1,4 @@
+export { activeRuntime } from "../src/state/rpc"
 import { useStore } from "../src/state/store"
 import type { Block } from "../src/state/transcript"
 export const calls: { cursor: number; distance: number; duration?: number }[] = []
