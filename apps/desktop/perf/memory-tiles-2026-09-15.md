@@ -107,6 +107,16 @@ promoted icons. Removing the icon promotion alone raised history-fast to
   contents a tiled backing store that paints and accumulates again. The
   scroller now sets `isolation: isolate` explicitly; `clip-path` and
   `contain: paint` had the same effect, so the stacking context is what matters.
+- Streaming allocation. The grouper already swaps a single block reference per
+  token, but the live work list rebuilt its hierarchy, chunk list and task map
+  from all 1,600 blocks on every update and re-rendered every mounted row.
+  `useTailDerived` (Transcript.tsx, `lib/tailChange.ts`) classifies the update
+  by reference without allocating and patches the previous hierarchy or chunk
+  list when only a leaf block changed or was appended, rebuilding otherwise;
+  the task map is memoized and `WorkRow`/`ToolGroupRow` are memoized, so a
+  token re-renders one row. Mid-stream WebKit malloc fell from 292–297 MiB
+  dirty to 150–216 MiB and the streaming stage peak from 359–361 MiB to
+  224–286 MiB when run alone.
 
 Long single elements (a 5,000-line code block, a very long answer) still become
 tiled layers, but their tiles are bounded by the element's own size rather
@@ -176,10 +186,15 @@ republishing the whole 1,601-block array every 32 ms. History stages hold up
 to sixteen pooled 6.9 MiB code-block layers and two 11.3 MiB answer-sized
 layers; hosting the answer, message content, Markdown root or outer wrapper
 differently did not remove the latter two, and that attribution is open.
-Reaching a 200–300 MiB lifetime peak would need less layer churn per scrolled
-pixel (reusing row DOM instead of remounting it) and lower streaming
-allocation, which are transcript-store and virtualizer changes rather than
-layer-structure ones.
+The streaming allocation was reduced (see Changes). The full-sequence peak is
+now set by the mixed-work and expanded stages at 395–397 MiB across two runs,
+with stages resting at 215–318 MiB while the document is mounted and
+123–140 MiB idle; run alone, mixed work peaks at 236 MiB and streaming at
+224–286 MiB. The sequence peak stays near 390 MiB because each stage inherits
+the previous stages' pooled layers and heap. Reusing row DOM across scroll
+positions would cut layer churn further but would carry component state
+(entrance animation, copy state, disclosure mount) between unrelated blocks,
+so it was not attempted; the remaining lever there is WebKit's own layer pool.
 
 The footprint peak is a noisy measure of tile memory because the kernel stops
 counting tiles once WebKit marks them volatile; identical control runs ranged

@@ -38,6 +38,7 @@ import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtim
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
+import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
 import { TranscriptStateRoot } from "@/components/kybern/TranscriptStateScope"
@@ -69,7 +70,7 @@ import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { activeRuntime, errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
-import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup } from "@/state/transcript"
+import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
 const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
@@ -1008,9 +1009,60 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
   return chunks
 }
 
+/** Derive from a block list, patching the previous result when only the tail
+ * block changed or one block was appended. A stream replaces one reference per
+ * token; rebuilding 1,000+ entries and invalidating every mounted row for that
+ * was most of the streaming allocation. Falls back to a full rebuild whenever
+ * the patch cannot preserve the structure. */
+function useTailDerived<T, R>(items: readonly T[], build: (items: readonly T[]) => R, patch: (previous: R, change: TailChange<T>) => R | null): R {
+  // State rather than a ref: the previous snapshot is read during render, and
+  // React retries this render immediately when it changes, before committing.
+  const [cache, setCache] = useState(() => ({ items, build, result: build(items) }))
+  let result = cache.result
+  if (cache.build !== build) result = build(items)
+  else {
+    const change = diffTail(cache.items, items)
+    if (change.kind !== "same") result = (change.kind === "rebuild" ? null : patch(cache.result, change)) ?? build(items)
+  }
+  if (cache.items !== items || cache.build !== build) setCache({ items, build, result })
+  return result
+}
+
+const isLeafWorkBlock = (block: Block) => block.kind !== "tool" && block.kind !== "runtime_task"
+
+function patchHierarchyTail(previous: WorkHierarchy, change: TailChange<Block>): WorkHierarchy | null {
+  if (change.kind === "append") {
+    if (!isLeafWorkBlock(change.after)) return null
+    return { ...previous, roots: [...previous.roots, change.after] }
+  }
+  if (change.kind !== "tail" || !isLeafWorkBlock(change.before) || !isLeafWorkBlock(change.after)) return null
+  const index = previous.roots.lastIndexOf(change.before)
+  if (index === -1) return null
+  const roots = previous.roots.slice()
+  roots[index] = change.after
+  return { ...previous, roots }
+}
+
+function patchChunksTail(previous: WorkChunk[], change: TailChange<Block>): WorkChunk[] | null {
+  if (change.kind === "append") {
+    if (!isLeafWorkBlock(change.after)) return null
+    return [...previous, { kind: "single", block: change.after }]
+  }
+  if (change.kind !== "tail" || !isLeafWorkBlock(change.before) || !isLeafWorkBlock(change.after)) return null
+  for (let index = previous.length - 1; index >= 0; index--) {
+    const chunk = previous[index]!
+    if (chunk.kind === "single" && chunk.block === change.before) {
+      const chunks = previous.slice()
+      chunks[index] = { kind: "single", block: change.after }
+      return chunks
+    }
+  }
+  return null
+}
+
 function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, tone = "muted", liveTextId = null, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; tone?: WorkTone; liveTextId?: string | null; onOpenAgentActivity: OpenAgentActivity }) {
-  const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
-  const hierarchy = buildWorkHierarchy(blocks)
+  const tasksByToolCall = useMemo(() => new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : []))), [tasks])
+  const hierarchy = useTailDerived(blocks, buildWorkHierarchy, patchHierarchyTail)
   return <WorkRows compact blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
 }
 
@@ -1045,12 +1097,15 @@ function WorkRows({
       onOpenAgentActivity={onOpenAgentActivity}
     />
   )
+  // Consecutive settled tools fold into one group row; a streamed tail patches
+  // the previous chunk list instead of re-chunking every block.
+  const buildChunks = useCallback((items: readonly Block[]) => chunkWork(items, tasksByToolCall), [tasksByToolCall])
+  const chunks = useTailDerived(blocks, buildChunks, patchChunksTail)
   // Live work is already one row per block. Feed those blocks directly to the
   // virtualizer instead of allocating a wrapper for every offscreen block on
   // each streamed tail update. Settled compact work still needs tool chunks.
   if (!compact) return <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{renderBlock}</VirtualRows>
 
-  const chunks = chunkWork(blocks, tasksByToolCall)
   return <VirtualRows items={chunks} getKey={chunkKey} estimateSize={estimateWorkSize}>{(chunk) =>
     chunk.kind === "single" ? (
       renderBlock(chunk.block)
@@ -1066,7 +1121,7 @@ function WorkRows({
   }</VirtualRows>
 }
 
-function ToolGroupRow({
+const ToolGroupRow = memo(function ToolGroupRow({
   blocks,
   tasksByToolCall,
   childrenByParent,
@@ -1119,9 +1174,9 @@ function ToolGroupRow({
       </div></CollapsiblePanel>
     </Collapsible>
   )
-}
+})
 
-function WorkRow({
+const WorkRow = memo(function WorkRow({
   block,
   task,
   tasksByToolCall,
@@ -1178,7 +1233,7 @@ function WorkRow({
     default:
       return null
   }
-}
+})
 
 function ToolRow({
   block,
