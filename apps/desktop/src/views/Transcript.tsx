@@ -358,7 +358,7 @@ export function Transcript({
         aria-hidden={agentActivityDetail ? true : undefined}
         inert={agentActivityDetail ? true : undefined}
         className={cn(
-          "relative flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 ease-out motion-reduce:transition-none",
+          "chat-scroll-fade-scope relative flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 ease-out motion-reduce:transition-none",
           agentActivityDetail && "pointer-events-none opacity-0",
         )}
       >
@@ -410,6 +410,8 @@ export function Transcript({
             </VirtualRows></TranscriptStateRoot>
           )}
         </MessageScroller>
+        {/* Maskless bottom fade for opaque content surfaces (see kit.css). */}
+        <div aria-hidden className="chat-scroll-fade" />
         <div
           className={cn(
             "pointer-events-none absolute inset-x-0 z-30 flex justify-center py-1 transition-[opacity,transform,filter] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none",

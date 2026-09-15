@@ -97,6 +97,16 @@ promoted icons. Removing the icon promotion alone raised history-fast to
   are unchanged, and the fixture checks the block's height against 5,000 line
   boxes. The code surface moved from a background on the tall rounded wrapper
   to a promoted, radius-free pseudo-element, so the wrapper paints nothing.
+- The transcript's bottom fade no longer masks the scroller on opaque content
+  surfaces. It is a small gradient overlay whose opacity follows the
+  scroller's named scroll timeline (`timeline-scope` on the pane), clearing
+  over the last 96px exactly like the mask's reveal range; full translucency
+  keeps the mask because there is no opaque color to fade into. Removing the
+  mask alone made history-fast jump to 1.8 GiB: the mask had been making the
+  scroller a stacking context, and without one WebKit gives the scrolled
+  contents a tiled backing store that paints and accumulates again. The
+  scroller now sets `isolation: isolate` explicitly; `clip-path` and
+  `contain: paint` had the same effect, so the stacking context is what matters.
 
 Long single elements (a 5,000-line code block, a very long answer) still become
 tiled layers, but their tiles are bounded by the element's own size rather
@@ -111,17 +121,21 @@ physical footprint from `vmmap -summary` after each stage:
 
 | Stage | PR #18 `bca8a40` current / peak | This change current / peak |
 | --- | ---: | ---: |
-| History cold | 325.1 / 342.2 MiB | 269.0 / 294.1 MiB |
-| History warm | 261.0 / 344.6 MiB | 233.8 / 294.1 MiB |
-| History fast | 355.4 / 393.0 MiB | 323.2 / 341.2 MiB |
-| Mixed work | 540.8 / 729.0 MiB | 239.3 / 391.8 MiB |
-| Mixed work streaming | 684.2 / 815.2 MiB | 244.5 / 391.8 MiB |
-| Expanded thinking | 582.8 / 875.1 MiB | 271.8 / 411.1 MiB |
-| Expanded tools | 541.5 / 875.1 MiB | 235.9 / 411.1 MiB |
-| Long code | 441.2 / 875.1 MiB | 240.7 / 411.1 MiB |
+| History cold | 325.1 / 342.2 MiB | 272.2 / 272.9 MiB |
+| History warm | 261.0 / 344.6 MiB | 226.0 / 284.8 MiB |
+| History fast | 355.4 / 393.0 MiB | 296.0 / 314.7 MiB |
+| Mixed work | 540.8 / 729.0 MiB | 224.3 / 362.0 MiB |
+| Mixed work streaming | 684.2 / 815.2 MiB | 226.4 / 362.0 MiB |
+| Expanded thinking | 582.8 / 875.1 MiB | 252.6 / 389.0 MiB |
+| Expanded tools | 541.5 / 875.1 MiB | 218.1 / 389.0 MiB |
+| Long code | 441.2 / 875.1 MiB | 218.9 / 389.0 MiB |
 
-The full-sequence lifetime peak fell from 875.1 MiB to 411.1 MiB, the history
-peak from 393.0 to 341.2 MiB, and the mixed-work peak from 729.0 to 391.8 MiB.
+The full-sequence lifetime peak fell from 875.1 MiB to 389 MiB (two consecutive
+runs: 389.0 and 388.9), the history peak from 393.0 to 315–320 MiB, and the
+mixed-work peak from 729.0 to 362–366 MiB. One earlier run of the same source
+peaked at 505.7 MiB because the streaming stage's JavaScript heap happened to
+grow to 320 MiB dirty before collection; repeats with and without the fade
+animation showed the same spread, so treat single streaming peaks as noisy.
 Graphics resident memory after the mixed-work scroll fell from 788.7 MiB
 (324 regions) to about 145 MiB when the stage runs alone, and every dense
 stage now ends with only the page root's four to six tiles. Frame p95 stayed
@@ -140,11 +154,32 @@ in paint hosts took that stage from 307 MiB / 28 accumulated tiles to
 
 The long-code stage run alone went from 279 MiB graphics resident with 30
 accumulating tiles to 152 MiB with the page root's tiles only, and its
-lifetime peak from 295 to 224 MiB. Clean before/after captures of the long
-code and history stages are pixel-identical. What remains is the scroll-fade
-mask on the transcript scroller (two to four viewport-sized buffers, about
-25–50 MiB); a gradient overlay would replace it only on opaque windows, and
-translucent windows are the default, so it is left as is.
+lifetime peak from 295 to 224 MiB. Mixed work alone peaks at 236 MiB. Clean
+before/after captures of the long code and history stages are pixel-identical,
+and the composer-shell capture shows the last row dimming under the composer.
+
+## What the remaining peak is made of
+
+Sampled mid-scroll in the mixed-work stage (footprint 216 MiB, peak 236 MiB):
+
+| Region | Dirty |
+| --- | ---: |
+| WebKit Malloc (JavaScript heap, DOM, render tree, workers) | 117 MiB |
+| Graphics (about 170 pooled 480K row layers plus live ones) | 82 MiB |
+| JS JIT code | 4 MiB |
+
+After eight idle seconds the same document rests at 123–140 MiB. The peak is
+therefore transient again, but no longer tile coverage: it is the row-layer
+pool WebKit keeps for reuse (volatile after a few seconds) and JavaScript
+garbage between collections, which the streaming stage inflates by
+republishing the whole 1,601-block array every 32 ms. History stages hold up
+to sixteen pooled 6.9 MiB code-block layers and two 11.3 MiB answer-sized
+layers; hosting the answer, message content, Markdown root or outer wrapper
+differently did not remove the latter two, and that attribution is open.
+Reaching a 200–300 MiB lifetime peak would need less layer churn per scrolled
+pixel (reusing row DOM instead of remounting it) and lower streaming
+allocation, which are transcript-store and virtualizer changes rather than
+layer-structure ones.
 
 The footprint peak is a noisy measure of tile memory because the kernel stops
 counting tiles once WebKit marks them volatile; identical control runs ranged

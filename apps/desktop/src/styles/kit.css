@@ -3170,3 +3170,59 @@ diffs-container {
   display: block;
   will-change: transform;
 }
+
+/* Transcript bottom fade. A mask on the scroller costs WebKit two to four
+   viewport-sized buffers, so on opaque content surfaces the same dissolve is a
+   small gradient overlay whose opacity follows the scroller's named scroll
+   timeline, clearing over the last 96px exactly like the mask's reveal range.
+   Full translucency keeps the mask: no opaque color exists to fade into. */
+html:not([data-full-translucency]) [data-chat-scroll-container].scroll-fade-b {
+  -webkit-mask-image: none;
+  mask-image: none;
+  animation: none;
+  scroll-timeline: --chat-scroll y;
+}
+
+/* The mask also made the scroller a stacking context; without one, WebKit
+   gives the scrolled contents a tiled backing store that paints and
+   accumulates tiles again (history-fast reached 1.8 GiB). Keep the stacking
+   context explicitly, independent of the fade implementation. */
+[data-chat-scroll-container] {
+  isolation: isolate;
+}
+
+.chat-scroll-fade-scope {
+  timeline-scope: --chat-scroll;
+}
+
+.chat-scroll-fade {
+  pointer-events: none;
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: min(12%, calc(var(--spacing) * 10));
+  background: linear-gradient(to bottom, transparent, var(--color-background-surface, var(--color-background)));
+  animation: chat-scroll-fade-clear 1ms linear both;
+  animation-timeline: --chat-scroll;
+  animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+}
+
+html[data-full-translucency] .chat-scroll-fade {
+  display: none;
+}
+
+@supports not (animation-timeline: scroll()) {
+  .chat-scroll-fade {
+    animation: none;
+  }
+}
+
+@keyframes chat-scroll-fade-clear {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
