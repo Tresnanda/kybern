@@ -9,9 +9,29 @@ import { fixture, calls } from "./history-rpc"
 import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+const liveEdgeTrace: unknown[] = []
+let previousSample = ""
+function recordLiveEdge(stage: string) {
+  const viewport = scroll()
+  if (!viewport) return
+  const sample = {
+    stage, blocks: state()?.blocks.length, hidden: document.hidden,
+    top: viewport.scrollTop, height: viewport.scrollHeight, client: viewport.clientHeight,
+    distance: viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+    latestVisibleText: document.body.innerText.includes("Answer 999"),
+    latestMountedText: document.body.textContent?.includes("Answer 999"),
+    lastTurn: [...document.querySelectorAll<HTMLElement>("[data-turn-id]")].at(-1)?.dataset.turnId,
+  }
+  const signature = JSON.stringify(sample)
+  if (signature === previousSample) return
+  previousSample = signature
+  liveEdgeTrace.push({ elapsed: Math.round(performance.now()), ...sample })
+  if (liveEdgeTrace.length > 24) liveEdgeTrace.shift()
+}
 async function waitFor(condition: () => unknown, message: string) {
   const end = performance.now() + 15000
-  while (!condition() && performance.now() < end) await sleep(20)
+  while (!condition() && performance.now() < end) { recordLiveEdge(message); await sleep(20) }
+  recordLiveEdge(message)
   check(condition(), message)
 }
 const at = "2026-09-14T00:00:00Z"
@@ -80,4 +100,4 @@ async function run() {
   return { pass: true, beforeBlocks: 3000, afterBlocks: state().blocks.length, beforeBytes, afterBytes, anchorShift, reload: true, selection: true, focus: true, identity: true }
 }
 const w = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }
-run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))
+run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), liveEdgeTrace, blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))

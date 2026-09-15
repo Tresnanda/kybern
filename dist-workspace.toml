@@ -16,6 +16,11 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
+# A tag can race main CI; require that exact commit before publishing.
+# The local-artifacts phase makes host depend directly on the gate: plan-only
+# gates leave skipped builds, which dist permits the host job to bypass.
+local-artifacts-jobs = ["./release-ci"]
+github-custom-job-permissions = { "release-ci" = { actions = "read", contents = "read" } }
 # Default every package to "do not distribute"; crates/kybern opts back in with
 # `dist = true` in its own dist.toml.
 # (The `packages = [...]` allow-list is not honoured by dist 0.32 for Cargo workspaces.)
