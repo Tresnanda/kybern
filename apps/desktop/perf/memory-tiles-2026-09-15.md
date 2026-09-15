@@ -86,6 +86,17 @@ promoted icons. Removing the icon promotion alone raised history-fast to
   fixture now asserts both states.
 - Streaming words (`.t-stream-w`) no longer carry a permanent `will-change`;
   their `@starting-style` transition still runs.
+- Transcript Markdown (`chat-markdown--hosted`) hosts each top-level block,
+  and the answer block hosts its other children (images, footer with copy and
+  time, errors, the edited-files card). The footer alone, painted straight into
+  a 105,000 px answer, kept a tiled layer alive for the long-code stage.
+- Code blocks longer than 40 lines are split into `chat-code-chunk` blocks
+  (`lib/codeChunks.ts`), each its own layer, so a 5,000-line block is 125
+  small layers whose backing stores WebKit only attaches near the viewport.
+  Newlines stay inside the chunks: `textContent`, selection and copied text
+  are unchanged, and the fixture checks the block's height against 5,000 line
+  boxes. The code surface moved from a background on the tall rounded wrapper
+  to a promoted, radius-free pseudo-element, so the wrapper paints nothing.
 
 Long single elements (a 5,000-line code block, a very long answer) still become
 tiled layers, but their tiles are bounded by the element's own size rather
@@ -100,17 +111,17 @@ physical footprint from `vmmap -summary` after each stage:
 
 | Stage | PR #18 `bca8a40` current / peak | This change current / peak |
 | --- | ---: | ---: |
-| History cold | 325.1 / 342.2 MiB | 229.4 / 304.1 MiB |
-| History warm | 261.0 / 344.6 MiB | 206.1 / 304.1 MiB |
-| History fast | 355.4 / 393.0 MiB | 338.8 / 359.0 MiB |
-| Mixed work | 540.8 / 729.0 MiB | 249.7 / 387.5 MiB |
-| Mixed work streaming | 684.2 / 815.2 MiB | 251.8 / 387.5 MiB |
-| Expanded thinking | 582.8 / 875.1 MiB | 284.5 / 416.0 MiB |
-| Expanded tools | 541.5 / 875.1 MiB | 239.0 / 416.0 MiB |
-| Long code | 441.2 / 875.1 MiB | 245.6 / 416.0 MiB |
+| History cold | 325.1 / 342.2 MiB | 269.0 / 294.1 MiB |
+| History warm | 261.0 / 344.6 MiB | 233.8 / 294.1 MiB |
+| History fast | 355.4 / 393.0 MiB | 323.2 / 341.2 MiB |
+| Mixed work | 540.8 / 729.0 MiB | 239.3 / 391.8 MiB |
+| Mixed work streaming | 684.2 / 815.2 MiB | 244.5 / 391.8 MiB |
+| Expanded thinking | 582.8 / 875.1 MiB | 271.8 / 411.1 MiB |
+| Expanded tools | 541.5 / 875.1 MiB | 235.9 / 411.1 MiB |
+| Long code | 441.2 / 875.1 MiB | 240.7 / 411.1 MiB |
 
-The full-sequence lifetime peak fell from 875.1 MiB to 416.0 MiB, the history
-peak from 393.0 to 359.0 MiB, and the mixed-work peak from 729.0 to 387.5 MiB.
+The full-sequence lifetime peak fell from 875.1 MiB to 411.1 MiB, the history
+peak from 393.0 to 341.2 MiB, and the mixed-work peak from 729.0 to 391.8 MiB.
 Graphics resident memory after the mixed-work scroll fell from 788.7 MiB
 (324 regions) to about 145 MiB when the stage runs alone, and every dense
 stage now ends with only the page root's four to six tiles. Frame p95 stayed
@@ -127,13 +138,13 @@ tail painted straight into the 25,000 px container. Wrapping plain-list items
 in paint hosts took that stage from 307 MiB / 28 accumulated tiles to
 155 MiB / 4 root tiles when run alone.
 
-What remains is bounded by content rather than by scroll speed: a 5,000-line
-code block or a very long answer is a single element taller than the tiling
-threshold, so its tiles accumulate up to its own area while it is traversed
-(long code: 459 MiB graphics resident in the full sequence, 245 MiB
-footprint). Splitting such elements into smaller hosts would need changes to
-code-block markup. Resting footprint after eight idle seconds is 123–166 MiB
-in every mixed-work and expanded configuration.
+The long-code stage run alone went from 279 MiB graphics resident with 30
+accumulating tiles to 152 MiB with the page root's tiles only, and its
+lifetime peak from 295 to 224 MiB. Clean before/after captures of the long
+code and history stages are pixel-identical. What remains is the scroll-fade
+mask on the transcript scroller (two to four viewport-sized buffers, about
+25–50 MiB); a gradient overlay would replace it only on opaque windows, and
+translucent windows are the default, so it is left as is.
 
 The footprint peak is a noisy measure of tile memory because the kernel stops
 counting tiles once WebKit marks them volatile; identical control runs ranged

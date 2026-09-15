@@ -83,6 +83,10 @@ async function run() {
     if (scenario === "long-code") {
       const code = view.querySelector("[data-message-role] pre code")
       if (code?.textContent?.trimEnd() !== longCode.slice("```typescript\n".length, -"\n```".length)) failures.push("Long code lost its fenced structure or exact content")
+      // Line chunks must not add line boxes: 5,000 lines at the code line height.
+      const lineHeight = code ? parseFloat(getComputedStyle(code).lineHeight) : 0
+      if (code && Math.abs(code.getBoundingClientRect().height - 5000 * lineHeight) > lineHeight) failures.push(`Long code height ${code.getBoundingClientRect().height} differs from 5000 lines at ${lineHeight}px`)
+      if (code && code.querySelectorAll(".chat-code-chunk").length !== 125) failures.push("Long code was not split into 125 line chunks")
     }
     let received = "New output."
     const stream = scenario === "mixed-work-streaming" ? setInterval(() => {
@@ -133,8 +137,14 @@ async function run() {
       const tall = boxes.filter(b => b.rect.height > 1024).sort((a, b) => b.rect.height - a.rect.height).slice(0, 12).map(b => `${Math.round(b.rect.width)}x${Math.round(b.rect.height)} ${describe(b.el)}`)
       const promoted = boxes.filter(b => getComputedStyle(b.el).willChange !== "auto")
       const promotedTall = promoted.filter(b => b.rect.height > 1024).map(b => `${Math.round(b.rect.width)}x${Math.round(b.rect.height)} ${describe(b.el)}`)
+      const layerish = Array.from(document.querySelectorAll<HTMLElement>("[data-slot=message-content] *, [data-slot=message-content]")).slice(0, 400).flatMap(el => {
+        const cs = getComputedStyle(el)
+        const odd = { position: cs.position !== "static" ? cs.position : "", overflow: cs.overflow !== "visible" ? cs.overflow : "", willChange: cs.willChange !== "auto" ? cs.willChange : "", opacity: cs.opacity !== "1" ? cs.opacity : "", transform: cs.transform !== "none" ? "t" : "", isolation: cs.isolation !== "auto" ? cs.isolation : "", zIndex: cs.zIndex !== "auto" ? cs.zIndex : "", contain: cs.contain !== "none" ? cs.contain : "", filter: cs.filter !== "none" ? "f" : "", mask: cs.maskImage !== "none" ? "m" : "", mix: cs.mixBlendMode !== "normal" ? cs.mixBlendMode : "", clip: cs.clipPath !== "none" ? "c" : "", bg: cs.backgroundColor !== "rgba(0, 0, 0, 0)" ? "bg" : "", radius: cs.borderRadius !== "0px" ? "r" : "" }
+        const flags = Object.entries(odd).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ")
+        return flags ? [`${describe(el)} ${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)} :: ${flags}`] : []
+      })
       const panel = document.querySelector<HTMLElement>("[data-slot=collapsible-panel]")
-      native().postMessage(JSON.stringify({ stage: `${scenario} probe`, elements: boxes.length, wide, tall, promoted: promoted.length, promotedTall, scrollHeight: view.scrollHeight, docHeight: document.documentElement.scrollHeight, panel: panel ? panel.outerHTML.slice(0, 700) : null, panelParent: panel?.parentElement?.outerHTML.slice(0, 300) ?? null }))
+      native().postMessage(JSON.stringify({ stage: `${scenario} probe`, elements: boxes.length, wide, tall, promoted: promoted.length, promotedTall, scrollHeight: view.scrollHeight, docHeight: document.documentElement.scrollHeight, panel: panel ? panel.outerHTML.slice(0, 700) : null, panelParent: panel?.parentElement?.outerHTML.slice(0, 300) ?? null, layerish }))
     }
     if (__SCROLL_MEMORY__) await new Promise<void>(resolve => {
       Object.assign(window, { __memoryContinue: resolve })

@@ -669,21 +669,21 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           )}
 
           <div className="chat-paint-host group min-w-0 py-0.5">
-            {deliveredImages.length > 0 && <div data-response-images>{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
+            {deliveredImages.length > 0 && <div data-response-images className="chat-paint-host">{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
             {group.answer && (
-              <div data-slot="message-content">
-                <Markdown text={group.answer.text} style={TEXT} />
+              <div data-slot="message-content" className="chat-paint-host">
+                <Markdown text={group.answer.text} className="chat-markdown--hosted" style={TEXT} />
               </div>
             )}
 
             {group.end?.error && (
-              <p className="mt-2 flex items-start gap-2 text-destructive" style={TEXT}>
+              <p className="chat-paint-host mt-2 flex items-start gap-2 text-destructive" style={TEXT}>
                 <CircleAlertIcon className="mt-1 size-3.5 shrink-0" />
                 <span className="selectable">{group.end.error}</span>
               </p>
             )}
             {group.end?.stopReason === "interrupted" && (
-              <p className="text-muted-foreground" style={TEXT}>
+              <p className="chat-paint-host text-muted-foreground" style={TEXT}>
                 Stopped.
               </p>
             )}
@@ -691,13 +691,13 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast && settled} />}
 
             {group.reverted && (
-              <p className="mt-2 flex items-center gap-1.5 text-muted-foreground" style={TEXT}>
+              <p className="chat-paint-host mt-2 flex items-center gap-1.5 text-muted-foreground" style={TEXT}>
                 <Undo2Icon className="size-3" /> Reverted to before this turn
               </p>
             )}
 
             {settled && (group.answer || group.end) && (
-              <div className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]" style={META}>
+              <div className="chat-paint-host mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]" style={META}>
                 <CopyAction text={group.answer?.text ?? ""} />
                 {group.end?.at && <p className="tabular-nums">{clockTime(group.end.at)}</p>}
               </div>
@@ -1330,10 +1330,10 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone = "muted",
       {showText && (
         <div className="chat-message-segment flex flex-col gap-1.5 pr-[2px] pl-[2px]" data-live={live && !block.complete ? "true" : undefined}>
           {tone === "bright" ? (
-            <Markdown text={bodyText} style={TEXT} live={live && !block.complete} />
+            <Markdown text={bodyText} className="chat-markdown--hosted" style={TEXT} live={live && !block.complete} />
           ) : (
             <div className="text-muted-foreground">
-              <Markdown text={bodyText} className="[&_*]:text-muted-foreground" style={TEXT} live={live && !block.complete} />
+              <Markdown text={bodyText} className="chat-markdown--hosted [&_*]:text-muted-foreground" style={TEXT} live={live && !block.complete} />
             </div>
           )}
         </div>
@@ -1374,7 +1374,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   }
 
   return (
-    <div className="mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
+    <div className="chat-paint-host mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
       <div
         className={cn(
           "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-chat-code-surface)_40%,transparent)] px-3 py-1.5",

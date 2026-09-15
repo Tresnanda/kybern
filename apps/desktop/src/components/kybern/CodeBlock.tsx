@@ -5,6 +5,7 @@ import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
 import { IconSwap } from "./motion"
 import { canHighlightCode, streamingHighlightInterval } from "@/lib/workload"
 import { highlightToHtml } from "@/lib/highlight"
+import { chunkHighlightedHtml, chunkPlainCode } from "@/lib/codeChunks"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
 
 const ALIASES: Record<string, string> = { js: "javascript", ts: "typescript", sh: "bash", shell: "bash", zsh: "bash", py: "python", rs: "rust", yml: "yaml", md: "markdown", kt: "kotlin", "c++": "cpp" }
@@ -55,7 +56,9 @@ export function useIsDark(): boolean {
 
 function HighlightedCode({ code, name, dark, live }: { code: string; name: string | null; dark: boolean; live: boolean }) {
   const [highlight, setHighlight] = useState<{ code: string; name: string; dark: boolean; html: string } | null>(null)
-  const markup = useMemo(() => highlight ? { __html: highlight.html } : null, [highlight])
+  // Tall blocks render as line chunks so no single layer exceeds WebKit's tiling threshold.
+  const markup = useMemo(() => highlight ? { __html: chunkHighlightedHtml(highlight.html) } : null, [highlight])
+  const plainChunks = useMemo(() => chunkPlainCode(code), [code])
   const highlightedAt = useRef(0)
   const inFlight = useRef<{ code: string; name: string; dark: boolean; abort: AbortController } | null>(null)
   const highlightable = canHighlightCode(name, code)
@@ -95,7 +98,7 @@ function HighlightedCode({ code, name, dark, live }: { code: string; name: strin
     <div dangerouslySetInnerHTML={markup} />
   ) : (
     <pre>
-      <code>{code}</code>
+      <code>{plainChunks ? plainChunks.map((chunk, index) => <span key={index} className="chat-code-chunk">{chunk}</span>) : code}</code>
     </pre>
   )
 }

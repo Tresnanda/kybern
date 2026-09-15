@@ -42,7 +42,7 @@ final class Bench: NSObject, WKScriptMessageHandler {
   web = WKWebView(frame: NSRect(x: 0, y: 0, width: Double(ProcessInfo.processInfo.environment["KYBERN_PERF_WIDTH"] ?? "1100") ?? 1100, height: Double(ProcessInfo.processInfo.environment["KYBERN_PERF_HEIGHT"] ?? "720") ?? 720), configuration: config)
   window = NSWindow(contentRect: web.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
   window.title = "Kybern rendering checks"
-  if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1" { print("Debug window id: \(window.windowNumber)"); fflush(stdout) }
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1" || ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" { print("Debug window id: \(window.windowNumber)"); fflush(stdout) }
   window.contentView = web
   window.orderFront(nil)
   let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
