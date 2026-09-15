@@ -174,6 +174,7 @@ export function Palette() {
                         value={item}
                         onClick={() => {
                           close()
+                          if (item.id !== "settings" && item.id !== "theme") set({ settingsOpen: false })
                           item.run()
                         }}
                         className={cn("cursor-pointer items-center gap-2 rounded-lg px-2.5", item.group === "Threads" ? "py-2" : "py-1.5")}

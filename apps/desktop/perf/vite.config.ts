@@ -24,14 +24,21 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "app-update" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "settings" ? [{
+    name: "settings-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.includes("/src/") || id.includes("/src/state/")) return
+      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "settings-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "app-update" ? [{
     name: "app-update-fixture-transport",
     enforce: "pre",
     transform(code, id) {
       if (!/\/(AppUpdate|Sidebar)\.tsx$/.test(id)) return
       return code.replaceAll('"@/lib/appUpdate"', JSON.stringify(path.resolve(import.meta.dirname, "app-update-transport.ts")))
     },
-  }] : process.env.KYBERN_PERF_FIXTURE === "chat-collaboration" ? [{
+  }] : ["chat-collaboration", "composer-stack"].includes(process.env.KYBERN_PERF_FIXTURE ?? "") ? [{
     name: "chat-collaboration-fixture-transport",
     enforce: "pre",
     transform(code, id) {

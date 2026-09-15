@@ -4,7 +4,7 @@ import { platform } from "@/lib/tauri"
 // translucent left sidebar; a content card with a seam rail; the right dock.
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ChatPaneDropOverlay } from "@/components/kybern/ChatPaneDropOverlay"
@@ -27,7 +27,7 @@ import { SessionsDialog } from "@/views/SessionsDialog"
 import { Palette } from "@/views/Palette"
 import { PullRequests } from "@/views/PullRequests"
 import { RightPanel } from "@/views/RightPanel"
-import { SettingsDialog } from "@/views/SettingsDialog"
+import { SettingsScreen } from "@/views/SettingsScreen"
 import { ThreadSidebar } from "@/views/Sidebar"
 import { SplitThreads } from "@/views/SplitThreads"
 import { ThreadView } from "@/views/Thread"
@@ -62,17 +62,23 @@ function Workspace() {
   const splitView = useStore((s) => s.splitView)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const rightOpen = useStore((s) => s.rightOpen)
+  const settingsOpen = useStore((s) => s.settingsOpen)
+  const reducedMotion = useReducedMotion()
+  const [keyboardNavigation, setKeyboardNavigation] = useState(false)
+  const workspaceFocus = useRef<HTMLElement | null>(null)
   const set = useStore((s) => s.set)
 
-  useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true })
-  useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true })
+  useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen })
+  useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })
-  useHotkey("mod+n", () => newThread(), { allowInInput: true })
-  useHotkey("mod+,", () => set({ settingsOpen: true }), { allowInInput: true })
+  useHotkey("mod+n", () => { set({ settingsOpen: false }); newThread() }, { allowInInput: true })
+  useHotkey("mod+,", () => { setKeyboardNavigation(true); set({ settingsOpen: true }) }, { allowInInput: true })
   useHotkey("mod+\\", () => {
+    if (useStore.getState().settingsOpen) return
     if (!useStore.getState().splitFocusedPane("horizontal")) toast("This pane can’t be split to the right")
   }, { allowInInput: true })
   useHotkey("mod+shift+\\", () => {
+    if (useStore.getState().settingsOpen) return
     if (!useStore.getState().splitFocusedPane("vertical")) toast("This pane can’t be split below")
   }, { allowInInput: true })
 
@@ -85,10 +91,14 @@ function Workspace() {
     <SidebarProvider
       open={sidebarOpen}
       onOpenChange={(open) => set({ sidebarOpen: open })}
-      className="bg-[var(--app-shell-background)]"
+      className="relative bg-[var(--app-shell-background)]"
+      onPointerDownCapture={() => setKeyboardNavigation(false)}
+      onKeyDownCapture={() => setKeyboardNavigation(true)}
+      onFocusCapture={(event) => { if (!settingsOpen) workspaceFocus.current = event.target as HTMLElement }}
       data-sidebar-side="left"
       style={{ "--sidebar-width": `${sidebar.width}px` } as React.CSSProperties}
     >
+      <div className="settings-workspace flex h-dvh min-w-0 flex-1" inert={settingsOpen} aria-hidden={settingsOpen || undefined} data-settings-open={settingsOpen} data-keyboard={keyboardNavigation || undefined}>
       <div className="fixed top-0 z-40 flex h-[46px] items-center" style={{ left: platform() === "macos" ? "var(--desktop-top-bar-traffic-light-gutter, 84px)" : "16px" }}>
         <SidebarLeadingControls className="hidden md:flex" />
       </div>
@@ -155,14 +165,22 @@ function Workspace() {
         </SidebarInset>
       </div>
 
+      </div>
+      <AnimatePresence initial={false} onExitComplete={() => { if (!useStore.getState().settingsOpen && workspaceFocus.current?.isConnected) workspaceFocus.current.focus({ preventScroll: true }) }}>
+        {settingsOpen && <motion.div key="settings-screen" className="absolute inset-0 z-50"
+          initial={{ opacity: 0, transform: "translateX(8px)" }}
+          animate={{ opacity: 1, transform: "translateX(0px)" }}
+          exit={{ opacity: 0, transform: "translateX(8px)" }}
+          transition={{ duration: reducedMotion || keyboardNavigation ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}>
+          <ErrorBoundary label="settings"><SettingsScreen /></ErrorBoundary>
+        </motion.div>}
+      </AnimatePresence>
+
       <ErrorBoundary label="the palette">
         <Palette />
       </ErrorBoundary>
       <ErrorBoundary label="saved sessions">
         <SessionsDialog />
-      </ErrorBoundary>
-      <ErrorBoundary label="settings">
-        <SettingsDialog />
       </ErrorBoundary>
       <ErrorBoundary label="hand off">
         <HandoffDialog />

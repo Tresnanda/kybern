@@ -238,3 +238,11 @@ thread-specific artifact guidance when Kybern provides the exact folder.
 
 `~/.kybern/`: `state.sqlite`, `settings.json`, `keybindings.json`, `themes/`,
 `daemon.token` (0600), `daemon.port`, `worktrees/`, `assets/`.
+
+### Branded image backgrounds
+
+For Kybern promotional images, screenshot presentations, and illustrated feature
+cards, reuse `apps/desktop/public/release-background.png` as the background.
+It is the same artwork as `/Users/mymac/Downloads/Frame 7 (1).png`, already used
+by the update notice. Prefer the repository asset so visuals remain reproducible
+and consistent with the website. Keep functional UI previews and content readable.

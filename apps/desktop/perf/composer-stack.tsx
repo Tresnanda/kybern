@@ -1,5 +1,7 @@
 // Real thread/composer geometry, including simultaneous tasks, queue and requests.
 // Synthetic state only: no daemon, private transcript or provider invocation.
+import { createRef } from "react"
+import { Composer, type ComposerHandle } from "../src/views/Composer"
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { ThreadView } from "../src/views/Thread"
@@ -93,6 +95,22 @@ function button(text: string) { return [...document.querySelectorAll<HTMLButtonE
 async function run() {
   useStore.getState().set({ connection: { state: "open" }, projects: { project: { id: "project", name: "Project", path: "/project", is_git: false, worktrees_default: false, created_at: at, updated_at: at } }, threads: { [thread.id]: thread }, providers: [], selected: { kind: "thread", id: thread.id }, splitView: null, transcripts: { [thread.id]: { ...emptyThreadState(), loaded: true, thread } } })
   let samples = 0
+  const composerRef = createRef<ComposerHandle>()
+  for (const width of [1000, 480, 320]) {
+    flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: true, setTheme: () => {}, setTranslucent: () => {} }}><div style={{ width, maxWidth: "100vw", paddingTop: 400 }}><Composer ref={composerRef} projectId="project" provider={thread.provider} providers={[]} mode="full-access" onSend={async () => {}} /></div></ThemeProviderContext>))
+    await sleep(500)
+    for (const prefix of ["/", "@", "$"]) {
+      composerRef.current!.setText(prefix)
+      await sleep(300)
+      const menu = document.querySelector<HTMLElement>('[role="listbox"]')
+      check(menu, `${width}/${prefix}: autocomplete opens`)
+      if (menu) {
+        const bounds = menu.getBoundingClientRect()
+        const composer = document.querySelector(".chat-composer-surface")!.getBoundingClientRect()
+        check(Math.abs(bounds.left - composer.left) < 1 && Math.abs(bounds.right - composer.right) < 1, `${width}/${prefix}: menu matches composer edges`)
+      }
+    }
+  }
   for (const variant of ["dark", "light"] as const) for (const width of [1000, 480, 320]) {
     setTheme(variant)
     render(width)

@@ -110,6 +110,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 
 | Change | Native check |
 | --- | --- |
+| Settings screen, navigation, and usage reporting | `node scripts/check-rendering.mjs settings` |
 | Theme tokens, surfaces, translucency | `node --experimental-strip-types scripts/check-window-material.mjs` |
 | Streaming, Markdown, highlighting, message rail | `node scripts/check-rendering.mjs` |
 | Thinking disclosure re-entry, mixed work, dynamic row heights | `node scripts/check-rendering.mjs work-stream` |

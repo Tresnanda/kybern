@@ -162,6 +162,7 @@ export function ThreadView({
   useEffect(() => {
     if (!isFocused) return
     const onKey = (e: KeyboardEvent) => {
+      if (useStore.getState().settingsOpen) return
       if (!["1", "2", "3", "4"].includes(e.key) || e.metaKey || e.ctrlKey || e.altKey) return
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return
