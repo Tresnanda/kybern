@@ -117,9 +117,15 @@ The remaining peak comes from the expanded-tools stage: one settled group of
 layer that accumulates about 30 full and 27 partial tiles during the scroll
 (roughly 160 MiB). Hiding, promoting, paint-containing or demoting the panel,
 its trigger, the collapsible root, the list containers, the turn row and the
-work container individually did not change that histogram, so the source is
-not yet attributed; without screen recording permission the layer overlay
-could not be captured. Expanded thinking and long code hold many small row
+work container individually did not change that histogram. WebKit's compositing overlay
+(`KYBERN_PERF_DEBUG_LAYERS=1`) shows every tool row as its own layer with a
+backing store, but the nearest promoted ancestor of the row list (the panel
+host, or the panel itself when promoted) is still a tiled layer that WebKit
+treats as drawing content, with a live tile grid and repaint counters even
+though nothing visible remains for it to paint. Demoting that host doubles
+the tiles, so the promotion is still correct; what makes WebKit consider the
+host non-empty in this structure, but not in the equivalent live work list,
+is the open question. Expanded thinking and long code hold many small row
 layers (about 320–400 MiB graphics resident) but no longer accumulate scroll
 tiles. Resting footprint after eight idle seconds is 123–166 MiB in every
 mixed-work and expanded configuration.
