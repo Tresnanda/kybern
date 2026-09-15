@@ -157,36 +157,47 @@ import {
 import { cn } from "@/lib/utils";
 
 // Keep the existing icon API stable while the app moves from Central/Tabler to Phosphor.
-export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
+export type LucideIcon = FC<SVGProps<SVGSVGElement> & { size?: string | number }>;
+
+// Central glyphs were a masked `inline-block size-4 shrink-0` span. Phosphor's
+// default SVG has a 256 viewBox and no width/height unless `size` is set, so
+// WebKit can measure 0 or 256px on first layout. That inflates transcript rows,
+// keeps every history message mounted, and leaves follow-scroll short of the
+// live edge. Pin the same 16px slot (or an explicit caller size) on every glyph.
+const KIT_ICON_SLOT_CLASS = "inline-block size-4 shrink-0 align-middle";
+
+type KitIconProps = SVGProps<SVGSVGElement> & { size?: string | number };
+
+function renderPhosphor(
+  Component: Icon,
+  { className, style, color, width, height, size, ...rest }: KitIconProps,
+  extras: { weight?: IconWeight; mirrored?: boolean } = {},
+) {
+  const explicitSize = size ?? width ?? height;
+  return (
+    <Component
+      className={cn(explicitSize == null ? KIT_ICON_SLOT_CLASS : "inline-block shrink-0 align-middle", className)}
+      style={style}
+      color={typeof color === "string" ? color : undefined}
+      weight={extras.weight ?? "regular"}
+      mirrored={extras.mirrored}
+      size={explicitSize ?? 16}
+      {...(rest as Partial<IconProps>)}
+    />
+  );
+}
 
 function adaptIcon(Component: Icon, weight: IconWeight = "regular"): LucideIcon {
-  function AdaptedIcon({ className, style, color, ...rest }: SVGProps<SVGSVGElement>) {
-    return (
-      <Component
-        className={className}
-        style={style}
-        color={typeof color === "string" ? color : undefined}
-        weight={weight}
-        {...(rest as Partial<IconProps>)}
-      />
-    );
+  function AdaptedIcon(props: KitIconProps) {
+    return renderPhosphor(Component, props, { weight });
   }
   AdaptedIcon.displayName = Component.displayName ?? Component.name;
   return AdaptedIcon;
 }
 
 function adaptMirrored(Component: Icon, weight: IconWeight = "regular"): LucideIcon {
-  function AdaptedIcon({ className, style, color, ...rest }: SVGProps<SVGSVGElement>) {
-    return (
-      <Component
-        className={className}
-        style={style}
-        color={typeof color === "string" ? color : undefined}
-        weight={weight}
-        mirrored
-        {...(rest as Partial<IconProps>)}
-      />
-    );
+  function AdaptedIcon(props: KitIconProps) {
+    return renderPhosphor(Component, props, { weight, mirrored: true });
   }
   AdaptedIcon.displayName = `${Component.displayName ?? Component.name}Mirrored`;
   return AdaptedIcon;
