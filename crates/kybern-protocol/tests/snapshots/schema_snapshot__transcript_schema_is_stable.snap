@@ -163,6 +163,10 @@ expression: schema_for!(TranscriptEntry)
           "$ref": "#/$defs/ToolCall"
         },
         "output": true,
+        "output_omitted": {
+          "description": "Settled result exists in the event log but was not inlined here.",
+          "type": "boolean"
+        },
         "is_error": {
           "type": "boolean"
         },

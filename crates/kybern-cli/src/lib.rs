@@ -678,7 +678,13 @@ pub async fn run() -> Result<()> {
         },
         Cmd::Show { thread, limit, before_seq, through_seq } => {
             let r = client
-                .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.parse()?, transcript_limit: limit, before_seq, through_seq })
+                .call::<ThreadsGet>(ThreadsGetParams {
+                    thread_id: thread.parse()?,
+                    transcript_limit: limit,
+                    before_seq,
+                    through_seq,
+                    ..Default::default()
+                })
                 .await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::transcript(&r) }
         }

@@ -11,7 +11,8 @@ pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHist
 pub use transcript_page::{transcript_page, transcript_page_ref};
 
 pub use projection::{
-    project_pending_questions, project_provider_usage, project_runtime_tasks, project_thread_activity, project_transcript,
+    LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, project_pending_questions, project_provider_usage, project_runtime_tasks,
+    project_thread_activity, project_transcript, should_omit_tool_output,
 };
 
 use std::path::Path;
@@ -1737,16 +1738,137 @@ impl Store {
         })
     }
 
-    pub fn runtime_tasks_for_thread(&self, thread_id: ThreadId) -> Result<Vec<RuntimeTask>> {
+    /// Fold the transcript without retaining every event payload at once.
+    pub fn project_transcript_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<TranscriptEntry>> {
+        self.with(|c| {
+            let mut statement =
+                c.prepare("SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND seq <= ?2 ORDER BY seq")?;
+            let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
+            let mut fold = TranscriptFold::default();
+            while let Some(row) = rows.next()? {
+                fold.apply(&row_to_event(row)?);
+            }
+            Ok(fold.finish())
+        })
+    }
+
+    pub fn tool_call_outputs(
+        &self,
+        thread_id: ThreadId,
+        tool_call_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, (serde_json::Value, bool)>> {
+        if tool_call_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        self.with(|c| {
+            let ids = serde_json::to_string(tool_call_ids)?;
+            let mut statement = c.prepare(
+                "SELECT payload FROM events
+                 WHERE thread_id = ?1 AND kind = 'tool_call_completed'
+                   AND json_extract(payload, '$.tool_call_id') IN (SELECT value FROM json_each(?2))
+                 ORDER BY seq ASC",
+            )?;
+            let mut outputs = std::collections::HashMap::new();
+            let mut rows = statement.query(params![thread_id.to_string(), ids])?;
+            while let Some(row) = rows.next()? {
+                let text: String = row.get(0)?;
+                if let EventPayload::ToolCallCompleted { tool_call_id, output, is_error } = serde_json::from_str(&text)? {
+                    outputs.insert(tool_call_id, (output, is_error));
+                }
+            }
+            Ok(outputs)
+        })
+    }
+
+    pub fn tool_call_output(&self, thread_id: ThreadId, tool_call_id: &str) -> Result<Option<(serde_json::Value, bool)>> {
+        Ok(self.tool_call_outputs(thread_id, &[tool_call_id.to_string()])?.remove(tool_call_id))
+    }
+
+    pub fn hydrate_tool_outputs(&self, thread_id: ThreadId, entries: &mut [TranscriptEntry]) -> Result<()> {
+        let ids: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                TranscriptEntry::ToolCall { call, complete: true, output_omitted: true, .. } => Some(call.id.clone()),
+                _ => None,
+            })
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let outputs = self.tool_call_outputs(thread_id, &ids)?;
+        for entry in entries {
+            let TranscriptEntry::ToolCall { call, output, output_omitted, is_error, complete, .. } = entry else { continue };
+            if !*complete || !*output_omitted {
+                continue;
+            }
+            if let Some((value, err)) = outputs.get(&call.id) {
+                *output = Some(value.clone());
+                *is_error = *err;
+                *output_omitted = false;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn runtime_tasks_for_thread_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<RuntimeTask>> {
         self.with(|c| {
             let mut st = c.prepare(
                 "SELECT seq, thread_id, turn_id, at, payload FROM events
-                 WHERE thread_id = ?1 AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound')
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound')
                  ORDER BY seq",
             )?;
-            let events = st.query_map([thread_id.to_string()], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
+            let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
             Ok(project_runtime_tasks(&events))
         })
+    }
+
+    pub fn provider_usage_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<ProviderUsage> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind = 'provider_usage_updated'
+                 ORDER BY seq",
+            )?;
+            let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
+            Ok(project_provider_usage(&events))
+        })
+    }
+
+    pub fn pending_questions_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<AsyncQuestionRequest>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind IN ('async_questions_requested', 'async_questions_answered')
+                 ORDER BY seq",
+            )?;
+            let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
+            Ok(project_pending_questions(&events))
+        })
+    }
+
+    pub fn provider_commands_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<ProviderCommand>> {
+        self.with(|c| {
+            let payload: Option<String> = c
+                .query_row(
+                    "SELECT payload FROM events
+                     WHERE thread_id = ?1 AND seq <= ?2 AND kind = 'provider_commands_updated'
+                     ORDER BY seq DESC LIMIT 1",
+                    params![thread_id.to_string(), through_seq],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match payload {
+                None => Ok(Vec::new()),
+                Some(text) => match serde_json::from_str::<EventPayload>(&text)? {
+                    EventPayload::ProviderCommandsUpdated { commands } => Ok(commands),
+                    _ => Ok(Vec::new()),
+                },
+            }
+        })
+    }
+
+    pub fn runtime_tasks_for_thread(&self, thread_id: ThreadId) -> Result<Vec<RuntimeTask>> {
+        self.runtime_tasks_for_thread_through(thread_id, i64::MAX)
     }
 
     // ---- approvals ----
@@ -2357,5 +2479,105 @@ mod tests {
         assert!(!store.queue_is_pending(intended.id).unwrap());
         assert!(store.queue_is_pending(other.id).unwrap());
         assert_eq!(store.collaboration_message_get(cancelled.id).unwrap().unwrap().state, CollaborationDeliveryState::Cancelled);
+    }
+
+    #[test]
+    fn large_tool_outputs_stay_in_sqlite_until_a_page_asks_for_them() {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let project = Project {
+            id: Uuid::now_v7(),
+            name: "tools".into(),
+            path: format!("/tmp/{}", Uuid::now_v7()),
+            is_git: false,
+            worktrees_default: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let thread = Thread {
+            id: Uuid::now_v7(),
+            project_id: project.id,
+            title: "tools".into(),
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            status: ThreadStatus::Idle,
+            worktree: None,
+            cwd: project.path.clone(),
+            provider_session_id: None,
+            pinned: false,
+            created_at: now,
+            updated_at: now,
+            last_seq: 0,
+            parent_thread_id: None,
+            coordinator_project_id: None,
+            collaboration_group_id: None,
+        };
+        store.thread_upsert(&thread).unwrap();
+        let turn = Uuid::now_v7();
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("run") },
+            )
+            .unwrap();
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::ToolCallStarted {
+                    call: ToolCall { id: "big".into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                    origin: EventOrigin::Root,
+                },
+            )
+            .unwrap();
+        let output = serde_json::json!("x".repeat(LARGE_TOOL_OUTPUT_BYTES + 8));
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::ToolCallCompleted { tool_call_id: "big".into(), output: output.clone(), is_error: false },
+            )
+            .unwrap();
+        for index in 0..49 {
+            let id = format!("big-{index}");
+            store
+                .event_append(
+                    thread.id,
+                    Some(turn),
+                    EventPayload::ToolCallStarted {
+                        call: ToolCall { id: id.clone(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                        origin: EventOrigin::Root,
+                    },
+                )
+                .unwrap();
+            store
+                .event_append(
+                    thread.id,
+                    Some(turn),
+                    EventPayload::ToolCallCompleted { tool_call_id: id, output: output.clone(), is_error: false },
+                )
+                .unwrap();
+        }
+        let events = store.events_for_thread_through(thread.id, i64::MAX).unwrap();
+        let event_bytes = serde_json::to_vec(&events).unwrap().len();
+        let transcript = store.project_transcript_through(thread.id, i64::MAX).unwrap();
+        let transcript_bytes = serde_json::to_vec(&transcript).unwrap().len();
+        assert!(transcript_bytes * 10 < event_bytes, "cached projection {transcript_bytes} should drop the {event_bytes}-byte event log");
+        eprintln!("tool-output-omit event_bytes={event_bytes} transcript_bytes={transcript_bytes}");
+        assert!(matches!(
+            transcript.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { output: None, output_omitted: true, .. })
+        ));
+        let mut page = transcript.clone();
+        store.hydrate_tool_outputs(thread.id, &mut page).unwrap();
+        assert_eq!(store.tool_call_output(thread.id, "big").unwrap(), Some((output.clone(), false)));
+        assert!(matches!(
+            page.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { output: Some(value), output_omitted: false, .. }) if *value == output
+        ));
     }
 }

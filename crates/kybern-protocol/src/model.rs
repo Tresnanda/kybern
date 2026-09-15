@@ -785,6 +785,9 @@ pub enum TranscriptEntry {
         call: ToolCall,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<Value>,
+        /// Settled result exists in the event log but was not inlined here.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        output_omitted: bool,
         is_error: bool,
         complete: bool,
         at: DateTime<Utc>,

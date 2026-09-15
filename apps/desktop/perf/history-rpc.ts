@@ -27,3 +27,4 @@ export async function loadEarlier(id: string) {
 export async function loadDiff() {}
 export async function loadFileDiff() {}
 export async function revertTo() {}
+export async function hydrateToolOutput() {}

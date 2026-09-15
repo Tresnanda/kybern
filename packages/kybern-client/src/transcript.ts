@@ -50,6 +50,7 @@ export type Block =
       call: ToolCall
       stream: string
       output: JsonValue | null
+      outputOmitted?: boolean
       isError: boolean
       complete: boolean
     }
@@ -181,6 +182,7 @@ function entryToBlock(e: TranscriptEntry): Block | null {
         call: e.call,
         stream: "",
         output: e.output ?? null,
+        outputOmitted: e.output_omitted ?? false,
         isError: e.is_error,
         complete: e.complete,
       }

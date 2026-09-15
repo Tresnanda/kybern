@@ -219,7 +219,7 @@ async fn notes_sync_between_clients_and_survive_reopening_the_store() {
             .is_err()
     );
     let snapshot = phone
-        .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), before_seq: None, through_seq: None })
+        .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), ..Default::default() })
         .await
         .unwrap();
     assert_eq!(snapshot.notes, notes);
@@ -667,7 +667,7 @@ async fn cached_history_pages_match_full_history_and_keep_their_sequence_barrier
             .unwrap();
     }
     let client = host.client().await;
-    let params = ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), before_seq: None, through_seq: None };
+    let params = ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), ..Default::default() };
     let recent = client.call::<ThreadsGet>(params.clone()).await.unwrap();
     assert_eq!(recent.transcript.len(), 60);
     let barrier = recent.thread.last_seq;
@@ -730,7 +730,7 @@ async fn measure_remote_history_pages() {
     ] {
         let start = std::time::Instant::now();
         let result = client
-            .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: limit, before_seq: None, through_seq: None })
+            .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: limit, ..Default::default() })
             .await
             .unwrap();
         let elapsed = start.elapsed();
