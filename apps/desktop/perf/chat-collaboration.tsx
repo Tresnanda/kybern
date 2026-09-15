@@ -85,6 +85,13 @@ async function run() {
     sidebarDisclosure = helperRows().length === 0
     helperToggle.click(); await sleep(300)
     sidebarDisclosure &&= helperRows().length === 2 && helperToggle.getAttribute("aria-expanded") === "true"
+    if (preview === "hierarchy") {
+      const parent = Array.from(document.querySelectorAll<HTMLElement>("[data-marquee-host]")).find(row => row.textContent === "Improve sign-in")!
+      const children = helperRows()
+      const indented = children.every(row => parseFloat(getComputedStyle(row).paddingInlineStart) - parseFloat(getComputedStyle(parent).paddingInlineStart) === 20)
+      const guides = children.every(row => !!row.parentElement?.querySelector('span[aria-hidden="true"].w-px'))
+      return results({ preview, pass: sidebarDisclosure && indented && guides, indented, guides })
+    }
     helperToggle.click(); await sleep(300)
     sidebarDisclosure &&= helperRows().length === 0 && helperToggle.getAttribute("aria-expanded") === "false"
   }
