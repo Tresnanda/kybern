@@ -36,8 +36,19 @@ interface VirtualRowsProps<T> {
 }
 
 export function VirtualRows<T>(props: VirtualRowsProps<T>) {
-  if (!props.viewport && props.items.length <= 30) return <>{props.items.map((item, index) => <TranscriptStateScope key={props.getKey(item, index)} name={props.getKey(item, index)}>{props.children(item, index)}</TranscriptStateScope>)}</>
+  if (!props.viewport && props.items.length <= 30) return <PlainRows {...props} />
   return <VirtualizedRows {...props} />
+}
+
+/** Short lists stay in normal flow, but each item is still its own paint host:
+ * one tall item (an opened tool group) would otherwise make the enclosing
+ * work container a tiled layer that paints its siblings and accumulates
+ * scroll tiles. Margins collapse through the wrapper, so spacing is unchanged. */
+function PlainRows<T>({ items, getKey, children }: VirtualRowsProps<T>) {
+  return <>{items.map((item, index) => {
+    const key = getKey(item, index)
+    return <div key={key} className="chat-paint-host" data-virtual-key={key}><TranscriptStateScope name={key}>{children(item, index)}</TranscriptStateScope></div>
+  })}</>
 }
 
 function VirtualizedRows<T>({
@@ -207,7 +218,7 @@ function VirtualizedRows<T>({
     container.current = element
   }, [])
 
-  if (!viewport) return <>{items.map((item, index) => <TranscriptStateScope key={getKey(item, index)} name={getKey(item, index)}>{children(item, index)}</TranscriptStateScope>)}</>
+  if (!viewport) return <PlainRows items={items} getKey={getKey} estimateSize={estimateSize}>{children}</PlainRows>
   const rows = virtualizer.getVirtualItems()
   return (
     <div ref={setContainer} className={className} data-virtual-list={owner} style={{ position: "relative", width: "100%", display: "flow-root" }}>

@@ -133,7 +133,8 @@ async function run() {
       const tall = boxes.filter(b => b.rect.height > 1024).sort((a, b) => b.rect.height - a.rect.height).slice(0, 12).map(b => `${Math.round(b.rect.width)}x${Math.round(b.rect.height)} ${describe(b.el)}`)
       const promoted = boxes.filter(b => getComputedStyle(b.el).willChange !== "auto")
       const promotedTall = promoted.filter(b => b.rect.height > 1024).map(b => `${Math.round(b.rect.width)}x${Math.round(b.rect.height)} ${describe(b.el)}`)
-      native().postMessage(JSON.stringify({ stage: `${scenario} probe`, elements: boxes.length, wide, tall, promoted: promoted.length, promotedTall, scrollHeight: view.scrollHeight, docHeight: document.documentElement.scrollHeight }))
+      const panel = document.querySelector<HTMLElement>("[data-slot=collapsible-panel]")
+      native().postMessage(JSON.stringify({ stage: `${scenario} probe`, elements: boxes.length, wide, tall, promoted: promoted.length, promotedTall, scrollHeight: view.scrollHeight, docHeight: document.documentElement.scrollHeight, panel: panel ? panel.outerHTML.slice(0, 700) : null, panelParent: panel?.parentElement?.outerHTML.slice(0, 300) ?? null }))
     }
     if (__SCROLL_MEMORY__) await new Promise<void>(resolve => {
       Object.assign(window, { __memoryContinue: resolve })

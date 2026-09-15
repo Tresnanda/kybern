@@ -69,7 +69,12 @@ promoted icons. Removing the icon promotion alone raised history-fast to
 ## Changes
 
 - `VirtualRows` gives every mounted virtualized row `will-change: transform`
-  in addition to the outer paint boundary.
+  in addition to the outer paint boundary. Short lists that stay in normal
+  flow wrap each item in the same paint host: one tall item (an opened tool
+  group) otherwise made the enclosing work container a tiled layer that painted
+  its siblings, such as the streaming tail, and accumulated scroll tiles. The
+  wrapper has no padding or border, so margins collapse through it and spacing
+  is unchanged.
 - `chat-paint-host` (kit.css) marks the painted transcript leaves: user
   messages, the working header and "Thinking" row, live and settled work
   lists, grouped-tool headers and panels, nested activity lists, the settled
@@ -95,40 +100,40 @@ physical footprint from `vmmap -summary` after each stage:
 
 | Stage | PR #18 `bca8a40` current / peak | This change current / peak |
 | --- | ---: | ---: |
-| History cold | 325.1 / 342.2 MiB | 238.1 / 295.7 MiB |
-| History warm | 261.0 / 344.6 MiB | 216.3 / 295.7 MiB |
-| History fast | 355.4 / 393.0 MiB | 340.3 / 352.8 MiB |
-| Mixed work | 540.8 / 729.0 MiB | 244.9 / 394.0 MiB |
-| Mixed work streaming | 684.2 / 815.2 MiB | 363.4 / 394.0 MiB |
-| Expanded thinking | 582.8 / 875.1 MiB | 390.1 / 523.1 MiB |
-| Expanded tools | 541.5 / 875.1 MiB | 459.3 / 523.1 MiB |
-| Long code | 441.2 / 875.1 MiB | 367.7 / 523.1 MiB |
+| History cold | 325.1 / 342.2 MiB | 229.4 / 304.1 MiB |
+| History warm | 261.0 / 344.6 MiB | 206.1 / 304.1 MiB |
+| History fast | 355.4 / 393.0 MiB | 338.8 / 359.0 MiB |
+| Mixed work | 540.8 / 729.0 MiB | 249.7 / 387.5 MiB |
+| Mixed work streaming | 684.2 / 815.2 MiB | 251.8 / 387.5 MiB |
+| Expanded thinking | 582.8 / 875.1 MiB | 284.5 / 416.0 MiB |
+| Expanded tools | 541.5 / 875.1 MiB | 239.0 / 416.0 MiB |
+| Long code | 441.2 / 875.1 MiB | 245.6 / 416.0 MiB |
 
-The full-sequence lifetime peak fell from 875.1 MiB to 523.1 MiB (an earlier
-run of the same source measured 588.5 MiB), the history peak from 393.0 to
-353.9 MiB, and the mixed-work peak from 729.0 to 394.0 MiB. Graphics resident
-memory after the mixed-work scroll fell from 788.7 MiB (324 regions) to
-328.0 MiB (242 regions), and the mixed-work stage alone now ends with six
-full tiles, all belonging to the page's root layer. Frame p95 stayed at
-17–19 ms with zero empty viewports in every stage.
+The full-sequence lifetime peak fell from 875.1 MiB to 416.0 MiB, the history
+peak from 393.0 to 359.0 MiB, and the mixed-work peak from 729.0 to 387.5 MiB.
+Graphics resident memory after the mixed-work scroll fell from 788.7 MiB
+(324 regions) to about 145 MiB when the stage runs alone, and every dense
+stage now ends with only the page root's four to six tiles. Frame p95 stayed
+at 17–19 ms with zero empty viewports in every stage.
 
-The remaining peak comes from the expanded-tools stage: one settled group of
-800 tools opened inside a 25,000 px collapsible panel still leaves a tiled
-layer that accumulates about 30 full and 27 partial tiles during the scroll
-(roughly 160 MiB). Hiding, promoting, paint-containing or demoting the panel,
-its trigger, the collapsible root, the list containers, the turn row and the
-work container individually did not change that histogram. WebKit's compositing overlay
-(`KYBERN_PERF_DEBUG_LAYERS=1`) shows every tool row as its own layer with a
-backing store, but the nearest promoted ancestor of the row list (the panel
-host, or the panel itself when promoted) is still a tiled layer that WebKit
-treats as drawing content, with a live tile grid and repaint counters even
-though nothing visible remains for it to paint. Demoting that host doubles
-the tiles, so the promotion is still correct; what makes WebKit consider the
-host non-empty in this structure, but not in the equivalent live work list,
-is the open question. Expanded thinking and long code hold many small row
-layers (about 320–400 MiB graphics resident) but no longer accumulate scroll
-tiles. Resting footprint after eight idle seconds is 123–166 MiB in every
-mixed-work and expanded configuration.
+The expanded-tools residual from the first pass was attributed with WebKit's
+compositing overlay (`KYBERN_PERF_DEBUG_LAYERS=1`, captured with
+`screencapture -l`): each tool row was its own layer, but the work container
+around the opened group was still a tiled layer with a live tile grid. Hiding
+the turn's children removed it while hiding the panel, trigger, message,
+header or tail individually did not, which pointed at the non-virtualized
+work list: with two items it rendered them without wrappers, so the streaming
+tail painted straight into the 25,000 px container. Wrapping plain-list items
+in paint hosts took that stage from 307 MiB / 28 accumulated tiles to
+155 MiB / 4 root tiles when run alone.
+
+What remains is bounded by content rather than by scroll speed: a 5,000-line
+code block or a very long answer is a single element taller than the tiling
+threshold, so its tiles accumulate up to its own area while it is traversed
+(long code: 459 MiB graphics resident in the full sequence, 245 MiB
+footprint). Splitting such elements into smaller hosts would need changes to
+code-block markup. Resting footprint after eight idle seconds is 123–166 MiB
+in every mixed-work and expanded configuration.
 
 The footprint peak is a noisy measure of tile memory because the kernel stops
 counting tiles once WebKit marks them volatile; identical control runs ranged
