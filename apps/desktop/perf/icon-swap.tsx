@@ -78,15 +78,18 @@ function configureReducedMotionRules(enabled: boolean) {
       if (rule instanceof CSSMediaRule && (condition.includes("(prefers-reduced-motion:reduce)") || condition.includes("(prefers-reduced-motion)"))) {
         changed.push({ rule, media: rule.media.mediaText })
         rule.media.mediaText = enabled ? "all" : "not all"
-      } else if ("cssRules" in rule) visit((rule as CSSGroupingRule).cssRules)
+      } else if (rule instanceof CSSImportRule && rule.styleSheet) visit(rule.styleSheet.cssRules)
+      else if ("cssRules" in rule) visit((rule as CSSGroupingRule).cssRules)
     }
   }
   for (const sheet of document.styleSheets) visit(sheet.cssRules)
-  check(changed.length > 0, "No reduced-motion rules found")
+  check(changed.length > 0, `No reduced-motion rules found: ${JSON.stringify(Array.from(document.styleSheets, (sheet) => ({ href: sheet.href, rules: Array.from(sheet.cssRules, (rule) => ({ type: rule.constructor.name, css: rule.cssText.slice(0, 180) })) })))}`)
   return () => { for (const { rule, media } of changed) rule.media.mediaText = media }
 }
 
 async function run() {
+  if (document.readyState !== "complete") await new Promise<void>((resolve) => window.addEventListener("load", () => resolve(), { once: true }))
+  await document.fonts.ready
   document.documentElement.classList.add("dark")
   document.documentElement.dataset.windowMaterial = "opaque"
   document.documentElement.style.colorScheme = "dark"
