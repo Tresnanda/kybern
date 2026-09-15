@@ -33,7 +33,7 @@ cost. Cache counts remain separate from input plus output counts.
 - Checks cover screen semantics, retained/inert workspace DOM, focus entry and
   restoration, search, theme changes, settings saves, agents, interrupted section
   and screen transitions, out-of-order usage responses, retry, empty data,
-  date filters, menu Escape and screen Escape. All 25 checks pass, including
+  date filters, menu Escape and screen Escape. All 26 checks pass, including
   category grouping and the new notifications/background destinations.
 - Native profile checks passed, including save, inheritance, cancellation and
   slow-motion reversal. The unchanged 1,000-thread / 20-project work-shell
@@ -52,3 +52,9 @@ cost. Cache counts remain separate from input plus output counts.
 Preview files are in `artifacts/settings-redesign/` and are excluded from Git.
 The installed app, normal daemon and user data were not replaced. This change
 requires a frontend rebuild; no daemon/protocol changes or new dependencies.
+
+## Sidebar alignment correction
+The inline icon wrapper introduced font descender space and lifted icons 2.59px
+above their label centers. A flex icon slot removes that baseline dependency.
+The native fixture measures all eight rows: maximum center offset is now 0px
+at normal text size. A light-mode screenshot was also visually inspected.

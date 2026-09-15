@@ -52,6 +52,15 @@ async function run() {
   check('workspace preserved and inert', document.querySelector('.settings-workspace') === workspace && workspace?.hasAttribute('inert'))
   if (__UPDATE_REDUCED_MOTION__) check('reduced motion has no section animation', getComputedStyle(document.querySelector('.settings-section-content')!).animationName === 'none')
   check('heading focused', document.activeElement === document.querySelector('.settings-page-heading h1'))
+  const navRows = Array.from(document.querySelectorAll<HTMLElement>('.settings-nav-item'))
+  if (window.innerWidth > 580) {
+    const offsets = navRows.map(row => {
+      const icon = row.querySelector('.settings-nav-icon')!.firstElementChild!.getBoundingClientRect()
+      const label = row.lastElementChild!.getBoundingClientRect()
+      return Math.abs(icon.top + icon.height / 2 - label.top - label.height / 2)
+    })
+    check(`sidebar icons share label centers (max ${Math.max(...offsets).toFixed(2)}px)`, offsets.every(offset => offset < 1))
+  }
   if (__COLLAB_VIEW__ === 'general') return report({ pass: true, checks })
   const input = document.querySelector<HTMLInputElement>('[aria-label="Search settings"]')!
   write(input, 'glass'); await sleep(100)
