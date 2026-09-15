@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.1
+
+<!-- kybern-release-title: Lighter, steadier conversations -->
+<!-- kybern-release-summary: Coordinators research before they act and can be deleted, helper results arrive once, and long chats use far less memory. -->
+
+- Project coordinators research the project before implementing. The first send keeps your brief, delegates research, and asks for a reviewed overview before accepting edit or integration assignments; setup progress and your corrections survive restarts.
+- Delete a coordinator once its work is inactive. Deletion archives it, keeps worker history, files, and knowledge, and frees the project to start a fresh coordinator.
+- Helper results are delivered once. Reading a collaboration message now acknowledges it, so an agent no longer receives the same result again as a queued follow-up. This applies to Codex, Claude Code, OpenCode, Pi, OMP, Cursor, and coordinators.
+- Spawned conversations collapse under their parent on desktop, phone, and iPad. Queued updates and delivered results show the sender and formatted content on demand, keeping routing details out of the reading flow.
+- Long conversations, dense tool activity, and large code blocks use far less memory while scrolling. The desktop stress workload's peak dropped from about 875 MiB to about 390 MiB, streaming allocates less per token, and an idle conversation settles near 130 MiB.
+- The transcript's bottom fade no longer masks the whole scroller on opaque windows, and icons only promote while they animate.
+
 ## 0.4.0
 
 <!-- kybern-release-title: Bring your agents together -->
