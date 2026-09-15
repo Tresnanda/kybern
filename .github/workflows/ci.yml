@@ -73,6 +73,8 @@ jobs:
       - name: test
         working-directory: apps/desktop
         run: pnpm test
+      - name: Release gate regression tests
+        run: node --test scripts/check-release-ci.test.mjs
       - name: lint
         working-directory: apps/desktop
         run: pnpm lint

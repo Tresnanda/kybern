@@ -41,13 +41,19 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
 jobs:
+  release-ci:
+    uses: ./.github/workflows/release-ci.yml
+
   bundle:
+    needs: release-ci
+    if: ${{ !cancelled() && (needs.release-ci.result == 'success' || github.ref_type != 'tag') }}
     name: bundle (${{ matrix.target }})
     strategy:
       fail-fast: false
@@ -169,10 +175,9 @@ jobs:
 
   manifest:
     name: updater manifest
-    needs: bundle
-    # A platform that failed to build is simply absent from latest.json; the
-    # other platforms still receive the update. The failed job stays red.
-    if: ${{ always() && needs.bundle.result != 'cancelled' && (github.event_name != 'push' || github.ref_type == 'tag') }}
+    needs: [bundle, release-ci]
+    # Publish only when exact-commit CI and every platform bundle succeeded.
+    if: ${{ always() && (needs.release-ci.result == 'success' || github.ref_type != 'tag') && needs.bundle.result == 'success' && (github.event_name != 'push' || github.ref_type == 'tag') }}
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
