@@ -1002,7 +1002,7 @@ exit 1
         let listed = runtime.perform(&settings, Uuid::nil(), &parse_args(json!({ "action": "list_windows" })).unwrap()).await.unwrap();
         assert!(listed["cua"].get("windows").and_then(Value::as_array).is_some_and(|windows| !windows.is_empty()), "{listed}");
         let captured = runtime
-            .perform(&settings, Uuid::nil(), &parse_args(json!({ "action": "capture", "app": "Xfce4-terminal" })).unwrap())
+            .perform(&settings, Uuid::nil(), &parse_args(json!({ "action": "capture", "app": "Mousepad" })).unwrap())
             .await
             .expect("window-only capture via Kybern computer_use");
         assert_eq!(captured["ok"], true, "{captured}");
