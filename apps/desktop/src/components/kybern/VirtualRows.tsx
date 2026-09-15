@@ -198,6 +198,14 @@ function VirtualizedRows<T>({
   useLayoutEffect(() => {
     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
       const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
+      const scroll = instance.scrollElement
+      // Following the live edge: keep the end pinned as late Markdown or icon
+      // layout grows a visible tail row. Without this, follow stays true while
+      // the measured content walks away from the viewport.
+      if (followEnd && delta > 0 && scroll) {
+        const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+        if (distance <= 120) return true
+      }
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
@@ -206,20 +214,33 @@ function VirtualizedRows<T>({
       // DOM bottom (before this delta) so a visible row is not mistaken for an
       // offscreen row, causing a spurious correction followed by a snap back.
       const element = instance.elementsCache.get(item.key)
-      const scroll = instance.scrollElement
       return element?.isConnected && scroll
         ? element.getBoundingClientRect().bottom - delta <= scroll.getBoundingClientRect().top
         : item.end <= offset
     }
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
-  }, [virtualizer])
+  }, [followEnd, virtualizer])
+  const viewportReady = useRef(false)
+  useLayoutEffect(() => {
+    const scroll = viewport?.current
+    const ready = !!scroll && scroll.clientHeight > 0
+    if (ready && !viewportReady.current && followEnd) {
+      virtualizer.scrollToEnd({ behavior: "auto" })
+    }
+    viewportReady.current = ready
+  }, [followEnd, viewport, virtualizer, items.length])
   useImperativeHandle(controllerRef, () => virtualizer, [virtualizer])
   const setContainer = useCallback((element: HTMLDivElement | null) => {
     container.current = element
   }, [])
 
   if (!viewport) return <PlainRows items={items} getKey={getKey} estimateSize={estimateSize}>{children}</PlainRows>
-  const rows = virtualizer.getVirtualItems()
+  // A zero-height scrollport (ref not committed, or percentage height not yet
+  // resolved) must not emit the estimate spacer. That spacer is the full
+  // virtual height; as a flex min-content it expands the viewport, TanStack
+  // then mounts every turn, and follow-scroll aims at a stale end.
+  const viewportHeight = viewport.current?.clientHeight ?? 0
+  const rows = viewportHeight > 0 ? virtualizer.getVirtualItems() : []
   return (
     <div ref={setContainer} className={className} data-virtual-list={owner} style={{ position: "relative", width: "100%", display: "flow-root" }}>
       {/* Mounted rows share normal flow. Absolute positions based on earlier
@@ -251,7 +272,7 @@ function VirtualizedRows<T>({
           </div>
         )
       })}
-      <div aria-hidden style={{ height: Math.max(0, virtualizer.getTotalSize() - ((rows.at(-1)?.end ?? margin) - margin)), overflowAnchor: "none" }} />
+      <div aria-hidden style={{ height: viewportHeight > 0 ? Math.max(0, virtualizer.getTotalSize() - ((rows.at(-1)?.end ?? margin) - margin)) : 0, overflowAnchor: "none" }} />
     </div>
   )
 }
