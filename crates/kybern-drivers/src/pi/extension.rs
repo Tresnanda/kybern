@@ -27,7 +27,7 @@ pub const APP_TOOL_TITLE_PREFIX: &str = "kybern_app_tool_request:";
 pub const ALLOW_ONCE: &str = "Allow once";
 pub const ALLOW_ALWAYS: &str = "Always allow this exact call";
 pub const DENY: &str = "Deny";
-pub const APP_TOOL_NAMES: [&str; 18] = [
+pub const APP_TOOL_NAMES: [&str; 19] = [
     "kybern_thread_context",
     "kybern_workspace_diff",
     "kybern_read_file",
@@ -46,6 +46,7 @@ pub const APP_TOOL_NAMES: [&str; 18] = [
     "kybern_collaboration_cancel",
     "kybern_collaboration_context_read",
     "kybern_collaboration_context_put",
+    "computer_use",
 ];
 pub const DEFAULT_APP_TOOL_NAMES: [&str; 7] = [
     "kybern_thread_context",

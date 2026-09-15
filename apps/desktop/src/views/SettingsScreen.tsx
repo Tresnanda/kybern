@@ -262,6 +262,7 @@ function General() {
           <Switch aria-label="Generate thread titles" checked={settings.generate_titles} onCheckedChange={(v) => update({ generate_titles: v })} />
         </Row>
         <AskBeforeCloseRow />
+        <ComputerUseRow />
       </Section>
     </>
   )
@@ -325,6 +326,42 @@ function AskBeforeCloseRow() {
   return (
     <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them.">
       <Switch aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={setAskBeforeClose} />
+    </Row>
+  )
+}
+
+function ComputerUseRow() {
+  const { settings, update } = useSettings()
+  const [status, setStatus] = useState<string>()
+  useEffect(() => {
+    let alive = true
+    rpc()
+      .call("computer_use.status", {})
+      .then((result) => {
+        if (alive) setStatus(result.message)
+      })
+      .catch(() => {
+        if (alive) setStatus("This daemon does not report computer use yet. Update kybernd.")
+      })
+    return () => {
+      alive = false
+    }
+  }, [settings?.computer_use?.enabled, settings?.computer_use?.binary])
+  if (!settings) return null
+  const enabled = settings.computer_use?.enabled ?? true
+  return (
+    <Row
+      title="Computer use"
+      description="Claude, OpenCode, Pi, and Cursor can drive this desktop through Cua Driver. Codex keeps its own Computer Use plugin."
+      status={status}
+    >
+      <Switch
+        aria-label="Computer use"
+        checked={enabled}
+        onCheckedChange={(value) =>
+          update({ computer_use: { enabled: value, binary: settings.computer_use?.binary ?? null } })
+        }
+      />
     </Row>
   )
 }

@@ -45,6 +45,35 @@ to it does not copy your laptop's projects or credentials.
 For Pi's model and thinking controls, live steering, permission modes, and
 thread-scoped app tools, see the [Pi integration guide](crates/kybern-drivers/PI.md).
 
+### Computer use
+
+Kybern can drive the host desktop for Claude Code, OpenCode, Pi, Oh My Pi, and
+Cursor through [Cua Driver](https://cua.ai/cua-driver). This is one compound
+`computer_use` tool on Kybern's existing native tool bridge, not a sixth coding
+agent. Codex keeps its bundled Computer Use plugin (`@Computer Use` / `cua_repl`);
+Kybern does not replace that path with Cua.
+
+Install Cua Driver on the machine that runs `kybernd`:
+
+```sh
+curl -fsSL https://cua.ai/driver/install.sh | bash
+kybern computer-use
+```
+
+On macOS grant Accessibility and Screen Recording to **CuaDriver.app** and keep
+the app running. On Linux install `libxi6` and `at-spi2-core`, then run
+`cua-driver serve` in a graphical session. On Windows use an interactive desktop,
+not Session 0 or SSH. If `cua-driver` is missing, Kybern does not attach the
+tool (so it does not spend tokens) and `kybern computer-use` says what to do
+next.
+
+Supervised and Accept edits ask before clicks, typing, keys, scrolls, and drags.
+Captures and window lists do not. Auto and Full access do not show Kybern GUI
+approval cards; they still use Cua's standard mode, not an unrestricted daemon.
+
+Disable the tool in Settings or `settings.json` (`computer_use.enabled`) if you
+do not want it on a headless host.
+
 ### Desktop app
 
 Every desktop package bundles `kybernd`; you do not need to install the daemon
@@ -358,6 +387,7 @@ the generated workflow after changing it.
 cargo build
 ./target/debug/kybernd                       # data in ~/.kybern, port 4173
 ./target/debug/kybern providers
+./target/debug/kybern computer-use
 ./target/debug/kybern new -p . "explain this repo in three lines"
 ./target/debug/kybern threads
 ./target/debug/kybern send <thread-id> "now write the README"

@@ -105,11 +105,14 @@ export function toolSurface(call: ToolCall, output: JsonValue | null = null): To
   const kind = fromMeta?.kind ?? surfaceFromName(call.name)
   if (!kind) return null
   const app = fromMeta?.app ?? {}
-  const code = string(record(call.input).code)
+  const input = record(call.input)
+  const code = string(input.code)
   const appId =
     string(app.appId) ||
     string(app.bundleId) ||
     (/getApp\(\s*["']([^"']+)["']\s*\)/.exec(code)?.[1] ?? "") ||
+    string(input.app) ||
+    string(input.app_id) ||
     null
   const name = string(app.displayName) || (appId ? appDisplayName(appId) : "")
   return { kind, appId, app: name || null, screenshots: screenshotsFrom(output) }

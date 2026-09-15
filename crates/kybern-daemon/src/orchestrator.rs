@@ -1981,6 +1981,86 @@ impl Orchestrator {
         }
     }
 
+    async fn execute_computer_use(
+        &self,
+        thread: &Thread,
+        live: &LiveSession,
+        turn_id: TurnId,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if thread.provider.kind == ProviderKind::Codex {
+            return Err(anyhow!(
+                "Codex uses its bundled Computer Use plugin. Mention @Computer Use instead of the Kybern computer_use tool."
+            ));
+        }
+        let settings = self.inner.settings.get();
+        if !settings.computer_use.enabled {
+            return Err(anyhow!("Computer use is disabled in settings. Enable it, or mention @Computer Use in a Codex thread."));
+        }
+        let args = crate::computer_use::parse_args(arguments)?;
+        if crate::computer_use::needs_host_approval(thread.permission_mode, args.action) {
+            let key = crate::computer_use::grant_key(&args);
+            if !self.inner.computer_use.has_grant(live.session_instance_id, &key) {
+                let decision = self.request_computer_use_approval(thread.id, live, turn_id, &args).await?;
+                match decision {
+                    ApprovalDecision::Deny { reason } => {
+                        return Err(anyhow!(
+                            "{}",
+                            reason.unwrap_or_else(|| { "Desktop input was denied. Change the request or permission mode.".into() })
+                        ));
+                    }
+                    ApprovalDecision::AllowAlways => self.inner.computer_use.remember_grant(live.session_instance_id, key),
+                    ApprovalDecision::AllowOnce | ApprovalDecision::Submit { .. } => {}
+                }
+            }
+        }
+        let value = self.inner.computer_use.perform(&settings, thread.id, &args).await?;
+        if let Some(source) = crate::computer_use::screenshot_data_url(&value) {
+            self.emit(
+                thread.id,
+                Some(turn_id),
+                EventPayload::ImageReceived { id: Uuid::now_v7().to_string(), origin: EventOrigin::Root, source },
+            )?;
+        }
+        Ok(value)
+    }
+
+    async fn request_computer_use_approval(
+        &self,
+        thread_id: ThreadId,
+        live: &LiveSession,
+        turn_id: TurnId,
+        args: &crate::computer_use::ComputerUseArgs,
+    ) -> Result<ApprovalDecision> {
+        let approval = ApprovalRequest {
+            id: Uuid::now_v7(),
+            thread_id,
+            turn_id,
+            tool_call_id: None,
+            tool_name: crate::computer_use::TOOL_NAME.into(),
+            input: serde_json::json!({
+                "action": args.action.as_str(),
+                "app": args.app,
+                "window_id": args.window_id,
+            }),
+            summary: crate::computer_use::approval_summary(args),
+            suggestions: Vec::new(),
+            created_at: Utc::now(),
+        };
+        let rx = self.inner.computer_use.register_approval(live.session_instance_id, approval.id);
+        self.inner.store.approval_insert(&approval)?;
+        live.pending.lock().await.insert(approval.id, format!("{}{}", crate::computer_use::HOST_REQUEST_PREFIX, approval.id));
+        live.touch();
+        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalRequested { approval })?;
+        if let Some(mut thread) = self.inner.store.thread_get(thread_id)?
+            && thread.status != ThreadStatus::AwaitingApproval
+        {
+            thread.status = ThreadStatus::AwaitingApproval;
+            self.update_thread(thread)?;
+        }
+        rx.await.map_err(|_| anyhow!("Computer use approval was cancelled. Send the turn again."))
+    }
+
     pub fn execute_native_app_tool_call<'a>(
         &'a self,
         thread_id: ThreadId,
@@ -2232,6 +2312,9 @@ impl Orchestrator {
                     return Err(anyhow!("native tool caller turn ended before its result was delivered"));
                 }
                 return Ok(value);
+            }
+            if name == crate::computer_use::TOOL_NAME {
+                return self.execute_computer_use(&thread, &live, turn_id, arguments).await;
             }
             let mut value = self.inner.app_tools.execute(thread_id, name, arguments).await?;
             if name == "kybern_thread_context" {
@@ -2498,6 +2581,7 @@ struct Inner {
     settings: SettingsStore,
     provider_catalogs: Arc<crate::state::ProviderCatalogCache>,
     app_tools: crate::app_tools::AppTools,
+    computer_use: crate::computer_use::ComputerUseRuntime,
     native_tools: Option<crate::native_tools_mcp::NativeToolsGateway>,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
     releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
@@ -2677,6 +2761,7 @@ impl Orchestrator {
                 settings,
                 provider_catalogs: Arc::new(crate::state::ProviderCatalogCache::default()),
                 app_tools,
+                computer_use: crate::computer_use::ComputerUseRuntime::new(),
                 native_tools: None,
                 sessions: Mutex::new(HashMap::new()),
                 releasing: Mutex::new(HashMap::new()),
@@ -2703,7 +2788,12 @@ impl Orchestrator {
         self
     }
 
+    pub async fn computer_use_status(&self) -> kybern_protocol::ComputerUseStatus {
+        self.inner.computer_use.status(&self.inner.settings.get()).await
+    }
+
     fn revoke_native_session(&self, live: &LiveSession) {
+        self.inner.computer_use.forget_session(live.session_instance_id);
         if let Some(gateway) = &self.inner.native_tools {
             gateway.revoke(live.session_instance_id);
         }
@@ -4057,6 +4147,25 @@ impl Orchestrator {
         approval.validate_decision(&decision).map_err(|message| anyhow!(message))?;
         let live =
             self.inner.sessions.lock().await.get(&approval.thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
+        if let Some(tx) = self.inner.computer_use.take_approval(approval_id) {
+            live.pending.lock().await.remove(&approval_id);
+            live.touch();
+            self.inner.store.approval_resolve(approval_id, &decision)?;
+            self.emit(
+                approval.thread_id,
+                Some(approval.turn_id),
+                EventPayload::ApprovalResolved { approval_id, decision: decision.clone() },
+            )?;
+            if live.pending.lock().await.is_empty()
+                && let Some(mut t) = self.inner.store.thread_get(approval.thread_id)?
+                && t.status == ThreadStatus::AwaitingApproval
+            {
+                t.status = ThreadStatus::Running;
+                self.update_thread(t)?;
+            }
+            let _ = tx.send(decision);
+            return Ok(());
+        }
         let mut pending = live.pending.lock().await;
         let request_id = pending.get(&approval_id).cloned().ok_or_else(|| anyhow!("approval no longer pending"))?;
         live.touch();
@@ -4085,7 +4194,11 @@ impl Orchestrator {
             }
             let decision = ApprovalDecision::Deny { reason: Some("turn ended".into()) };
             if let Some(provider_id) = pending.remove(&id) {
-                let _ = live.session.respond_permission(&provider_id, &decision).await;
+                if let Some(tx) = self.inner.computer_use.take_approval(id) {
+                    let _ = tx.send(decision.clone());
+                } else if !provider_id.starts_with(crate::computer_use::HOST_REQUEST_PREFIX) {
+                    let _ = live.session.respond_permission(&provider_id, &decision).await;
+                }
             }
             self.inner.store.approval_resolve(id, &decision)?;
             self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision })?;
@@ -4366,8 +4479,9 @@ impl Orchestrator {
             .get(thread.provider.kind)
             .ok_or_else(|| anyhow!("provider {} is not available in this build", thread.provider.kind))?;
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found"))?;
-        let mut provider_settings =
-            crate::settings::provider_settings(&self.inner.settings.get(), thread.provider.kind, Some(&project.path));
+        let settings = self.inner.settings.get();
+        let mut provider_settings = crate::settings::provider_settings(&settings, thread.provider.kind, Some(&project.path));
+        let native_tools = crate::computer_use::native_tools_for(thread.provider.kind, &settings);
         let mut profile_binding = None;
         if thread.provider.kind == ProviderKind::Omp {
             // A resumed chat must keep the profile that owns its native session,
@@ -4388,13 +4502,7 @@ impl Orchestrator {
             .native_tools
             .as_ref()
             .map(|gateway| {
-                gateway.register_coordinator(
-                    thread.id,
-                    session_instance_id,
-                    crate::app_tools::native_tool_definitions(),
-                    restrictions,
-                    coordinator_instructions,
-                )
+                gateway.register_coordinator(thread.id, session_instance_id, native_tools, restrictions, coordinator_instructions)
             })
             .transpose()?;
         let config = SessionConfig {
@@ -7683,5 +7791,104 @@ for line in sys.stdin:
             assert_eq!(std::fs::canonicalize(value["cwd"].as_str().unwrap()).unwrap(), std::fs::canonicalize(&thread.cwd).unwrap());
             assert_eq!(value["args"].as_array().unwrap().iter().any(|arg| arg == "--resume"), index == 1);
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn computer_use_asks_before_supervised_clicks_and_leaves_codex_on_its_plugin() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        let stub = fixture.root.join("cua-driver");
+        std::fs::write(
+            &stub,
+            r#"#!/bin/sh
+if [ "$1" = "call" ]; then echo '{"content":[{"type":"text","text":"{\"ok\":true}"}]}'; exit 0; fi
+if [ "$1" = "--version" ]; then echo "cua-driver 0.0.0-test"; exit 0; fi
+if [ "$1" = "doctor" ]; then echo '{"ok":true}'; exit 0; fi
+exit 1
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut settings = fixture.orchestrator.inner.settings.get();
+        settings.computer_use.binary = Some(stub.display().to_string());
+        fixture.orchestrator.inner.settings.set(settings.clone()).unwrap();
+
+        let names: Vec<_> =
+            crate::computer_use::native_tools_for(ProviderKind::Codex, &settings).into_iter().map(|tool| tool.name).collect();
+        assert!(!names.iter().any(|name| name == crate::computer_use::TOOL_NAME));
+        let names: Vec<_> =
+            crate::computer_use::native_tools_for(ProviderKind::ClaudeCode, &settings).into_iter().map(|tool| tool.name).collect();
+        assert!(names.iter().any(|name| name == crate::computer_use::TOOL_NAME));
+
+        let mut codex = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Codex);
+        codex.permission_mode = PermissionMode::FullAccess;
+        fixture.store.thread_upsert(&codex).unwrap();
+        let (live, _) = fixture.active_app_tool_session(&codex).await;
+        let error = fixture
+            .orchestrator
+            .execute_native_app_tool_call(
+                codex.id,
+                live.session_instance_id,
+                "codex-cu",
+                crate::computer_use::TOOL_NAME,
+                json!({ "action": "click", "x": 1, "y": 1 }),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("bundled Computer Use plugin"));
+
+        let mut auto = fixture.thread(ThreadStatus::Idle);
+        auto.permission_mode = PermissionMode::Auto;
+        fixture.store.thread_upsert(&auto).unwrap();
+        let (live, _) = fixture.active_app_tool_session(&auto).await;
+        let clicked = fixture
+            .orchestrator
+            .execute_native_app_tool_call(
+                auto.id,
+                live.session_instance_id,
+                "auto-click",
+                crate::computer_use::TOOL_NAME,
+                json!({ "action": "click", "x": 8, "y": 12, "app": "Finder" }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(clicked["ok"], true);
+
+        let supervised = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.active_app_tool_session(&supervised).await;
+        let thread_id = supervised.id;
+        let session_id = live.session_instance_id;
+        let pending = fixture.orchestrator.clone();
+        let click = tokio::spawn(async move {
+            pending
+                .execute_native_app_tool_call(
+                    thread_id,
+                    session_id,
+                    "supervised-click",
+                    crate::computer_use::TOOL_NAME,
+                    json!({ "action": "click", "x": 4, "y": 5 }),
+                )
+                .await
+        });
+        let approval = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(approval) = fixture.store.approvals_pending(Some(supervised.id)).unwrap().into_iter().next() {
+                    break approval;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("supervised computer use must ask before clicking");
+        assert_eq!(approval.tool_name, crate::computer_use::TOOL_NAME);
+        assert!(approval.summary.contains("Allow desktop click"));
+        fixture
+            .orchestrator
+            .respond_approval(approval.id, ApprovalDecision::Deny { reason: Some("not this window".into()) })
+            .await
+            .unwrap();
+        let error = click.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("not this window"));
     }
 }

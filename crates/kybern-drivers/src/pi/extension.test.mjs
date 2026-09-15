@@ -46,6 +46,17 @@ function context(select) {
   };
 }
 
+test("computer_use is accepted from the configured native bridge", () => {
+  const harness = fakePi("supervised", [
+    {
+      name: "computer_use",
+      description: "Drive the desktop.",
+      parameters: { type: "object", properties: { action: { type: "string" } }, additionalProperties: false },
+    },
+  ]);
+  assert.ok(harness.tools.has("computer_use"));
+});
+
 test("registers the handshake, mode control, and thread-scoped tools", () => {
   const harness = fakePi();
   assert.equal(harness.commands.get("kybern-extension").description, "Kybern extension protocol 1");

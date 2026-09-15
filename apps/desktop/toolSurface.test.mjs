@@ -19,6 +19,9 @@ const done = (content, app) => ({ result: { content, structuredContent: null, _m
 test("a running screen-control call is recognised from its name and names the app from its code", () => {
   const surface = toolSurface(cua('var app = await cua.getApp("com.apple.finder"); await app.getScreenshot();'))
   assert.deepEqual(surface, { kind: "computer", appId: "com.apple.finder", app: "Finder", screenshots: [] })
+  const kybern = toolSurface({ id: "t", name: "computer_use", input: { action: "click", app: "Finder" } })
+  assert.equal(kybern?.kind, "computer")
+  assert.equal(kybern?.app, "Finder")
   assert.equal(toolSurface({ id: "t", name: "shell", input: { command: "ls" } }), null)
   assert.equal(toolSurface({ id: "t", name: "mcp:github/search", input: {} }), null)
 })
