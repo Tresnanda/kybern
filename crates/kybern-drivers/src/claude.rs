@@ -483,10 +483,10 @@ fn parse_reset_local(text: &str) -> Option<i64> {
     let now = Local::now();
     for year in [now.year(), now.year() + 1] {
         let naive = NaiveDate::from_ymd_opt(year, month, day)?.and_hms_opt(hour, minute, 0)?;
-        if let chrono::LocalResult::Single(dt) = Local.from_local_datetime(&naive) {
-            if dt.timestamp() + 86_400 >= now.timestamp() {
-                return Some(dt.timestamp());
-            }
+        if let chrono::LocalResult::Single(dt) = Local.from_local_datetime(&naive)
+            && dt.timestamp() + 86_400 >= now.timestamp()
+        {
+            return Some(dt.timestamp());
         }
     }
     None
