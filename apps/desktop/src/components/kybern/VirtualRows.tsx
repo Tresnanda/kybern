@@ -181,26 +181,25 @@ function VirtualizedRows<T>({
       const max = el ? Math.max(0, el.scrollHeight - el.clientHeight) : 0
       const virtualEnd = Math.max(0, instance.getTotalSize() - (el?.clientHeight ?? 0))
       const aimingEnd = virtualEnd - offset <= 120
+      const far = !!el && Math.abs(el.scrollTop - offset) > 40
       if (options.adjustments === undefined) {
         // Last-item / follow must snap to the live DOM edge, but only when the
         // virtualizer is already aiming at its own end. Redirecting every
-        // explicit offset while following sent middle rail jumps to a stale max
-        // and inflated the mount-time spacer (514 history messages).
+        // explicit offset while following sent middle rail jumps to a stale max.
         if (followEndRef.current && aimingEnd && el) {
           railTargetRef.current = false
           elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
           return
         }
-        // Leaving the live edge: drop follow immediately so size-change
-        // compensation cannot reuse the last-item DOM-max pin. Keep the
-        // library offset for far jumps so first-measure adjustments cannot
-        // walk onto later turns. Set this even if follow is still on — a
-        // scheduled follow update must not beat the rail jump.
-        if (aimingEnd) {
-          railTargetRef.current = false
-        } else {
+        // Far non-end jumps (first/middle rail) leave follow and keep the
+        // library offset. Mount-time offset 0 is not a jump — treating every
+        // non-end explicit as leaving the live edge unmounted follow and left
+        // scaling at 514 history messages.
+        if (!aimingEnd && far) {
           followEndRef.current = false
-          if (el && Math.abs(el.scrollTop - offset) > 40) railTargetRef.current = true
+          railTargetRef.current = true
+        } else if (aimingEnd) {
+          railTargetRef.current = false
         }
         elementScroll(offset, options, instance)
         return
