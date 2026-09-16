@@ -174,7 +174,17 @@ function VirtualizedRows<T>({
     // anchoring keeps flow stable without forcing a React commit per resize.
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
-      const current = instance.scrollElement?.scrollTop
+      const el = instance.scrollElement
+      // The virtualizer's end is estimate-based. At 480px, wrapping and icon
+      // overflow grow the DOM ~77px/turn after the first jump, so that end
+      // sits ~70k short of scrollHeight. While following, pin to the live
+      // DOM edge the fixture (and the reader) actually see.
+      if (followEnd && providedViewport && el) {
+        const max = Math.max(0, el.scrollHeight - el.clientHeight)
+        elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
+        return
+      }
+      const current = el?.scrollTop
       if (options.adjustments !== undefined && current !== undefined) {
         // A wheel/trackpad move can precede the scroll event that updates the
         // library's cursor. Apply height compensation to the actual position,
@@ -199,13 +209,9 @@ function VirtualizedRows<T>({
     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
       const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
       const scroll = instance.scrollElement
-      // Following the live edge: keep the end pinned as late Markdown or icon
-      // layout grows a visible tail row. Without this, follow stays true while
-      // the measured content walks away from the viewport.
-      if (followEnd && delta > 0 && scroll) {
-        const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
-        if (distance <= 120) return true
-      }
+      // Following: any growth (narrow wrap, late Markdown, icon overflow)
+      // must move the reader with the DOM end, not the estimate cache.
+      if (followEnd && providedViewport && delta > 0) return true
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
@@ -219,16 +225,28 @@ function VirtualizedRows<T>({
         : item.end <= offset
     }
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
-  }, [followEnd, virtualizer])
-  const viewportReady = useRef(false)
+  }, [followEnd, providedViewport, virtualizer])
+  const liveEdge = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
+    if (!followEnd || !providedViewport) return
     const scroll = viewport?.current
-    const ready = !!scroll && scroll.clientHeight > 0
-    if (ready && !viewportReady.current && followEnd) {
-      virtualizer.scrollToEnd({ behavior: "auto" })
+    const sentinel = liveEdge.current
+    if (!scroll || !sentinel) return
+    const pin = () => {
+      const max = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
+      if (max - scroll.scrollTop > 1) scroll.scrollTop = max
     }
-    viewportReady.current = ready
-  }, [followEnd, viewport, virtualizer, items.length])
+    pin()
+    // Overflow and late wrap can grow scrollHeight without changing the
+    // viewport box, so a ResizeObserver on the scroller never fires. The
+    // sentinel sits after the last spacer; if it leaves the viewport while
+    // we are following, jump to the live DOM edge.
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => !entry.isIntersecting)) pin()
+    }, { root: scroll, threshold: 1 })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [followEnd, providedViewport, viewport, items.length])
   useImperativeHandle(controllerRef, () => virtualizer, [virtualizer])
   const setContainer = useCallback((element: HTMLDivElement | null) => {
     container.current = element
@@ -273,6 +291,7 @@ function VirtualizedRows<T>({
         )
       })}
       <div aria-hidden style={{ height: viewportHeight > 0 ? Math.max(0, virtualizer.getTotalSize() - ((rows.at(-1)?.end ?? margin) - margin)) : 0, overflowAnchor: "none" }} />
+      <div aria-hidden ref={liveEdge} data-live-edge="" style={{ height: 1, overflowAnchor: "none" }} />
     </div>
   )
 }

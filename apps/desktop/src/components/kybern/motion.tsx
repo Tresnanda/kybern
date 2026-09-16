@@ -154,8 +154,8 @@ export function IconSwap({ active, a, b, className }: { active: IconSwapKey; a: 
   const swapping = state.leaving !== null
   return (
     <span className={cn("t-icon-swap", className)} data-swapping={swapping ? "true" : undefined}>
-      {(state.shown === "a" || state.leaving === "a") && <span key="a" data-active={state.shown === "a"} className="inline-flex">{a}</span>}
-      {(state.shown === "b" || state.leaving === "b") && <span key="b" data-active={state.shown === "b"} className="inline-flex">{b}</span>}
+      {(state.shown === "a" || state.leaving === "a") && <span key="a" data-active={state.shown === "a"} className="inline-flex min-h-0 min-w-0 overflow-hidden">{a}</span>}
+      {(state.shown === "b" || state.leaving === "b") && <span key="b" data-active={state.shown === "b"} className="inline-flex min-h-0 min-w-0 overflow-hidden">{b}</span>}
     </span>
   )
 }
