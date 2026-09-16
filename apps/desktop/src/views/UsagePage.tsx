@@ -93,28 +93,13 @@ export function UsagePage() {
     }).catch(() => { /* older daemon lacks the method: keep the per-thread fallback */ })
     return () => { canceled = true }
   }, [environmentId, connection, revision])
-  // Merge the daemon's stored snapshot with the live per-thread values so an
-  // active thread's fresh limits win immediately (freshest window: later reset
-  // time, then higher reported usage).
-  const accountLimits = useMemo(() => {
-    const byProvider = new Map<ProviderKind, Map<string, ReportedLimit>>()
-    const sources = [providerLimits, (storedLimits ?? []).map((entry) => ({ kind: entry.provider, limits: entry.limits }))]
-    for (const list of sources) for (const { kind, limits } of list) {
-      const windows = byProvider.get(kind) ?? new Map<string, ReportedLimit>()
-      for (const limit of limits) {
-        const windowKey = String(limit.window_minutes ?? limit.name)
-        const prev = windows.get(windowKey)
-        const fresher = !prev
-          || (limit.resets_at ?? 0) > (prev.resets_at ?? 0)
-          || ((limit.resets_at ?? 0) === (prev.resets_at ?? 0) && limit.used_percent >= prev.used_percent)
-        if (fresher) windows.set(windowKey, limit)
-      }
-      byProvider.set(kind, windows)
-    }
-    return [...byProvider.entries()]
-      .map(([kind, windows]) => ({ kind, limits: [...windows.values()].sort((a, b) => (a.window_minutes ?? Number.MAX_SAFE_INTEGER) - (b.window_minutes ?? Number.MAX_SAFE_INTEGER)) }))
-      .filter((entry) => entry.limits.length > 0)
-  }, [providerLimits, storedLimits])
+  // The daemon's usage.limits is authoritative (store's last-reported values plus
+  // a live Codex read); use the live per-thread values only until it loads or if
+  // an older daemon lacks the method.
+  const accountLimits = (storedLimits
+    ? storedLimits.map((entry) => ({ kind: entry.provider, limits: entry.limits }))
+    : providerLimits
+  ).filter((entry) => entry.limits.length > 0)
   // Never show the previous filter's totals under the next filter's label.
   const data = result?.scope === scope ? result : null
   const error = failure?.key === key ? failure.message : null
@@ -145,7 +130,7 @@ export function UsagePage() {
           {limits.map((limit, index) => {
             const percent = reportedPercent(limit.used_percent)
             return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
-              <div className="usage-limit-heading"><b>{limitLabel(limit)}</b><span>{percent === null ? "Unavailable" : `${Math.round(percent)}% used`}</span></div>
+              <div className="usage-limit-heading"><b>{limitLabel(limit, kind)}</b><span>{percent === null ? "Unavailable" : `${Math.round(percent)}% used`}</span></div>
               <div className="usage-limit-meter"><span style={{ transform: `scaleX(${(percent ?? 0) / 100})` }} /></div>
               <p className="usage-limit-reset">{resetLabel(limit.resets_at)}</p>
             </div>

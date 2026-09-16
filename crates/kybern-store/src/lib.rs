@@ -1901,9 +1901,9 @@ impl Store {
     }
 
     /// Latest reported plan limits per provider, folded from stored
-    /// `provider_usage_updated` events. The freshest window wins (later reset
-    /// time, then higher reported usage), so it reflects the most recent turn or
-    /// session a provider ran without needing a live one.
+    /// `provider_usage_updated` events. Last report wins: the most recent event
+    /// (highest seq) for each window is authoritative, even if its percentage is
+    /// lower than an earlier report (a window can reset, or usage can be re-read).
     pub fn latest_provider_limits(&self) -> Result<Vec<methods::ProviderLimits>> {
         use std::collections::BTreeMap;
         self.with(|c| {
@@ -1921,19 +1921,11 @@ impl Store {
                     continue;
                 };
                 let windows = by_provider.entry(provider).or_default();
+                // Rows arrive in seq order, so a later event overwrites an earlier one.
                 for entry in limits {
                     let Ok(limit) = serde_json::from_value::<UsageLimit>(entry.clone()) else { continue };
                     let key = limit.window_minutes.map(|w| w.to_string()).unwrap_or_else(|| limit.name.clone());
-                    let fresher = match windows.get(&key) {
-                        None => true,
-                        Some(prev) => {
-                            limit.resets_at.unwrap_or(0) > prev.resets_at.unwrap_or(0)
-                                || (limit.resets_at == prev.resets_at && limit.used_percent >= prev.used_percent)
-                        }
-                    };
-                    if fresher {
-                        windows.insert(key, limit);
-                    }
+                    windows.insert(key, limit);
                 }
             }
             let providers = by_provider

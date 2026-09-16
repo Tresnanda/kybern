@@ -1,4 +1,4 @@
-import type { ProviderUsage } from "@/protocol"
+import type { ProviderKind, ProviderUsage } from "@/protocol"
 
 export function reportedPercent(value: number): number | null {
   return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : null
@@ -17,9 +17,12 @@ const LIMIT_NAME_LABELS: Record<string, string> = {
   seven_day_overage_included: "Weekly (with overage)",
 }
 
-export function limitLabel(limit: NonNullable<ProviderUsage["limits"]>[number]): string {
-  if (limit.window_minutes === 300) return "5-hour"
-  if (limit.window_minutes === 10080) return "Weekly"
+export function limitLabel(limit: NonNullable<ProviderUsage["limits"]>[number], provider?: ProviderKind): string {
+  // Match each vendor's own wording: Claude calls these "Current session" and
+  // "This week"; Codex (and the generic case) use the window durations.
+  const claude = provider === "claude-code"
+  if (limit.window_minutes === 300) return claude ? "Current session" : "5-hour"
+  if (limit.window_minutes === 10080) return claude ? "This week" : "Weekly"
   const name = limit.name?.trim()
   if (!name) return "Usage limit"
   if (LIMIT_NAME_LABELS[name]) return LIMIT_NAME_LABELS[name]

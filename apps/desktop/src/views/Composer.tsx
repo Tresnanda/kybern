@@ -985,7 +985,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 data-chat-composer-actions="right"
                 className={cn("flex items-center gap-1", surfaceMode === "split" ? "min-w-0 flex-1 justify-end" : "shrink-0")}
               >
-                {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} />}
+                {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
                   <Menu onOpenChange={(open) => open && canReloadModels && void reloadModels()}>
                     <Tooltip>
