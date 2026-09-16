@@ -60,9 +60,9 @@
 .usage-stat p { margin-top: 8px; font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
 .usage-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
 .usage-section-heading h2 { font-size: 14px; font-weight: 600; }
-.usage-segments { display: flex; position: relative; padding: 3px; border-radius: 8px; background: var(--color-background-button-secondary); }
-.usage-segments button { cursor: pointer; position: relative; z-index: 1; border-radius: 5px; padding: 5px 12px; font-size: 12px; color: var(--muted-foreground); }
-.usage-segments button[aria-pressed="true"] { color: var(--foreground); background: var(--color-background-surface); box-shadow: 0 1px 3px #00000012; }
+.usage-segments, .settings-segments { display: flex; position: relative; padding: 3px; border-radius: 8px; background: var(--color-background-button-secondary); }
+.usage-segments button, .settings-segments button { cursor: pointer; position: relative; z-index: 1; border-radius: 5px; padding: 5px 12px; font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+.usage-segments button[aria-pressed="true"], .settings-segments button[aria-pressed="true"] { color: var(--foreground); background: var(--color-background-surface); box-shadow: 0 1px 3px #00000012; }
 .usage-chart { display: flex; align-items: end; gap: 5px; height: 126px; border-bottom: 1px solid var(--color-border); padding-top: 8px; }
 .usage-chart-day { height: 100%; flex: 1; min-width: 0; display: flex; align-items: end; }
 .usage-chart-bar { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--foreground); opacity: .65; min-height: 2px; }
@@ -79,6 +79,20 @@
 .usage-state { display: grid; justify-items: start; gap: 10px; padding: 30px 0; font-size: 13px; line-height: 1.6; }
 .usage-state p { max-width: 54ch; color: var(--muted-foreground); }
 .usage-skeleton { height: 150px; border-radius: 10px; background: var(--color-background-button-secondary); }
+.usage-limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(15.5rem, 1fr)); gap: 14px; }
+.usage-limit-card { display: grid; gap: 16px; padding: 16px; border: 1px solid var(--color-border); border-radius: 12px; }
+.usage-limit-provider { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
+.usage-limit { display: grid; gap: 7px; }
+.usage-limit-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; }
+.usage-limit-heading b { font-weight: 500; }
+.usage-limit-heading span { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.usage-limit-meter { height: 6px; border-radius: 999px; overflow: hidden; background: var(--color-background-button-secondary); }
+.usage-limit-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--foreground); opacity: .55; transform-origin: left; transition: transform var(--duration-slow, .5s) var(--ease-smooth-out, ease-out); }
+[dir="rtl"] .usage-limit-meter > span { transform-origin: right; }
+.usage-limit[data-usage-tone="warning"] .usage-limit-meter > span { background: var(--warning); opacity: 1; }
+.usage-limit[data-usage-tone="critical"] .usage-limit-meter > span { background: var(--destructive); opacity: 1; }
+.usage-limit-reset { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .usage-limit-meter > span { transition: none; } }
 @media (max-width: 760px) {
   .settings-navigation { width: 190px; }
   .settings-navigation-inner { padding-inline: 12px; }

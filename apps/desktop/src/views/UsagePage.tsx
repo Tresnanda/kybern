@@ -1,13 +1,23 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/kit/button"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { ProviderMark } from "@/components/kybern/bits"
 import { ChevronDownIcon, RefreshCwIcon } from "@/lib/kit/icons"
 import { tokens, usd } from "@/lib/format"
+import { limitLabel, reportedPercent, resetLabel } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import type { ProviderKind, UsageGroup, UsageSummaryResult } from "@/protocol"
+import type { ProviderKind, ProviderUsage, UsageGroup, UsageSummaryResult } from "@/protocol"
+
+type ReportedLimit = NonNullable<ProviderUsage["limits"]>[number]
+
+function limitTone(percent: number | null): "normal" | "warning" | "critical" {
+  if (percent === null) return "normal"
+  if (percent >= 95) return "critical"
+  if (percent >= 80) return "warning"
+  return "normal"
+}
 
 type Period = "7" | "30" | "all"
 const PERIODS: Record<Period, string> = { "7": "Last 7 days", "30": "Last 30 days", all: "All time" }
@@ -18,6 +28,32 @@ const count = (row: UsageSummaryResult["total"]) => row.usage.input_tokens + row
 export function UsagePage() {
   const environmentId = useStore((s) => s.environmentId)
   const connection = useStore((s) => s.connection.state)
+  const threads = useStore((s) => s.threads)
+  const transcripts = useStore((s) => s.transcripts)
+  // Plan limits arrive live per thread (5-hour / weekly). Show the freshest known
+  // window per provider — latest reset time wins, then higher reported usage.
+  const providerLimits = useMemo(() => {
+    const byProvider = new Map<ProviderKind, Map<string, ReportedLimit>>()
+    for (const [id, transcript] of Object.entries(transcripts)) {
+      const limits = transcript?.providerUsage?.limits
+      const kind = threads[id]?.provider?.kind
+      if (!limits?.length || !kind) continue
+      const windows = byProvider.get(kind) ?? new Map<string, ReportedLimit>()
+      for (const limit of limits) {
+        const windowKey = String(limit.window_minutes ?? limit.name)
+        const prev = windows.get(windowKey)
+        const fresher = !prev
+          || (limit.resets_at ?? 0) > (prev.resets_at ?? 0)
+          || ((limit.resets_at ?? 0) === (prev.resets_at ?? 0) && limit.used_percent > prev.used_percent)
+        if (fresher) windows.set(windowKey, limit)
+      }
+      byProvider.set(kind, windows)
+    }
+    return [...byProvider.entries()].map(([kind, windows]) => ({
+      kind,
+      limits: [...windows.values()].sort((a, b) => (a.window_minutes ?? Number.MAX_SAFE_INTEGER) - (b.window_minutes ?? Number.MAX_SAFE_INTEGER)),
+    }))
+  }, [threads, transcripts])
   const [period, setPeriod] = useState<Period>("30")
   const [group, setGroup] = useState<UsageGroup>("provider")
   const [revision, refresh] = useState(0)
@@ -66,6 +102,23 @@ export function UsagePage() {
     <div className="usage-segments" role="group" aria-label="Group usage by">{([['provider', 'Agent'], ['model', 'Model'], ['day', 'Day']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={group === value} onClick={() => setGroup(value)}>{label}</button>)}</div>
       <Button variant="ghost" size="sm" disabled={loading} onClick={() => refresh(value => value + 1)}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
     </div>
+
+    {providerLimits.length > 0 && <section aria-label="Plan limits">
+      <div className="usage-section-heading"><h2>Plan limits</h2><span className="usage-filter-label">As of your latest turns</span></div>
+      <div className="usage-limits">
+        {providerLimits.map(({ kind, limits }) => <div key={kind} className="usage-limit-card">
+          <div className="usage-limit-provider">{PROVIDERS[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDERS[kind] ?? kind}</span></div>
+          {limits.map((limit, index) => {
+            const percent = reportedPercent(limit.used_percent)
+            return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
+              <div className="usage-limit-heading"><b>{limitLabel(limit)}</b><span>{percent === null ? "Unavailable" : `${Math.round(percent)}% used`}</span></div>
+              <div className="usage-limit-meter"><span style={{ transform: `scaleX(${(percent ?? 0) / 100})` }} /></div>
+              <p className="usage-limit-reset">{resetLabel(limit.resets_at)}</p>
+            </div>
+          })}
+        </div>)}
+      </div>
+    </section>}
 
     {loading && !data && <div role="status" className="grid gap-4"><p className="settings-note">Loading usage…</p><div className="usage-skeleton" aria-hidden="true" /></div>}
     {error && <div role="alert" className="usage-state"><h2 className="font-medium">{data ? "Unable to refresh usage" : "Unable to load usage"}</h2><p>{error}{data && " Showing the last loaded totals."}</p><Button variant="chrome-outline" size="sm" onClick={() => refresh(value => value + 1)}>Try again</Button></div>}

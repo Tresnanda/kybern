@@ -127,6 +127,7 @@ import {
   ShieldCheckIcon as HcShieldCheck,
   ShieldIcon as HcShield,
   Analytics01Icon as HcAnalytics,
+  HandIcon as HcHand,
 } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 
@@ -339,7 +340,8 @@ export const StopIcon: LucideIcon = hugeIconFilled(HcStop);
 export const StopFilledIcon: LucideIcon = hugeIconFilled(HcStop);
 export const SquareSplitHorizontal: LucideIcon = hugeIcon(HiSplitH);
 export const SquareSplitVertical: LucideIcon = hugeIcon(HiSplitV);
-// Approval-mode glyphs (composer "Approve for me" / "Full access").
+// Approval-mode glyphs (composer permission menu: ask / edits / auto / full).
+export const HandRaisedIcon: LucideIcon = hugeIcon(HcHand);
 export const ShieldCheckIcon: LucideIcon = hugeIcon(HcShieldCheck);
 export const ShieldIcon: LucideIcon = hugeIcon(HcShield);
 // Usage / analytics (sidebar quick action).

@@ -20,6 +20,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/
 import { MatrixLoader, TextSwap } from "@/components/kybern/motion"
 import { PERMISSION_HINT, PERMISSION_LABEL } from "@/lib/format"
 import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/kit/icons"
+import { BotIcon, ShieldCheckIcon, WorktreeIcon, PencilIcon, WindowIcon, RefreshCwIcon, DevicePowerIcon, ZapIcon, CodeIcon, FoldersIcon, CircleAlertIcon } from "@/lib/kit/icons"
 import {
   SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -188,17 +189,24 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function Row({ title, description, status, children }: { title: string; description?: React.ReactNode; status?: string; children?: React.ReactNode }) {
+function Row({ icon, title, description, status, children }: { icon?: React.ReactNode; title: string; description?: React.ReactNode; status?: string; children?: React.ReactNode }) {
   const labelId = useId()
   return (
     <div className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "settings-row scroll-mt-24 py-4!")}>
       <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
-        <div className="min-w-0 basis-52 flex-1 space-y-1">
-          {title && <div className="flex min-h-5 items-center gap-1.5">
-            <h3 id={labelId} className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{title}</h3>
-          </div>}
-          {description && <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "leading-relaxed break-words")}>{description}</p>}
-          {status && <p className="pt-1 text-[11px] text-muted-foreground">{status}</p>}
+        <div className="flex min-w-0 basis-52 flex-1 items-start gap-3">
+          {icon && (
+            <span className="flex h-5 shrink-0 items-center justify-center text-muted-foreground/70 [&>*]:size-4 [&>*]:shrink-0" aria-hidden>
+              {icon}
+            </span>
+          )}
+          <div className="min-w-0 flex-1 space-y-1">
+            {title && <div className="flex min-h-5 items-center gap-1.5">
+              <h3 id={labelId} className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{title}</h3>
+            </div>}
+            {description && <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "leading-relaxed break-words")}>{description}</p>}
+            {status && <p className="pt-1 text-[11px] text-muted-foreground">{status}</p>}
+          </div>
         </div>
         {children && <div role="group" aria-labelledby={labelId} className="flex max-w-full shrink-0 items-center gap-2">{children}</div>}
       </div>
@@ -231,7 +239,7 @@ function General() {
   return (
     <>
       <Section title="New threads">
-        <Row title="Default agent" description="Used when you start a thread from a project.">
+        <Row icon={<BotIcon />} title="Default agent" description="Used when you start a thread from a project.">
           <SettingsPicker
             value={settings.default_provider}
             onChange={(v) => update({ default_provider: v as ProviderKind })}
@@ -246,19 +254,19 @@ function General() {
             }))}
           />
         </Row>
-        <Row title="Default permissions" description={PERMISSION_HINT[settings.default_permission_mode]}>
+        <Row icon={<ShieldCheckIcon />} title="Default permissions" description={PERMISSION_HINT[settings.default_permission_mode]}>
           <SettingsPicker
             value={settings.default_permission_mode}
             onChange={(v) => update({ default_permission_mode: v as PermissionMode })}
             options={(Object.keys(PERMISSION_LABEL) as PermissionMode[]).map((m) => ({ value: m, label: PERMISSION_LABEL[m] }))}
           />
         </Row>
-        <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this.">
+        <Row icon={<WorktreeIcon />} title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this.">
           <Switch aria-label="Use a worktree for new threads" checked={settings.worktrees_default} onCheckedChange={(v) => update({ worktrees_default: v })} />
         </Row>
       </Section>
       <Section title="Threads">
-        <Row title="Generate thread titles" description="Names the thread from its first message using the agent.">
+        <Row icon={<PencilIcon />} title="Generate thread titles" description="Names the thread from its first message using the agent.">
           <Switch aria-label="Generate thread titles" checked={settings.generate_titles} onCheckedChange={(v) => update({ generate_titles: v })} />
         </Row>
         <AskBeforeCloseRow />
@@ -272,7 +280,7 @@ function Notifications() {
   if (!settings) return null
   return <>
     <Section title="Agent activity">
-        <Row title="Show agent notifications" description="When work finishes, fails, or needs your input.">
+        <Row icon={<BellIcon />} title="Show agent notifications" description="When work finishes, fails, or needs your input.">
           <Switch aria-label="Show agent notifications" checked={settings.notifications} onCheckedChange={(v) => update({ notifications: v })} />
         </Row>
     </Section>
@@ -288,13 +296,14 @@ function Background() {
 
 type BackgroundLimitKey = { [K in keyof BackgroundSettings]: BackgroundSettings[K] extends number ? K : never }[keyof BackgroundSettings]
 
-const BACKGROUND_FIELDS: { key: BackgroundLimitKey; title: string; description: string; unit: string; step: number }[] = [
+const BACKGROUND_FIELDS: { key: BackgroundLimitKey; title: string; description: string; unit: string; step: number; icon: React.ReactNode }[] = [
   {
     key: "session_idle_minutes",
     title: "Release idle agents after",
     description: "Closes a quiet thread's agent. The next message starts it again.",
     unit: "min",
     step: 5,
+    icon: <ClockIcon />,
   },
   {
     key: "max_idle_sessions",
@@ -302,6 +311,7 @@ const BACKGROUND_FIELDS: { key: BackgroundLimitKey; title: string; description: 
     description: "Past this many, the least recently used one is released first.",
     unit: "agents",
     step: 1,
+    icon: <BotIcon />,
   },
   {
     key: "terminal_idle_minutes",
@@ -309,6 +319,7 @@ const BACKGROUND_FIELDS: { key: BackgroundLimitKey; title: string; description: 
     description: "Only shells with no tab open and nothing running.",
     unit: "min",
     step: 5,
+    icon: <TerminalIcon />,
   },
   {
     key: "daemon_idle_exit_minutes",
@@ -316,6 +327,7 @@ const BACKGROUND_FIELDS: { key: BackgroundLimitKey; title: string; description: 
     description: "Once nothing needs it. Keep this off if you use the CLI or remote access.",
     unit: "min",
     step: 5,
+    icon: <DevicePowerIcon />,
   },
 ]
 
@@ -323,7 +335,7 @@ const BACKGROUND_FIELDS: { key: BackgroundLimitKey; title: string; description: 
 function AskBeforeCloseRow() {
   const ask = useAskBeforeClose()
   return (
-    <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them.">
+    <Row icon={<WindowIcon />} title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them.">
       <Switch aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={setAskBeforeClose} />
     </Row>
   )
@@ -334,11 +346,11 @@ function BackgroundSettingsSection({ background, onChange }: { background: Backg
     <Section title="Background">
       <ActivityStrip />
       {BACKGROUND_FIELDS.map((field) => (
-        <Row key={field.key} title={field.title} description={field.description}>
+        <Row key={field.key} icon={field.icon} title={field.title} description={field.description}>
           <LimitField label={field.title} unit={field.unit} step={field.step} value={background[field.key]} onCommit={(value) => onChange({ ...background, [field.key]: value })} />
         </Row>
       ))}
-      <Row title="Save power on battery" description="Releases idle agents after a minute and holds harness updates until you plug in.">
+      <Row icon={<ZapIcon />} title="Save power on battery" description="Releases idle agents after a minute and holds harness updates until you plug in.">
         <Switch aria-label="Save power on battery" checked={background.save_power_on_battery ?? false} onCheckedChange={(v) => onChange({ ...background, save_power_on_battery: v })} />
       </Row>
     </Section>
@@ -474,7 +486,7 @@ function NotificationSettings() {
     } catch (e) { toast.error("Unable to send notification", { description: errorText(e) }) }
     finally { setBusy(false) }
   }
-  return <Section title="System notifications"><Row title="Notification access" description={permission === "granted" ? "System alerts appear when Kybern is in the background." : permission === "denied" ? "Allow Kybern notifications in system settings, then try again." : permission === "unavailable" ? "System notifications aren't available in this environment. In-app alerts still work." : "Enable access to receive alerts outside Kybern."}><Button size="sm" variant="chrome-outline" disabled={busy || permission === "unavailable"} onClick={() => void test()}>{permission === "granted" ? "Send test notification" : "Enable notifications"}</Button></Row></Section>
+  return <Section title="System notifications"><Row icon={<BellIcon />} title="Notification access" description={permission === "granted" ? "System alerts appear when Kybern is in the background." : permission === "denied" ? "Allow Kybern notifications in system settings, then try again." : permission === "unavailable" ? "System notifications aren't available in this environment. In-app alerts still work." : "Enable access to receive alerts outside Kybern."}><Button size="sm" variant="chrome-outline" disabled={busy || permission === "unavailable"} onClick={() => void test()}>{permission === "granted" ? "Send test notification" : "Enable notifications"}</Button></Row></Section>
 }
 
 function Agents() {
@@ -519,7 +531,7 @@ function AgentSettings() {
   }
   return <>
     <Section title="Updates">
-      <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished.">
+      <Row icon={<RefreshCwIcon />} title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished.">
         <Switch aria-label="Update harnesses automatically" checked={settings?.auto_update_harnesses ?? false} onCheckedChange={(checked) => void update({ auto_update_harnesses: checked })} />
       </Row>
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
@@ -531,7 +543,7 @@ function AgentSettings() {
         const result = updates.find((item) => item.kind === provider.kind)
         const busy = result?.status === "waiting" || result?.status === "updating"
         const custom = !!settings?.providers[provider.kind]?.binary
-        return <Row key={provider.kind} title={provider.display_name} description={provider.unavailable_reason ?? (provider.available ? <span title={provider.binary_path ?? undefined} className="block truncate">{provider.binary_path}</span> : "Not found on PATH")}>
+        return <Row key={provider.kind} icon={<ProviderMark kind={provider.kind} size={16} className="size-4" />} title={provider.display_name} description={provider.unavailable_reason ?? (provider.available ? <span title={provider.binary_path ?? undefined} className="block truncate">{provider.binary_path}</span> : "Not found on PATH")}>
           <div className="flex min-w-0 flex-col items-end gap-2">
             <div className="flex items-center gap-3">
               <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{provider.version ?? (provider.available ? "Installed" : "Not installed")}</span>
@@ -541,7 +553,7 @@ function AgentSettings() {
           </div>
         </Row>
       })}
-      {loadError && <Row title="Unable to load update status" description={loadError} />}
+      {loadError && <Row icon={<CircleAlertIcon />} title="Unable to load update status" description={loadError} />}
     </Section>
   </>
 }
@@ -666,7 +678,7 @@ function DaemonUpdateRows({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; o
     return () => { canceled = true; clearTimeout(timer) }
   }, [local, connection.state])
   if (local) {
-    return <Row title="kybernd" description="Bundled with the app and updated with it.">
+    return <Row icon={<TerminalIcon />} title="kybernd" description="Bundled with the app and updated with it.">
       <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{info?.version ?? "…"}</span>
     </Row>
   }
@@ -682,10 +694,10 @@ function DaemonUpdateRows({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; o
   }
   const detail = record && status !== "not_checked" ? record.message : null
   return <>
-    <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running.">
+    <Row icon={<RefreshCwIcon />} title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running.">
       <Switch aria-label="Update the daemon automatically" checked={autoUpdate} onCheckedChange={onAutoUpdate} />
     </Row>
-    <Row title="kybernd" description={<span className="block truncate">{info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"}</span>}>
+    <Row icon={<TerminalIcon />} title="kybernd" description={<span className="block truncate">{info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"}</span>}>
       <div className="flex min-w-0 flex-col items-end gap-2">
         <div className="flex items-center gap-3">
           <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{record?.current_version ?? info?.version ?? "…"}</span>
@@ -717,7 +729,7 @@ function Appearance() {
       <p className="settings-note">System follows your device’s light and dark appearance.</p>
     </section>
     <Section title="Window material">
-      <Row title="Use translucent surfaces" description="Let your desktop show softly through the sidebar and floating controls. Follows your system’s reduced transparency preference.">
+      <Row icon={<WindowIcon />} title="Use translucent surfaces" description="Let your desktop show softly through the sidebar and floating controls. Follows your system’s reduced transparency preference.">
         <Switch aria-label="Use translucent surfaces" checked={translucent} onCheckedChange={setTranslucent} />
       </Row>
     </Section>
@@ -738,7 +750,7 @@ function AppUpdateRow() {
     : update.phase === "current" && update.checkedAt ? `Up to date · checked ${new Date(update.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
     : null
   return (
-    <Row title="Kybern" description={<>
+    <Row icon={<InfoIcon />} title="Kybern" description={<>
       <span className="block">{update.appVersion ?? "…"}</span>
       {status && <span role="status" className={cn("mt-1 block", update.phase === "error" ? "text-destructive" : "text-muted-foreground")}>{status}</span>}
     </>}>
@@ -752,10 +764,10 @@ function About() {
   return (
     <Section title="About">
       <AppUpdateRow />
-      <Row title="Daemon" description={info?.version ?? "…"} />
-      <Row title="Protocol" description={info ? String(info.protocol_version) : "…"} />
-      <Row title="Host" description={info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"} />
-      <Row title="Data" description={info?.data_dir ?? "…"} />
+      <Row icon={<TerminalIcon />} title="Daemon" description={info?.version ?? "…"} />
+      <Row icon={<CodeIcon />} title="Protocol" description={info ? String(info.protocol_version) : "…"} />
+      <Row icon={<DeviceLaptopIcon />} title="Host" description={info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"} />
+      <Row icon={<FoldersIcon />} title="Data" description={info?.data_dir ?? "…"} />
     </Section>
   )
 }
