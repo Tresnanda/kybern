@@ -175,11 +175,10 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const el = instance.scrollElement
-      // The virtualizer's end is estimate-based. At 480px, wrapping and icon
-      // overflow grow the DOM ~77px/turn after the first jump, so that end
-      // sits ~70k short of scrollHeight. While following, pin to the live
-      // DOM edge the fixture (and the reader) actually see.
-      if (followEnd && providedViewport && el) {
+      // Size-change compensation while following: stay on the live DOM edge.
+      // Do not redirect explicit scrollToIndex/scrollToOffset — rail jumps
+      // and Home/End must be able to leave the live edge.
+      if (followEnd && providedViewport && el && options.adjustments !== undefined) {
         const max = Math.max(0, el.scrollHeight - el.clientHeight)
         elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
         return
@@ -209,9 +208,12 @@ function VirtualizedRows<T>({
     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
       const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
       const scroll = instance.scrollElement
-      // Following: any growth (narrow wrap, late Markdown, icon overflow)
-      // must move the reader with the DOM end, not the estimate cache.
-      if (followEnd && providedViewport && delta > 0) return true
+      // Following: grow with the live edge only while we are still on it.
+      // A rail jump to the first message must not be treated as follow.
+      if (followEnd && providedViewport && delta > 0 && scroll) {
+        const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+        if (distance <= 120) return true
+      }
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
@@ -227,22 +229,28 @@ function VirtualizedRows<T>({
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
   }, [followEnd, providedViewport, virtualizer])
   const liveEdge = useRef<HTMLDivElement>(null)
+  const followEndRef = useRef(followEnd)
+  followEndRef.current = followEnd
   useLayoutEffect(() => {
     if (!followEnd || !providedViewport) return
     const scroll = viewport?.current
     const sentinel = liveEdge.current
     if (!scroll || !sentinel) return
     const pin = () => {
+      if (!followEndRef.current) return
       const max = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
       if (max - scroll.scrollTop > 1) scroll.scrollTop = max
     }
     pin()
     // Overflow and late wrap can grow scrollHeight without changing the
-    // viewport box, so a ResizeObserver on the scroller never fires. The
-    // sentinel sits after the last spacer; if it leaves the viewport while
-    // we are following, jump to the live DOM edge.
+    // viewport box. Re-pin only when the live edge moved (content grew),
+    // never when the reader or rail scrolled the sentinel out of view.
+    let lastHeight = scroll.scrollHeight
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => !entry.isIntersecting)) pin()
+      if (!followEndRef.current || !entries.some((entry) => !entry.isIntersecting)) return
+      const grew = scroll.scrollHeight > lastHeight
+      lastHeight = scroll.scrollHeight
+      if (grew) pin()
     }, { root: scroll, threshold: 1 })
     observer.observe(sentinel)
     return () => observer.disconnect()
