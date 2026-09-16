@@ -171,8 +171,7 @@ const KIT_FOLDER_WEIGHT: IconWeight = "bold";
 // Putting `inline-flex` + `min-width: <slot>` on the SVG itself lets WebKit use
 // that viewBox as flex min-content (scaling mounted 802 messages). The square
 // slot is a span — no viewBox — with equal sides so the glyph cannot squash.
-// The inner SVG pins width/height to the slot (not 100%) and zeros min-content
-// so the viewBox cannot inflate rows.
+// The inner SVG zeros min-content and fills 100% so it cannot inflate rows.
 const KIT_ICON_SLOT_CLASS = "inline-flex size-4 shrink-0 overflow-hidden align-middle";
 
 type KitIconProps = SVGProps<SVGSVGElement> & { size?: string | number };
@@ -221,14 +220,14 @@ function renderPhosphor(
     >
       <Component
         {...(rest as Partial<IconProps>)}
-        className="block min-h-0 min-w-0"
-        style={{ width: slot, height: slot, minWidth: 0, minHeight: 0, maxWidth: "100%", maxHeight: "100%", overflow: "hidden", display: "block" }}
+        className="block size-full min-h-0 min-w-0"
+        style={{ width: "100%", height: "100%", minWidth: 0, minHeight: 0, overflow: "hidden", display: "block" }}
         color={typeof color === "string" ? color : undefined}
         weight={extras.weight ?? KIT_ICON_WEIGHT}
         mirrored={extras.mirrored}
         overflow="hidden"
         preserveAspectRatio="xMidYMid meet"
-        size={slot}
+        size="100%"
       />
     </span>
   );
