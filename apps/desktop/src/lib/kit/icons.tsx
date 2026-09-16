@@ -163,15 +163,16 @@ export type LucideIcon = FC<SVGProps<SVGSVGElement> & { size?: string | number }
 // Bold is 1.5px, the same optical weight as nearby font-normal text.
 const KIT_ICON_WEIGHT: IconWeight = "bold";
 
-// Central glyphs were a masked square span. Phosphor SVGs use a 256 viewBox:
-// unset width/height lets WebKit measure 0 or 256px and inflate transcript rows.
-// Pin equal width/height (never min-size 0). Zeroing min-width/min-height lets a
-// flex or line box squash one axis; overflow:hidden then clips the glyph oval.
-const KIT_ICON_SLOT_CLASS = "inline-flex aspect-square size-4 shrink-0 overflow-hidden align-middle";
+// Central glyphs were a masked square span. Phosphor SVGs use a 256 viewBox.
+// Putting `inline-flex` + `min-width: <slot>` on the SVG itself lets WebKit use
+// that viewBox as flex min-content (scaling mounted 802 messages). The square
+// slot is a span — no viewBox — with equal sides so the glyph cannot squash.
+// The inner SVG zeros min-content and fills 100% so it cannot inflate rows.
+const KIT_ICON_SLOT_CLASS = "inline-flex size-4 shrink-0 overflow-hidden align-middle";
 
 type KitIconProps = SVGProps<SVGSVGElement> & { size?: string | number };
 
-/** Resolve a square slot so Phosphor width/height attributes match the CSS size. */
+/** Resolve a square slot so the wrapper's width and height stay equal. */
 function kitIconSlotSize(
   explicit: string | number | undefined,
   className?: string,
@@ -194,30 +195,37 @@ function renderPhosphor(
   const slot = kitIconSlotSize(size ?? width ?? height, className);
   const explicitSize = size ?? width ?? height;
   return (
-    <Component
-      {...(rest as Partial<IconProps>)}
+    <span
       className={cn(
-        explicitSize == null ? KIT_ICON_SLOT_CLASS : "inline-flex aspect-square shrink-0 overflow-hidden align-middle",
+        explicitSize == null ? KIT_ICON_SLOT_CLASS : "inline-flex shrink-0 overflow-hidden align-middle",
         className,
       )}
       style={{
         ...style,
-        aspectRatio: "1 / 1",
         width: slot,
         height: slot,
         minWidth: slot,
         minHeight: slot,
         maxWidth: slot,
         maxHeight: slot,
+        aspectRatio: "1 / 1",
         overflow: "hidden",
         flexShrink: 0,
       }}
-      color={typeof color === "string" ? color : undefined}
-      weight={extras.weight ?? KIT_ICON_WEIGHT}
-      mirrored={extras.mirrored}
-      preserveAspectRatio="xMidYMid meet"
-      size={slot}
-    />
+      aria-hidden
+    >
+      <Component
+        {...(rest as Partial<IconProps>)}
+        className="block size-full min-h-0 min-w-0"
+        style={{ width: "100%", height: "100%", minWidth: 0, minHeight: 0, overflow: "hidden", display: "block" }}
+        color={typeof color === "string" ? color : undefined}
+        weight={extras.weight ?? KIT_ICON_WEIGHT}
+        mirrored={extras.mirrored}
+        overflow="hidden"
+        preserveAspectRatio="xMidYMid meet"
+        size="100%"
+      />
+    </span>
   );
 }
 
