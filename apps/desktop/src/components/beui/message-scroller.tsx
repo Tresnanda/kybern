@@ -512,7 +512,10 @@ export function MessageScroller({
         return;
       }
 
-      setFollowing(false);
+      // Wheel already flush-syncs this. Rail clicks must too: VirtualRows
+      // reads followEnd in scrollToFn, and a scheduled update leaves follow
+      // pinning size-change adjustments until after scrollToIndex.
+      if (followingRef.current) flushSync(() => setFollowing(false));
       programmaticScrollRef.current = true;
       navigationNeedsCancelRef.current = true;
       if (navigationModel) {

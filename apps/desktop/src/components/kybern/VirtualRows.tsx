@@ -68,6 +68,9 @@ function VirtualizedRows<T>({
   const container = useRef<HTMLDivElement>(null)
   const [margin, setMargin] = useState(0)
   const [pinned, setPinned] = useState<{ focused: string | null; selection: readonly [string, string] | null }>({ focused: null, selection: null })
+  const followEndRef = useRef(followEnd)
+  followEndRef.current = followEnd
+  const railTargetRef = useRef(false)
 
   useLayoutEffect(() => {
     const list = container.current
@@ -175,16 +178,36 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const el = instance.scrollElement
-      // Size-change compensation while following: stay on the live DOM edge.
-      // Do not redirect explicit scrollToIndex/scrollToOffset — rail jumps
-      // and Home/End must be able to leave the live edge.
-      if (followEnd && providedViewport && el && options.adjustments !== undefined) {
-        const max = Math.max(0, el.scrollHeight - el.clientHeight)
-        elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
+      if (options.adjustments === undefined) {
+        // Explicit scrollToIndex/scrollToOffset. A rail jump must leave follow
+        // before React re-renders, or the next size-change pin yanks it back.
+        const leavingEnd = !!el && el.scrollHeight - offset - el.clientHeight > 120
+        if (leavingEnd) followEndRef.current = false
+        // Far jumps keep a sticky target. Applying later measurements to the
+        // current DOM position walked the interaction fixture onto later turns.
+        // Near-current writes (wheel cancel, tiny corrects) must not stick.
+        railTargetRef.current = !!el && Math.abs(el.scrollTop - offset) > 40
+        elementScroll(offset, options, instance)
+        return
+      }
+      // Size-change compensation while following: stay on the live DOM edge
+      // only while we are still on it. Read the ref so a rail jump that has
+      // already set following false is not yanked back before this function
+      // identity updates.
+      if (followEndRef.current && providedViewport && el) {
+        const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+        if (distance <= 120) {
+          const max = Math.max(0, el.scrollHeight - el.clientHeight)
+          elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
+          return
+        }
+      }
+      if (railTargetRef.current) {
+        elementScroll(offset, options, instance)
         return
       }
       const current = el?.scrollTop
-      if (options.adjustments !== undefined && current !== undefined) {
+      if (current !== undefined) {
         // A wheel/trackpad move can precede the scroll event that updates the
         // library's cursor. Apply height compensation to the actual position,
         // or it can undo that move. Core adds the adjustment to this cursor.
@@ -209,11 +232,15 @@ function VirtualizedRows<T>({
       const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
       const scroll = instance.scrollElement
       // Following: grow with the live edge only while we are still on it.
-      // A rail jump to the first message must not be treated as follow.
-      if (followEnd && providedViewport && delta > 0 && scroll) {
+      // A rail jump must not be treated as follow, even before this effect
+      // re-runs with the new followEnd prop.
+      if (followEndRef.current && providedViewport && delta > 0 && scroll) {
         const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
         if (distance <= 120) return true
       }
+      // An active rail/index jump must keep reconciling against the target.
+      // First-measure compensation walks that target onto later turns.
+      if (railTargetRef.current) return false
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
@@ -229,8 +256,6 @@ function VirtualizedRows<T>({
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
   }, [followEnd, providedViewport, virtualizer])
   const liveEdge = useRef<HTMLDivElement>(null)
-  const followEndRef = useRef(followEnd)
-  followEndRef.current = followEnd
   useLayoutEffect(() => {
     if (!followEnd || !providedViewport) return
     const scroll = viewport?.current
