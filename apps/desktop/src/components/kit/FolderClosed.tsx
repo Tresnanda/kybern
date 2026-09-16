@@ -6,18 +6,16 @@
 
 import type { SVGProps } from "react";
 import { Folder01Icon, FolderOpenIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
+import { hugeGlyph } from "@/lib/kit/hugeGlyph";
 
-function FolderGlyph(icon: IconSvgElement, props: SVGProps<SVGSVGElement>) {
-  return (
-    <HugeiconsIcon icon={icon} {...props} color="currentColor" strokeWidth={2} />
-  );
-}
+// Folders use a lighter stroke than the shared 2.5 (large, dense glyph).
+const ClosedGlyph = hugeGlyph(Folder01Icon, 2);
+const OpenGlyph = hugeGlyph(FolderOpenIcon, 2);
 
 export function FolderClosed(props: SVGProps<SVGSVGElement>) {
-  return FolderGlyph(Folder01Icon, props);
+  return <ClosedGlyph {...props} />;
 }
 
 export function FolderOpen(props: SVGProps<SVGSVGElement>) {
-  return FolderGlyph(FolderOpenIcon, props);
+  return <OpenGlyph {...props} />;
 }

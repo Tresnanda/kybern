@@ -1,6 +1,7 @@
 import { type FC, type SVGProps } from "react";
 import { VscMcp } from "react-icons/vsc";
-import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
+import { type IconSvgElement } from "@hugeicons/react";
+import { hugeGlyph, hugeGlyphFilled } from "./hugeGlyph";
 import {
   // --- generic utility glyphs (former Tabler / react-icons set) ---
   AlertCircleIcon as HiAlertCircle,
@@ -143,9 +144,7 @@ export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
 const HUGEICON_STROKE_WIDTH = 2.5;
 
 function hugeIcon(icon: IconSvgElement, strokeWidth: number = HUGEICON_STROKE_WIDTH): LucideIcon {
-  return function HugeIconGlyph(props) {
-    return <HugeiconsIcon icon={icon} {...props} color="currentColor" strokeWidth={strokeWidth} />;
-  };
+  return hugeGlyph(icon, strokeWidth);
 }
 
 // The folder is a large, dense glyph — it reads too heavy at the shared 2.5, so
@@ -157,17 +156,7 @@ const FOLDER_STROKE_WIDTH = 2;
 // shapes become solid; any stroke-only detail (e.g. the pushpin tail) is preserved
 // by omitting strokeWidth so the glyph keeps its own path attributes.
 function hugeIconFilled(icon: IconSvgElement): LucideIcon {
-  return function HugeIconSolid({ className, ...props }) {
-    return (
-      <HugeiconsIcon
-        icon={icon}
-        {...props}
-        color="currentColor"
-        strokeWidth={undefined}
-        className={cn("[&_*]:fill-current", className)}
-      />
-    );
-  };
+  return hugeGlyphFilled(icon);
 }
 
 export const AppsIcon: LucideIcon = hugeIcon(HiApps);
@@ -346,14 +335,9 @@ export const ShieldIcon: LucideIcon = hugeIcon(HcShield);
 export const AnalyticsIcon: LucideIcon = hugeIcon(HcAnalytics);
 // Dotted "annotation" chat bubble — the temporary thread marker shown on the
 // composer toggle and beside temporary threads in the sidebar.
+const TemporaryThreadGlyph = hugeIcon(HiMessageCircle);
 export const TemporaryThreadIcon: LucideIcon = ({ className, ...props }) => (
-  <HugeiconsIcon
-    icon={HiMessageCircle}
-    {...props}
-    color="currentColor"
-    strokeWidth={HUGEICON_STROKE_WIDTH}
-    className={cn("size-3.5 shrink-0", className)}
-  />
+  <TemporaryThreadGlyph className={cn("size-3.5 shrink-0", className)} {...props} />
 );
 export const TerminalIcon = hugeIcon(HcConsole);
 export const TerminalSquare = hugeIcon(HcConsole);

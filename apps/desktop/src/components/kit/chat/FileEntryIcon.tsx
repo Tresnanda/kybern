@@ -19,7 +19,8 @@ import {
   SourceCodeIcon,
   Video01Icon,
 } from "@hugeicons/core-free-icons"
-import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
+import { type IconSvgElement } from "@hugeicons/react"
+import { hugeGlyph } from "@/lib/kit/hugeGlyph"
 import {
   SiBun,
   SiC,
@@ -46,9 +47,8 @@ type GlyphComponent = FC<{ className?: string }>
 
 // Hugeicons rendered at the same stroke weight as the rest of the app chrome.
 function hugeFileIcon(icon: IconSvgElement): GlyphComponent {
-  return function FileGlyph({ className }) {
-    return <HugeiconsIcon icon={icon} color="currentColor" strokeWidth={2.5} className={className} />
-  }
+  const Glyph = hugeGlyph(icon, 2.5)
+  return ({ className }) => <Glyph className={className} />
 }
 
 // Logical icon name (from fileIcons.ts) -> glyph component. Brand/language marks
