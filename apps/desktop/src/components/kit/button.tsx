@@ -6,7 +6,11 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
-import { extendButtonIconChildSelectors } from "@/lib/kit/central-icons";
+
+// Icons render as <svg>, so the `[&_svg]` child rules in the variant strings below
+// apply directly. Kept as an identity wrapper (Central's masked-<span> icons, which
+// this used to also target, have been removed) to avoid churning every variant.
+const extendButtonIconChildSelectors = (className: string) => className;
 
 /** Slightly softer outline border for header chrome buttons in dark mode. */
 const headerButtonDarkBorderClassName =

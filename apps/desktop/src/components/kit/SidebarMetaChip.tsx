@@ -9,8 +9,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 
 // Right-aligned thread-row meta chips (automation clock, worktree, fork, handoff). Their
 // icons are forced to the shared trailing size at the slot so they match the pin/archive
-// buttons and the whole right-side cluster reads as one uniform set — including the worktree
-// Central icon, which the shared force class covers via its [data-slot=central-icon] selector.
+// buttons and the whole right-side cluster reads as one uniform set.
 // CHIP_SLOT_PX drives the overlapping-stack layout math below (Tailwind can only scan literal
 // class strings, so keep it in step with the slot's h-[15px]/w-[15px]).
 const CHIP_SLOT_PX = 15;

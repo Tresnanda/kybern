@@ -1,312 +1,371 @@
-import { type CSSProperties, type FC, type SVGProps } from "react";
-import { PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
-import { RiApps2Line } from "react-icons/ri";
-import { SiGithub } from "react-icons/si";
+import { type FC, type SVGProps } from "react";
 import { VscMcp } from "react-icons/vsc";
-import { cn } from "@/lib/utils";
-import { CentralIcon, type CentralIconVariant } from "./central-icons";
+import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import {
-  IconAlertCircle,
-  IconAlertTriangle,
-  IconArchive,
-  IconArrowBackUp,
-  IconArrowDown,
-  IconArrowLeft,
-  IconArrowRight,
-  IconArrowUp,
-  IconArrowUpRight,
-  IconBolt,
-  IconBrain,
-  IconBug,
-  IconCamera,
-  IconCheck,
-  IconChevronDown,
-  IconChevronLeft,
-  IconChevronRight,
-  IconChevronUp,
-  IconCircleCheck,
-  IconColumns2,
-  IconDots,
-  IconDownload,
-  IconExternalLink,
-  IconEye,
-  IconFile,
-  IconFlag,
-  IconFlask2,
-  IconFolder,
-  IconFolderOpen,
-  IconHistory,
-  IconInfoCircle,
-  IconLayoutDistributeHorizontal,
-  IconListCheck,
-  IconListDetails,
-  IconLoader2,
-  IconMaximize,
-  IconMinimize,
-  IconMinus,
-  IconDeviceLaptop,
-  IconDeviceMobileRotated,
-  IconPlugOff,
-  IconPower,
-  IconMessageCircle,
-  IconMoon,
-  IconPaperclip,
-  IconPlus,
-  IconRefresh,
-  IconRotate2,
-  IconSelector,
-  IconStar,
-  IconStarFilled,
-  IconSun,
-  IconTextWrap,
-  IconTrash,
-  IconX,
-  type TablerIcon,
-} from "@tabler/icons-react";
+  // --- generic utility glyphs (former Tabler / react-icons set) ---
+  AlertCircleIcon as HiAlertCircle,
+  Alert02Icon as HiAlertTriangle,
+  Archive02Icon as HiArchive,
+  ArrowTurnBackwardIcon as HiUndo,
+  ArrowLeft01Icon as HiArrowLeft,
+  ArrowRight01Icon as HiArrowRight,
+  ArrowDown01Icon as HiArrowDown,
+  ArrowUp01Icon as HiArrowUp,
+  ArrowUpRight01Icon as HiArrowUpRight,
+  FlashIcon as HiFlash,
+  BrainIcon as HiBrain,
+  BugIcon as HiBug,
+  Camera01Icon as HiCamera,
+  Tick02Icon as HiCheck,
+  ChevronDownIcon as HiChevronDown,
+  ChevronLeftIcon as HiChevronLeft,
+  ChevronRightIcon as HiChevronRight,
+  ChevronUpIcon as HiChevronUp,
+  UnfoldMoreIcon as HiSelector,
+  CheckmarkCircle02Icon as HiCircleCheck,
+  LayoutTwoColumnIcon as HiColumns2,
+  MoreHorizontalIcon as HiDots,
+  Download04Icon as HiDownload,
+  LinkSquare02Icon as HiExternalLink,
+  EyeIcon as HiEye,
+  File01Icon as HiFile,
+  Flag01Icon as HiFlag,
+  FlaskConicalIcon as HiFlask,
+  Folder01Icon as HiFolder,
+  FolderOpenIcon as HiFolderOpen,
+  HistoryIcon as HiHistory,
+  InformationCircleIcon as HiInfo,
+  Layout01Icon as HiRows3,
+  CheckListIcon as HiListCheck,
+  Task01Icon as HiListTodo,
+  Loading03Icon as HiLoader,
+  ArrowExpand01Icon as HiMaximize,
+  ArrowShrink01Icon as HiMinimize,
+  MinusSignIcon as HiMinus,
+  LaptopIcon as HiLaptop,
+  Rotate01Icon as HiDeviceRotate,
+  PlugSocketIcon as HiPlugOff,
+  ShutDownIcon as HiPower,
+  Comment01Icon as HiMessageCircle,
+  Moon02Icon as HiMoon,
+  Attachment01Icon as HiPaperclip,
+  PlusSignIcon as HiPlus,
+  RefreshIcon as HiRefresh,
+  RotateLeft01Icon as HiRotateCcw,
+  StarIcon as HiStar,
+  Sun03Icon as HiSun,
+  TextWrapIcon as HiTextWrap,
+  Delete02Icon as HiTrash,
+  Cancel01Icon as HiX,
+  GridViewIcon as HiApps,
+  SquareSplitHorizontalIcon as HiSplitH,
+  SquareSplitVerticalIcon as HiSplitV,
+  GithubIcon as HiGithub,
+  // --- former Central (signature) glyphs, now Hugeicons ---
+  SquareArrowDown01Icon as HcBackgroundTray,
+  WorkflowSquare01Icon as HcAgents,
+  ArrowTurnForwardIcon as HcSteer,
+  ArrowDataTransferHorizontalIcon as HcHandoff,
+  CubeIcon as HcSkill,
+  PencilEdit02Icon as HcCompose,
+  DragDropVerticalIcon as HcDrag,
+  PreferenceHorizontalIcon as HcCustomize,
+  EraserIcon as HcEraser,
+  ArrowUpDownIcon as HcSort,
+  RoboticIcon as HcRobot,
+  Book02Icon as HcBook,
+  HelpCircleIcon as HcQuestion,
+  CircleArrowUp01Icon as HcArrowUpCircle,
+  CloudSyncIcon as HcCloudSync,
+  Edit02Icon as HcChanges,
+  Copy01Icon as HcCopy,
+  Link01Icon as HcLink,
+  GitCompareIcon as HcDiff,
+  Note01Icon as HcNotes,
+  Clock01Icon as HcClock,
+  SourceCodeIcon as HcCode,
+  FolderLibraryIcon as HcFolders,
+  GiftIcon as HcGift,
+  GitCommitIcon as HcCommit,
+  GitBranchIcon as HcBranch,
+  GitMergeIcon as HcMerge,
+  CloudUploadIcon as HcPush,
+  GitPullRequestIcon as HcPR,
+  GitPullRequestDraftIcon as HcPRDraft,
+  GitPullRequestClosedIcon as HcPRClosed,
+  GitMergeConflictIcon as HcConflict,
+  FilterIcon as HcFilter,
+  UserGroupIcon as HcUsers,
+  Globe02Icon as HcGlobe,
+  SmartPhone01Icon as HcPhone,
+  Home01Icon as HcHome,
+  SquareLock02Icon as HcLock,
+  VolumeHighIcon as HcVolUp,
+  VolumeLowIcon as HcVolDown,
+  RecordIcon as HcRecord,
+  StopIcon as HcStop,
+  PuzzleIcon as HcPuzzle,
+  HammerIcon as HcHammer,
+  KanbanIcon as HcKanban,
+  KeyboardIcon as HcKeyboard,
+  BubbleChatIcon as HcBubble,
+  Comment02Icon as HcSidechat,
+  Mic01Icon as HcMic,
+  SidebarLeftIcon as HcPanelLeft,
+  SidebarRightIcon as HcPanelRight,
+  AppWindowMacIcon as HcWindow,
+  SidebarLeft01Icon as HcLayoutSidebar,
+  PencilIcon as HcPencil,
+  PinIcon as HcPin,
+  PauseIcon as HcPause,
+  PlayIcon as HcPlay,
+  Target02Icon as HcGoal,
+  Search01Icon as HcSearch,
+  Settings01Icon as HcSettings,
+  CommandLineIcon as HcConsole,
+  GitForkIcon as HcWorktree,
+  ShieldCheckIcon as HcShieldCheck,
+  ShieldIcon as HcShield,
+  Analytics01Icon as HcAnalytics,
+} from "@hugeicons/core-free-icons";
+import { cn } from "@/lib/utils";
 
-// Keep the existing icon API stable while the app moves from Lucide to Tabler.
+// The whole app renders its icons through the Hugeicons free set (stroke-rounded).
+// Provider brand logos live in ./Icons; a few brand/file-type marks come from
+// Simple Icons (react-icons). This module is the single source for every other glyph.
 export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
 
-function adaptIcon(Component: TablerIcon): LucideIcon {
-  return function AdaptedIcon(props) {
-    return <Component {...props} />;
-  };
-}
+// Hugeicons default to strokeWidth 1.5; pin every glyph to 2 so the weight matches
+// what the app shipped before (the sidebar folder icon's thickness) on the same 24
+// viewBox. HugeiconsIcon renders a real <svg>, so kit `[&_svg]` sizing rules apply.
+const HUGEICON_STROKE_WIDTH = 2;
 
-// Wraps a Central icon asset behind the LucideIcon API. Rendering via CSS mask
-// avoids stroke-on-stroke alpha summation that gave hand-drawn SVGs a
-// "stamped twice" look on shared vertices (the previous PinIcon bug).
-function centralIconWrapper(name: string, variant?: CentralIconVariant): LucideIcon {
-  return function CentralIconWrapper({ className, style, ...rest }) {
-    const ariaLabelRaw = (rest as { ["aria-label"]?: unknown })["aria-label"];
-    const label = typeof ariaLabelRaw === "string" ? ariaLabelRaw : undefined;
+function hugeIcon(icon: IconSvgElement): LucideIcon {
+  return function HugeIconGlyph(props) {
     return (
-      <CentralIcon
-        name={name}
-        variant={variant}
-        className={typeof className === "string" ? className : undefined}
-        style={style as CSSProperties | undefined}
-        label={label}
+      <HugeiconsIcon
+        icon={icon}
+        {...props}
+        color="currentColor"
+        strokeWidth={HUGEICON_STROKE_WIDTH}
       />
     );
   };
 }
 
-export const AppsIcon: LucideIcon = (props) => (
-  <RiApps2Line className={props.className} style={props.style} />
-);
+// Solid variant: the free set is stroke-only, so filled states (play/pause/stop,
+// pinned, fast-mode bolt) fill the glyph's paths with currentColor. Simple closed
+// shapes become solid; any stroke-only detail (e.g. the pushpin tail) is preserved
+// by omitting strokeWidth so the glyph keeps its own path attributes.
+function hugeIconFilled(icon: IconSvgElement): LucideIcon {
+  return function HugeIconSolid({ className, ...props }) {
+    return (
+      <HugeiconsIcon
+        icon={icon}
+        {...props}
+        color="currentColor"
+        strokeWidth={undefined}
+        className={cn("[&_*]:fill-current", className)}
+      />
+    );
+  };
+}
+
+export const AppsIcon: LucideIcon = hugeIcon(HiApps);
 // Composer stacked-panel glyphs (subagent strip / workflow run card).
-export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wall");
-export const PanelExpandIcon: LucideIcon = centralIconWrapper("expand-45");
-export const PanelCollapseIcon: LucideIcon = centralIconWrapper("minimize-45");
-export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");
-export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
-export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
-export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
-export const HandoffIcon: LucideIcon = centralIconWrapper("arrow-left-right");
-export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
-export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
+export const BackgroundTrayIcon: LucideIcon = hugeIcon(HcBackgroundTray);
+export const PanelExpandIcon: LucideIcon = hugeIcon(HiMaximize);
+export const PanelCollapseIcon: LucideIcon = hugeIcon(HiMinimize);
+export const BackToParentIcon: LucideIcon = hugeIcon(HiUndo);
+export const WorkflowIcon: LucideIcon = hugeIcon(HcAgents);
+export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
+export const ComposerSendArrowIcon: LucideIcon = hugeIcon(HiArrowUp);
+export const HandoffIcon: LucideIcon = hugeIcon(HcHandoff);
+export const SkillCubeIcon: LucideIcon = hugeIcon(HcSkill);
+export const NewThreadIcon: LucideIcon = hugeIcon(HcCompose);
 /** The "+" affordance behind every add/create action (Add project, activity header). */
-export const AddPlusIcon: LucideIcon = centralIconWrapper("plus-medium");
-/** 2x3 dot grip for drag-to-reorder handles (provider rows, sidebar nav customize). */
-export const DragHandleIcon: LucideIcon = centralIconWrapper("dot-grid-2x3");
+export const AddPlusIcon: LucideIcon = hugeIcon(HiPlus);
+/** Grip for drag-to-reorder handles (provider rows, sidebar nav customize). */
+export const DragHandleIcon: LucideIcon = hugeIcon(HcDrag);
 /** Sliders glyph for "customize this surface" entries. */
-export const CustomizeIcon: LucideIcon = centralIconWrapper("settings-slider-three");
-export const EraserIcon: LucideIcon = centralIconWrapper("eraser");
-export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
-export const ArrowRightIcon = adaptIcon(IconArrowRight);
-export const ArrowDownIcon = adaptIcon(IconArrowDown);
-export const ArrowUpIcon = adaptIcon(IconArrowUp);
-export const ArrowUpRightIcon = adaptIcon(IconArrowUpRight);
-export const SortIcon: LucideIcon = centralIconWrapper("arrow-top-bottom");
-// Single source for the robot/agent glyph. Sourced from the Central icon set so
-// every robot affordance (reasoning rows, agent-task rows, agent mention chips,
-// subagent menus, agent-activity headers) renders one identical icon. Use
-// BotIcon in React; AGENT_ROBOT_ICON_NAME for imperative DOM via
-// createCentralIconElement.
-export const AGENT_ROBOT_ICON_NAME = "robot";
-export const BotIcon: LucideIcon = centralIconWrapper(AGENT_ROBOT_ICON_NAME);
-export const BookIcon: LucideIcon = centralIconWrapper("book-simple");
-export const BugIcon = adaptIcon(IconBug);
-export const CameraIcon = adaptIcon(IconCamera);
-export const CheckIcon = adaptIcon(IconCheck);
-export const ChevronDownIcon = adaptIcon(IconChevronDown);
-export const ChevronLeftIcon = adaptIcon(IconChevronLeft);
-export const ChevronRightIcon = adaptIcon(IconChevronRight);
-export const ChevronUpIcon = adaptIcon(IconChevronUp);
-export const ChevronsUpDownIcon = adaptIcon(IconSelector);
-export const CircleAlertIcon = adaptIcon(IconAlertCircle);
-export const CircleCheckIcon = adaptIcon(IconCircleCheck);
-// Completed/success status glyph sourced from the Central set so it sits in the
-// same visual language as the other trailing thread-row icons (worktree, fork,
-// pull-request) instead of the react-icons outline check it replaced.
-export const CheckCircle2Icon: LucideIcon = centralIconWrapper("check-circle-2");
+export const CustomizeIcon: LucideIcon = hugeIcon(HcCustomize);
+export const EraserIcon: LucideIcon = hugeIcon(HcEraser);
+export const ArrowLeftIcon = hugeIcon(HiArrowLeft);
+export const ArrowRightIcon = hugeIcon(HiArrowRight);
+export const ArrowDownIcon = hugeIcon(HiArrowDown);
+export const ArrowUpIcon = hugeIcon(HiArrowUp);
+export const ArrowUpRightIcon = hugeIcon(HiArrowUpRight);
+export const SortIcon: LucideIcon = hugeIcon(HcSort);
+// Single source for the robot/agent glyph so every robot affordance (reasoning
+// rows, agent-task rows, agent mention chips, subagent menus, agent-activity
+// headers) renders one identical icon.
+export const BotIcon: LucideIcon = hugeIcon(HcRobot);
+export const BookIcon: LucideIcon = hugeIcon(HcBook);
+export const BugIcon = hugeIcon(HiBug);
+export const CameraIcon = hugeIcon(HiCamera);
+export const CheckIcon = hugeIcon(HiCheck);
+export const ChevronDownIcon = hugeIcon(HiChevronDown);
+export const ChevronLeftIcon = hugeIcon(HiChevronLeft);
+export const ChevronRightIcon = hugeIcon(HiChevronRight);
+export const ChevronUpIcon = hugeIcon(HiChevronUp);
+export const ChevronsUpDownIcon = hugeIcon(HiSelector);
+export const CircleAlertIcon = hugeIcon(HiAlertCircle);
+export const CircleCheckIcon = hugeIcon(HiCircleCheck);
+export const CheckCircle2Icon: LucideIcon = hugeIcon(HiCircleCheck);
 // User-input rows: a question-mark circle while the agent waits for an answer,
-// and an up-arrow circle once the answer is submitted. Sourced from the Central
-// set so they sit visually beside the other timeline glyphs (robot, search, …).
-export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questionmark");
-export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
-export const CloudSyncIcon = centralIconWrapper("cloud-sync");
-export const Columns2Icon = adaptIcon(IconColumns2);
-export const ChangesIcon = centralIconWrapper("changes");
-export const CopyIcon = centralIconWrapper("square-behind-square-6");
-export const LinkIcon = centralIconWrapper("chain-link-3");
-export const DiffIcon = centralIconWrapper("difference-modified");
-export const DownloadIcon = adaptIcon(IconDownload);
+// and an up-arrow circle once the answer is submitted.
+export const CircleQuestionIcon: LucideIcon = hugeIcon(HcQuestion);
+export const ArrowUpCircleIcon: LucideIcon = hugeIcon(HcArrowUpCircle);
+export const CloudSyncIcon = hugeIcon(HcCloudSync);
+export const Columns2Icon = hugeIcon(HiColumns2);
+export const ChangesIcon = hugeIcon(HcChanges);
+export const CopyIcon = hugeIcon(HcCopy);
+export const LinkIcon = hugeIcon(HcLink);
+export const DiffIcon = hugeIcon(HcDiff);
+export const DownloadIcon = hugeIcon(HiDownload);
 // The clock doubles as the automation glyph everywhere it appears (meta chip,
-// Automations nav, slash command, created card, environment section), so it is
-// sourced from the Central icon set rather than the Tabler stroke icon.
-export const BellIcon: LucideIcon = centralIconWrapper("notes");
-export const ClockIcon = centralIconWrapper("clock");
-export const EllipsisIcon = adaptIcon(IconDots);
-export const ExternalLinkIcon = adaptIcon(IconExternalLink);
-export const EyeIcon = adaptIcon(IconEye);
-// Markdown Source/Preview toggle glyphs, sourced from the Central set so the
-// file-preview header controls share one visual language with the rest of the
-// chrome (raw source = code brackets, rendered preview = open eye).
-export const CodeIcon: LucideIcon = centralIconWrapper("code");
-export const EyeOpenIcon: LucideIcon = centralIconWrapper("eye-open");
-export const PaperclipIcon = adaptIcon(IconPaperclip);
-export const ArchiveIcon = adaptIcon(IconArchive);
-export const BrainIcon = adaptIcon(IconBrain);
-export const FileIcon = adaptIcon(IconFile);
-export const FlagIcon = adaptIcon(IconFlag);
-export const FlaskConicalIcon = adaptIcon(IconFlask2);
-export const FolderIcon = adaptIcon(IconFolder);
-export const FolderOpenIcon = adaptIcon(IconFolderOpen);
+// Automations nav, slash command, created card, environment section).
+export const BellIcon: LucideIcon = hugeIcon(HcNotes);
+export const ClockIcon = hugeIcon(HcClock);
+export const EllipsisIcon = hugeIcon(HiDots);
+export const ExternalLinkIcon = hugeIcon(HiExternalLink);
+export const EyeIcon = hugeIcon(HiEye);
+// Markdown Source/Preview toggle glyphs (raw source = code brackets, rendered
+// preview = open eye).
+export const CodeIcon: LucideIcon = hugeIcon(HcCode);
+export const EyeOpenIcon: LucideIcon = hugeIcon(HiEye);
+export const PaperclipIcon = hugeIcon(HiPaperclip);
+export const ArchiveIcon = hugeIcon(HiArchive);
+export const BrainIcon = hugeIcon(HiBrain);
+export const FileIcon = hugeIcon(HiFile);
+export const FlagIcon = hugeIcon(HiFlag);
+export const FlaskConicalIcon = hugeIcon(HiFlask);
+export const FolderIcon = hugeIcon(HiFolder);
+export const FolderOpenIcon = hugeIcon(HiFolderOpen);
 // Stacked "folders" glyph used as the single representation of a file tree /
-// explorer surface (right-dock explorer, editor Files activity, diff file-tree
-// toggle). Central "reversed" outline asset so it matches the rest of the chrome.
-export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
-export const GiftIcon: LucideIcon = centralIconWrapper("gift-2");
-export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
-export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
-// Forking a thread reuses the branch glyph: the Central "fork" asset reads as a
-// second, unrelated icon next to it, so fork and branch share one visual.
+// explorer surface (right-dock explorer, editor Files activity, diff file-tree toggle).
+export const FoldersIcon: LucideIcon = hugeIcon(HcFolders);
+export const GiftIcon: LucideIcon = hugeIcon(HcGift);
+export const GitCommitIcon: LucideIcon = hugeIcon(HcCommit);
+export const GitBranchIcon: LucideIcon = hugeIcon(HcBranch);
+// Forking a thread reuses the branch glyph so fork and branch share one visual.
 export const GitForkIcon: LucideIcon = GitBranchIcon;
-export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
-export const GitMergedSimpleIcon: LucideIcon = centralIconWrapper("merged-simple");
-export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
-export const GitHubIcon: LucideIcon = (props) => (
-  <SiGithub className={props.className} style={props.style} />
-);
-export const GitPullRequestIcon = centralIconWrapper("pull-request");
-// Pull-request state glyphs from the same three-node Central family as "pull-request",
-// so draft/closed/merged read as variations of one icon rather than four styles.
-export const GitPullRequestDraftIcon: LucideIcon = centralIconWrapper("draft");
-export const GitPullRequestClosedIcon: LucideIcon = centralIconWrapper("request-closed");
-export const GitMergeConflictIcon: LucideIcon = centralIconWrapper("merge-conflict");
-// Three descending-width lines — the app's one "filter controls" glyph (pull
-// request list filters, and anywhere else that opens a filter popover).
-export const FilterIcon: LucideIcon = centralIconWrapper("filter-2");
+export const GitMergeIcon: LucideIcon = hugeIcon(HcMerge);
+export const GitMergedSimpleIcon: LucideIcon = hugeIcon(HcMerge);
+export const PushIcon: LucideIcon = hugeIcon(HcPush);
+export const GitHubIcon: LucideIcon = hugeIcon(HiGithub);
+export const GitPullRequestIcon = hugeIcon(HcPR);
+// Pull-request state glyphs from the same family as "pull-request".
+export const GitPullRequestDraftIcon: LucideIcon = hugeIcon(HcPRDraft);
+export const GitPullRequestClosedIcon: LucideIcon = hugeIcon(HcPRClosed);
+export const GitMergeConflictIcon: LucideIcon = hugeIcon(HcConflict);
+// Three descending-width lines — the app's one "filter controls" glyph.
+export const FilterIcon: LucideIcon = hugeIcon(HcFilter);
 // Two-person glyph for "reviewers"/"people" rows (pull request meta grid).
-export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
-// One globe for the whole app (browser rows, web search, favicon fallback,
-// local servers): the Central glyph, so it matches the other work-row icons.
-export const GlobeIcon: LucideIcon = centralIconWrapper("globe");
+export const UsersIcon: LucideIcon = hugeIcon(HcUsers);
+// One globe for the whole app (browser rows, web search, favicon fallback, local servers).
+export const GlobeIcon: LucideIcon = hugeIcon(HcGlobe);
 export const WebSearchIcon: LucideIcon = GlobeIcon;
 // Handset glyph for the iOS Simulator dock pane.
-export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
+export const DeviceMobileIcon: LucideIcon = hugeIcon(HcPhone);
 // Hardware-button glyphs for the simulator's control rail.
-export const DeviceHomeIcon: LucideIcon = centralIconWrapper("home");
-export const DeviceLockIcon: LucideIcon = centralIconWrapper("lock");
-export const DeviceVolumeUpIcon: LucideIcon = centralIconWrapper("volume-up");
-export const DeviceVolumeDownIcon: LucideIcon = centralIconWrapper("volume-down");
-export const DeviceShutterIcon: LucideIcon = centralIconWrapper("camera-1");
-// Simulator toolbar: start/stop a screen recording, turn the view, power the
-// device off, and let go of it. The two Tabler glyphs have no Central
-// equivalent that reads as unambiguously as a rotating handset and a power symbol.
-export const DeviceRecordIcon: LucideIcon = centralIconWrapper("record");
-export const DeviceRecordStopIcon: LucideIcon = centralIconWrapper("stop", "fill");
-export const DeviceRotateIcon = adaptIcon(IconDeviceMobileRotated);
-export const DevicePowerIcon = adaptIcon(IconPower);
-export const DeviceDetachIcon = adaptIcon(IconPlugOff);
+export const DeviceHomeIcon: LucideIcon = hugeIcon(HcHome);
+export const DeviceLockIcon: LucideIcon = hugeIcon(HcLock);
+export const DeviceVolumeUpIcon: LucideIcon = hugeIcon(HcVolUp);
+export const DeviceVolumeDownIcon: LucideIcon = hugeIcon(HcVolDown);
+export const DeviceShutterIcon: LucideIcon = hugeIcon(HiCamera);
+// Simulator toolbar: start/stop a screen recording, turn the view, power off, detach.
+export const DeviceRecordIcon: LucideIcon = hugeIcon(HcRecord);
+export const DeviceRecordStopIcon: LucideIcon = hugeIconFilled(HcStop);
+export const DeviceRotateIcon = hugeIcon(HiDeviceRotate);
+export const DevicePowerIcon = hugeIcon(HiPower);
+export const DeviceDetachIcon = hugeIcon(HiPlugOff);
+// MCP has no Hugeicons/Simple Icons mark; keep the VS Code MCP glyph.
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
-export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
+export const PluginIcon: LucideIcon = hugeIcon(HcPuzzle);
 // Single hammer/build glyph (tool-call rows, codex provider, "build" scripts).
-// Sourced from the Central set so it matches the other work-row icons (pencil,
-// terminal, skill cube) it sits beside, instead of the Tabler wrench it used to be.
-export const HammerIcon: LucideIcon = centralIconWrapper("hammer");
-export const HistoryIcon = adaptIcon(IconHistory);
-export const InfoIcon = adaptIcon(IconInfoCircle);
-export const KanbanIcon = centralIconWrapper("columns-3-wide");
-export const KeyboardIcon: LucideIcon = centralIconWrapper("keyboard");
-export const ListChecksIcon = adaptIcon(IconListCheck);
-export const ListTodoIcon = adaptIcon(IconListDetails);
-export const Loader2Icon = adaptIcon(IconLoader2);
-export const LoaderCircleIcon = adaptIcon(IconLoader2);
-export const LoaderIcon = adaptIcon(IconLoader2);
-export const Maximize2 = adaptIcon(IconMaximize);
-export const Minimize2 = adaptIcon(IconMinimize);
-export const MessageCircleIcon = adaptIcon(IconMessageCircle);
-export const MinusIcon = adaptIcon(IconMinus);
-export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
-// Canonical side-chat glyph — every sidechat surface (right dock pane, environment
-// panel rows, tabs) must use this one so the feature reads consistently.
-export const SidechatIcon: LucideIcon = centralIconWrapper("chat-bubble-7");
-export const MicIcon: LucideIcon = centralIconWrapper("microphone");
-export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
-export const PanelRightCloseIcon = centralIconWrapper("sidebar-simple-right-wide");
-export const WindowIcon: LucideIcon = centralIconWrapper("window");
-export const LayoutSidebarIcon: LucideIcon = centralIconWrapper("layout-sidebar");
-export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
-export const PinIcon: LucideIcon = centralIconWrapper("pin");
-// Solid pin from the fill set — used wherever a pin reflects "pinned" status
-// (project + thread rows and their hover cards) rather than a neutral action.
-export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
-export const PauseIcon: LucideIcon = centralIconWrapper("pause", "fill");
-export const PlayIcon: LucideIcon = centralIconWrapper("play", "fill");
-// Outline transport glyphs (Central "reversed" set) for surfaces that read as a
-// row of neutral actions rather than playback state — e.g. the composer goal strip.
-export const PauseOutlineIcon: LucideIcon = centralIconWrapper("pause");
-export const PlayOutlineIcon: LucideIcon = centralIconWrapper("play");
-/** Outline trash can from the Central set (Trash2 is the legacy Tabler glyph). */
-export const TrashCanIcon: LucideIcon = centralIconWrapper("trash-can");
+export const HammerIcon: LucideIcon = hugeIcon(HcHammer);
+export const HistoryIcon = hugeIcon(HiHistory);
+export const InfoIcon = hugeIcon(HiInfo);
+export const KanbanIcon = hugeIcon(HcKanban);
+export const KeyboardIcon: LucideIcon = hugeIcon(HcKeyboard);
+export const ListChecksIcon = hugeIcon(HiListCheck);
+export const ListTodoIcon = hugeIcon(HiListTodo);
+export const Loader2Icon = hugeIcon(HiLoader);
+export const LoaderCircleIcon = hugeIcon(HiLoader);
+export const LoaderIcon = hugeIcon(HiLoader);
+export const Maximize2 = hugeIcon(HiMaximize);
+export const Minimize2 = hugeIcon(HiMinimize);
+export const MessageCircleIcon = hugeIcon(HiMessageCircle);
+export const MinusIcon = hugeIcon(HiMinus);
+export const ChatBubbleIcon: LucideIcon = hugeIcon(HcBubble);
+// Canonical side-chat glyph — every sidechat surface uses this one.
+export const SidechatIcon: LucideIcon = hugeIcon(HcSidechat);
+export const MicIcon: LucideIcon = hugeIcon(HcMic);
+export const PanelLeftIcon = hugeIcon(HcPanelLeft);
+export const PanelRightCloseIcon = hugeIcon(HcPanelRight);
+export const WindowIcon: LucideIcon = hugeIcon(HcWindow);
+export const LayoutSidebarIcon: LucideIcon = hugeIcon(HcLayoutSidebar);
+export const PencilIcon: LucideIcon = hugeIcon(HcPencil);
+export const PinIcon: LucideIcon = hugeIcon(HcPin);
+// Solid pin from the same glyph — used wherever a pin reflects "pinned" status.
+export const PinFilledIcon: LucideIcon = hugeIconFilled(HcPin);
+export const PauseIcon: LucideIcon = hugeIconFilled(HcPause);
+export const PlayIcon: LucideIcon = hugeIconFilled(HcPlay);
+// Outline transport glyphs for surfaces that read as neutral actions rather than
+// playback state — e.g. the composer goal strip.
+export const PauseOutlineIcon: LucideIcon = hugeIcon(HcPause);
+export const PlayOutlineIcon: LucideIcon = hugeIcon(HcPlay);
+/** Trash can (outline). */
+export const TrashCanIcon: LucideIcon = hugeIcon(HiTrash);
 // Persistent thread goal ("Pursuing goal" strip, /goal surfaces).
-export const GoalIcon: LucideIcon = centralIconWrapper("target-arrow");
-export const Plus = adaptIcon(IconPlus);
-export const PlusIcon = adaptIcon(IconPlus);
-export const RefreshCwIcon = adaptIcon(IconRefresh);
-export const RotateCcwIcon = adaptIcon(IconRotate2);
-export const Rows3Icon = adaptIcon(IconLayoutDistributeHorizontal);
-export const SearchIcon: LucideIcon = centralIconWrapper("magnifying-glass");
-// Single source for the settings gear. Every settings affordance renders this
-// one Central glyph so gears stay identical across the chrome.
-export const SettingsIcon: LucideIcon = centralIconWrapper("settings-gear-4");
-export const StarIcon = adaptIcon(IconStar);
-export const StarFilledIcon = adaptIcon(IconStarFilled);
-export const SunIcon = adaptIcon(IconSun);
-export const MoonIcon = adaptIcon(IconMoon);
-export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
-export const StopIcon: LucideIcon = centralIconWrapper("stop", "fill");
-export const StopFilledIcon: LucideIcon = centralIconWrapper("stop", "fill");
-export const SquareSplitHorizontal: LucideIcon = (props) => (
-  <PiSquareSplitHorizontal className={props.className} style={props.style} />
-);
-export const SquareSplitVertical: LucideIcon = (props) => (
-  <PiSquareSplitVertical className={props.className} style={props.style} />
-);
-const TemporaryThreadGlyph = centralIconWrapper("bubble-annotation-5");
+export const GoalIcon: LucideIcon = hugeIcon(HcGoal);
+export const Plus = hugeIcon(HiPlus);
+export const PlusIcon = hugeIcon(HiPlus);
+export const RefreshCwIcon = hugeIcon(HiRefresh);
+export const RotateCcwIcon = hugeIcon(HiRotateCcw);
+export const Rows3Icon = hugeIcon(HiRows3);
+export const SearchIcon: LucideIcon = hugeIcon(HcSearch);
+// Single source for the settings gear.
+export const SettingsIcon: LucideIcon = hugeIcon(HcSettings);
+export const StarIcon = hugeIcon(HiStar);
+export const StarFilledIcon = hugeIconFilled(HiStar);
+export const SunIcon = hugeIcon(HiSun);
+export const MoonIcon = hugeIcon(HiMoon);
+export const DeviceLaptopIcon = hugeIcon(HiLaptop);
+export const StopIcon: LucideIcon = hugeIconFilled(HcStop);
+export const StopFilledIcon: LucideIcon = hugeIconFilled(HcStop);
+export const SquareSplitHorizontal: LucideIcon = hugeIcon(HiSplitH);
+export const SquareSplitVertical: LucideIcon = hugeIcon(HiSplitV);
+// Approval-mode glyphs (composer "Approve for me" / "Full access").
+export const ShieldCheckIcon: LucideIcon = hugeIcon(HcShieldCheck);
+export const ShieldIcon: LucideIcon = hugeIcon(HcShield);
+// Usage / analytics (sidebar quick action).
+export const AnalyticsIcon: LucideIcon = hugeIcon(HcAnalytics);
 // Dotted "annotation" chat bubble — the temporary thread marker shown on the
 // composer toggle and beside temporary threads in the sidebar.
 export const TemporaryThreadIcon: LucideIcon = ({ className, ...props }) => (
-  <TemporaryThreadGlyph className={cn("size-3.5 shrink-0", className)} {...props} />
+  <HugeiconsIcon
+    icon={HiMessageCircle}
+    {...props}
+    color="currentColor"
+    strokeWidth={HUGEICON_STROKE_WIDTH}
+    className={cn("size-3.5 shrink-0", className)}
+  />
 );
-export const TerminalIcon = centralIconWrapper("console");
-export const TerminalSquare = centralIconWrapper("console");
-export const TerminalSquareIcon = centralIconWrapper("console");
-export const TextWrapIcon = adaptIcon(IconTextWrap);
-export const Trash2 = adaptIcon(IconTrash);
-export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
-export const Undo2Icon = adaptIcon(IconArrowBackUp);
-export const WorktreeIcon = centralIconWrapper("arrow-split-right");
-export const XIcon = adaptIcon(IconX);
-export const ZapIcon = adaptIcon(IconBolt);
-// Single source for the fast-mode glyph. Every fast-mode affordance (composer
-// trait badges, the effort-header toggle, the /fast command) renders this one solid
-// lightning bolt from the Central fill set instead of mixing Tabler/Ionicons bolts.
-export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
-// Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
-export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
+export const TerminalIcon = hugeIcon(HcConsole);
+export const TerminalSquare = hugeIcon(HcConsole);
+export const TerminalSquareIcon = hugeIcon(HcConsole);
+export const TextWrapIcon = hugeIcon(HiTextWrap);
+export const Trash2 = hugeIcon(HiTrash);
+export const TriangleAlertIcon = hugeIcon(HiAlertTriangle);
+export const Undo2Icon = hugeIcon(HiUndo);
+export const WorktreeIcon = hugeIcon(HcWorktree);
+export const XIcon = hugeIcon(HiX);
+export const ZapIcon = hugeIcon(HiFlash);
+// Single source for the fast-mode glyph — one solid lightning bolt.
+export const FastModeIcon: LucideIcon = hugeIconFilled(HiFlash);
+// Outline twin of FastModeIcon for the inactive toggle state.
+export const FastModeOutlineIcon: LucideIcon = hugeIcon(HiFlash);

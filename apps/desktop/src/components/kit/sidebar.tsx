@@ -1,6 +1,7 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
-import { IconLayoutSidebar } from "@tabler/icons-react";
+import { SidebarLeftIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { cn } from "@/lib/utils";
@@ -435,7 +436,13 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      <IconLayoutSidebar aria-hidden className="size-4" />
+      <HugeiconsIcon
+        icon={SidebarLeftIcon}
+        aria-hidden
+        className="size-4"
+        color="currentColor"
+        strokeWidth={2}
+      />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );

@@ -62,7 +62,7 @@ export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
 )
 
 export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME =
-  "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0"
+  "!size-7 shrink-0 rounded-lg [&_svg]:mx-0"
 
 export const DOCK_HEADER_ICON_BUTTON_CLASS = CHAT_HEADER_ICON_CONTROL_CLASS_NAME
 
@@ -120,7 +120,7 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
 /** One footprint for the sidebar toggle and the back/forward arrows: 28px squares,
  *  no gap, secondary ink at full strength (Base Button dims SVGs to 80%). */
 const SIDEBAR_TRIGGER_CLASS_NAME = cn(
-  "!size-7 shrink-0 rounded-lg [&_svg]:!opacity-100 [&_svg,&_[data-slot=central-icon]]:mx-0",
+  "!size-7 shrink-0 rounded-lg [&_svg]:!opacity-100 [&_svg]:mx-0",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 )
@@ -204,7 +204,7 @@ const SIDEBAR_HEADER_LEADING_INSET_CLASS =
 
 const PANEL_TOGGLE_CLASS_NAME = cn(
   CHAT_HEADER_TOGGLE_CLASS_NAME,
-  "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+  "!size-7 [&_svg]:mx-0",
 )
 
 export function DockToggle() {

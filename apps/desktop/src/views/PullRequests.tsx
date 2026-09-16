@@ -12,8 +12,7 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuTrigger } from "@/components/kit/menu"
 import { relativeTime } from "@/lib/format"
 import { mapWithConcurrency } from "@/lib/workload"
-import { CentralIcon } from "@/lib/kit/central-icons"
-import { CheckIcon, FilterIcon, GitPullRequestIcon, RefreshCwIcon } from "@/lib/kit/icons"
+import { CheckIcon, FilterIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestIcon, RefreshCwIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { Project, ProjectId, PullRequest } from "@/protocol"
@@ -233,8 +232,8 @@ export function PullRequests() {
 
 function stateGlyph(pr: PullRequest) {
   const state = pr.state.toUpperCase()
-  if (state === "MERGED") return <CentralIcon name="merged-simple" className="size-[1.125rem] text-[color:var(--color-status-merged,#a371f7)]" />
-  if (state === "CLOSED") return <CentralIcon name="pull-request-closed-simple" className="size-[1.125rem] text-muted-foreground" />
+  if (state === "MERGED") return <GitMergeIcon className="size-[1.125rem] text-[color:var(--color-status-merged,#a371f7)]" />
+  if (state === "CLOSED") return <GitPullRequestClosedIcon className="size-[1.125rem] text-muted-foreground" />
   if (pr.is_draft) return <GitPullRequestIcon className="size-[1.125rem] text-muted-foreground" />
   return <GitPullRequestIcon className="size-[1.125rem] text-[var(--color-decoration-added)]" />
 }
