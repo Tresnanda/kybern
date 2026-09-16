@@ -507,7 +507,7 @@ export function MessageScroller({
       const lastItem = railItems.at(-1)?.id === item.id;
       setActiveRailId(item.id);
       if (lastItem) {
-        setFollowing(true);
+        if (!followingRef.current) flushSync(() => setFollowing(true));
         scrollToEnd(reduce || !smooth ? "auto" : "smooth");
         return;
       }

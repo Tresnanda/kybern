@@ -289,7 +289,11 @@ export function Transcript({
     }
     return {
       items: navigationItems,
-      scrollToEnd() { rows.current?.scrollToEnd() },
+      scrollToEnd() {
+        cancelAnimationFrame(navigationFrame.current)
+        navigationFrame.current = 0
+        rows.current?.scrollToEnd()
+      },
       cancelScroll() {
         cancelAnimationFrame(navigationFrame.current)
         navigationFrame.current = 0
@@ -320,23 +324,16 @@ export function Transcript({
         const scroll = viewport.current
         if (!item || !scroll) return
         cancelAnimationFrame(navigationFrame.current)
-        const index = item.turnIndex + historyOffset
-        rows.current?.scrollToIndex(index, { align: "start" })
+        rows.current?.scrollToIndex(item.turnIndex + historyOffset, { align: "start" })
         let attempts = 0
         const refine = () => {
-          const group = groups[item.turnIndex]
-          const turn = group ? scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(group, item.turnIndex))}"]`) : null
+          const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
           const message = turn?.querySelector(`[data-message-role="${item.role}"]`)
-          const view = scroll.getBoundingClientRect()
-          const rect = message?.getBoundingClientRect()
-          if (!rect || rect.bottom <= view.top || rect.top >= view.bottom) {
-            rows.current?.scrollToIndex(index, { align: "start" })
-            if (attempts++ < 30) navigationFrame.current = requestAnimationFrame(refine)
-            return
-          }
-          const top = scroll.scrollTop + rect.top - view.top - Math.max(0, (scroll.clientHeight - rect.height) / 2)
+          if (!message && attempts++ < 10) { navigationFrame.current = requestAnimationFrame(refine); return }
+          if (!message) return
+          const rect = message.getBoundingClientRect()
+          const top = scroll.scrollTop + rect.top - scroll.getBoundingClientRect().top - Math.max(0, (scroll.clientHeight - rect.height) / 2)
           rows.current?.scrollToOffset(top)
-          if (attempts++ < 30) navigationFrame.current = requestAnimationFrame(refine)
         }
         navigationFrame.current = requestAnimationFrame(refine)
       },

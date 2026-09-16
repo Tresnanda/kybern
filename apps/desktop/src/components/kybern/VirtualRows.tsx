@@ -71,6 +71,7 @@ function VirtualizedRows<T>({
   const followEndRef = useRef(followEnd)
   followEndRef.current = followEnd
   const railTargetRef = useRef(false)
+  if (followEnd) railTargetRef.current = false
 
   useLayoutEffect(() => {
     const list = container.current
@@ -179,28 +180,30 @@ function VirtualizedRows<T>({
     scrollToFn: (offset, options, instance) => {
       const el = instance.scrollElement
       if (options.adjustments === undefined) {
-        // Explicit scrollToIndex/scrollToOffset. A rail jump must leave follow
-        // before React re-renders, or the next size-change pin yanks it back.
-        const leavingEnd = !!el && el.scrollHeight - offset - el.clientHeight > 120
-        if (leavingEnd) followEndRef.current = false
-        // Far jumps keep a sticky target. Applying later measurements to the
-        // current DOM position walked the interaction fixture onto later turns.
-        // Near-current writes (wheel cancel, tiny corrects) must not stick.
-        railTargetRef.current = !!el && Math.abs(el.scrollTop - offset) > 40
-        elementScroll(offset, options, instance)
-        return
-      }
-      // Size-change compensation while following: stay on the live DOM edge
-      // only while we are still on it. Read the ref so a rail jump that has
-      // already set following false is not yanked back before this function
-      // identity updates.
-      if (followEndRef.current && providedViewport && el) {
-        const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-        if (distance <= 120) {
-          const max = Math.max(0, el.scrollHeight - el.clientHeight)
+        const max = el ? Math.max(0, el.scrollHeight - el.clientHeight) : 0
+        // Following (including the last rail item) must land on the live DOM
+        // edge. The virtualizer's last-index offset is estimate-short, and
+        // reconciling it after a DOM snap pulls the reader back.
+        if (followEndRef.current && el) {
+          railTargetRef.current = false
           elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
           return
         }
+        // Far rail jumps (follow already released) keep the library offset so
+        // first-measure compensation cannot walk the target onto later turns.
+        if (max - offset <= 120) railTargetRef.current = false
+        else if (el && Math.abs(el.scrollTop - offset) > 40) railTargetRef.current = true
+        elementScroll(offset, options, instance)
+        return
+      }
+      // Size-change compensation while following: stay on the live DOM edge.
+      // Explicit jumps while following also pin there: last-index offsets are
+      // estimate-short. Rail jumps flush-sync following off first so they
+      // keep their offset.
+      if (followEndRef.current && providedViewport && el) {
+        const max = Math.max(0, el.scrollHeight - el.clientHeight)
+        elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
+        return
       }
       if (railTargetRef.current) {
         elementScroll(offset, options, instance)
@@ -238,9 +241,6 @@ function VirtualizedRows<T>({
         const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
         if (distance <= 120) return true
       }
-      // An active rail/index jump must keep reconciling against the target.
-      // First-measure compensation walks that target onto later turns.
-      if (railTargetRef.current) return false
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
