@@ -57,6 +57,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const providerLoads = new Map<string, Promise<ProviderStatus[]>>()
   const snapshots = new Map<ThreadId, ReturnType<typeof createSnapshotReplay>>()
   const toolOutputLoads = new Map<string, Promise<void>>()
+  // Bound the large tool outputs held in the JS heap after on-demand hydration.
+  // Insertion order is the LRU order; re-viewing a result moves it to the end.
+  // Once the cap is exceeded the least-recently-viewed result is dropped back to
+  // an omitted stub, so browsing many large results cannot grow the heap without
+  // bound. It re-fetches on demand exactly like it did before it was hydrated.
+  const hydratedOutputs = new Map<string, ThreadId>()
+  const MAX_HYDRATED_OUTPUTS = 12
   let disposed = false
   let hydrationGeneration = 0
   let canReuseSnapshots = false
@@ -69,13 +76,48 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     return client
   }
 
+  // Keys are `${threadId}:${toolCallId}`. Thread ids are UUIDs, so the first
+  // colon is the boundary even when a tool-call id contains its own colons.
+  function splitOutputKey(key: string): [ThreadId, string] {
+    const at = key.indexOf(":")
+    return [key.slice(0, at) as ThreadId, key.slice(at + 1)]
+  }
+
   function transcriptGet(threadId: ThreadId, extra: Omit<ThreadsGetParams, "thread_id" | "include_tool_output"> = {}) {
     return rpc().call("threads.get", { thread_id: threadId, include_tool_output: false, ...extra })
   }
 
+  // Drop the least-recently-viewed hydrated outputs back to omitted stubs once
+  // the retained set exceeds its cap. A still-mounted row re-fetches through its
+  // own effect, so the currently-open result is kept by touching it on access.
+  function evictHydratedOutputs(keep: string): void {
+    for (const key of hydratedOutputs.keys()) {
+      if (hydratedOutputs.size <= MAX_HYDRATED_OUTPUTS) break
+      if (key === keep) continue
+      const [threadId, toolCallId] = splitOutputKey(key)
+      hydratedOutputs.delete(key)
+      useStore.getState().updateTranscript(threadId, (state) => {
+        let changed = false
+        const blocks = state.blocks.map((block) => {
+          if (block.kind === "tool" && block.call.id === toolCallId && !block.outputOmitted && block.output != null) {
+            changed = true
+            return { ...block, output: null, outputOmitted: true }
+          }
+          return block
+        })
+        return changed ? { ...state, blocks } : state
+      })
+    }
+  }
+
   function hydrateToolOutput(threadId: ThreadId, toolCallId: string): Promise<void> {
     const current = useStore.getState().transcripts[threadId]?.blocks.find((block) => block.kind === "tool" && block.call.id === toolCallId)
-    if (!current || current.kind !== "tool" || !current.outputOmitted) return Promise.resolve()
+    if (!current || current.kind !== "tool" || !current.outputOmitted) {
+      // Already hydrated: mark it most-recently-viewed so it survives eviction.
+      const key = `${threadId}:${toolCallId}`
+      if (hydratedOutputs.delete(key)) hydratedOutputs.set(key, threadId)
+      return Promise.resolve()
+    }
     const key = `${threadId}:${toolCallId}`
     const pending = toolOutputLoads.get(key)
     if (pending) return pending
@@ -90,6 +132,9 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
               : block,
           ),
         }))
+        hydratedOutputs.delete(key)
+        hydratedOutputs.set(key, threadId)
+        evictHydratedOutputs(key)
       })
       .catch((error) => {
         toast.error("Unable to load tool result", { description: errorText(error) })
@@ -892,6 +937,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     snapshots.clear()
     historyLoads.clear()
     reusableSnapshots.clear()
+    hydratedOutputs.clear()
+    toolOutputLoads.clear()
     useStore.getState().releaseCachedData()
     hydrationGeneration++
     uploads.abort()

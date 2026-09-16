@@ -116,6 +116,35 @@ test("expanding an omitted tool result fetches only that payload", async () => {
     assert.equal(block.outputOmitted, false)
   } finally { runtime.disconnect() }
 })
+test("hydrated tool results stay bounded: the least-recently-viewed one is re-omitted", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("tool-output-lru")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  client.reply = async (method) => (method === "threads.tool_output" ? { output: "full", is_error: false } : { checkpoints: [] })
+  const total = 14 // above the retained cap of 12
+  store.getState().updateTranscript("t", () => seedFromGet({
+    thread: { id: "t", last_seq: total },
+    transcript: Array.from({ length: total }, (_, i) => ({
+      role: "tool_call", turn_id: "turn", seq: i + 1, origin: { kind: "root" },
+      call: { id: `c${i}`, name: "bash", input: {} }, output_omitted: true, is_error: false, complete: true, at: "2026-09-07T00:00:00Z",
+    })),
+    pending_approvals: [],
+  }))
+  try {
+    for (let i = 0; i < total; i++) await runtime.hydrateToolOutput("t", `c${i}`)
+    const blocks = store.getState().transcripts.t.blocks
+    const hydrated = blocks.filter((b) => b.kind === "tool" && !b.outputOmitted && b.output != null)
+    assert.equal(hydrated.length, 12, "retained hydrated outputs are capped")
+    // The two oldest (c0, c1) were dropped back to omitted stubs; the newest stays.
+    assert.equal(blocks[0].outputOmitted, true)
+    assert.equal(blocks[0].output, null)
+    assert.equal(blocks[1].outputOmitted, true)
+    assert.equal(blocks[total - 1].outputOmitted, false)
+    assert.equal(blocks[total - 1].output, "full")
+  } finally { runtime.disconnect() }
+})
 test("inactive cache eviction preserves visible split panes and pending user data", () => {
   const store = createEnvironmentStore("retention")
   const a = history("a".repeat(4000)), b = history("b".repeat(4000)), c = history("c".repeat(4000))
