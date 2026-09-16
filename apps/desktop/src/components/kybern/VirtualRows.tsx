@@ -174,7 +174,16 @@ function VirtualizedRows<T>({
     // anchoring keeps flow stable without forcing a React commit per resize.
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
-      const current = instance.scrollElement?.scrollTop
+      const el = instance.scrollElement
+      // Size-change compensation while following: stay on the live DOM edge.
+      // Do not redirect explicit scrollToIndex/scrollToOffset — rail jumps
+      // and Home/End must be able to leave the live edge.
+      if (followEnd && providedViewport && el && options.adjustments !== undefined) {
+        const max = Math.max(0, el.scrollHeight - el.clientHeight)
+        elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
+        return
+      }
+      const current = el?.scrollTop
       if (options.adjustments !== undefined && current !== undefined) {
         // A wheel/trackpad move can precede the scroll event that updates the
         // library's cursor. Apply height compensation to the actual position,
@@ -198,6 +207,13 @@ function VirtualizedRows<T>({
   useLayoutEffect(() => {
     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
       const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
+      const scroll = instance.scrollElement
+      // Following: grow with the live edge only while we are still on it.
+      // A rail jump to the first message must not be treated as follow.
+      if (followEnd && providedViewport && delta > 0 && scroll) {
+        const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+        if (distance <= 120) return true
+      }
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
@@ -206,20 +222,51 @@ function VirtualizedRows<T>({
       // DOM bottom (before this delta) so a visible row is not mistaken for an
       // offscreen row, causing a spurious correction followed by a snap back.
       const element = instance.elementsCache.get(item.key)
-      const scroll = instance.scrollElement
       return element?.isConnected && scroll
         ? element.getBoundingClientRect().bottom - delta <= scroll.getBoundingClientRect().top
         : item.end <= offset
     }
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
-  }, [virtualizer])
+  }, [followEnd, providedViewport, virtualizer])
+  const liveEdge = useRef<HTMLDivElement>(null)
+  const followEndRef = useRef(followEnd)
+  followEndRef.current = followEnd
+  useLayoutEffect(() => {
+    if (!followEnd || !providedViewport) return
+    const scroll = viewport?.current
+    const sentinel = liveEdge.current
+    if (!scroll || !sentinel) return
+    const pin = () => {
+      if (!followEndRef.current) return
+      const max = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
+      if (max - scroll.scrollTop > 1) scroll.scrollTop = max
+    }
+    pin()
+    // Overflow and late wrap can grow scrollHeight without changing the
+    // viewport box. Re-pin only when the live edge moved (content grew),
+    // never when the reader or rail scrolled the sentinel out of view.
+    let lastHeight = scroll.scrollHeight
+    const observer = new IntersectionObserver((entries) => {
+      if (!followEndRef.current || !entries.some((entry) => !entry.isIntersecting)) return
+      const grew = scroll.scrollHeight > lastHeight
+      lastHeight = scroll.scrollHeight
+      if (grew) pin()
+    }, { root: scroll, threshold: 1 })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [followEnd, providedViewport, viewport, items.length])
   useImperativeHandle(controllerRef, () => virtualizer, [virtualizer])
   const setContainer = useCallback((element: HTMLDivElement | null) => {
     container.current = element
   }, [])
 
   if (!viewport) return <PlainRows items={items} getKey={getKey} estimateSize={estimateSize}>{children}</PlainRows>
-  const rows = virtualizer.getVirtualItems()
+  // A zero-height scrollport (ref not committed, or percentage height not yet
+  // resolved) must not emit the estimate spacer. That spacer is the full
+  // virtual height; as a flex min-content it expands the viewport, TanStack
+  // then mounts every turn, and follow-scroll aims at a stale end.
+  const viewportHeight = viewport.current?.clientHeight ?? 0
+  const rows = viewportHeight > 0 ? virtualizer.getVirtualItems() : []
   return (
     <div ref={setContainer} className={className} data-virtual-list={owner} style={{ position: "relative", width: "100%", display: "flow-root" }}>
       {/* Mounted rows share normal flow. Absolute positions based on earlier
@@ -251,7 +298,8 @@ function VirtualizedRows<T>({
           </div>
         )
       })}
-      <div aria-hidden style={{ height: Math.max(0, virtualizer.getTotalSize() - ((rows.at(-1)?.end ?? margin) - margin)), overflowAnchor: "none" }} />
+      <div aria-hidden style={{ height: viewportHeight > 0 ? Math.max(0, virtualizer.getTotalSize() - ((rows.at(-1)?.end ?? margin) - margin)) : 0, overflowAnchor: "none" }} />
+      <div aria-hidden ref={liveEdge} data-live-edge="" style={{ height: 1, overflowAnchor: "none" }} />
     </div>
   )
 }

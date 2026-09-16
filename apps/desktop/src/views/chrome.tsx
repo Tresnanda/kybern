@@ -3,14 +3,12 @@
 // back/forward cluster that moves into the route header when the sidebar collapses.
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react"
-import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io"
-
 import { Button } from "@/components/kit/button"
 import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/kit/sidebar"
 import { Toggle } from "@/components/kit/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
-import { LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
+import { HistoryBackIcon, HistoryForwardIcon, LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
 import { mod } from "@/lib/format"
 import { isTauri, platform } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -163,7 +161,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                 />
               }
             >
-              <IoIosArrowRoundBack className="size-[22px]" />
+              <HistoryBackIcon className="size-[22px]" />
             </TooltipTrigger>
             <TooltipPopup side="bottom">Back ({mod}[)</TooltipPopup>
           </Tooltip>
@@ -179,7 +177,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                 />
               }
             >
-              <IoIosArrowRoundForward className="size-[22px]" />
+              <HistoryForwardIcon className="size-[22px]" />
             </TooltipTrigger>
             <TooltipPopup side="bottom">Forward ({mod}])</TooltipPopup>
           </Tooltip>

@@ -44,7 +44,7 @@ export function sidebarIconButtonSlotClass(size: SidebarIconButtonSize): string 
 type TooltipSide = "top" | "right" | "bottom" | "left";
 
 export type SidebarIconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
-  // Accepts both our LucideIcon adapters and raw react-icons glyphs.
+  // Accepts kit LucideIcon adapters from `lib/kit/icons`.
   icon: ComponentType<{ className?: string }>;
   // Always rendered as the accessible name (aria-label).
   label: string;

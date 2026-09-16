@@ -355,11 +355,16 @@ export function MessageScroller({
     } else {
       viewport.scrollTop = viewport.scrollHeight;
     }
+    // Virtualizer scrollToEnd can no-op before the scroll element is bound, or
+    // land on an earlier scrollHeight while rows are still measuring. Snap to
+    // the live DOM edge so follow cannot stay true 70k+ px short.
+    const max = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    if (max - viewport.scrollTop > followThreshold) viewport.scrollTop = max;
     if (scrollTimerRef.current) window.clearTimeout(scrollTimerRef.current);
     scrollTimerRef.current = window.setTimeout(() => {
       programmaticScrollRef.current = false;
     }, behavior === "smooth" ? 320 : 0);
-  }, []);
+  }, [followThreshold]);
 
   const handleScroll = useCallback(() => {
     const viewport = viewportRef.current;
@@ -418,9 +423,15 @@ export function MessageScroller({
     return observeResizeFrame(content, () => {
       scheduleRailSync();
       if (!followOutput || !followingRef.current) return;
-      scrollToEnd(reduce || !smooth ? "auto" : "smooth");
+      const viewport = viewportRef.current;
+      const distance = viewport
+        ? viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+        : 0;
+      const far = !!viewport && distance > Math.max(followThreshold, viewport.clientHeight);
+      // Smooth chasing cannot cross a still-measuring virtual transcript.
+      scrollToEnd(reduce || !smooth || far || navigationModelRef.current ? "auto" : "smooth");
     });
-  }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth]);
+  }, [followOutput, followThreshold, reduce, scheduleRailSync, scrollToEnd, smooth]);
 
   useEffect(() => {
     if (navigation !== "rail") {
@@ -572,7 +583,7 @@ export function MessageScroller({
         onViewportKeyDown?.(event);
       }}
       className={cn(
-        "h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        "h-full min-h-0 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
         navigation === "rail"
           ? "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           : "[scrollbar-gutter:stable]",

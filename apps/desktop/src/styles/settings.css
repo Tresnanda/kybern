@@ -14,7 +14,7 @@
 .settings-navigation nav { min-height: 0; overflow-y: auto; padding-bottom: 2px; }
 .settings-nav-list { display: flex; flex-direction: column; gap: 3px; }
 .settings-nav-item { height: auto; min-height: 36px; padding: 8px 10px; gap: 10px; font-size: max(13px, var(--app-font-size-ui, 12px)); }
-/* Keep masked Central icons and SVG icons out of an inline text baseline.
+/* Keep SVG icons out of an inline text baseline.
    The slot and label share the row's center without font-dependent descender space. */
 .settings-nav-icon { display: flex; align-items: center; justify-content: center; width: 16px; height: 20px; flex-shrink: 0; line-height: 0; }
 .settings-nav-footer { display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 24px 8px 0; font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }

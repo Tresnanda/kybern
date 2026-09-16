@@ -378,7 +378,7 @@ export function Transcript({
           className="h-full min-h-0"
           style={{ "--rail-bottom": `${bottomInset + 24}px` } as CSSProperties}
           railClassName="!top-3 !bottom-[var(--rail-bottom)] text-muted-foreground/70"
-          viewportClassName={cn("scroll-fade-b h-full overflow-x-hidden overscroll-y-contain py-3 sm:py-4 focus-visible:ring-0", CHAT_COLUMN_GUTTER)}
+          viewportClassName={cn("scroll-fade-b h-full min-h-0 overflow-x-hidden overscroll-y-contain py-3 sm:py-4 focus-visible:ring-0", CHAT_COLUMN_GUTTER)}
           viewportProps={{ "data-chat-scroll-container": "" } as Record<string, unknown>}
           contentProps={{ style: { paddingBottom: bottomInset + 64 } }}
         >

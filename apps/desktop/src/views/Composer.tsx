@@ -8,7 +8,6 @@ import type { ProviderUsage } from "@/protocol"
 // through `above`, inside the same column frame.
 
 import { Fragment, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { HiOutlineHandRaised } from "react-icons/hi2"
 import { toast } from "sonner"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
@@ -43,9 +42,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { buildStructuredTextParts, structuredSegments } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
-import { CentralIcon } from "@/lib/kit/central-icons"
-import { ChevronDownIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
-  SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
+import { ChevronDownIcon, ComposerSendArrowIcon, HandRaisedIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
+  ShieldAccessIcon, ShieldCodeIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
 import { InlineToken } from "@/components/kybern/InlineToken"
@@ -117,10 +115,10 @@ export interface ComposerProps {
 }
 
 const MODES: { mode: PermissionMode; label: string; description: string; icon: React.ReactNode }[] = [
-  { mode: "supervised", label: "Ask for approval", description: "Always ask before editing files or running commands", icon: <HiOutlineHandRaised className="size-4" /> },
+  { mode: "supervised", label: "Ask for approval", description: "Always ask before editing files or running commands", icon: <HandRaisedIcon className="size-4" /> },
   { mode: "accept-edits", label: "Approve edits", description: "Edit files freely, ask before running commands", icon: <PencilIcon className="size-4" /> },
-  { mode: "auto", label: "Approve for me", description: "Only ask for actions detected as potentially unsafe", icon: <CentralIcon name="shield-code" className="size-4" /> },
-  { mode: "full-access", label: "Full access", description: "Unrestricted access to the internet and any file on your computer", icon: <CentralIcon name="shield-access" className="size-4" /> },
+  { mode: "auto", label: "Approve for me", description: "Only ask for actions detected as potentially unsafe", icon: <ShieldCodeIcon className="size-4" /> },
+  { mode: "full-access", label: "Full access", description: "Unrestricted access to the internet and any file on your computer", icon: <ShieldAccessIcon className="size-4" /> },
 ]
 
 /** "claude-fable-5-1" -> "Claude Fable 5.1" when the catalog has no entry. */

@@ -33,7 +33,7 @@ The old GPUI client is on the `gpui` branch. Do not port its views back.
 | `components/kit/` | UI primitives. `components/kit/chat/` holds the composer/transcript helpers and the `composerPickerStyles` class constants. |
 | `components/beui/` | BeUI components, vendored (MIT): message scroller with rail, file tree. |
 | `components/kybern/` | Our own pieces: `DiffView`, `Markdown` (shiki), `ResizeHandle`, `bits`. |
-| `lib/kit/` | Icon system (`icons.tsx`, Central SVGs under `public/central-icons-*`), theme math (`applyTheme.ts`), density/typography/width variables, sidebar row styles. |
+| `lib/kit/` | Icon system (`icons.tsx` maps kit names to Phosphor), theme math (`applyTheme.ts`), density/typography/width variables, sidebar row styles. |
 | `styles/kit.css` | Base stylesheet (tokens, primitives, chat surfaces). `styles/kybern.css` adds only what the Tauri shell needs. |
 
 ## Build and run
@@ -165,8 +165,8 @@ replay events received during hydration; preserve row identity and reading posit
 
 - Before styling anything new, find the matching kit component or class
   constant and reuse it; class strings in `views/` are shared on purpose. Do not reintroduce generic shadcn styling.
-- Icons come from `lib/kit/icons.tsx` (Central, Tabler, react-icons).
-  Phosphor and lucide are not used.
+- Icons come from `lib/kit/icons.tsx` (Phosphor via `@phosphor-icons/react`).
+  Views import kit names only; do not scatter Phosphor imports or use lucide.
 - Base UI menus: `MenuGroupLabel` must sit inside a `MenuGroup`; picker popups
   are `ComposerPickerMenuPopup`; dialogs use `components/kit/dialog`.
 - Transcript, composer and the home screen share `CHAT_COLUMN_GUTTER` from
