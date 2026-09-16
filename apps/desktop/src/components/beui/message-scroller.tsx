@@ -507,15 +507,12 @@ export function MessageScroller({
       const lastItem = railItems.at(-1)?.id === item.id;
       setActiveRailId(item.id);
       if (lastItem) {
-        if (!followingRef.current) flushSync(() => setFollowing(true));
+        setFollowing(true);
         scrollToEnd(reduce || !smooth ? "auto" : "smooth");
         return;
       }
 
-      // Wheel already flush-syncs this. Rail clicks must too: VirtualRows
-      // reads followEnd in scrollToFn, and a scheduled update leaves follow
-      // pinning size-change adjustments until after scrollToIndex.
-      if (followingRef.current) flushSync(() => setFollowing(false));
+      setFollowing(false);
       programmaticScrollRef.current = true;
       navigationNeedsCancelRef.current = true;
       if (navigationModel) {

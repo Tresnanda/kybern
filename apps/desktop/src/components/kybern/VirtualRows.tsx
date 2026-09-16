@@ -68,9 +68,6 @@ function VirtualizedRows<T>({
   const container = useRef<HTMLDivElement>(null)
   const [margin, setMargin] = useState(0)
   const [pinned, setPinned] = useState<{ focused: string | null; selection: readonly [string, string] | null }>({ focused: null, selection: null })
-  const followEndRef = useRef(followEnd)
-  followEndRef.current = followEnd
-  const railTargetRef = useRef(false)
 
   useLayoutEffect(() => {
     const list = container.current
@@ -178,45 +175,16 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const el = instance.scrollElement
-      const max = el ? Math.max(0, el.scrollHeight - el.clientHeight) : 0
-      const virtualEnd = Math.max(0, instance.getTotalSize() - (el?.clientHeight ?? 0))
-      const aimingEnd = virtualEnd - offset <= 120
-      const far = !!el && Math.abs(el.scrollTop - offset) > 40
-      if (options.adjustments === undefined) {
-        // Last-item / follow must snap to the live DOM edge, but only when the
-        // virtualizer is already aiming at its own end. Redirecting every
-        // explicit offset while following sent middle rail jumps to a stale max.
-        if (followEndRef.current && aimingEnd && el) {
-          railTargetRef.current = false
-          elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
-          return
-        }
-        // Far non-end jumps (first/middle rail) leave follow and keep the
-        // library offset. Mount-time offset 0 is not a jump — treating every
-        // non-end explicit as leaving the live edge unmounted follow and left
-        // scaling at 514 history messages.
-        if (!aimingEnd && far) {
-          followEndRef.current = false
-          railTargetRef.current = true
-        } else if (aimingEnd) {
-          railTargetRef.current = false
-        }
-        elementScroll(offset, options, instance)
-        return
-      }
-      // A sticky rail jump wins over follow: otherwise the last-item pin
-      // leaks into middle offsets when followEndRef is still true.
-      if (railTargetRef.current) {
-        elementScroll(offset, options, instance)
-        return
-      }
       // Size-change compensation while following: stay on the live DOM edge.
-      if (followEndRef.current && providedViewport && el) {
+      // Do not redirect explicit scrollToIndex/scrollToOffset — rail jumps
+      // and Home/End must be able to leave the live edge.
+      if (followEnd && providedViewport && el && options.adjustments !== undefined) {
+        const max = Math.max(0, el.scrollHeight - el.clientHeight)
         elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
         return
       }
       const current = el?.scrollTop
-      if (current !== undefined) {
+      if (options.adjustments !== undefined && current !== undefined) {
         // A wheel/trackpad move can precede the scroll event that updates the
         // library's cursor. Apply height compensation to the actual position,
         // or it can undo that move. Core adds the adjustment to this cursor.
@@ -241,9 +209,8 @@ function VirtualizedRows<T>({
       const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
       const scroll = instance.scrollElement
       // Following: grow with the live edge only while we are still on it.
-      // A rail jump must not be treated as follow, even before this effect
-      // re-runs with the new followEnd prop.
-      if (!railTargetRef.current && followEndRef.current && providedViewport && delta > 0 && scroll) {
+      // A rail jump to the first message must not be treated as follow.
+      if (followEnd && providedViewport && delta > 0 && scroll) {
         const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
         if (distance <= 120) return true
       }
@@ -262,6 +229,8 @@ function VirtualizedRows<T>({
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
   }, [followEnd, providedViewport, virtualizer])
   const liveEdge = useRef<HTMLDivElement>(null)
+  const followEndRef = useRef(followEnd)
+  followEndRef.current = followEnd
   useLayoutEffect(() => {
     if (!followEnd || !providedViewport) return
     const scroll = viewport?.current
