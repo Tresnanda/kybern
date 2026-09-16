@@ -276,6 +276,7 @@ export function Transcript({
   }, [])
   const rows = useRef<VirtualRowsController>(null)
   const navigationFrame = useRef(0)
+  const railJumpLock = useRef(false)
   useEffect(() => () => cancelAnimationFrame(navigationFrame.current), [threadId])
   const buildNavigation = useMemo(() => createTranscriptNavigation(), [])
   const navigationItems = useMemo(() => buildNavigation(groups), [buildNavigation, groups])
@@ -289,10 +290,16 @@ export function Transcript({
     }
     return {
       items: navigationItems,
-      scrollToEnd() { rows.current?.scrollToEnd() },
+      scrollToEnd() {
+        cancelAnimationFrame(navigationFrame.current)
+        navigationFrame.current = 0
+        railJumpLock.current = false
+        rows.current?.scrollToEnd()
+      },
       cancelScroll() {
         cancelAnimationFrame(navigationFrame.current)
         navigationFrame.current = 0
+        railJumpLock.current = false
         // An index target keeps reconciling as row measurements arrive, even
         // after following stops. Replace it with the reader's current offset.
         if (viewport.current) rows.current?.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
@@ -320,16 +327,38 @@ export function Transcript({
         const scroll = viewport.current
         if (!item || !scroll) return
         cancelAnimationFrame(navigationFrame.current)
-        rows.current?.scrollToIndex(item.turnIndex + historyOffset, { align: "start" })
+        const index = item.turnIndex + historyOffset
+        railJumpLock.current = true
+        rows.current?.scrollToIndex(index, { align: "start" })
         let attempts = 0
+        const finish = () => { railJumpLock.current = false }
         const refine = () => {
-          const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
+          const group = groups[item.turnIndex]
+          const turn = group ? scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(group, item.turnIndex))}"]`) : null
           const message = turn?.querySelector(`[data-message-role="${item.role}"]`)
-          if (!message && attempts++ < 10) { navigationFrame.current = requestAnimationFrame(refine); return }
-          if (!message) return
-          const rect = message.getBoundingClientRect()
-          const top = scroll.scrollTop + rect.top - scroll.getBoundingClientRect().top - Math.max(0, (scroll.clientHeight - rect.height) / 2)
+          const view = scroll.getBoundingClientRect()
+          const rect = message?.getBoundingClientRect()
+          const onScreen = !!rect && rect.bottom > view.top && rect.top < view.bottom
+          if (!onScreen) {
+            // Fill-icon rows are taller than the text-length estimate. The
+            // first scrollToIndex can overshoot (turn-101..108). Step from the
+            // mounted index using measured size — do not wait on a stale
+            // overshoot, and do not keep looping after the row is visible.
+            const current = rows.current?.getVirtualItemForOffset(scroll.scrollTop)
+            if (current && current.index !== index) {
+              rows.current?.scrollToOffset(Math.max(0, scroll.scrollTop + (index - current.index) * Math.max(1, current.size)))
+            } else {
+              rows.current?.scrollToIndex(index, { align: "start" })
+            }
+            if (attempts++ < 10) navigationFrame.current = requestAnimationFrame(refine)
+            else finish()
+            return
+          }
+          const top = scroll.scrollTop + rect.top - view.top - Math.max(0, (scroll.clientHeight - rect.height) / 2)
           rows.current?.scrollToOffset(top)
+          // Hold the lock one frame so remaining fill-icon measures cannot walk
+          // the just-centered offset. Do not keep scrolling.
+          navigationFrame.current = requestAnimationFrame(finish)
         }
         navigationFrame.current = requestAnimationFrame(refine)
       },
@@ -398,7 +427,7 @@ export function Transcript({
               )}
             </div>
           ) : (
-            <TranscriptStateRoot key={threadId}><VirtualRows items={virtualGroups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
+            <TranscriptStateRoot key={threadId}><VirtualRows items={virtualGroups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following} navigationLockRef={railJumpLock}>
               {(g, i) => g ? <div data-turn-id={turnKey(g, i - historyOffset)}><Turn group={g} threadId={threadId} isLast={i === virtualGroups.length - 1} onOpenAgentActivity={openAgentActivity} /></div> : (
                 <div className={cn(ROW, "py-2")}>
                   <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
