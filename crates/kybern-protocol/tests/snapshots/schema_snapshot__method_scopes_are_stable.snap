@@ -152,6 +152,8 @@ expression: scopes
   - "orchestration:operate"
 - - usage.summary
   - "orchestration:read"
+- - usage.limits
+  - "orchestration:read"
 - - access.pairing.create
   - "access:write"
 - - access.exposure.get

@@ -1138,6 +1138,15 @@ export interface UsageSummaryResult {
   total: UsageRow;
 }
 
+export interface UsageLimitsParams {}
+export interface ProviderLimits {
+  provider: ProviderKind;
+  limits: NonNullable<ProviderUsage["limits"]>;
+}
+export interface UsageLimitsResult {
+  providers: ProviderLimits[];
+}
+
 export interface PullRequest {
   number: number;
   title: string;
@@ -1435,6 +1444,7 @@ export interface Methods {
   "settings.get": [Empty, Settings];
   "settings.update": [SettingsUpdateParams, Settings];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
+  "usage.limits": [UsageLimitsParams, UsageLimitsResult];
   "git.status": [GitStatusParams, GitStatus];
   "git.branches": [GitBranchesParams, GitBranchesResult];
   "git.commit": [GitCommitParams, GitCommitResult];

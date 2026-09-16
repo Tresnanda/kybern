@@ -77,6 +77,7 @@ expression: names
 - settings.get
 - settings.update
 - usage.summary
+- usage.limits
 - access.pairing.create
 - access.exposure.get
 - access.exposure.set

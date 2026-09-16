@@ -1113,6 +1113,21 @@ pub struct UsageSummaryResult {
 }
 method!(UsageSummary, "usage.summary", Some(Scope::OrchestrationRead), UsageSummaryParams, UsageSummaryResult);
 
+/// Latest reported plan limits (e.g. 5-hour / weekly) per provider, taken from the
+/// most recent usage each provider reported. Available without running a turn.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct UsageLimitsParams {}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderLimits {
+    pub provider: crate::ProviderKind,
+    pub limits: Vec<crate::UsageLimit>,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct UsageLimitsResult {
+    pub providers: Vec<ProviderLimits>,
+}
+method!(UsageLimits, "usage.limits", Some(Scope::OrchestrationRead), UsageLimitsParams, UsageLimitsResult);
+
 // ---- access (pairing and tokens) ----
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -1638,6 +1653,7 @@ registry!(
     SettingsGet,
     SettingsUpdate,
     UsageSummary,
+    UsageLimits,
     PairingCreate,
     ExposureGet,
     ExposureSet,

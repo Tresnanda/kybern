@@ -253,6 +253,9 @@ enum Cmd {
         /// Only turns in the last N days.
         #[arg(long)]
         days: Option<i64>,
+        /// Show current plan limits (5-hour / weekly) per provider instead.
+        #[arg(long)]
+        limits: bool,
     },
     /// Pair another device: prints a one-time code and the endpoints to use.
     Pair {
@@ -824,11 +827,16 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
         },
-        Cmd::Usage { by, days } => {
-            let group_by = serde_json::from_value(serde_json::Value::String(by))?;
-            let since = days.map(|d| chrono::Utc::now() - chrono::Duration::days(d));
-            let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
-            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
+        Cmd::Usage { by, days, limits } => {
+            if limits {
+                let r = client.call::<UsageLimits>(UsageLimitsParams {}).await?;
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                let group_by = serde_json::from_value(serde_json::Value::String(by))?;
+                let since = days.map(|d| chrono::Utc::now() - chrono::Duration::days(d));
+                let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
+            }
         }
         Cmd::Pair { label, address, tailscale } => {
             // Validate before minting a code, so a typo doesn't waste an invitation.

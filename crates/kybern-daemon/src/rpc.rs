@@ -496,6 +496,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             ok(UsageSummaryResult { rows, total })
         }
+        UsageLimits::NAME => {
+            let _p: UsageLimitsParams = parse_or_default(params)?;
+            ok(UsageLimitsResult { providers: state.store.latest_provider_limits().map_err(internal)? })
+        }
         PairingCreate::NAME => {
             let p: PairingCreateParams = parse_or_default(params)?;
             let endpoints = crate::access::endpoints(state).await;

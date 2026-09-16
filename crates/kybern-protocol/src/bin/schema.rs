@@ -131,6 +131,7 @@ fn main() {
     method::<SettingsGet>(&mut methods);
     method::<SettingsUpdate>(&mut methods);
     method::<UsageSummary>(&mut methods);
+    method::<UsageLimits>(&mut methods);
     method::<PairingCreate>(&mut methods);
     method::<ExposureGet>(&mut methods);
     method::<ExposureSet>(&mut methods);

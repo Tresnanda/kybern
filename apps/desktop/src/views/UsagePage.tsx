@@ -8,7 +8,7 @@ import { tokens, usd } from "@/lib/format"
 import { limitLabel, reportedPercent, resetLabel } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import type { ProviderKind, ProviderUsage, UsageGroup, UsageSummaryResult } from "@/protocol"
+import type { ProviderKind, ProviderLimits, ProviderUsage, UsageGroup, UsageSummaryResult } from "@/protocol"
 
 type ReportedLimit = NonNullable<ProviderUsage["limits"]>[number]
 
@@ -54,6 +54,10 @@ export function UsagePage() {
       limits: [...windows.values()].sort((a, b) => (a.window_minutes ?? Number.MAX_SAFE_INTEGER) - (b.window_minutes ?? Number.MAX_SAFE_INTEGER)),
     }))
   }, [threads, transcripts])
+  // Authoritative limits from the daemon's store — available without opening a
+  // thread or prompting first. Falls back to the live per-thread values while it
+  // loads (or if an older daemon lacks the method).
+  const [storedLimits, setStoredLimits] = useState<ProviderLimits[] | null>(null)
   const [period, setPeriod] = useState<Period>("30")
   const [group, setGroup] = useState<UsageGroup>("provider")
   const [revision, refresh] = useState(0)
@@ -81,6 +85,18 @@ export function UsagePage() {
     }).catch((error) => { if (!canceled) setFailure({ key, message: errorText(error) }) })
     return () => { canceled = true }
   }, [key, scope, period, group])
+  useEffect(() => {
+    if (connection !== "open") return
+    let canceled = false
+    rpc().call("usage.limits", {}).then((result) => {
+      if (!canceled) setStoredLimits(result.providers)
+    }).catch(() => { /* older daemon lacks the method: keep the per-thread fallback */ })
+    return () => { canceled = true }
+  }, [environmentId, connection, revision])
+  const accountLimits = (storedLimits
+    ? storedLimits.map((entry) => ({ kind: entry.provider, limits: entry.limits }))
+    : providerLimits
+  ).filter((entry) => entry.limits.length > 0)
   // Never show the previous filter's totals under the next filter's label.
   const data = result?.scope === scope ? result : null
   const error = failure?.key === key ? failure.message : null
@@ -103,10 +119,10 @@ export function UsagePage() {
       <Button variant="ghost" size="sm" disabled={loading} onClick={() => refresh(value => value + 1)}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
     </div>
 
-    {providerLimits.length > 0 && <section aria-label="Account limits">
+    {accountLimits.length > 0 && <section aria-label="Account limits">
       <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label">As of your latest turns</span></div>
       <div className="usage-limits">
-        {providerLimits.map(({ kind, limits }) => <div key={kind} className="usage-limit-card">
+        {accountLimits.map(({ kind, limits }) => <div key={kind} className="usage-limit-card">
           <div className="usage-limit-provider">{PROVIDERS[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDERS[kind] ?? kind}</span></div>
           {limits.map((limit, index) => {
             const percent = reportedPercent(limit.used_percent)

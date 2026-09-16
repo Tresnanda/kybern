@@ -1900,6 +1900,58 @@ impl Store {
         })
     }
 
+    /// Latest reported plan limits per provider, folded from stored
+    /// `provider_usage_updated` events. The freshest window wins (later reset
+    /// time, then higher reported usage), so it reflects the most recent turn or
+    /// session a provider ran without needing a live one.
+    pub fn latest_provider_limits(&self) -> Result<Vec<methods::ProviderLimits>> {
+        use std::collections::BTreeMap;
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT t.provider_kind, e.payload FROM events e
+                 JOIN threads t ON t.id = e.thread_id
+                 WHERE e.kind = 'provider_usage_updated' ORDER BY e.seq ASC",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let mut by_provider: BTreeMap<String, BTreeMap<String, UsageLimit>> = BTreeMap::new();
+            for row in rows {
+                let (provider, payload) = row?;
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else { continue };
+                let Some(limits) = value.get("usage").and_then(|u| u.get("limits")).and_then(|l| l.as_array()) else {
+                    continue;
+                };
+                let windows = by_provider.entry(provider).or_default();
+                for entry in limits {
+                    let Ok(limit) = serde_json::from_value::<UsageLimit>(entry.clone()) else { continue };
+                    let key = limit.window_minutes.map(|w| w.to_string()).unwrap_or_else(|| limit.name.clone());
+                    let fresher = match windows.get(&key) {
+                        None => true,
+                        Some(prev) => {
+                            limit.resets_at.unwrap_or(0) > prev.resets_at.unwrap_or(0)
+                                || (limit.resets_at == prev.resets_at && limit.used_percent >= prev.used_percent)
+                        }
+                    };
+                    if fresher {
+                        windows.insert(key, limit);
+                    }
+                }
+            }
+            let providers = by_provider
+                .into_iter()
+                .filter_map(|(kind, windows)| {
+                    let provider = kind.parse::<ProviderKind>().ok()?;
+                    if windows.is_empty() {
+                        return None;
+                    }
+                    let mut limits: Vec<UsageLimit> = windows.into_values().collect();
+                    limits.sort_by_key(|l| l.window_minutes.unwrap_or(u64::MAX));
+                    Some(methods::ProviderLimits { provider, limits })
+                })
+                .collect();
+            Ok(providers)
+        })
+    }
+
     // ---- push tokens (mobile, later) ----
 
     pub fn push_token_upsert(&self, token: &str, platform: &str) -> Result<()> {
