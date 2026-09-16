@@ -11,7 +11,7 @@ import { connectorApproval, isUserInput } from "@/lib/userInput"
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -85,32 +85,6 @@ const HOVER_REVEAL =
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?.text.length ?? 0) / 75 * 20)
 const blockKey = (block: Block) => block.id
-
-function medianNumber(values: number[]): number {
-  const ordered = values.slice().sort((a, b) => a - b)
-  const middle = Math.floor(ordered.length / 2)
-  return ordered.length % 2 === 1 ? ordered[middle]! : (ordered[middle - 1]! + ordered[middle]!) / 2
-}
-
-/** One already-mounted same-shaped turn, not a per-frame step. Heavy tool dumps stay on the text estimate. */
-function sampleFillIconTurnSize(
-  virtualizer: VirtualRowsController,
-  items: readonly (TurnGroup | null)[],
-  target: TurnGroup,
-): number | null {
-  const targetEstimate = estimateTurnSize(target)
-  const sizes: number[] = []
-  for (const row of virtualizer.getVirtualItems()) {
-    const group = items[row.index]
-    if (!group) continue
-    if (Math.abs(estimateTurnSize(group) - targetEstimate) > 24) continue
-    if (row.size < 80) continue
-    const ratio = row.size / Math.max(1, targetEstimate)
-    if (ratio < 0.5 || ratio > 2.5) continue
-    sizes.push(row.size)
-  }
-  return sizes.length > 0 ? medianNumber(sizes) : null
-}
 const estimateWorkSize = () => 32
 const chunkKey = (chunk: WorkChunk) => chunk.kind === "single" ? chunk.block.id : `group:${chunk.blocks[0]!.id}`
 
@@ -270,15 +244,7 @@ export function Transcript({
   const historyOffset = state?.nextBeforeSeq != null ? 1 : 0
   const virtualGroups = useMemo<readonly (TurnGroup | null)[]>(() => historyOffset ? [null, ...groups] : groups, [groups, historyOffset])
   const virtualKey = useCallback((group: TurnGroup | null, index: number) => group ? turnKey(group, index - historyOffset) : "history-control", [historyOffset])
-  const pendingFillIconScroll = useRef<{ index: number; turnIndex: number; role: "user" | "assistant" } | null>(null)
-  const [fillIconSample, setFillIconSample] = useState<{ unit: number; match: number } | null>(null)
-  const virtualEstimate = useCallback((group: TurnGroup | null) => {
-    if (!group) return 48
-    const textEstimate = estimateTurnSize(group)
-    if (!fillIconSample) return textEstimate
-    if (Math.abs(textEstimate - fillIconSample.match) > 24) return textEstimate
-    return fillIconSample.unit
-  }, [fillIconSample])
+  const virtualEstimate = useCallback((group: TurnGroup | null) => group ? estimateTurnSize(group) : 48, [])
   const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
   const selectedActivity = agentActivityTrail.at(-1)
   const runtimeTasks = useStore((s) => selectedActivity?.threadId === threadId ? s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS : EMPTY_RUNTIME_TASKS)
@@ -311,34 +277,6 @@ export function Transcript({
   const rows = useRef<VirtualRowsController>(null)
   const navigationFrame = useRef(0)
   useEffect(() => () => cancelAnimationFrame(navigationFrame.current), [threadId])
-  const centerRailMessage = useCallback((turnIndex: number, role: "user" | "assistant") => {
-    const scroll = viewport.current
-    if (!scroll) return
-    cancelAnimationFrame(navigationFrame.current)
-    let attempts = 0
-    const refine = () => {
-      const group = groups[turnIndex]
-      if (!group) return
-      const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(group, turnIndex))}"]`)
-      const message = turn?.querySelector(`[data-message-role="${role}"]`)
-      if (!message && attempts++ < 10) {
-        navigationFrame.current = requestAnimationFrame(refine)
-        return
-      }
-      if (!message) return
-      const rect = message.getBoundingClientRect()
-      const top = scroll.scrollTop + rect.top - scroll.getBoundingClientRect().top - Math.max(0, (scroll.clientHeight - rect.height) / 2)
-      rows.current?.scrollToOffset(top)
-    }
-    navigationFrame.current = requestAnimationFrame(refine)
-  }, [groups])
-  useLayoutEffect(() => {
-    const pending = pendingFillIconScroll.current
-    if (!pending) return
-    pendingFillIconScroll.current = null
-    rows.current?.scrollToIndex(pending.index, { align: "start" })
-    centerRailMessage(pending.turnIndex, pending.role)
-  }, [fillIconSample, centerRailMessage])
   const buildNavigation = useMemo(() => createTranscriptNavigation(), [])
   const navigationItems = useMemo(() => buildNavigation(groups), [buildNavigation, groups])
   const navigationModel = useMemo<MessageNavigationModel>(() => {
@@ -355,7 +293,6 @@ export function Transcript({
       cancelScroll() {
         cancelAnimationFrame(navigationFrame.current)
         navigationFrame.current = 0
-        pendingFillIconScroll.current = null
         // An index target keeps reconciling as row measurements arrive, even
         // after following stops. Replace it with the reader's current offset.
         if (viewport.current) rows.current?.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
@@ -381,24 +318,23 @@ export function Transcript({
       scrollToItem(id) {
         const item = byId.get(id)
         const scroll = viewport.current
-        const list = rows.current
-        if (!item || !scroll || !list) return
+        if (!item || !scroll) return
         cancelAnimationFrame(navigationFrame.current)
-        const index = item.turnIndex + historyOffset
-        const target = groups[item.turnIndex]
-        if (target && !fillIconSample) {
-          const sampled = sampleFillIconTurnSize(list, virtualGroups, target)
-          if (sampled != null) {
-            pendingFillIconScroll.current = { index, turnIndex: item.turnIndex, role: item.role }
-            setFillIconSample({ unit: sampled, match: estimateTurnSize(target) })
-            return
-          }
+        rows.current?.scrollToIndex(item.turnIndex + historyOffset, { align: "start" })
+        let attempts = 0
+        const refine = () => {
+          const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
+          const message = turn?.querySelector(`[data-message-role="${item.role}"]`)
+          if (!message && attempts++ < 10) { navigationFrame.current = requestAnimationFrame(refine); return }
+          if (!message) return
+          const rect = message.getBoundingClientRect()
+          const top = scroll.scrollTop + rect.top - scroll.getBoundingClientRect().top - Math.max(0, (scroll.clientHeight - rect.height) / 2)
+          rows.current?.scrollToOffset(top)
         }
-        list.scrollToIndex(index, { align: "start" })
-        centerRailMessage(item.turnIndex, item.role)
+        navigationFrame.current = requestAnimationFrame(refine)
       },
     }
-  }, [groups, navigationItems, historyOffset, virtualGroups, centerRailMessage, fillIconSample])
+  }, [groups, navigationItems, historyOffset])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
   useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
