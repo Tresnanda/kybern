@@ -71,7 +71,6 @@ function VirtualizedRows<T>({
   const followEndRef = useRef(followEnd)
   followEndRef.current = followEnd
   const railTargetRef = useRef(false)
-  if (followEnd) railTargetRef.current = false
 
   useLayoutEffect(() => {
     const list = container.current
@@ -179,34 +178,42 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const el = instance.scrollElement
+      const max = el ? Math.max(0, el.scrollHeight - el.clientHeight) : 0
+      const virtualEnd = Math.max(0, instance.getTotalSize() - (el?.clientHeight ?? 0))
+      const aimingEnd = virtualEnd - offset <= 120
       if (options.adjustments === undefined) {
-        const max = el ? Math.max(0, el.scrollHeight - el.clientHeight) : 0
-        // Following (including the last rail item) must land on the live DOM
-        // edge. The virtualizer's last-index offset is estimate-short, and
-        // reconciling it after a DOM snap pulls the reader back.
-        if (followEndRef.current && el) {
+        // Last-item / follow must snap to the live DOM edge, but only when the
+        // virtualizer is already aiming at its own end. Redirecting every
+        // explicit offset while following sent middle rail jumps to a stale max
+        // and inflated the mount-time spacer (514 history messages).
+        if (followEndRef.current && aimingEnd && el) {
           railTargetRef.current = false
           elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
           return
         }
-        // Far rail jumps (follow already released) keep the library offset so
-        // first-measure compensation cannot walk the target onto later turns.
-        if (max - offset <= 120) railTargetRef.current = false
-        else if (el && Math.abs(el.scrollTop - offset) > 40) railTargetRef.current = true
+        // Leaving the live edge: drop follow immediately so size-change
+        // compensation cannot reuse the last-item DOM-max pin. Keep the
+        // library offset for far jumps so first-measure adjustments cannot
+        // walk onto later turns. Set this even if follow is still on — a
+        // scheduled follow update must not beat the rail jump.
+        if (aimingEnd) {
+          railTargetRef.current = false
+        } else {
+          followEndRef.current = false
+          if (el && Math.abs(el.scrollTop - offset) > 40) railTargetRef.current = true
+        }
+        elementScroll(offset, options, instance)
+        return
+      }
+      // A sticky rail jump wins over follow: otherwise the last-item pin
+      // leaks into middle offsets when followEndRef is still true.
+      if (railTargetRef.current) {
         elementScroll(offset, options, instance)
         return
       }
       // Size-change compensation while following: stay on the live DOM edge.
-      // Explicit jumps while following also pin there: last-index offsets are
-      // estimate-short. Rail jumps flush-sync following off first so they
-      // keep their offset.
       if (followEndRef.current && providedViewport && el) {
-        const max = Math.max(0, el.scrollHeight - el.clientHeight)
         elementScroll(max, { adjustments: undefined, behavior: options.behavior }, instance)
-        return
-      }
-      if (railTargetRef.current) {
-        elementScroll(offset, options, instance)
         return
       }
       const current = el?.scrollTop
@@ -237,7 +244,7 @@ function VirtualizedRows<T>({
       // Following: grow with the live edge only while we are still on it.
       // A rail jump must not be treated as follow, even before this effect
       // re-runs with the new followEnd prop.
-      if (followEndRef.current && providedViewport && delta > 0 && scroll) {
+      if (!railTargetRef.current && followEndRef.current && providedViewport && delta > 0 && scroll) {
         const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
         if (distance <= 120) return true
       }

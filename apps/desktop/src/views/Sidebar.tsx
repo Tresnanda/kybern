@@ -32,7 +32,7 @@ import {
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
-  GitCompareIcon,
+  GitPullRequestIcon,
   HandoffIcon,
   KeyboardIcon,
   NewThreadIcon,
@@ -163,10 +163,10 @@ export function ThreadSidebar() {
         <div className="sidebar-surface-enter">
           <SidebarGroup className="px-1.5 pt-1 pb-1.5">
             <SidebarMenu className="gap-0.5">
-              <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
-              <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
-              <PrimaryAction icon={<GitCompareIcon className="size-[15px] shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
-              <PrimaryAction icon={<AnalyticsIcon className="size-[15px] shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
+              <PrimaryAction icon={<NewThreadIcon className="size-4 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
+              <PrimaryAction icon={<ClockIcon className="size-4 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
+              <PrimaryAction icon={<GitPullRequestIcon className="size-4 shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
+              <PrimaryAction icon={<AnalyticsIcon className="size-4 shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
             </SidebarMenu>
           </SidebarGroup>
 

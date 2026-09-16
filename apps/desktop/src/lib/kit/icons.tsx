@@ -36,7 +36,7 @@ import {
   CaretRight,
   CaretUp,
   CaretUpDown,
-  ChartLineUp,
+  ChartBar,
   ChatCircle,
   ChatTeardrop,
   ChatTeardropDots,
@@ -93,6 +93,7 @@ import {
   GitBranch,
   GitCommit,
   GitDiff,
+  GitFork,
   GitMerge,
   GitPullRequest,
   GithubLogo,
@@ -117,7 +118,7 @@ import {
   Package,
   Paperclip,
   Pause,
-  PencilSimple,
+  Pencil,
   Play,
   Plugs,
   PlugsConnected,
@@ -159,9 +160,12 @@ import { cn } from "@/lib/utils";
 // Keep the existing icon API stable while the app moves from Central/Tabler to Phosphor.
 export type LucideIcon = FC<SVGProps<SVGSVGElement> & { size?: string | number }>;
 
-// Phosphor regular is a 1px stroke at 16px — hairline against 12–14px UI labels.
-// Bold is 1.5px, the same optical weight as nearby font-normal text.
-const KIT_ICON_WEIGHT: IconWeight = "bold";
+// Phosphor bold is the heaviest outline (1.5px at 16px). Folder's enclosed
+// silhouette already matches nearby labels at that weight. Sparse line glyphs
+// (pencil, clock, git, charts) still read thin, so the kit default is fill.
+// Folder/FolderOpen/Folders stay bold — do not lighten them.
+const KIT_ICON_WEIGHT: IconWeight = "fill";
+const KIT_FOLDER_WEIGHT: IconWeight = "bold";
 
 // Central glyphs were a masked square span. Phosphor SVGs use a 256 viewBox.
 // Putting `inline-flex` + `min-width: <slot>` on the SVG itself lets WebKit use
@@ -309,13 +313,13 @@ export const BrainIcon = adaptIcon(Brain);
 export const FileIcon = adaptIcon(File);
 export const FlagIcon = adaptIcon(Flag);
 export const FlaskConicalIcon = adaptIcon(Flask);
-export const FolderIcon = adaptIcon(Folder);
-export const FolderOpenIcon = adaptIcon(FolderOpen);
-export const FoldersIcon = adaptIcon(Folders);
+export const FolderIcon = adaptIcon(Folder, KIT_FOLDER_WEIGHT);
+export const FolderOpenIcon = adaptIcon(FolderOpen, KIT_FOLDER_WEIGHT);
+export const FoldersIcon = adaptIcon(Folders, KIT_FOLDER_WEIGHT);
 export const GiftIcon = adaptIcon(Gift);
 export const GitCommitIcon = adaptIcon(GitCommit);
 export const GitBranchIcon = adaptIcon(GitBranch);
-export const GitForkIcon: LucideIcon = GitBranchIcon;
+export const GitForkIcon = adaptIcon(GitFork);
 export const GitMergeIcon = adaptIcon(GitMerge);
 export const GitMergedSimpleIcon = adaptIcon(GitMerge);
 export const PushIcon = adaptIcon(CloudArrowUp);
@@ -349,9 +353,9 @@ export const KanbanIcon = adaptIcon(Kanban);
 export const KeyboardIcon = adaptIcon(Keyboard);
 export const ListChecksIcon = adaptIcon(ListChecks);
 export const ListTodoIcon = adaptIcon(List);
-export const Loader2Icon = adaptIcon(CircleNotch);
-export const LoaderCircleIcon = adaptIcon(CircleNotch);
-export const LoaderIcon = adaptIcon(CircleNotch);
+export const Loader2Icon = adaptIcon(CircleNotch, KIT_FOLDER_WEIGHT);
+export const LoaderCircleIcon = adaptIcon(CircleNotch, KIT_FOLDER_WEIGHT);
+export const LoaderIcon = adaptIcon(CircleNotch, KIT_FOLDER_WEIGHT);
 export const Maximize2 = adaptIcon(ArrowsOut);
 export const Minimize2 = adaptIcon(ArrowsIn);
 export const MessageCircleIcon = adaptIcon(ChatCircle);
@@ -363,13 +367,13 @@ export const PanelLeftIcon = adaptIcon(Sidebar);
 export const PanelRightCloseIcon = adaptMirrored(SidebarSimple);
 export const WindowIcon = adaptIcon(AppWindow);
 export const LayoutSidebarIcon = adaptIcon(Sidebar);
-export const PencilIcon = adaptIcon(PencilSimple);
+export const PencilIcon = adaptIcon(Pencil);
 export const PinIcon = adaptIcon(PushPin);
 export const PinFilledIcon = adaptIcon(PushPin, "fill");
 export const PauseIcon = adaptIcon(Pause, "fill");
 export const PlayIcon = adaptIcon(Play, "fill");
-export const PauseOutlineIcon = adaptIcon(Pause);
-export const PlayOutlineIcon = adaptIcon(Play);
+export const PauseOutlineIcon = adaptIcon(Pause, KIT_FOLDER_WEIGHT);
+export const PlayOutlineIcon = adaptIcon(Play, KIT_FOLDER_WEIGHT);
 export const TrashCanIcon = adaptIcon(Trash);
 export const GoalIcon = adaptIcon(Target);
 export const PlusIcon = adaptIcon(PhosphorPlus);
@@ -403,11 +407,11 @@ export const WorktreeIcon = adaptIcon(ArrowsSplit);
 export const XIcon = adaptIcon(X);
 export const ZapIcon = adaptIcon(Lightning);
 export const FastModeIcon = adaptIcon(Lightning, "fill");
-export const FastModeOutlineIcon = adaptIcon(Lightning);
+export const FastModeOutlineIcon = adaptIcon(Lightning, KIT_FOLDER_WEIGHT);
 export const HandRaisedIcon = adaptIcon(HandPalm);
 export const ShieldCodeIcon = adaptIcon(ShieldCheck);
 export const ShieldAccessIcon = adaptIcon(ShieldStar);
-export const AnalyticsIcon = adaptIcon(ChartLineUp);
+export const AnalyticsIcon = adaptIcon(ChartBar);
 
 /** File-type glyphs for composer, diff, and transcript rows. Keys match `fileIcons.ts`. */
 export const FILE_ENTRY_ICONS: Record<string, LucideIcon> = {
