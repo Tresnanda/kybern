@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/kit/button"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/kit/input-group"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { ProviderMark } from "@/components/kybern/bits"
@@ -147,6 +148,7 @@ export function UsagePage() {
         <div className="usage-stat"><dt>Input + output tokens</dt><dd title={count(data.summary.total).toLocaleString()}>{tokens(count(data.summary.total))}</dd><p>{tokens(data.summary.total.usage.input_tokens)} input · {tokens(data.summary.total.usage.output_tokens)} output</p></div>
         <div className="usage-stat"><dt>Completed turns</dt><dd>{data.summary.total.turns.toLocaleString()}</dd><p>{tokens(data.summary.total.usage.cache_read_tokens)} cache read · {tokens(data.summary.total.usage.cache_write_tokens)} cache write</p></div>
       </dl>
+      <PlanValue apiEquivalent={data.summary.total.cost_usd} period={period} />
       {data.summary.rows.length === 0 ? <div className="usage-state"><h2 className="font-medium">No usage in this period</h2><p>Usage appears here after an agent finishes a turn on this machine. Try a longer period to see earlier activity.</p>{period !== "all" && <Button size="sm" variant="chrome-outline" onClick={() => setPeriod("all")}>Show all time</Button>}</div> : <section aria-label="Daily token activity">
         <div className="usage-section-heading"><h2>Daily activity</h2><span className="usage-filter-label">{activeDay ?? <>{period === "7" ? "Last 7 days" : "Last 30 days"} · UTC</>}</span></div>
         <div className="usage-chart">{chart.map(day => {
@@ -164,4 +166,61 @@ export function UsagePage() {
       <p className="settings-note">Turns recorded by this Kybern daemon. Cost is each agent's own figure — on a subscription (Claude, Codex) it's the pay-as-you-go equivalent, not your actual bill, and some agents report none. Cache tokens count toward cost but are listed separately.</p>
     </>}
   </div>
+}
+
+const PLAN_COST_KEY = "kybern.usage.plan-cost"
+
+/** Reframes the pay-as-you-go cost as subscription value: how much compute your
+ *  flat fee actually bought. Plan cost is stored locally — no account needed. */
+function PlanValue({ apiEquivalent, period }: { apiEquivalent: number; period: Period }) {
+  const [monthly, setMonthly] = useState<number | null>(() => {
+    const stored = Number(localStorage.getItem(PLAN_COST_KEY))
+    return Number.isFinite(stored) && stored > 0 ? stored : null
+  })
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState("")
+  const commit = () => {
+    const value = Number(draft)
+    if (Number.isFinite(value) && value > 0) {
+      setMonthly(value)
+      localStorage.setItem(PLAN_COST_KEY, String(value))
+    } else {
+      setMonthly(null)
+      localStorage.removeItem(PLAN_COST_KEY)
+    }
+    setEditing(false)
+  }
+  const startEdit = () => { setDraft(monthly ? String(monthly) : ""); setEditing(true) }
+  const days = period === "7" ? 7 : period === "30" ? 30 : null
+  const planForPeriod = monthly != null && days != null ? (monthly * days) / 30 : null
+  const multiple = planForPeriod && planForPeriod > 0 ? apiEquivalent / planForPeriod : null
+  const periodLabel = period === "7" ? "in the last 7 days" : period === "30" ? "this month" : "so far"
+  return (
+    <div className="usage-plan-value">
+      <div className="usage-plan-head">
+        <span className="usage-plan-title">Subscription value</span>
+        {editing ? (
+          <span className="usage-plan-edit">
+            <InputGroup className="w-24">
+              <InputGroupAddon>$</InputGroupAddon>
+              <InputGroupInput aria-label="Total plan cost per month" inputMode="decimal" placeholder="200" autoFocus value={draft}
+                onChange={(event) => setDraft(event.target.value.replace(/[^0-9.]/g, ""))}
+                onKeyDown={(event) => { if (event.key === "Enter") commit(); if (event.key === "Escape") setEditing(false) }} />
+            </InputGroup>
+            <Button size="xs" variant="chrome-outline" onClick={commit}>Save</Button>
+          </span>
+        ) : (
+          <Button size="xs" variant="ghost" onClick={startEdit}>{monthly != null ? `$${monthly}/mo` : "Set plan cost"}</Button>
+        )}
+      </div>
+      {multiple != null ? <>
+        <div className="usage-plan-multiple">{multiple >= 10 ? Math.round(multiple).toLocaleString() : multiple.toFixed(1)}&times;</div>
+        <p className="usage-plan-caption">You ran <b className="text-foreground">{usd(apiEquivalent)}</b> of pay-as-you-go compute on {usd(planForPeriod!)} of subscription {periodLabel}.</p>
+      </> : monthly != null ? (
+        <p className="usage-plan-caption"><b className="text-foreground">{usd(apiEquivalent)}</b> of pay-as-you-go compute on your subscription {periodLabel}. Pick a 7- or 30-day period to see your value multiple.</p>
+      ) : (
+        <p className="usage-plan-caption">Add your total plan cost per month to see how much pay-as-you-go compute your flat fee actually covers.</p>
+      )}
+    </div>
+  )
 }

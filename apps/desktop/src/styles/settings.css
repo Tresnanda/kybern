@@ -93,6 +93,12 @@
 .usage-limit[data-usage-tone="critical"] .usage-limit-meter > span { background: var(--destructive); opacity: 1; }
 .usage-limit-reset { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { .usage-limit-meter > span { transition: none; } }
+.usage-plan-value { display: grid; gap: 8px; padding: 18px; border: 1px solid var(--color-border); border-radius: 12px; }
+.usage-plan-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+.usage-plan-title { font-size: 13px; font-weight: 600; }
+.usage-plan-edit { display: flex; align-items: center; gap: 8px; }
+.usage-plan-multiple { font-size: clamp(30px, 4vw, 42px); font-weight: 600; line-height: 1.02; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.usage-plan-caption { font-size: 12px; line-height: 1.55; color: var(--muted-foreground); max-width: 62ch; }
 @media (max-width: 760px) {
   .settings-navigation { width: 190px; }
   .settings-navigation-inner { padding-inline: 12px; }
