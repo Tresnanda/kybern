@@ -401,6 +401,132 @@ fn contextual_command(binary: &std::path::Path, context: &ProbeContext) -> Comma
     command
 }
 
+/// Read the account's current plan limits by driving Claude Code's local
+/// `/usage` command over stream-json. It runs no model turn (num_turns 0, zero
+/// cost), so the Usage page can show live limits without the user prompting.
+pub async fn read_account_limits(
+    cwd: &std::path::Path,
+    binary: Option<&PathBuf>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<Vec<kybern_protocol::UsageLimit>> {
+    let bin = resolve(ProviderKind::ClaudeCode, binary).ok()?;
+    let context = ProbeContext { binary: Some(bin.clone()), cwd: Some(cwd.to_path_buf()), env: env.clone() };
+    let mut cmd = contextual_command(&bin, &context);
+    cmd.args(["-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--no-session-persistence"]);
+    let child = NdjsonChild::spawn(cmd).ok()?;
+    child.write(&json!({ "type": "user", "message": { "role": "user", "content": "/usage" } })).await.ok()?;
+    let _ = child.close_stdin().await;
+    let text = tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        loop {
+            let frame = {
+                let mut lines = child.lines.lock().await;
+                lines.recv().await?
+            };
+            if frame.get("type").and_then(Value::as_str) == Some("result") {
+                return frame.get("result").and_then(Value::as_str).map(str::to_string);
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+    child.kill().await;
+    let limits = parse_usage_limits(&text?);
+    (!limits.is_empty()).then_some(limits)
+}
+
+/// Parse the human-readable `/usage` output into structured limits. Lines look
+/// like `Current session: 7% used · resets Sep 16 at 7:30pm (Asia/Makassar)`.
+fn parse_usage_limits(text: &str) -> Vec<kybern_protocol::UsageLimit> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        let Some((label, rest)) = line.split_once(':') else { continue };
+        if !rest.contains("% used") {
+            continue;
+        }
+        let Some(percent) = rest.split('%').next().and_then(|value| value.trim().parse::<f64>().ok()) else {
+            continue;
+        };
+        let (name, window_minutes) = classify_usage_limit(label.trim());
+        let resets_at = rest.split("resets").nth(1).and_then(parse_reset_local);
+        out.push(kybern_protocol::UsageLimit { name, used_percent: percent, window_minutes, resets_at });
+    }
+    out
+}
+
+/// Map a `/usage` row label to a stable name + window so it lines up with the
+/// desktop labels and Codex's window-based limits.
+fn classify_usage_limit(label: &str) -> (String, Option<u64>) {
+    if label.to_lowercase().contains("session") {
+        ("Current session".into(), Some(300))
+    } else if label.eq_ignore_ascii_case("Current week (all models)") {
+        ("This week".into(), Some(10080))
+    } else if let Some(model) = label.strip_prefix("Current week (").and_then(|inner| inner.strip_suffix(')')) {
+        (format!("{model} this week"), None)
+    } else {
+        (label.to_string(), None)
+    }
+}
+
+/// Parse `Sep 16 at 7:30pm (Asia/Makassar)` as a local time. The daemon shares
+/// the user's timezone, so interpret the naive datetime in `Local` and ignore
+/// the parenthetical tz name. Assume the current year, rolling forward a year if
+/// the date already passed (resets are always in the future).
+fn parse_reset_local(text: &str) -> Option<i64> {
+    use chrono::{Datelike, Local, NaiveDate, TimeZone};
+    let cleaned = text.split('(').next().unwrap_or(text).trim().replace(" at ", " ");
+    let mut parts = cleaned.split_whitespace();
+    let month = month_number(parts.next()?)?;
+    let day: u32 = parts.next()?.parse().ok()?;
+    let (hour, minute) = parse_clock(parts.next()?)?;
+    let now = Local::now();
+    for year in [now.year(), now.year() + 1] {
+        let naive = NaiveDate::from_ymd_opt(year, month, day)?.and_hms_opt(hour, minute, 0)?;
+        if let chrono::LocalResult::Single(dt) = Local.from_local_datetime(&naive) {
+            if dt.timestamp() + 86_400 >= now.timestamp() {
+                return Some(dt.timestamp());
+            }
+        }
+    }
+    None
+}
+
+fn month_number(abbr: &str) -> Option<u32> {
+    Some(match abbr.to_lowercase().as_str() {
+        "jan" => 1,
+        "feb" => 2,
+        "mar" => 3,
+        "apr" => 4,
+        "may" => 5,
+        "jun" => 6,
+        "jul" => 7,
+        "aug" => 8,
+        "sep" => 9,
+        "oct" => 10,
+        "nov" => 11,
+        "dec" => 12,
+        _ => return None,
+    })
+}
+
+fn parse_clock(text: &str) -> Option<(u32, u32)> {
+    let lower = text.to_lowercase();
+    let pm = lower.ends_with("pm");
+    let body = lower.trim_end_matches("pm").trim_end_matches("am");
+    let (hour12, minute) = match body.split_once(':') {
+        Some((h, m)) => (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?),
+        None => (body.parse::<u32>().ok()?, 0),
+    };
+    let hour = match (hour12, pm) {
+        (12, false) => 0,
+        (12, true) => 12,
+        (h, true) => h + 12,
+        (h, false) => h,
+    };
+    (hour < 24 && minute < 60).then_some((hour, minute))
+}
+
 /// Friendly names follow a CLI-version-gated manifest while the
 /// selector itself remains exactly what Claude Code accepts.
 fn claude_model_name(selector: &str, cli_version: Option<&str>, alias_target: Option<&str>) -> String {
