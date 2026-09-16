@@ -33,8 +33,6 @@ interface VirtualRowsProps<T> {
   className?: string
   anchor?: "start" | "end"
   followEnd?: boolean
-  /** When true, keep the library’s explicit offset so a rail jump is not walked by first-measure compensation. Set only for scrollToItem, never on mount. */
-  navigationLockRef?: RefObject<boolean>
 }
 
 export function VirtualRows<T>(props: VirtualRowsProps<T>) {
@@ -63,7 +61,6 @@ function VirtualizedRows<T>({
   className,
   anchor,
   followEnd = true,
-  navigationLockRef,
 }: VirtualRowsProps<T>) {
   const inherited = useContext(VirtualScrollContext)
   const viewport = providedViewport ?? inherited?.viewport
@@ -178,14 +175,6 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const el = instance.scrollElement
-      // A rail jump holds the library offset while fill-icon rows measure
-      // taller than estimates. Applying those deltas to the current DOM
-      // position walked the fixture onto later turns. Do not infer this lock
-      // from far explicit scrolls — that was the 514/802 mount-time pin.
-      if (navigationLockRef?.current) {
-        elementScroll(offset, options, instance)
-        return
-      }
       // Size-change compensation while following: stay on the live DOM edge.
       // Do not redirect explicit scrollToIndex/scrollToOffset — rail jumps
       // and Home/End must be able to leave the live edge.
@@ -221,7 +210,6 @@ function VirtualizedRows<T>({
       const scroll = instance.scrollElement
       // Following: grow with the live edge only while we are still on it.
       // A rail jump to the first message must not be treated as follow.
-      if (navigationLockRef?.current) return false
       if (followEnd && providedViewport && delta > 0 && scroll) {
         const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
         if (distance <= 120) return true
@@ -239,7 +227,7 @@ function VirtualizedRows<T>({
         : item.end <= offset
     }
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
-  }, [followEnd, providedViewport, virtualizer, navigationLockRef])
+  }, [followEnd, providedViewport, virtualizer])
   const liveEdge = useRef<HTMLDivElement>(null)
   const followEndRef = useRef(followEnd)
   followEndRef.current = followEnd
