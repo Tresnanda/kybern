@@ -138,6 +138,38 @@ async fn codex_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Prov
     models
 }
 
+/// Read the account's current rate limits straight from the Codex app-server,
+/// without starting a thread. Lets the Usage page show live plan limits on
+/// demand instead of the last value a running turn happened to report.
+pub async fn read_account_limits(
+    cwd: &std::path::Path,
+    binary: Option<&PathBuf>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<Vec<kybern_protocol::UsageLimit>> {
+    let bin = resolve(ProviderKind::Codex, binary).ok()?;
+    let mut cmd = Command::new(bin);
+    cmd.current_dir(cwd).arg("app-server").envs(env);
+    let child = NdjsonChild::spawn(cmd).ok()?;
+    let initialized = catalog_call(
+        &child,
+        1,
+        "initialize",
+        json!({
+            "clientInfo": { "name": "kybern", "title": "Kybern", "version": env!("CARGO_PKG_VERSION") },
+            "capabilities": { "experimentalApi": true }
+        }),
+    )
+    .await
+    .is_some();
+    if !initialized || child.write(&json!({ "method": "initialized" })).await.is_err() {
+        child.kill().await;
+        return None;
+    }
+    let result = catalog_call(&child, 2, "account/rateLimits/read", json!({})).await;
+    child.kill().await;
+    parse_rate_limits(&result?["rateLimits"])
+}
+
 /// Ask Codex's own app-server for its effective skill catalog. This preserves
 /// plugin namespaces, disabled state, and repo/system precedence that cannot be
 /// reconstructed reliably from a blind filesystem walk.

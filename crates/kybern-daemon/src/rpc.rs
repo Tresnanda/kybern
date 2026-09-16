@@ -498,7 +498,27 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         UsageLimits::NAME => {
             let _p: UsageLimitsParams = parse_or_default(params)?;
-            ok(UsageLimitsResult { providers: state.store.latest_provider_limits().map_err(internal)? })
+            let mut providers = state.store.latest_provider_limits().map_err(internal)?;
+            // Codex exposes an account-level rate-limit read that needs no turn, so
+            // refresh it live. cwd only needs to be a real directory; the account
+            // auth lives under $HOME, which the daemon already inherits.
+            let codex_settings = crate::settings::provider_settings(&state.settings.get(), ProviderKind::Codex, None);
+            let binary: Option<std::path::PathBuf> = codex_settings.binary.clone().map(Into::into);
+            let cwd = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+            let live = tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                kybern_drivers::codex::read_account_limits(&cwd, binary.as_ref(), &codex_settings.env),
+            )
+            .await
+            .ok()
+            .flatten();
+            if let Some(limits) = live {
+                providers.retain(|entry| entry.provider != ProviderKind::Codex);
+                if !limits.is_empty() {
+                    providers.push(ProviderLimits { provider: ProviderKind::Codex, limits });
+                }
+            }
+            ok(UsageLimitsResult { providers })
         }
         PairingCreate::NAME => {
             let p: PairingCreateParams = parse_or_default(params)?;
