@@ -10,7 +10,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 
 function FolderGlyph(icon: IconSvgElement, props: SVGProps<SVGSVGElement>) {
   return (
-    <HugeiconsIcon icon={icon} {...props} color="currentColor" strokeWidth={2.5} />
+    <HugeiconsIcon icon={icon} {...props} color="currentColor" strokeWidth={2} />
   );
 }
 

@@ -142,18 +142,15 @@ export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
 // rules apply. Keep FileEntryIcon/FolderClosed/kit sidebar in step with this value.
 const HUGEICON_STROKE_WIDTH = 2.5;
 
-function hugeIcon(icon: IconSvgElement): LucideIcon {
+function hugeIcon(icon: IconSvgElement, strokeWidth: number = HUGEICON_STROKE_WIDTH): LucideIcon {
   return function HugeIconGlyph(props) {
-    return (
-      <HugeiconsIcon
-        icon={icon}
-        {...props}
-        color="currentColor"
-        strokeWidth={HUGEICON_STROKE_WIDTH}
-      />
-    );
+    return <HugeiconsIcon icon={icon} {...props} color="currentColor" strokeWidth={strokeWidth} />;
   };
 }
+
+// The folder is a large, dense glyph — it reads too heavy at the shared 2.5, so
+// folders use a lighter stroke. Keep FolderClosed.tsx in step with this value.
+const FOLDER_STROKE_WIDTH = 2;
 
 // Solid variant: the free set is stroke-only, so filled states (play/pause/stop,
 // pinned, fast-mode bolt) fill the glyph's paths with currentColor. Simple closed
@@ -242,11 +239,11 @@ export const BrainIcon = hugeIcon(HiBrain);
 export const FileIcon = hugeIcon(HiFile);
 export const FlagIcon = hugeIcon(HiFlag);
 export const FlaskConicalIcon = hugeIcon(HiFlask);
-export const FolderIcon = hugeIcon(HiFolder);
-export const FolderOpenIcon = hugeIcon(HiFolderOpen);
+export const FolderIcon = hugeIcon(HiFolder, FOLDER_STROKE_WIDTH);
+export const FolderOpenIcon = hugeIcon(HiFolderOpen, FOLDER_STROKE_WIDTH);
 // Stacked "folders" glyph used as the single representation of a file tree /
 // explorer surface (right-dock explorer, editor Files activity, diff file-tree toggle).
-export const FoldersIcon: LucideIcon = hugeIcon(HcFolders);
+export const FoldersIcon: LucideIcon = hugeIcon(HcFolders, FOLDER_STROKE_WIDTH);
 export const GiftIcon: LucideIcon = hugeIcon(HcGift);
 export const GitCommitIcon: LucideIcon = hugeIcon(HcCommit);
 export const GitBranchIcon: LucideIcon = hugeIcon(HcBranch);

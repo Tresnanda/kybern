@@ -5,7 +5,6 @@ import { collaborationThreadRows } from "../../../../packages/kybern-client/src/
 
 import { useMemo, useState } from "react"
 import { HiOutlineArchiveBox } from "react-icons/hi2"
-import { IoIosGitCompare } from "react-icons/io"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
@@ -27,6 +26,7 @@ import {
   AddPlusIcon,
   AnalyticsIcon,
   ArchiveIcon,
+  GitPullRequestIcon,
   BellIcon,
   BookIcon,
   CircleQuestionIcon,
@@ -166,8 +166,8 @@ export function ThreadSidebar() {
             <SidebarMenu className="gap-0.5">
               <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
               <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
-              <PrimaryAction icon={<IoIosGitCompare className="size-[15px] shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
-              <PrimaryAction icon={<AnalyticsIcon className="size-[15px] shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
+              <PrimaryAction icon={<GitPullRequestIcon className="size-3.5 shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
+              <PrimaryAction icon={<AnalyticsIcon className="size-3.5 shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
             </SidebarMenu>
           </SidebarGroup>
 
