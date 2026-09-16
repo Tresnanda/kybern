@@ -93,10 +93,28 @@ export function UsagePage() {
     }).catch(() => { /* older daemon lacks the method: keep the per-thread fallback */ })
     return () => { canceled = true }
   }, [environmentId, connection, revision])
-  const accountLimits = (storedLimits
-    ? storedLimits.map((entry) => ({ kind: entry.provider, limits: entry.limits }))
-    : providerLimits
-  ).filter((entry) => entry.limits.length > 0)
+  // Merge the daemon's stored snapshot with the live per-thread values so an
+  // active thread's fresh limits win immediately (freshest window: later reset
+  // time, then higher reported usage).
+  const accountLimits = useMemo(() => {
+    const byProvider = new Map<ProviderKind, Map<string, ReportedLimit>>()
+    const sources = [providerLimits, (storedLimits ?? []).map((entry) => ({ kind: entry.provider, limits: entry.limits }))]
+    for (const list of sources) for (const { kind, limits } of list) {
+      const windows = byProvider.get(kind) ?? new Map<string, ReportedLimit>()
+      for (const limit of limits) {
+        const windowKey = String(limit.window_minutes ?? limit.name)
+        const prev = windows.get(windowKey)
+        const fresher = !prev
+          || (limit.resets_at ?? 0) > (prev.resets_at ?? 0)
+          || ((limit.resets_at ?? 0) === (prev.resets_at ?? 0) && limit.used_percent >= prev.used_percent)
+        if (fresher) windows.set(windowKey, limit)
+      }
+      byProvider.set(kind, windows)
+    }
+    return [...byProvider.entries()]
+      .map(([kind, windows]) => ({ kind, limits: [...windows.values()].sort((a, b) => (a.window_minutes ?? Number.MAX_SAFE_INTEGER) - (b.window_minutes ?? Number.MAX_SAFE_INTEGER)) }))
+      .filter((entry) => entry.limits.length > 0)
+  }, [providerLimits, storedLimits])
   // Never show the previous filter's totals under the next filter's label.
   const data = result?.scope === scope ? result : null
   const error = failure?.key === key ? failure.message : null
@@ -120,7 +138,7 @@ export function UsagePage() {
     </div>
 
     {accountLimits.length > 0 && <section aria-label="Account limits">
-      <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label">As of your latest turns</span></div>
+      <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label">Last reported by your agents</span></div>
       <div className="usage-limits">
         {accountLimits.map(({ kind, limits }) => <div key={kind} className="usage-limit-card">
           <div className="usage-limit-provider">{PROVIDERS[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDERS[kind] ?? kind}</span></div>
