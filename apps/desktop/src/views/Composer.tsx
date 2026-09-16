@@ -966,11 +966,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 m.mode === "full-access" && "text-[var(--runtime-full-access-accent)] data-highlighted:text-[var(--runtime-full-access-accent)]",
                               )}
                             >
-                              <span className="grid w-full min-w-0 flex-1 grid-cols-[1.25rem_minmax(0,1fr)] items-start gap-x-3">
-                                <span className="flex h-5 items-center justify-center [&>*]:size-4">{m.icon}</span>
+                              <span className="flex w-full min-w-0 flex-1 items-center gap-3">
+                                <span className="flex shrink-0 items-center justify-center [&_svg]:size-[18px] [&_svg]:shrink-0">{m.icon}</span>
                                 <span className="flex min-w-0 flex-col gap-0.5">
-                                  <span className="font-medium leading-5">{m.label}</span>
-                                  <span className={cn("runtime-mode-menu-description text-xs font-normal", m.mode === "full-access" ? "text-current" : "text-muted-foreground")}>{m.description}</span>
+                                  <span className="font-medium leading-tight">{m.label}</span>
+                                  <span className={cn("runtime-mode-menu-description text-xs font-normal leading-snug", m.mode === "full-access" ? "text-current" : "text-muted-foreground")}>{m.description}</span>
                                 </span>
                               </span>
                             </MenuRadioItem>

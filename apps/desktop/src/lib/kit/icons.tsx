@@ -136,10 +136,11 @@ import { cn } from "@/lib/utils";
 // Simple Icons (react-icons). This module is the single source for every other glyph.
 export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
 
-// Hugeicons default to strokeWidth 1.5; pin every glyph to 2 so the weight matches
-// what the app shipped before (the sidebar folder icon's thickness) on the same 24
-// viewBox. HugeiconsIcon renders a real <svg>, so kit `[&_svg]` sizing rules apply.
-const HUGEICON_STROKE_WIDTH = 2;
+// Hugeicons default to a thin strokeWidth 1.5; pin every glyph to 2.5 so the icons
+// carry enough optical weight next to the app's medium/semibold text instead of
+// reading as hairlines. HugeiconsIcon renders a real <svg>, so kit `[&_svg]` sizing
+// rules apply. Keep FileEntryIcon/FolderClosed/kit sidebar in step with this value.
+const HUGEICON_STROKE_WIDTH = 2.5;
 
 function hugeIcon(icon: IconSvgElement): LucideIcon {
   return function HugeIconGlyph(props) {

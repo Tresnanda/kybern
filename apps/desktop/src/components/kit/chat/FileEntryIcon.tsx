@@ -47,7 +47,7 @@ type GlyphComponent = FC<{ className?: string }>
 // Hugeicons rendered at the same stroke weight as the rest of the app chrome.
 function hugeFileIcon(icon: IconSvgElement): GlyphComponent {
   return function FileGlyph({ className }) {
-    return <HugeiconsIcon icon={icon} color="currentColor" strokeWidth={2} className={className} />
+    return <HugeiconsIcon icon={icon} color="currentColor" strokeWidth={2.5} className={className} />
   }
 }
 

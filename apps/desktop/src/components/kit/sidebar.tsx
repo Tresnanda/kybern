@@ -441,7 +441,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
         aria-hidden
         className="size-4"
         color="currentColor"
-        strokeWidth={2}
+        strokeWidth={2.5}
       />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
