@@ -103,8 +103,8 @@ export function UsagePage() {
       <Button variant="ghost" size="sm" disabled={loading} onClick={() => refresh(value => value + 1)}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
     </div>
 
-    {providerLimits.length > 0 && <section aria-label="Plan limits">
-      <div className="usage-section-heading"><h2>Plan limits</h2><span className="usage-filter-label">As of your latest turns</span></div>
+    {providerLimits.length > 0 && <section aria-label="Account limits">
+      <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label">As of your latest turns</span></div>
       <div className="usage-limits">
         {providerLimits.map(({ kind, limits }) => <div key={kind} className="usage-limit-card">
           <div className="usage-limit-provider">{PROVIDERS[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDERS[kind] ?? kind}</span></div>
