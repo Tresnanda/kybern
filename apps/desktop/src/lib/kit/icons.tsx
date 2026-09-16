@@ -159,40 +159,69 @@ import { cn } from "@/lib/utils";
 // Keep the existing icon API stable while the app moves from Central/Tabler to Phosphor.
 export type LucideIcon = FC<SVGProps<SVGSVGElement> & { size?: string | number }>;
 
-// Central glyphs were a masked `inline-block size-4 shrink-0` span. Phosphor
-// SVGs use a 256 viewBox. Unset width/height, or a flex/grid `min-size: auto`
-// that still resolves to that viewBox, lets WebKit measure 0 or 256px. That
-// inflates transcript rows, mounts every history message, and leaves follow-
-// scroll short of the live edge. Pin the same 16px slot (or an explicit caller
-// size) and zero the min-content so the viewBox cannot stretch a flex item.
-const KIT_ICON_SLOT_CLASS = "inline-block size-4 min-h-0 min-w-0 shrink-0 overflow-hidden align-middle";
+// Phosphor regular is a 1px stroke at 16px — hairline against 12–14px UI labels.
+// Bold is 1.5px, the same optical weight as nearby font-normal text.
+const KIT_ICON_WEIGHT: IconWeight = "bold";
+
+// Central glyphs were a masked square span. Phosphor SVGs use a 256 viewBox:
+// unset width/height lets WebKit measure 0 or 256px and inflate transcript rows.
+// Pin equal width/height (never min-size 0). Zeroing min-width/min-height lets a
+// flex or line box squash one axis; overflow:hidden then clips the glyph oval.
+const KIT_ICON_SLOT_CLASS = "inline-flex aspect-square size-4 shrink-0 overflow-hidden align-middle";
 
 type KitIconProps = SVGProps<SVGSVGElement> & { size?: string | number };
+
+/** Resolve a square slot so Phosphor width/height attributes match the CSS size. */
+function kitIconSlotSize(
+  explicit: string | number | undefined,
+  className?: string,
+): string | number {
+  if (explicit != null && explicit !== "") return explicit;
+  if (className) {
+    const arbitrary = className.match(/(?:^|\s)(?:!)?size-\[([^\]]+)\]/);
+    if (arbitrary?.[1]) return arbitrary[1];
+    const numbered = className.match(/(?:^|\s)(?:!)?size-(\d+(?:\.\d+)?)(?=\s|$)/);
+    if (numbered?.[1]) return `${Number(numbered[1]) * 0.25}rem`;
+  }
+  return 16;
+}
 
 function renderPhosphor(
   Component: Icon,
   { className, style, color, width, height, size, ...rest }: KitIconProps,
   extras: { weight?: IconWeight; mirrored?: boolean } = {},
 ) {
+  const slot = kitIconSlotSize(size ?? width ?? height, className);
   const explicitSize = size ?? width ?? height;
   return (
     <Component
       {...(rest as Partial<IconProps>)}
       className={cn(
-        explicitSize == null ? KIT_ICON_SLOT_CLASS : "inline-block min-h-0 min-w-0 shrink-0 overflow-hidden align-middle",
+        explicitSize == null ? KIT_ICON_SLOT_CLASS : "inline-flex aspect-square shrink-0 overflow-hidden align-middle",
         className,
       )}
-      style={{ minWidth: 0, minHeight: 0, overflow: "hidden", ...style }}
+      style={{
+        ...style,
+        aspectRatio: "1 / 1",
+        width: slot,
+        height: slot,
+        minWidth: slot,
+        minHeight: slot,
+        maxWidth: slot,
+        maxHeight: slot,
+        overflow: "hidden",
+        flexShrink: 0,
+      }}
       color={typeof color === "string" ? color : undefined}
-      weight={extras.weight ?? "regular"}
+      weight={extras.weight ?? KIT_ICON_WEIGHT}
       mirrored={extras.mirrored}
-      overflow="hidden"
-      size={explicitSize ?? 16}
+      preserveAspectRatio="xMidYMid meet"
+      size={slot}
     />
   );
 }
 
-function adaptIcon(Component: Icon, weight: IconWeight = "regular"): LucideIcon {
+function adaptIcon(Component: Icon, weight: IconWeight = KIT_ICON_WEIGHT): LucideIcon {
   function AdaptedIcon(props: KitIconProps) {
     return renderPhosphor(Component, props, { weight });
   }
@@ -200,7 +229,7 @@ function adaptIcon(Component: Icon, weight: IconWeight = "regular"): LucideIcon 
   return AdaptedIcon;
 }
 
-function adaptMirrored(Component: Icon, weight: IconWeight = "regular"): LucideIcon {
+function adaptMirrored(Component: Icon, weight: IconWeight = KIT_ICON_WEIGHT): LucideIcon {
   function AdaptedIcon(props: KitIconProps) {
     return renderPhosphor(Component, props, { weight, mirrored: true });
   }
