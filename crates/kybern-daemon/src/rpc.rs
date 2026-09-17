@@ -235,12 +235,21 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let projection = state
                 .thread_projections
                 .get_or_build((id, through_seq), move || {
-                    let events = store.events_for_thread_through(id, through_seq)?;
-                    Ok(crate::thread_projection::ThreadProjection::from_events(&events))
+                    Ok(crate::thread_projection::ThreadProjection {
+                        transcript: store.project_transcript_through(id, through_seq)?,
+                        runtime_tasks: store.runtime_tasks_for_thread_through(id, through_seq)?,
+                        provider_usage: store.provider_usage_through(id, through_seq)?,
+                        provider_commands: store.provider_commands_through(id, through_seq)?,
+                        pending_questions: store.pending_questions_through(id, through_seq)?,
+                    })
                 })
                 .await
                 .map_err(internal)?;
-            let (transcript, next_before_seq) = kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            let (mut transcript, next_before_seq) =
+                kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            if p.include_tool_output.unwrap_or(true) {
+                state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
+            }
             let pending_approvals = state.store.approvals_pending(Some(id)).map_err(internal)?;
             ok(ThreadsGetResult {
                 notes: state.store.thread_notes(thread.id).map_err(internal)?,
@@ -253,6 +262,20 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 provider_commands: projection.provider_commands.clone(),
                 pending_questions: projection.pending_questions.clone(),
             })
+        }
+        ThreadsToolOutput::NAME => {
+            let p: ThreadsToolOutputParams = parse(params)?;
+            if p.start_seq.is_some_and(|seq| seq < 0) || p.through_seq.is_some_and(|seq| seq < 0) {
+                return Err(RpcError::invalid_params("use nonnegative tool and snapshot sequences"));
+            }
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let through_seq = p.through_seq.unwrap_or(thread.last_seq).min(thread.last_seq);
+            let (output, is_error) = state
+                .store
+                .tool_call_output_through(p.thread_id, &p.tool_call_id, p.start_seq, through_seq)
+                .map_err(internal)?
+                .ok_or_else(|| RpcError::not_found("tool output"))?;
+            ok(ThreadsToolOutputResult { output, is_error })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
@@ -496,6 +519,41 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             ok(UsageSummaryResult { rows, total })
         }
+        UsageLimits::NAME => {
+            let _p: UsageLimitsParams = parse_or_default(params)?;
+            let mut providers = state.store.latest_provider_limits().map_err(internal)?;
+            // Both harnesses expose a turn-free way to read current limits — Codex
+            // via account/rateLimits/read, Claude via its local /usage command. cwd
+            // only needs to be a real directory; account auth lives under $HOME,
+            // which the daemon already inherits. Refresh both concurrently and
+            // overlay the live values on the stored snapshot.
+            let settings = state.settings.get();
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+            let claude = crate::settings::provider_settings(&settings, ProviderKind::ClaudeCode, None);
+            let codex = crate::settings::provider_settings(&settings, ProviderKind::Codex, None);
+            let claude_bin: Option<std::path::PathBuf> = claude.binary.clone().map(Into::into);
+            let codex_bin: Option<std::path::PathBuf> = codex.binary.clone().map(Into::into);
+            let (claude_live, codex_live) = tokio::join!(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    kybern_drivers::claude::read_account_limits(&home, claude_bin.as_ref(), &claude.env)
+                ),
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(8),
+                    kybern_drivers::codex::read_account_limits(&home, codex_bin.as_ref(), &codex.env)
+                ),
+            );
+            for (kind, live) in [(ProviderKind::ClaudeCode, claude_live.ok().flatten()), (ProviderKind::Codex, codex_live.ok().flatten())] {
+                if let Some(limits) = live {
+                    providers.retain(|entry| entry.provider != kind);
+                    if !limits.is_empty() {
+                        providers.push(ProviderLimits { provider: kind, limits });
+                    }
+                }
+            }
+            providers.sort_by_key(|entry| entry.provider != ProviderKind::ClaudeCode);
+            ok(UsageLimitsResult { providers })
+        }
         PairingCreate::NAME => {
             let p: PairingCreateParams = parse_or_default(params)?;
             let endpoints = crate::access::endpoints(state).await;
@@ -544,7 +602,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
-            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let _thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             let limit = p.limit.clamp(1, 100) as usize;
             let mut artifacts = state.store.artifact_calls(p.thread_id, p.before_seq, limit as u32 + 1).map_err(internal)?;
             let more = artifacts.len() > limit;

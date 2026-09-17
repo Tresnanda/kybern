@@ -190,6 +190,15 @@ enum Cmd {
         #[arg(long)]
         through_seq: Option<i64>,
     },
+    /// Read one saved tool result at an optional historical snapshot.
+    ToolOutput {
+        thread: String,
+        tool_call_id: String,
+        #[arg(long)]
+        start_seq: Option<i64>,
+        #[arg(long)]
+        through_seq: Option<i64>,
+    },
     /// Manage durable follow-ups on this environment.
     Queue {
         #[command(subcommand)]
@@ -253,6 +262,9 @@ enum Cmd {
         /// Only turns in the last N days.
         #[arg(long)]
         days: Option<i64>,
+        /// Show current plan limits (5-hour / weekly) per provider instead.
+        #[arg(long)]
+        limits: bool,
     },
     /// Pair another device: prints a one-time code and the endpoints to use.
     Pair {
@@ -678,9 +690,21 @@ pub async fn run() -> Result<()> {
         },
         Cmd::Show { thread, limit, before_seq, through_seq } => {
             let r = client
-                .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.parse()?, transcript_limit: limit, before_seq, through_seq })
+                .call::<ThreadsGet>(ThreadsGetParams {
+                    thread_id: thread.parse()?,
+                    transcript_limit: limit,
+                    before_seq,
+                    through_seq,
+                    ..Default::default()
+                })
                 .await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::transcript(&r) }
+        }
+        Cmd::ToolOutput { thread, tool_call_id, start_seq, through_seq } => {
+            let result = client
+                .call::<ThreadsToolOutput>(ThreadsToolOutputParams { thread_id: thread.parse()?, tool_call_id, start_seq, through_seq })
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Watch { thread, after } => {
             let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
@@ -824,11 +848,16 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
         },
-        Cmd::Usage { by, days } => {
-            let group_by = serde_json::from_value(serde_json::Value::String(by))?;
-            let since = days.map(|d| chrono::Utc::now() - chrono::Duration::days(d));
-            let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
-            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
+        Cmd::Usage { by, days, limits } => {
+            if limits {
+                let r = client.call::<UsageLimits>(UsageLimitsParams {}).await?;
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                let group_by = serde_json::from_value(serde_json::Value::String(by))?;
+                let since = days.map(|d| chrono::Utc::now() - chrono::Duration::days(d));
+                let r = client.call::<UsageSummary>(UsageSummaryParams { since, group_by }).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::usage(&r) }
+            }
         }
         Cmd::Pair { label, address, tailscale } => {
             // Validate before minting a code, so a typo doesn't waste an invitation.

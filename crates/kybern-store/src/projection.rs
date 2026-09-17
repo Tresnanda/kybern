@@ -19,6 +19,56 @@ fn is_root_task(task: &RuntimeTask, roots: &std::collections::HashSet<(ThreadId,
     task.kind == RuntimeTaskKind::Agent && task.provider_thread_id.as_ref().is_some_and(|id| roots.contains(&(task.thread_id, id.clone())))
 }
 
+/// Settled tool results larger than this stay in SQLite until a client asks
+/// for the specific call. The cached projection keeps a flag, not the bytes.
+pub const LARGE_TOOL_OUTPUT_BYTES: usize = 2048;
+
+pub fn json_payload_bytes(value: &Value) -> usize {
+    match value {
+        Value::Null | Value::Bool(_) => 4,
+        Value::Number(n) => n.to_string().len(),
+        Value::String(s) => s.len(),
+        Value::Array(items) => items.iter().map(json_payload_bytes).sum(),
+        Value::Object(map) => map.iter().map(|(key, child)| key.len() + json_payload_bytes(child)).sum(),
+    }
+}
+
+pub fn should_omit_tool_output(output: &Value) -> bool {
+    json_payload_bytes(output) > LARGE_TOOL_OUTPUT_BYTES
+}
+
+#[derive(Default)]
+pub struct TranscriptFold {
+    omit_tool_outputs: bool,
+    out: Vec<TranscriptEntry>,
+    turn_started_at: std::collections::HashMap<TurnId, chrono::DateTime<chrono::Utc>>,
+    last_turn_id: Option<TurnId>,
+    unscoped_assistant_message: Option<(TurnId, MessageId)>,
+    roots: std::collections::HashSet<(ThreadId, String)>,
+}
+
+impl TranscriptFold {
+    pub fn omitting_tool_outputs() -> Self {
+        Self { omit_tool_outputs: true, ..Self::default() }
+    }
+
+    pub fn apply(&mut self, ev: &ThreadEvent) {
+        apply_transcript_event(
+            &mut self.out,
+            &mut self.turn_started_at,
+            &mut self.last_turn_id,
+            &mut self.unscoped_assistant_message,
+            &mut self.roots,
+            ev,
+            self.omit_tool_outputs,
+        );
+    }
+
+    pub fn finish(self) -> Vec<TranscriptEntry> {
+        self.out
+    }
+}
+
 /// Fold append-only runtime task events into one latest-state row per task.
 pub fn project_runtime_tasks(events: &[ThreadEvent]) -> Vec<RuntimeTask> {
     use std::collections::hash_map::Entry;
@@ -137,13 +187,25 @@ pub fn project_thread_activity(thread_id: ThreadId, tasks: &[RuntimeTask]) -> Th
 }
 
 pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
-    let roots = root_sessions(events);
-    let mut out: Vec<TranscriptEntry> = Vec::new();
-    let mut turn_started_at = std::collections::HashMap::new();
-    let mut last_turn_id = None;
-    let mut unscoped_assistant_message = None;
-
+    let mut fold = TranscriptFold::default();
     for ev in events {
+        fold.apply(ev);
+    }
+    fold.finish()
+}
+
+fn apply_transcript_event(
+    out: &mut Vec<TranscriptEntry>,
+    turn_started_at: &mut std::collections::HashMap<TurnId, chrono::DateTime<chrono::Utc>>,
+    last_turn_id: &mut Option<TurnId>,
+    unscoped_assistant_message: &mut Option<(TurnId, MessageId)>,
+    roots: &mut std::collections::HashSet<(ThreadId, String)>,
+    ev: &ThreadEvent,
+    omit_tool_outputs: bool,
+) {
+    let mut last_turn_id_value = *last_turn_id;
+    let mut unscoped_assistant_message_value = *unscoped_assistant_message;
+    for ev in std::iter::once(ev) {
         let turn_id = ev.turn_id;
         if turn_id.is_none()
             && matches!(&ev.payload,
@@ -152,9 +214,9 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             | EventPayload::AssistantMessageCompleted { origin, .. }
             | EventPayload::ToolCallStarted { origin, .. } if origin.is_root())
         {
-            for entry in &mut out {
+            for entry in out.iter_mut() {
                 if let TranscriptEntry::TurnSummary { turn_id, terminal_message_id, .. } = entry
-                    && Some(*turn_id) == last_turn_id
+                    && Some(*turn_id) == last_turn_id_value
                 {
                     *terminal_message_id = None;
                 }
@@ -166,18 +228,18 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             | EventPayload::AsyncQuestionsAnswered { message_id, message, .. } => {
                 if out.iter().any(|entry| matches!(entry, TranscriptEntry::User { id, .. } if id == message_id)) { continue; }
                 let Some(turn_id) = turn_id else { continue };
-                last_turn_id = Some(turn_id);
-                unscoped_assistant_message = None;
+                last_turn_id_value = Some(turn_id);
+                unscoped_assistant_message_value = None;
                 turn_started_at.entry(turn_id).or_insert(ev.at);
                 out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
             }
             EventPayload::SessionImported { .. } => {
-                out.push(TranscriptEntry::Notice { turn_id: last_turn_id.unwrap_or_default(), seq: ev.seq, at: ev.at, level: NoticeLevel::Info, text: "Session resumed. Earlier messages are shown above.".into() });
+                out.push(TranscriptEntry::Notice { turn_id: last_turn_id_value.unwrap_or_default(), seq: ev.seq, at: ev.at, level: NoticeLevel::Info, text: "Session resumed. Earlier messages are shown above.".into() });
             }
             EventPayload::TurnResumed => {
                 let Some(turn_id) = turn_id else { continue };
-                last_turn_id = Some(turn_id);
-                unscoped_assistant_message = None;
+                last_turn_id_value = Some(turn_id);
+                unscoped_assistant_message_value = None;
                 out.retain(|entry| !matches!(entry, TranscriptEntry::TurnSummary { turn_id: id, .. } if *id == turn_id));
             }
             EventPayload::ImageReceived { id, origin, source } => {
@@ -191,7 +253,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                     continue;
                 }
                 let Some((turn_id, message_id)) =
-                    assistant_scope(turn_id, last_turn_id, *message_id, &mut unscoped_assistant_message, false)
+                    assistant_scope(turn_id, last_turn_id_value, *message_id, &mut unscoped_assistant_message_value, false)
                 else {
                     continue;
                 };
@@ -199,10 +261,10 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 // presentation, open a new stable segment whenever a row-making
                 // event landed since the previous delta so tools and narration
                 // keep exact event order without fragmenting the live DOM node.
-                match tail_open_assistant(&mut out, message_id, origin) {
+                match tail_open_assistant(out, message_id, origin) {
                     Some(TranscriptEntry::Assistant { text, .. }) => text.push_str(delta),
                     _ => {
-                        let segment = next_segment(&out, message_id, origin);
+                        let segment = next_segment(out, message_id, origin);
                         out.push(TranscriptEntry::Assistant {
                             id: message_id,
                             turn_id,
@@ -222,14 +284,14 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                     continue;
                 }
                 let Some((turn_id, message_id)) =
-                    assistant_scope(turn_id, last_turn_id, *message_id, &mut unscoped_assistant_message, false)
+                    assistant_scope(turn_id, last_turn_id_value, *message_id, &mut unscoped_assistant_message_value, false)
                 else {
                     continue;
                 };
-                match tail_open_assistant(&mut out, message_id, origin) {
+                match tail_open_assistant(out, message_id, origin) {
                     Some(TranscriptEntry::Assistant { thinking, .. }) => thinking.get_or_insert_with(String::new).push_str(delta),
                     _ => {
-                        let segment = next_segment(&out, message_id, origin);
+                        let segment = next_segment(out, message_id, origin);
                         out.push(TranscriptEntry::Assistant {
                             id: message_id,
                             turn_id,
@@ -249,18 +311,18 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                     continue;
                 }
                 let Some((turn_id, message_id)) =
-                    assistant_scope(turn_id, last_turn_id, *message_id, &mut unscoped_assistant_message, true)
+                    assistant_scope(turn_id, last_turn_id_value, *message_id, &mut unscoped_assistant_message_value, true)
                 else {
                     continue;
                 };
-                let mut segments = assistant_segment_indices(&out, message_id, origin);
+                let mut segments = assistant_segment_indices(out, message_id, origin);
                 if segments.is_empty() {
                     out.push(TranscriptEntry::Assistant {
                         id: message_id,
                         turn_id,
                         seq: ev.seq,
                         origin: origin.clone(),
-                        segment: next_segment(&out, message_id, origin),
+                        segment: next_segment(out, message_id, origin),
                         text: text.clone(),
                         thinking: thinking.clone(),
                         at: ev.at,
@@ -268,16 +330,16 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                     });
                 } else {
                     let last_is_tail = segments.last().is_some_and(|index| *index + 1 == out.len());
-                    let streamed_text = assistant_field_text(&out, &segments, AssistantField::Text);
-                    let streamed_thinking = assistant_field_text(&out, &segments, AssistantField::Thinking);
-                    let trailing_text =
-                        (!last_is_tail).then(|| text.strip_prefix(&streamed_text)).flatten().filter(|suffix| !suffix.is_empty());
+                    let trailing_text = (!last_is_tail)
+                        .then(|| assistant_field_suffix(out, &segments, text, AssistantField::Text))
+                        .flatten()
+                        .filter(|suffix| !suffix.is_empty());
                     let trailing_thinking = (!last_is_tail)
-                        .then(|| thinking.as_deref()?.strip_prefix(&streamed_thinking))
+                        .then(|| assistant_field_suffix(out, &segments, thinking.as_deref()?, AssistantField::Thinking))
                         .flatten()
                         .filter(|suffix| !suffix.is_empty());
                     if trailing_text.is_some() || trailing_thinking.is_some() {
-                        let segment = next_segment(&out, message_id, origin);
+                        let segment = next_segment(out, message_id, origin);
                         out.push(TranscriptEntry::Assistant {
                             id: message_id,
                             turn_id,
@@ -291,9 +353,9 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                         });
                         segments.push(out.len() - 1);
                     }
-                    reconcile_assistant_field(&mut out, &segments, text, AssistantField::Text);
+                    reconcile_assistant_field(out, &segments, text, AssistantField::Text);
                     if let Some(thinking) = thinking {
-                        reconcile_assistant_field(&mut out, &segments, thinking, AssistantField::Thinking);
+                        reconcile_assistant_field(out, &segments, thinking, AssistantField::Thinking);
                     }
                     for index in segments {
                         if let TranscriptEntry::Assistant { complete, .. } = &mut out[index] {
@@ -303,31 +365,38 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
                 }
             }
             EventPayload::ToolCallStarted { call, origin } => {
-                let Some(turn_id) = turn_id.or(last_turn_id) else { continue };
+                let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
                 out.push(TranscriptEntry::ToolCall {
                     turn_id,
                     seq: ev.seq,
                     origin: origin.clone(),
                     call: call.clone(),
                     output: None,
+                    output_omitted: false,
                     is_error: false,
                     complete: false,
                     at: ev.at,
                 });
             }
             EventPayload::ToolCallCompleted { tool_call_id, output, is_error } => {
-                if let Some(TranscriptEntry::ToolCall { output: o, is_error: e, complete, .. }) =
+                if let Some(TranscriptEntry::ToolCall { output: o, output_omitted, is_error: e, complete, .. }) =
                     out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::ToolCall { call, .. } if &call.id == tool_call_id))
                 {
-                    *o = Some(output.clone());
+                    if omit_tool_outputs && should_omit_tool_output(output) {
+                        *o = None;
+                        *output_omitted = true;
+                    } else {
+                        *o = Some(output.clone());
+                        *output_omitted = false;
+                    }
                     *e = *is_error;
                     *complete = true;
                 }
             }
             EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, terminal_message_id } => {
                 let Some(turn_id) = turn_id else { continue };
-                last_turn_id = Some(turn_id);
-                mark_turn_complete(&mut out, turn_id);
+                last_turn_id_value = Some(turn_id);
+                mark_turn_complete(out, turn_id);
                 out.push(TranscriptEntry::TurnSummary {
                     turn_id,
                     seq: ev.seq,
@@ -342,8 +411,8 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             }
             EventPayload::TurnFailed { error } => {
                 let Some(turn_id) = turn_id else { continue };
-                last_turn_id = Some(turn_id);
-                mark_turn_complete(&mut out, turn_id);
+                last_turn_id_value = Some(turn_id);
+                mark_turn_complete(out, turn_id);
                 let duration_ms = turn_started_at.get(&turn_id).map(|s| (ev.at - *s).num_milliseconds().max(0) as u64).unwrap_or(0);
                 out.push(TranscriptEntry::TurnSummary {
                     turn_id,
@@ -371,7 +440,7 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             EventPayload::RuntimeTaskStarted { task }
             | EventPayload::RuntimeTaskUpdated { task }
             | EventPayload::RuntimeTaskCompleted { task } => {
-                if is_root_task(task, &roots) { continue; }
+                if is_root_task(task, roots) { continue; }
                 let turn_id = turn_id.unwrap_or(task.origin_turn_id);
                 let mut incoming = task.clone();
                 if incoming.started_seq == 0 {
@@ -399,8 +468,15 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             }
             EventPayload::ProviderSessionReleased { reason } => {
                 // Releases happen between turns; show them under the last one.
-                let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id), reason.notice_text()) else { continue };
+                let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id_value), reason.notice_text()) else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at });
+            }
+            EventPayload::ProviderSessionBound { session_id, .. } => {
+                roots.insert((ev.thread_id, session_id.clone()));
+                out.retain(|entry| match entry {
+                    TranscriptEntry::RuntimeTask { task, .. } => !is_root_task(task, roots),
+                    _ => true,
+                });
             }
             EventPayload::AsyncQuestionsRequested { .. } | EventPayload::ProviderCommandsUpdated { .. } | EventPayload::ProviderUsageUpdated { .. }
             | EventPayload::ThreadCreated { .. }
@@ -416,12 +492,12 @@ pub fn project_transcript(events: &[ThreadEvent]) -> Vec<TranscriptEntry> {
             | EventPayload::ThreadNotesUpdated { .. }
             | EventPayload::MessageRemoved { .. }
             | EventPayload::ThreadArchived
-            | EventPayload::ProviderSessionBound { .. }
             | EventPayload::ToolCallOutputDelta { .. }
             | EventPayload::CheckpointUpdated { .. } => {}
         }
     }
-    out
+    *last_turn_id = last_turn_id_value;
+    *unscoped_assistant_message = unscoped_assistant_message_value;
 }
 
 /// Recover legacy Claude continuations that arrived after a provisional result
@@ -495,62 +571,72 @@ enum AssistantField {
     Thinking,
 }
 
-fn assistant_field_text(out: &[TranscriptEntry], indices: &[usize], field: AssistantField) -> String {
-    indices
-        .iter()
-        .map(|index| match (&out[*index], field) {
-            (TranscriptEntry::Assistant { text, .. }, AssistantField::Text) => text.as_str(),
-            (TranscriptEntry::Assistant { thinking, .. }, AssistantField::Thinking) => thinking.as_deref().unwrap_or_default(),
-            _ => "",
-        })
-        .collect()
+fn assistant_field(entry: &TranscriptEntry, field: AssistantField) -> &str {
+    match (entry, field) {
+        (TranscriptEntry::Assistant { text, .. }, AssistantField::Text) => text,
+        (TranscriptEntry::Assistant { thinking, .. }, AssistantField::Thinking) => thinking.as_deref().unwrap_or_default(),
+        _ => "",
+    }
 }
 
-/// Reconcile streamed slices with the provider's authoritative completed
-/// message while preserving every segment boundary that preceded a tool row.
+/// Like canonical.strip_prefix(concatenated_segments), without constructing that
+/// concatenation. The returned slice borrows only canonical, never the transcript.
+fn assistant_field_suffix<'a>(out: &[TranscriptEntry], indices: &[usize], canonical: &'a str, field: AssistantField) -> Option<&'a str> {
+    let mut remaining = canonical;
+    for &index in indices {
+        remaining = remaining.strip_prefix(assistant_field(&out[index], field))?;
+    }
+    Some(remaining)
+}
+
+/// Reconcile streamed slices with the provider's authoritative completed message.
+/// Compare borrowed text; allocate only the replacement segment. Unchanged prefix
+/// strings stay in place and obsolete tails are dropped, not kept as empty buffers.
 fn reconcile_assistant_field(out: &mut [TranscriptEntry], indices: &[usize], canonical: &str, field: AssistantField) {
-    let pieces = indices
-        .iter()
-        .map(|index| match (&out[*index], field) {
-            (TranscriptEntry::Assistant { text, .. }, AssistantField::Text) => text.clone(),
-            (TranscriptEntry::Assistant { thinking, .. }, AssistantField::Thinking) => thinking.clone().unwrap_or_default(),
-            _ => String::new(),
-        })
-        .collect::<Vec<_>>();
-    let streamed = pieces.concat();
-    if streamed == canonical {
+    if indices.is_empty() || assistant_field_suffix(out, indices, canonical, field) == Some("") {
         return;
     }
-
-    let common_prefix =
-        streamed.chars().zip(canonical.chars()).take_while(|(left, right)| left == right).map(|(ch, _)| ch.len_utf8()).sum::<usize>();
-    let target_position = if streamed.is_empty() {
+    let streamed_len = indices.iter().map(|&index| assistant_field(&out[index], field).len()).sum::<usize>();
+    let common_prefix = indices
+        .iter()
+        .flat_map(|&index| assistant_field(&out[index], field).chars())
+        .zip(canonical.chars())
+        .take_while(|(left, right)| left == right)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+    let target_position = if streamed_len == 0 {
         if matches!(field, AssistantField::Thinking) { 0 } else { indices.len() - 1 }
     } else {
         let mut consumed = 0;
-        pieces
+        indices
             .iter()
-            .position(|piece| {
-                let contains = common_prefix < consumed + piece.len();
-                consumed += piece.len();
+            .position(|&index| {
+                let len = assistant_field(&out[index], field).len();
+                let contains = common_prefix < consumed + len;
+                consumed += len;
                 contains
             })
             .unwrap_or(indices.len() - 1)
     };
-    let consumed_before = pieces.iter().take(target_position).map(String::len).sum::<usize>();
-    let keep = common_prefix.saturating_sub(consumed_before).min(pieces[target_position].len());
-    let mut replacement = pieces[target_position][..keep].to_string();
-    replacement.push_str(&canonical[common_prefix..]);
+    let consumed_before = indices.iter().take(target_position).map(|&index| assistant_field(&out[index], field).len()).sum::<usize>();
+    let piece = assistant_field(&out[indices[target_position]], field);
+    let keep = common_prefix.saturating_sub(consumed_before).min(piece.len());
+    let suffix = &canonical[common_prefix..];
+    let mut replacement = String::with_capacity(keep + suffix.len());
+    replacement.push_str(&piece[..keep]);
+    replacement.push_str(suffix);
+    let mut replacement = Some(replacement);
 
-    for (position, index) in indices.iter().enumerate() {
-        let value = if position < target_position {
-            pieces[position].clone()
-        } else if position == target_position {
-            replacement.clone()
-        } else {
-            String::new()
-        };
-        if let TranscriptEntry::Assistant { text, thinking, .. } = &mut out[*index] {
+    for (position, &index) in indices.iter().enumerate() {
+        if let TranscriptEntry::Assistant { text, thinking, .. } = &mut out[index] {
+            if position < target_position {
+                // The old reconciliation normalized empty thinking to None.
+                if matches!(field, AssistantField::Thinking) && thinking.as_ref().is_some_and(String::is_empty) {
+                    *thinking = None;
+                }
+                continue;
+            }
+            let value = if position == target_position { replacement.take().unwrap_or_default() } else { String::new() };
             match field {
                 AssistantField::Text => *text = value,
                 AssistantField::Thinking => *thinking = (!value.is_empty()).then_some(value),
@@ -931,6 +1017,52 @@ mod tests {
     }
 
     #[test]
+    fn large_settled_tool_results_are_omitted_from_the_cached_projection() {
+        let thread_id = Uuid::from_u128(1);
+        let turn_id = Uuid::from_u128(2);
+        let at = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+        let ev = |seq, payload| ThreadEvent { seq, thread_id, turn_id: Some(turn_id), at, payload };
+        let small = serde_json::json!("ok");
+        let large = serde_json::json!("x".repeat(super::LARGE_TOOL_OUTPUT_BYTES + 1));
+        let events = [
+            ev(1, EventPayload::TurnStarted { message_id: Uuid::from_u128(3), message: UserMessage::text("hi") }),
+            ev(
+                2,
+                EventPayload::ToolCallStarted {
+                    call: ToolCall { id: "small".into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                    origin: EventOrigin::Root,
+                },
+            ),
+            ev(3, EventPayload::ToolCallCompleted { tool_call_id: "small".into(), output: small.clone(), is_error: false }),
+            ev(
+                4,
+                EventPayload::ToolCallStarted {
+                    call: ToolCall { id: "large".into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                    origin: EventOrigin::Root,
+                },
+            ),
+            ev(5, EventPayload::ToolCallCompleted { tool_call_id: "large".into(), output: large.clone(), is_error: false }),
+        ];
+        let full = project_transcript(&events);
+        assert!(
+            matches!(full.last(), Some(TranscriptEntry::ToolCall { output: Some(value), output_omitted: false, .. }) if value == &large)
+        );
+        let mut fold = super::TranscriptFold::omitting_tool_outputs();
+        for event in &events {
+            fold.apply(event);
+        }
+        let rows = fold.finish();
+        let tools: Vec<_> = rows
+            .iter()
+            .filter_map(|row| match row {
+                TranscriptEntry::ToolCall { call, output, output_omitted, .. } => Some((call.id.as_str(), output.clone(), *output_omitted)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools, vec![("small", Some(small), false), ("large", None, true)]);
+    }
+
+    #[test]
     fn active_agent_promotes_thread_activity_to_working() {
         let tasks = vec![
             runtime_task("monitor", RuntimeTaskKind::Monitor, RuntimeTaskStatus::Waiting, 0),
@@ -941,5 +1073,156 @@ mod tests {
         assert_eq!(summary.state, Some(ThreadActivityState::Working));
         assert_eq!(summary.active_agents, 1);
         assert_eq!(summary.active_monitors, 1);
+    }
+}
+
+#[cfg(test)]
+mod reconciliation_allocation_tests {
+    use super::*;
+
+    fn assistant_field_text(out: &[TranscriptEntry], indices: &[usize], field: AssistantField) -> String {
+        indices
+            .iter()
+            .map(|index| match (&out[*index], field) {
+                (TranscriptEntry::Assistant { text, .. }, AssistantField::Text) => text.as_str(),
+                (TranscriptEntry::Assistant { thinking, .. }, AssistantField::Thinking) => thinking.as_deref().unwrap_or_default(),
+                _ => "",
+            })
+            .collect()
+    }
+
+    /// Reconcile streamed slices with the provider's authoritative completed
+    /// message while preserving every segment boundary that preceded a tool row.
+    fn legacy_reconcile_assistant_field(out: &mut [TranscriptEntry], indices: &[usize], canonical: &str, field: AssistantField) {
+        let pieces = indices
+            .iter()
+            .map(|index| match (&out[*index], field) {
+                (TranscriptEntry::Assistant { text, .. }, AssistantField::Text) => text.clone(),
+                (TranscriptEntry::Assistant { thinking, .. }, AssistantField::Thinking) => thinking.clone().unwrap_or_default(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>();
+        let streamed = pieces.concat();
+        if streamed == canonical {
+            return;
+        }
+
+        let common_prefix =
+            streamed.chars().zip(canonical.chars()).take_while(|(left, right)| left == right).map(|(ch, _)| ch.len_utf8()).sum::<usize>();
+        let target_position = if streamed.is_empty() {
+            if matches!(field, AssistantField::Thinking) { 0 } else { indices.len() - 1 }
+        } else {
+            let mut consumed = 0;
+            pieces
+                .iter()
+                .position(|piece| {
+                    let contains = common_prefix < consumed + piece.len();
+                    consumed += piece.len();
+                    contains
+                })
+                .unwrap_or(indices.len() - 1)
+        };
+        let consumed_before = pieces.iter().take(target_position).map(String::len).sum::<usize>();
+        let keep = common_prefix.saturating_sub(consumed_before).min(pieces[target_position].len());
+        let mut replacement = pieces[target_position][..keep].to_string();
+        replacement.push_str(&canonical[common_prefix..]);
+
+        for (position, index) in indices.iter().enumerate() {
+            let value = if position < target_position {
+                pieces[position].clone()
+            } else if position == target_position {
+                replacement.clone()
+            } else {
+                String::new()
+            };
+            if let TranscriptEntry::Assistant { text, thinking, .. } = &mut out[*index] {
+                match field {
+                    AssistantField::Text => *text = value,
+                    AssistantField::Thinking => *thinking = (!value.is_empty()).then_some(value),
+                }
+            }
+        }
+    }
+
+    fn rows(pieces: &[Option<&str>]) -> (Vec<TranscriptEntry>, Vec<usize>) {
+        let mut out = Vec::new();
+        let mut indices = Vec::new();
+        for (segment, piece) in pieces.iter().enumerate() {
+            indices.push(out.len());
+            out.push(TranscriptEntry::Assistant {
+                id: MessageId::nil(),
+                turn_id: TurnId::nil(),
+                seq: segment as i64 + 1,
+                origin: Default::default(),
+                segment: segment as u32,
+                text: piece.unwrap_or_default().into(),
+                thinking: piece.map(str::to_owned),
+                at: "2026-09-17T00:00:00Z".parse().unwrap(),
+                complete: false,
+            });
+            out.push(TranscriptEntry::Notice {
+                turn_id: TurnId::nil(),
+                seq: segment as i64 + 1,
+                level: NoticeLevel::Info,
+                text: "separator".into(),
+                at: "2026-09-17T00:00:00Z".parse().unwrap(),
+            });
+        }
+        (out, indices)
+    }
+
+    #[test]
+    fn borrowed_reconciliation_matches_legacy_for_unicode_and_segment_boundaries() {
+        let pieces = [None, Some(""), Some("a"), Some("ab"), Some("é"), Some("😀"), Some("e\u{301}"), Some("\n\0")];
+        let canonical = ["", "a", "ab", "abc", "ba", "é", "éa", "😀", "😀é", "e\u{301}", "\u{301}", "\n\0", "ab\n\0tail"];
+        for a in pieces {
+            for b in pieces {
+                for c in pieces {
+                    for parts in [vec![a], vec![a, b], vec![a, b, c]] {
+                        let (source, indices) = rows(&parts);
+                        for text in canonical {
+                            for field in [AssistantField::Text, AssistantField::Thinking] {
+                                let expected_suffix = text.strip_prefix(&assistant_field_text(&source, &indices, field));
+                                assert_eq!(assistant_field_suffix(&source, &indices, text, field), expected_suffix);
+                                let mut expected = source.clone();
+                                let mut actual = source.clone();
+                                legacy_reconcile_assistant_field(&mut expected, &indices, text, field);
+                                reconcile_assistant_field(&mut actual, &indices, text, field);
+                                assert_eq!(
+                                    serde_json::to_value(&actual).unwrap(),
+                                    serde_json::to_value(&expected).unwrap(),
+                                    "parts={parts:?}, canonical={text:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn correction_keeps_prefix_string_and_frees_obsolete_tail() {
+        let (mut out, indices) = rows(&[Some("keep "), Some("wrong "), Some("old tail")]);
+        let pointer = match &out[indices[0]] {
+            TranscriptEntry::Assistant { text, .. } => text.as_ptr(),
+            _ => unreachable!(),
+        };
+        reconcile_assistant_field(&mut out, &indices, "keep corrected", AssistantField::Text);
+        let TranscriptEntry::Assistant { text, .. } = &out[indices[0]] else { unreachable!() };
+        assert_eq!(text.as_ptr(), pointer);
+        assert_eq!(text, "keep ");
+        let TranscriptEntry::Assistant { text, .. } = &out[indices[1]] else { unreachable!() };
+        assert_eq!(text, "corrected");
+        let TranscriptEntry::Assistant { text, .. } = &out[indices[2]] else { unreachable!() };
+        assert_eq!(text.capacity(), 0);
+    }
+
+    #[test]
+    fn empty_indices_are_a_noop() {
+        let (mut out, _) = rows(&[Some("unchanged")]);
+        let before = serde_json::to_value(&out).unwrap();
+        reconcile_assistant_field(&mut out, &[], "replacement", AssistantField::Text);
+        assert_eq!(serde_json::to_value(&out).unwrap(), before);
     }
 }

@@ -44,6 +44,8 @@ expression: scopes
   - "orchestration:operate"
 - - threads.get
   - "orchestration:read"
+- - threads.tool_output
+  - "orchestration:read"
 - - threads.update
   - "orchestration:operate"
 - - threads.archive
@@ -151,6 +153,8 @@ expression: scopes
 - - settings.update
   - "orchestration:operate"
 - - usage.summary
+  - "orchestration:read"
+- - usage.limits
   - "orchestration:read"
 - - access.pairing.create
   - "access:write"

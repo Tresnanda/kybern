@@ -219,7 +219,7 @@ async fn notes_sync_between_clients_and_survive_reopening_the_store() {
             .is_err()
     );
     let snapshot = phone
-        .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), before_seq: None, through_seq: None })
+        .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), ..Default::default() })
         .await
         .unwrap();
     assert_eq!(snapshot.notes, notes);
@@ -667,7 +667,7 @@ async fn cached_history_pages_match_full_history_and_keep_their_sequence_barrier
             .unwrap();
     }
     let client = host.client().await;
-    let params = ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), before_seq: None, through_seq: None };
+    let params = ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), ..Default::default() };
     let recent = client.call::<ThreadsGet>(params.clone()).await.unwrap();
     assert_eq!(recent.transcript.len(), 60);
     let barrier = recent.thread.last_seq;
@@ -730,7 +730,7 @@ async fn measure_remote_history_pages() {
     ] {
         let start = std::time::Instant::now();
         let result = client
-            .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: limit, before_seq: None, through_seq: None })
+            .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: limit, ..Default::default() })
             .await
             .unwrap();
         let elapsed = start.elapsed();
@@ -809,4 +809,61 @@ async fn chat_file_links_read_the_connected_thread_workspace() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rpc() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let store = &host.state.store;
+    let turn = TurnId::new_v4();
+    let append = |payload| store.event_append(thread.id, Some(turn), payload).unwrap();
+    append(EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("fixture") });
+    let start = || EventPayload::ToolCallStarted {
+        call: ToolCall { id: "reused:é😀".into(), name: "Read".into(), input: json!({}), parent_id: None },
+        origin: EventOrigin::Root,
+    };
+    let first = append(start()).seq;
+    let a = json!({"stdout": "first é😀\n".repeat(1000)});
+    let barrier = append(EventPayload::ToolCallCompleted { tool_call_id: "reused:é😀".into(), output: a.clone(), is_error: true }).seq;
+    let corrected = json!({"stdout": "corrected é😀\n".repeat(1000)});
+    append(EventPayload::ToolCallCompleted { tool_call_id: "reused:é😀".into(), output: corrected.clone(), is_error: false });
+    let second = append(start()).seq;
+    let b = json!({"stdout": "second é😀\n".repeat(1000)});
+    append(EventPayload::ToolCallCompleted { tool_call_id: "reused:é😀".into(), output: b.clone(), is_error: false });
+    let client = host.client().await;
+    let params = ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), through_seq: Some(barrier), ..Default::default() };
+    let historical = client.call::<ThreadsGet>(params.clone()).await.unwrap();
+    assert!(
+        matches!(historical.transcript.last(), Some(TranscriptEntry::ToolCall { output: Some(value), is_error: true, output_omitted: false, .. }) if value == &a)
+    );
+    let omitted = client.call::<ThreadsGet>(ThreadsGetParams { include_tool_output: Some(false), ..params }).await.unwrap();
+    assert!(matches!(omitted.transcript.last(), Some(TranscriptEntry::ToolCall { output: None, output_omitted: true, .. })));
+    let exact = ThreadsToolOutputParams {
+        thread_id: thread.id,
+        tool_call_id: "reused:é😀".into(),
+        start_seq: Some(first),
+        through_seq: Some(barrier),
+    };
+    let result = client.call::<ThreadsToolOutput>(exact.clone()).await.unwrap();
+    assert_eq!(result.output, a);
+    assert!(result.is_error);
+    let current = client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, ..Default::default() }).await.unwrap();
+    let outputs: Vec<_> = current
+        .transcript
+        .iter()
+        .filter_map(|row| match row {
+            TranscriptEntry::ToolCall { output, .. } => output.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outputs, [corrected, b]);
+    assert!(client.call::<ThreadsToolOutput>(ThreadsToolOutputParams { start_seq: Some(second), ..exact.clone() }).await.is_err());
+    assert!(client.call::<ThreadsToolOutput>(ThreadsToolOutputParams { start_seq: Some(-1), ..exact.clone() }).await.is_err());
+    assert!(client.call::<ThreadsToolOutput>(ThreadsToolOutputParams { thread_id: host.thread().id, ..exact.clone() }).await.is_err());
+    // Reopening the real migrated database preserves lookup semantics.
+    let reopened = kybern_store::Store::open(&host.state.paths.db).unwrap();
+    assert_eq!(reopened.tool_call_output_through(thread.id, &exact.tool_call_id, Some(first), barrier).unwrap(), Some((a, true)));
+    store.project_delete(thread.project_id).unwrap();
+    assert!(client.call::<ThreadsToolOutput>(exact).await.is_err(), "deleted content is not resurrected");
 }

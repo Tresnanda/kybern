@@ -1,4 +1,4 @@
-import type { ProviderUsage } from "@/protocol"
+import type { ProviderKind, ProviderUsage } from "@/protocol"
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "@/components/kit/popover"
 import { contextUsage, limitLabel, reportedPercent, resetLabel } from "@/lib/providerUsage"
 
@@ -10,7 +10,7 @@ function UsageMeter({ percent, label }: { percent: number; label: string }) {
   )
 }
 
-export function ProviderUsageIndicator({ usage }: { usage?: ProviderUsage }) {
+export function ProviderUsageIndicator({ usage, provider }: { usage?: ProviderUsage; provider?: ProviderKind }) {
   const context = contextUsage(usage?.context)
   const label = context ? `${Math.round(context.percent)}% of context used` : "Context usage unavailable"
   const tone = context && context.percent >= 95 ? "critical" : context && context.percent >= 80 ? "warning" : "normal"
@@ -38,7 +38,7 @@ export function ProviderUsageIndicator({ usage }: { usage?: ProviderUsage }) {
             <h3 className="provider-usage-section-label">Account limits</h3>
             {usage?.limits?.length ? usage.limits.map((limit, index) => {
               const percent = reportedPercent(limit.used_percent)
-              const name = limitLabel(limit)
+              const name = limitLabel(limit, provider)
               return <div key={`${limit.name}-${index}`} className="provider-usage-limit" data-usage-tone={percent !== null && percent >= 95 ? "critical" : "normal"}>
                 <div className="provider-usage-limit-heading"><span>{name}</span><span className="tabular-nums text-muted-foreground">{percent === null ? "Unavailable" : `${Math.round(percent)}% used`}</span></div>
                 {percent !== null && <UsageMeter percent={percent} label={`${name} limit used`} />}

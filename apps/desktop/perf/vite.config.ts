@@ -4,6 +4,7 @@ import { mergeConfig } from "vite"
 import base from "../vite.config"
 export default mergeConfig(base, {
   define: {
+    __TOOL_LEASE_ENDPOINT__: process.env.KYBERN_TOOL_LEASE_ENDPOINT ?? "null",
     __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
     __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]",
     __WORK_REPLAY__: process.env.KYBERN_WORK_REPLAY ? readFileSync(process.env.KYBERN_WORK_REPLAY, "utf8") : "[]",
@@ -24,7 +25,14 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "settings" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "usage" ? [{
+    name: "usage-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/UsagePage.tsx")) return
+      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "usage-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "settings" ? [{
     name: "settings-fixture-transport",
     enforce: "pre",
     transform(code, id) {

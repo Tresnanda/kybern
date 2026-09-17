@@ -11,7 +11,7 @@ import { connectorApproval, isUserInput } from "@/lib/userInput"
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -37,7 +37,7 @@ import {
 import { clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
 import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
-import { MessageScroller, type MessageNavigationModel } from "@/components/beui/message-scroller"
+import { MessageScroller, type MessageNavigationModel, type MessageScrollerController } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
 import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
@@ -69,7 +69,7 @@ import {
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
-import { activeRuntime, errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
+import { activeRuntime, errorText, hydrateToolOutput, retainToolOutput, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
 
@@ -106,6 +106,8 @@ interface AgentActivityDetail {
   prompt: string | null
   result: string | null
   resultPending: boolean
+  resultLoading: boolean
+  resultTool: ToolBlock | undefined
   failed: boolean
   entries: AgentActivityEntry[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
@@ -216,6 +218,8 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     prompt: block ? runtimeActivityPrompt(block.call) : null,
     result: block ? runtimeActivityResult(block.output, block.stream) : null,
     resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
+    resultLoading: !!block?.outputOmitted,
+    resultTool: block,
     failed: block?.isError || task?.status === "failed",
     entries,
     tasksByToolCall,
@@ -241,10 +245,9 @@ export function Transcript({
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
-  const historyOffset = state?.nextBeforeSeq != null ? 1 : 0
-  const virtualGroups = useMemo<readonly (TurnGroup | null)[]>(() => historyOffset ? [null, ...groups] : groups, [groups, historyOffset])
-  const virtualKey = useCallback((group: TurnGroup | null, index: number) => group ? turnKey(group, index - historyOffset) : "history-control", [historyOffset])
-  const virtualEstimate = useCallback((group: TurnGroup | null) => group ? estimateTurnSize(group) : 48, [])
+  const hasEarlier = state?.nextBeforeSeq != null
+  const virtualKey = useCallback(turnKey, [])
+  const virtualEstimate = useCallback(estimateTurnSize, [])
   const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
   const selectedActivity = agentActivityTrail.at(-1)
   const runtimeTasks = useStore((s) => selectedActivity?.threadId === threadId ? s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS : EMPTY_RUNTIME_TASKS)
@@ -252,6 +255,16 @@ export function Transcript({
     () => selectedActivity?.threadId === threadId ? resolveAgentActivityDetail(groups, runtimeTasks, selectedActivity) : null,
     [groups, runtimeTasks, selectedActivity, threadId],
   )
+  const activityResult = agentActivityDetail?.resultTool
+  const activityToolCallId = activityResult?.call.id
+  const activityToolSeq = activityResult?.seq
+  useEffect(() => {
+    if (activityToolCallId === undefined || activityToolSeq === undefined) return
+    return retainToolOutput(threadId, activityToolCallId, activityToolSeq)
+  }, [threadId, activityToolCallId, activityToolSeq])
+  useEffect(() => {
+    if (connected && activityResult?.outputOmitted) void hydrateToolOutput(threadId, activityResult.call.id, activityResult.seq)
+  }, [threadId, activityResult, connected])
   const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
     const selection: AgentActivitySelection = { ...target, threadId }
     setAgentActivityTrail((current) => current.at(-1)?.threadId === threadId ? [...current, selection] : [selection])
@@ -298,7 +311,7 @@ export function Transcript({
         if (viewport.current) rows.current?.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
       },
       activeId(scroll) {
-        const index = (rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0) - historyOffset
+        const index = (rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0)
         const candidates = byTurn.get(index) ?? []
         const group = groups[index]
         if (!group) return ""
@@ -320,7 +333,7 @@ export function Transcript({
         const scroll = viewport.current
         if (!item || !scroll) return
         cancelAnimationFrame(navigationFrame.current)
-        rows.current?.scrollToIndex(item.turnIndex + historyOffset, { align: "start" })
+        rows.current?.scrollToIndex(item.turnIndex, { align: "start" })
         let attempts = 0
         const refine = () => {
           const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
@@ -334,14 +347,14 @@ export function Transcript({
         navigationFrame.current = requestAnimationFrame(refine)
       },
     }
-  }, [groups, navigationItems, historyOffset])
+  }, [groups, navigationItems])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
+  const scroller = useRef<MessageScrollerController>(null)
   useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
-    setFollowing(true)
-    rows.current?.scrollToEnd()
+    scroller.current?.scrollToEnd()
   }
 
   if (!state?.loaded) {
@@ -365,6 +378,7 @@ export function Transcript({
         )}
       >
         <MessageScroller
+          controllerRef={scroller}
           navigation={surfaceMode === "split" ? undefined : "rail"}
           navigationModel={navigationModel}
           navigationLabel="Message navigation"
@@ -398,8 +412,11 @@ export function Transcript({
               )}
             </div>
           ) : (
-            <TranscriptStateRoot key={threadId}><VirtualRows items={virtualGroups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
-              {(g, i) => g ? <div data-turn-id={turnKey(g, i - historyOffset)}><Turn group={g} threadId={threadId} isLast={i === virtualGroups.length - 1} onOpenAgentActivity={openAgentActivity} /></div> : (
+            <TranscriptStateRoot key={threadId}>
+              {/* The status stays outside the keyed transcript. Anchoring to a
+                  persistent status row would discard the reader's position when
+                  older turns are inserted immediately after that row. */}
+              {hasEarlier && (
                 <div className={cn(ROW, "py-2")}>
                   <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
                     {earlier.error ? <>
@@ -409,7 +426,10 @@ export function Transcript({
                   </div>
                 </div>
               )}
-            </VirtualRows></TranscriptStateRoot>
+              <VirtualRows items={groups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
+                {(g, i) => <div data-turn-id={turnKey(g, i)}><Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} /></div>}
+              </VirtualRows>
+            </TranscriptStateRoot>
           )}
         </MessageScroller>
         {/* Maskless bottom fade for opaque content surfaces (see kit.css). */}
@@ -447,9 +467,11 @@ function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActiv
   const promptTitle = detail.kind === "process" ? "Command" : detail.kind === "monitor" ? "Request" : "Prompt"
   const resultTitle = detail.kind === "process" ? "Output" : "Result"
   const missingPrompt = detail.kind === "process" ? "The command was not exposed by this harness." : "The delegated prompt was not exposed by this harness."
-  const missingResult = detail.resultPending
-    ? detail.kind === "agent" ? "The agent is still working." : "This work is still running."
-    : detail.failed ? "No additional error details were reported." : "This harness did not expose a final result."
+  const missingResult = detail.resultLoading
+    ? "Loading the saved result."
+    : detail.resultPending
+      ? detail.kind === "agent" ? "The agent is still working." : "This work is still running."
+      : detail.failed ? "No additional error details were reported." : "This harness did not expose a final result."
 
   return (
     <div
@@ -795,7 +817,7 @@ async function openThreadReference(threadId: ThreadId) {
     runtime = activeRuntime()
     let thread = store.getState().threads[threadId]
     if (!thread) {
-      const result = await runtime.rpc().call("threads.get", { thread_id: threadId, transcript_limit: 1 })
+      const result = await runtime.rpc().call("threads.get", { thread_id: threadId, transcript_limit: 1, include_tool_output: false })
       if (store !== useStore || activeRuntime() !== runtime) return
       thread = result.thread
       store.getState().set((state) => ({ threads: { ...state.threads, [threadId]: result.thread } }))
@@ -1277,7 +1299,7 @@ function ToolRow({
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
     const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 }
+    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1346,7 +1368,19 @@ function ToolRow({
 
 /** Mounted by DisclosureRegion only while open or completing its exit. */
 function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface: ToolSurface | null; screenshots: string[] }) {
+  const threadId = useContext(ImageThreadContext)
+  const connected = useStore((state) => state.connection.state === "open")
+  useEffect(() => {
+    if (!threadId) return
+    return retainToolOutput(threadId, block.call.id, block.seq)
+  }, [threadId, block.call.id, block.seq])
+  useEffect(() => {
+    if (connected && threadId && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
+  }, [connected, threadId, block])
   const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
+  if (block.outputOmitted && !out.trim() && screenshots.length === 0) {
+    return <p className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
+  }
   return (
     <>
       {screenshots.length > 0 && (

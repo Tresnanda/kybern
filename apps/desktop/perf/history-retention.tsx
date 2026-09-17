@@ -9,9 +9,47 @@ import { fixture, calls } from "./history-rpc"
 import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+const liveEdgeTrace: unknown[] = []
+const anchorTrace: unknown[] = []
+let readingAnchor: HTMLElement | undefined
+function recordAnchor(stage: string, target?: number) {
+  const view = scroll()
+  if (!view || !readingAnchor) return
+  anchorTrace.push({ stage, elapsed: Math.round(performance.now()), target, top: view.scrollTop, height: view.scrollHeight, blocks: state().blocks.length, anchor: readingAnchor.dataset.turnId, anchorTop: stage === "captured" || stage === "settled" ? readingAnchor.getBoundingClientRect().top : undefined, connected: readingAnchor.isConnected })
+  if (anchorTrace.length > 60) anchorTrace.shift()
+}
+let previousSample = ""
+function recordLiveEdge(stage: string) {
+  const viewport = scroll()
+  if (!viewport) return
+  const sample = {
+    stage, blocks: state()?.blocks.length, hidden: document.hidden,
+    top: viewport.scrollTop, height: viewport.scrollHeight, client: viewport.clientHeight,
+    distance: viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+    latestVisibleText: document.body.innerText.includes("Answer 999"),
+    latestMountedText: document.body.textContent?.includes("Answer 999"),
+    lastTurn: [...document.querySelectorAll<HTMLElement>("[data-turn-id]")].at(-1)?.dataset.turnId,
+    documentState: document.readyState, innerHeight: window.innerHeight,
+    sheets: document.styleSheets.length,
+    layout: (() => {
+      const result = []
+      for (let node: HTMLElement | null = viewport; node; node = node.parentElement) {
+        const style = getComputedStyle(node)
+        result.push({ tag: node.tagName, className: node.className, height: node.clientHeight, cssHeight: style.height, display: style.display, position: style.position, flex: style.flex })
+      }
+      return result
+    })(),
+  }
+  const signature = JSON.stringify(sample)
+  if (signature === previousSample) return
+  previousSample = signature
+  liveEdgeTrace.push({ elapsed: Math.round(performance.now()), ...sample })
+  if (liveEdgeTrace.length > 24) liveEdgeTrace.shift()
+}
 async function waitFor(condition: () => unknown, message: string) {
   const end = performance.now() + 15000
-  while (!condition() && performance.now() < end) await sleep(20)
+  while (!condition() && performance.now() < end) { recordLiveEdge(message); await sleep(20) }
+  recordLiveEdge(message)
   check(condition(), message)
 }
 const at = "2026-09-14T00:00:00Z"
@@ -24,6 +62,9 @@ const state = () => useStore.getState().transcripts.history!
 const scroll = () => document.querySelector<HTMLElement>("[data-chat-scroll-container]")!
 async function run() {
   document.documentElement.classList.add("dark")
+  // Fractional font metrics occur on supported WebKit versions. Exercise them
+  // on every runner, including machines whose default font rounds to pixels.
+  document.head.appendChild(Object.assign(document.createElement("style"), { textContent: ".chat-markdown { padding-bottom: 0.375px; }" }))
   useStore.getState().set({ selected: { kind: "thread", id: "history" }, connection: { state: "open" }, transcripts: { history: { ...emptyThreadState(), loaded: true, blocks: fixture.all, lastSeq: 3000 } } })
   const beforeBytes = retainedSize(state().blocks)
   flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex h-screen flex-col"><Transcript threadId="history" bottomInset={0} /></div></ThemeProviderContext>))
@@ -44,19 +85,43 @@ async function run() {
   // The store changes before React commits and WebKit finishes end anchoring.
   await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 60, "Cleanup preserves following position")
   scroll().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
-  scroll().scrollTop = 1000
+  scroll().scrollTop = Number(import.meta.env.VITE_HISTORY_READING_OFFSET ?? 1000)
   await sleep(60)
   const top = scroll().getBoundingClientRect().top
   const anchor = [...document.querySelectorAll<HTMLElement>("[data-turn-id]")].find(node => node.getBoundingClientRect().top >= top && node.getBoundingClientRect().top < top + scroll().clientHeight)!
   check(anchor, "Reading anchor exists")
   const anchorTop = anchor.getBoundingClientRect().top
+  readingAnchor = anchor
+  recordAnchor("captured")
+  const view = scroll()
+  const originalScrollTo = view.scrollTo.bind(view)
+  view.scrollTo = ((...args: [ScrollToOptions] | [number, number]) => {
+    recordAnchor("before write", typeof args[0] === "number" ? args[1] : args[0].top)
+    if (typeof args[0] === "number") originalScrollTo(args[0], args[1]!)
+    else originalScrollTo(args[0])
+    recordAnchor("after write")
+  }) as typeof view.scrollTo
   await waitFor(() => calls.length === 1 && !state().loadingEarlier, "Released history reloads on upward reading")
   await sleep(350)
   check(state().blocks.length === 720, "Reloaded history stays retained while reading")
   const anchorShift = Math.abs(anchor.getBoundingClientRect().top - anchorTop)
-  check(anchor.isConnected && anchorShift < 2, `Reload preserves reading position: ${anchorShift}px`)
+  recordAnchor("settled")
+  view.scrollTo = originalScrollTo
+  const replacementAnchor = document.querySelector<HTMLElement>(`[data-turn-id="${anchor.dataset.turnId}"]`)
+  check(anchor.isConnected && anchorShift < 2, `Reload preserves reading position: ${anchorShift}px; connected=${anchor.isConnected}; replacementTop=${replacementAnchor?.getBoundingClientRect().top}`)
   document.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')!.click()
-  await sleep(250)
+  await waitFor(() => document.body.innerText.includes("Answer 999") && scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Explicit return reaches the latest answer")
+  // Opening a dock changes the transcript's available geometry. Returning to
+  // latest must resume the scroller's follow state as well as move its cursor.
+  const pane = document.querySelector<HTMLElement>("[data-chat-transcript-pane]")!
+  pane.style.flex = "none"
+  pane.style.height = "360px"
+  pane.style.width = "420px"
+  await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Following survives opening a dock")
+  pane.style.removeProperty("flex")
+  pane.style.removeProperty("height")
+  pane.style.removeProperty("width")
+  await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Following survives closing a dock")
   const answer = [...document.querySelectorAll<HTMLElement>(".chat-markdown")].at(-1)!
   const range = document.createRange()
   range.selectNodeContents(answer)
@@ -77,7 +142,7 @@ async function run() {
   check(state().blocks.length === 3000 && document.activeElement === focus, `Focused message controls pin history; connected=${focus.isConnected}, active=${document.activeElement?.outerHTML.slice(0, 600)}`)
   focus.blur()
   await waitFor(() => state().blocks.length === 600, "Leaving the focused control permits cleanup")
-  return { pass: true, beforeBlocks: 3000, afterBlocks: state().blocks.length, beforeBytes, afterBytes, anchorShift, reload: true, selection: true, focus: true, identity: true }
+  return { pass: true, beforeBlocks: 3000, afterBlocks: state().blocks.length, beforeBytes, afterBytes, anchorShift, reload: true, selection: true, focus: true, identity: true, anchorTrace }
 }
 const w = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }
-run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))
+run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), anchorTrace, liveEdgeTrace, blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))

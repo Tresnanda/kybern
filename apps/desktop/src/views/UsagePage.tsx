@@ -1,13 +1,24 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/kit/button"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/kit/input-group"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { ProviderMark } from "@/components/kybern/bits"
 import { ChevronDownIcon, RefreshCwIcon } from "@/lib/kit/icons"
 import { tokens, usd } from "@/lib/format"
+import { limitLabel, reportedPercent, resetLabel } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import type { ProviderKind, UsageGroup, UsageSummaryResult } from "@/protocol"
+import type { ProviderKind, ProviderLimits, ProviderUsage, UsageGroup, UsageSummaryResult } from "@/protocol"
+
+type ReportedLimit = NonNullable<ProviderUsage["limits"]>[number]
+
+function limitTone(percent: number | null): "normal" | "warning" | "critical" {
+  if (percent === null) return "normal"
+  if (percent >= 95) return "critical"
+  if (percent >= 80) return "warning"
+  return "normal"
+}
 
 type Period = "7" | "30" | "all"
 const PERIODS: Record<Period, string> = { "7": "Last 7 days", "30": "Last 30 days", all: "All time" }
@@ -18,6 +29,36 @@ const count = (row: UsageSummaryResult["total"]) => row.usage.input_tokens + row
 export function UsagePage() {
   const environmentId = useStore((s) => s.environmentId)
   const connection = useStore((s) => s.connection.state)
+  const threads = useStore((s) => s.threads)
+  const transcripts = useStore((s) => s.transcripts)
+  // Plan limits arrive live per thread (5-hour / weekly). Show the freshest known
+  // window per provider — latest reset time wins, then higher reported usage.
+  const providerLimits = useMemo(() => {
+    const byProvider = new Map<ProviderKind, Map<string, ReportedLimit>>()
+    for (const [id, transcript] of Object.entries(transcripts)) {
+      const limits = transcript?.providerUsage?.limits
+      const kind = threads[id]?.provider?.kind
+      if (!limits?.length || !kind) continue
+      const windows = byProvider.get(kind) ?? new Map<string, ReportedLimit>()
+      for (const limit of limits) {
+        const windowKey = String(limit.window_minutes ?? limit.name)
+        const prev = windows.get(windowKey)
+        const fresher = !prev
+          || (limit.resets_at ?? 0) > (prev.resets_at ?? 0)
+          || ((limit.resets_at ?? 0) === (prev.resets_at ?? 0) && limit.used_percent > prev.used_percent)
+        if (fresher) windows.set(windowKey, limit)
+      }
+      byProvider.set(kind, windows)
+    }
+    return [...byProvider.entries()].map(([kind, windows]) => ({
+      kind,
+      limits: [...windows.values()].sort((a, b) => (a.window_minutes ?? Number.MAX_SAFE_INTEGER) - (b.window_minutes ?? Number.MAX_SAFE_INTEGER)),
+    }))
+  }, [threads, transcripts])
+  // Authoritative limits from the daemon's store — available without opening a
+  // thread or prompting first. Falls back to the live per-thread values while it
+  // loads (or if an older daemon lacks the method).
+  const [storedLimits, setStoredLimits] = useState<{ environmentId: string; providers: ProviderLimits[] } | null>(null)
   const [period, setPeriod] = useState<Period>("30")
   const [group, setGroup] = useState<UsageGroup>("provider")
   const [revision, refresh] = useState(0)
@@ -45,6 +86,21 @@ export function UsagePage() {
     }).catch((error) => { if (!canceled) setFailure({ key, message: errorText(error) }) })
     return () => { canceled = true }
   }, [key, scope, period, group])
+  useEffect(() => {
+    if (connection !== "open") return
+    let canceled = false
+    rpc().call("usage.limits", {}).then((result) => {
+      if (!canceled) setStoredLimits({ environmentId, providers: result.providers })
+    }).catch(() => { /* older daemon lacks the method: keep the per-thread fallback */ })
+    return () => { canceled = true }
+  }, [environmentId, connection, revision])
+  // The daemon's usage.limits is authoritative (store's last-reported values plus
+  // a live Codex read); use the live per-thread values only until it loads or if
+  // an older daemon lacks the method.
+  const accountLimits = (storedLimits?.environmentId === environmentId
+    ? storedLimits.providers.map((entry) => ({ kind: entry.provider, limits: entry.limits }))
+    : providerLimits
+  ).filter((entry) => entry.limits.length > 0)
   // Never show the previous filter's totals under the next filter's label.
   const data = result?.scope === scope ? result : null
   const error = failure?.key === key ? failure.message : null
@@ -67,14 +123,32 @@ export function UsagePage() {
       <Button variant="ghost" size="sm" disabled={loading} onClick={() => refresh(value => value + 1)}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
     </div>
 
+    {accountLimits.length > 0 && <section aria-label="Account limits">
+      <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label">Last reported by your agents</span></div>
+      <div className="usage-limits">
+        {accountLimits.map(({ kind, limits }) => <div key={kind} className="usage-limit-card">
+          <div className="usage-limit-provider">{PROVIDERS[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDERS[kind] ?? kind}</span></div>
+          {limits.map((limit, index) => {
+            const percent = reportedPercent(limit.used_percent)
+            return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
+              <div className="usage-limit-heading"><b>{limitLabel(limit, kind)}</b><span>{percent === null ? "Unavailable" : `${Math.round(percent)}% used`}</span></div>
+              <div className="usage-limit-meter"><span style={{ transform: `scaleX(${(percent ?? 0) / 100})` }} /></div>
+              <p className="usage-limit-reset">{resetLabel(limit.resets_at)}</p>
+            </div>
+          })}
+        </div>)}
+      </div>
+    </section>}
+
     {loading && !data && <div role="status" className="grid gap-4"><p className="settings-note">Loading usage…</p><div className="usage-skeleton" aria-hidden="true" /></div>}
     {error && <div role="alert" className="usage-state"><h2 className="font-medium">{data ? "Unable to refresh usage" : "Unable to load usage"}</h2><p>{error}{data && " Showing the last loaded totals."}</p><Button variant="chrome-outline" size="sm" onClick={() => refresh(value => value + 1)}>Try again</Button></div>}
     {data && <>
       <dl className="usage-summary">
-        <div className="usage-stat"><dt>Reported cost</dt><dd>{usd(data.summary.total.cost_usd)}</dd><p>From completed turns</p></div>
+        <div className="usage-stat"><dt>Reported cost</dt><dd>{usd(data.summary.total.cost_usd)}</dd><p>Pay-as-you-go equivalent, not your bill</p></div>
         <div className="usage-stat"><dt>Input + output tokens</dt><dd title={count(data.summary.total).toLocaleString()}>{tokens(count(data.summary.total))}</dd><p>{tokens(data.summary.total.usage.input_tokens)} input · {tokens(data.summary.total.usage.output_tokens)} output</p></div>
         <div className="usage-stat"><dt>Completed turns</dt><dd>{data.summary.total.turns.toLocaleString()}</dd><p>{tokens(data.summary.total.usage.cache_read_tokens)} cache read · {tokens(data.summary.total.usage.cache_write_tokens)} cache write</p></div>
       </dl>
+      <PlanValue apiEquivalent={data.summary.total.cost_usd} period={period} />
       {data.summary.rows.length === 0 ? <div className="usage-state"><h2 className="font-medium">No usage in this period</h2><p>Usage appears here after an agent finishes a turn on this machine. Try a longer period to see earlier activity.</p>{period !== "all" && <Button size="sm" variant="chrome-outline" onClick={() => setPeriod("all")}>Show all time</Button>}</div> : <section aria-label="Daily token activity">
         <div className="usage-section-heading"><h2>Daily activity</h2><span className="usage-filter-label">{activeDay ?? <>{period === "7" ? "Last 7 days" : "Last 30 days"} · UTC</>}</span></div>
         <div className="usage-chart">{chart.map(day => {
@@ -89,7 +163,64 @@ export function UsagePage() {
         {rows.length > 0 && <table className="usage-table"><thead><tr><th scope="col">{group === "provider" ? "Agent" : group === "model" ? "Model" : "Day (UTC)"}</th><th scope="col" className="usage-turns">Turns</th><th scope="col">Tokens</th><th scope="col">Cost</th></tr></thead><tbody>{rows.slice(0, rowLimit).map(row => <tr key={row.key}><td><div className="usage-row-name">{group === "provider" && PROVIDERS[row.key] && <ProviderMark kind={row.key as ProviderKind} size={14} className="size-3.5 shrink-0" />}<span>{group === "provider" ? PROVIDERS[row.key] ?? row.key : group === "day" ? dayLabel(row.key, true) : row.key === "(default)" ? "Default model" : row.key}</span></div><div className="usage-row-meter" aria-hidden="true"><span style={{ width: `${count(row) / max * 100}%` }} /></div></td><td className="usage-turns">{row.turns.toLocaleString()}</td><td title={count(row).toLocaleString()}>{tokens(count(row))}</td><td>{usd(row.cost_usd)}</td></tr>)}</tbody></table>}
         {rows.length > rowLimit && <Button variant="ghost" size="sm" onClick={() => setRowLimit(value => value + 20)}>Show more</Button>}
       </section>
-      <p className="settings-note">Includes completed turns recorded by this Kybern daemon. Costs are reported by agents; unreported costs and subscription charges are not included. Cache tokens are shown separately.</p>
+      <p className="settings-note">Turns recorded by this Kybern daemon. Cost is each agent's own figure — on a subscription (Claude, Codex) it's the pay-as-you-go equivalent, not your actual bill, and some agents report none. Cache tokens count toward cost but are listed separately.</p>
     </>}
   </div>
+}
+
+const PLAN_COST_KEY = "kybern.usage.plan-cost"
+
+/** Reframes the pay-as-you-go cost as subscription value: how much compute your
+ *  flat fee actually bought. Plan cost is stored locally — no account needed. */
+function PlanValue({ apiEquivalent, period }: { apiEquivalent: number; period: Period }) {
+  const [monthly, setMonthly] = useState<number | null>(() => {
+    const stored = Number(localStorage.getItem(PLAN_COST_KEY))
+    return Number.isFinite(stored) && stored > 0 ? stored : null
+  })
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState("")
+  const commit = () => {
+    const value = Number(draft)
+    if (Number.isFinite(value) && value > 0) {
+      setMonthly(value)
+      localStorage.setItem(PLAN_COST_KEY, String(value))
+    } else {
+      setMonthly(null)
+      localStorage.removeItem(PLAN_COST_KEY)
+    }
+    setEditing(false)
+  }
+  const startEdit = () => { setDraft(monthly ? String(monthly) : ""); setEditing(true) }
+  const days = period === "7" ? 7 : period === "30" ? 30 : null
+  const planForPeriod = monthly != null && days != null ? (monthly * days) / 30 : null
+  const multiple = planForPeriod && planForPeriod > 0 ? apiEquivalent / planForPeriod : null
+  const periodLabel = period === "7" ? "in the last 7 days" : period === "30" ? "this month" : "so far"
+  return (
+    <div className="usage-plan-value">
+      <div className="usage-plan-head">
+        <span className="usage-plan-title">Subscription value</span>
+        {editing ? (
+          <span className="usage-plan-edit">
+            <InputGroup className="w-24">
+              <InputGroupAddon>$</InputGroupAddon>
+              <InputGroupInput aria-label="Total plan cost per month" inputMode="decimal" placeholder="200" autoFocus value={draft}
+                onChange={(event) => setDraft(event.target.value.replace(/[^0-9.]/g, ""))}
+                onKeyDown={(event) => { if (event.key === "Enter") commit(); if (event.key === "Escape") setEditing(false) }} />
+            </InputGroup>
+            <Button size="xs" variant="chrome-outline" onClick={commit}>Save</Button>
+          </span>
+        ) : (
+          <Button size="xs" variant="ghost" onClick={startEdit}>{monthly != null ? `$${monthly}/mo` : "Set plan cost"}</Button>
+        )}
+      </div>
+      {multiple != null ? <>
+        <div className="usage-plan-multiple">{multiple >= 10 ? Math.round(multiple).toLocaleString() : multiple.toFixed(1)}&times;</div>
+        <p className="usage-plan-caption">You ran <b className="text-foreground">{usd(apiEquivalent)}</b> of pay-as-you-go compute on {usd(planForPeriod!)} of subscription {periodLabel}.</p>
+      </> : monthly != null ? (
+        <p className="usage-plan-caption"><b className="text-foreground">{usd(apiEquivalent)}</b> of pay-as-you-go compute on your subscription {periodLabel}. Pick a 7- or 30-day period to see your value multiple.</p>
+      ) : (
+        <p className="usage-plan-caption">Add your total plan cost per month to see how much pay-as-you-go compute your flat fee actually covers.</p>
+      )}
+    </div>
+  )
 }

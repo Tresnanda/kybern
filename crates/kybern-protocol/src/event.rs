@@ -192,6 +192,56 @@ pub enum EventPayload {
     },
 }
 
+impl EventPayload {
+    /// The persisted/wire discriminant, without allocating or traversing payload data.
+    /// Keep this exhaustive: adding an event must also select its Serde wire tag.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::ThreadCreated { .. } => "thread_created",
+            Self::ThreadUpdated { .. } => "thread_updated",
+            Self::ThreadArchived => "thread_archived",
+            Self::SessionImported { .. } => "session_imported",
+            Self::MessageQueued { .. } => "message_queued",
+            Self::MessageRemoved { .. } => "message_removed",
+            Self::MessageQueueUpdated { .. } => "message_queue_updated",
+            Self::MessageSteered { .. } => "message_steered",
+            Self::ThreadNotesUpdated { .. } => "thread_notes_updated",
+            Self::ProjectCoordinatorDeleted { .. } => "project_coordinator_deleted",
+            Self::CollaborationGroupUpdated { .. } => "collaboration_group_updated",
+            Self::CollaborationMemberUpdated { .. } => "collaboration_member_updated",
+            Self::CollaborationAssignmentUpdated { .. } => "collaboration_assignment_updated",
+            Self::CollaborationMessageUpdated { .. } => "collaboration_message_updated",
+            Self::CollaborationContextUpdated { .. } => "collaboration_context_updated",
+            Self::TurnStarted { .. } => "turn_started",
+            Self::TurnResumed => "turn_resumed",
+            Self::ProviderSessionBound { .. } => "provider_session_bound",
+            Self::ProviderSessionReleased { .. } => "provider_session_released",
+            Self::AssistantTextDelta { .. } => "assistant_text_delta",
+            Self::ImageReceived { .. } => "image_received",
+            Self::AssistantThinkingDelta { .. } => "assistant_thinking_delta",
+            Self::AssistantMessageCompleted { .. } => "assistant_message_completed",
+            Self::ToolCallStarted { .. } => "tool_call_started",
+            Self::ToolCallOutputDelta { .. } => "tool_call_output_delta",
+            Self::ToolCallCompleted { .. } => "tool_call_completed",
+            Self::RuntimeTaskStarted { .. } => "runtime_task_started",
+            Self::RuntimeTaskUpdated { .. } => "runtime_task_updated",
+            Self::RuntimeTaskCompleted { .. } => "runtime_task_completed",
+            Self::AsyncQuestionsRequested { .. } => "async_questions_requested",
+            Self::AsyncQuestionsAnswered { .. } => "async_questions_answered",
+            Self::UserInputRequested { .. } => "user_input_requested",
+            Self::ApprovalRequested { .. } => "approval_requested",
+            Self::ApprovalResolved { .. } => "approval_resolved",
+            Self::TurnCompleted { .. } => "turn_completed",
+            Self::TurnFailed { .. } => "turn_failed",
+            Self::ProviderCommandsUpdated { .. } => "provider_commands_updated",
+            Self::ProviderUsageUpdated { .. } => "provider_usage_updated",
+            Self::ProviderNotice { .. } => "provider_notice",
+            Self::CheckpointUpdated { .. } => "checkpoint_updated",
+            Self::WorkspaceReverted { .. } => "workspace_reverted",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NoticeLevel {
@@ -213,4 +263,43 @@ pub struct EventNotification {
 pub struct EventsReadyNotification {
     pub subscription_id: SubscriptionId,
     pub head_seq: EventSeq,
+}
+
+#[cfg(test)]
+mod kind_tests {
+    use super::*;
+
+    #[test]
+    fn kind_matches_serde_for_empty_scalar_and_large_payload_events() {
+        let examples = [
+            EventPayload::ThreadArchived,
+            EventPayload::TurnResumed,
+            EventPayload::MessageRemoved { message_id: MessageId::nil() },
+            EventPayload::ToolCallOutputDelta { tool_call_id: "a:b".into(), delta: "😀\n\0".into() },
+            EventPayload::ToolCallCompleted {
+                tool_call_id: "a:b".into(),
+                output: serde_json::json!({ "nested": [null, true, "x".repeat(1024 * 1024)] }),
+                is_error: false,
+            },
+            EventPayload::AssistantTextDelta { message_id: MessageId::nil(), origin: Default::default(), delta: "é".into() },
+            EventPayload::AssistantThinkingDelta { message_id: MessageId::nil(), origin: Default::default(), delta: String::new() },
+            EventPayload::AssistantMessageCompleted {
+                message_id: MessageId::nil(),
+                origin: Default::default(),
+                text: "done".into(),
+                thinking: None,
+            },
+            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "notice".into(), data: None },
+            EventPayload::ProviderUsageUpdated { usage: Default::default() },
+            EventPayload::ProviderCommandsUpdated { commands: Vec::new() },
+            EventPayload::WorkspaceReverted { to_turn_id: TurnId::nil(), commit: "abc".into() },
+        ];
+        for event in examples {
+            let wire = serde_json::to_value(&event).unwrap();
+            let tag: &'static str = event.kind();
+            assert_eq!(wire["kind"].as_str(), Some(tag));
+            let restored: EventPayload = serde_json::from_value(wire).unwrap();
+            assert_eq!(restored.kind(), tag);
+        }
+    }
 }

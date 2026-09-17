@@ -23,8 +23,7 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { PROVIDER_LABEL } from "@/lib/format"
-import { CentralIcon } from "@/lib/kit/central-icons"
-import { Plus, TerminalSquareIcon, Trash2 } from "@/lib/kit/icons"
+import { Plus, TerminalIcon, TerminalSquareIcon, Trash2, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ProviderKind, TerminalExitedNotification, TerminalId, TerminalOutputNotification, ThreadId } from "@/protocol"
 import { TERMINAL_EXITED_NOTIFICATION, TERMINAL_OUTPUT_NOTIFICATION } from "@/protocol"
@@ -164,7 +163,7 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
               <MenuGroup>
                 <MenuGroupLabel>Open in a new tab</MenuGroupLabel>
                 <MenuItem onClick={() => addTab("shell")}>
-                  <CentralIcon name="console" className="size-3.5 shrink-0" /> Shell
+                  <TerminalIcon className="size-3.5 shrink-0" /> Shell
                 </MenuItem>
               </MenuGroup>
               {clis.length > 0 && (
@@ -222,7 +221,7 @@ function TabChip({ tab, active, onSelect, onClose }: { tab: TerminalTab; active:
         <span className="transition-opacity group-hover/dock-tab:opacity-0">
           {tab.kind === "shell" ? <TerminalSquareIcon className="size-3.5 text-[var(--color-text-foreground)]" /> : <ProviderMark kind={tab.kind} size={14} className="size-3.5" />}
         </span>
-        <CentralIcon name="cross-small" className="absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100" />
+        <XIcon className="absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100" />
       </span>
       <span className="max-w-40 truncate">{tab.title}</span>
     </button>

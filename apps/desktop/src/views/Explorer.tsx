@@ -328,7 +328,7 @@ const FileViewer = memo(function FileViewer({ projectId, path, projectName, proj
             </div>
           )}
           <Menu>
-            <IconButton render={<MenuTrigger />} variant="chrome" size="icon-xs" label="File actions" tooltip="More" tooltipSide="bottom" className="!size-7 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0">
+            <IconButton render={<MenuTrigger />} variant="chrome" size="icon-xs" label="File actions" tooltip="More" tooltipSide="bottom" className="!size-7 rounded-lg [&_svg]:mx-0">
               <EllipsisIcon className="size-3.5" />
             </IconButton>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">

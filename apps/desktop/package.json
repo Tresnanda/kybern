@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test agentStart.test.mjs appUpdate.test.mjs releaseNotes.test.mjs chatLinks.test.mjs codeChunks.test.mjs tailChange.test.mjs toolActivity.test.mjs transcript.test.mjs performance.test.mjs loopVisibility.test.mjs uiDiagnostics.test.mjs splitView.test.mjs smoothStream.test.mjs environments.test.mjs userInput.test.mjs responseImages.test.mjs toolSurface.test.mjs highlightCache.test.mjs highlightQueue.test.mjs markdownQueue.test.mjs markdownParser.test.mjs transcriptNavigation.test.mjs memory.test.mjs notifications.test.mjs tauriEvents.test.mjs",
+    "test": "node --experimental-strip-types --test agentStart.test.mjs appUpdate.test.mjs releaseNotes.test.mjs chatLinks.test.mjs codeChunks.test.mjs tailChange.test.mjs toolActivity.test.mjs transcript.test.mjs performance.test.mjs loopVisibility.test.mjs uiDiagnostics.test.mjs splitView.test.mjs smoothStream.test.mjs environments.test.mjs userInput.test.mjs responseImages.test.mjs toolSurface.test.mjs highlightCache.test.mjs highlightQueue.test.mjs markdownQueue.test.mjs markdownParser.test.mjs transcriptNavigation.test.mjs memory.test.mjs toolOutputCache.test.mjs notifications.test.mjs tauriEvents.test.mjs",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b --noEmit",
@@ -19,7 +19,8 @@
     "@base-ui/react": "1.7.0",
     "@fontsource-variable/jetbrains-mono": "5.2.8",
     "@fontsource/cal-sans": "5.3.0",
-    "@tabler/icons-react": "3.44.0",
+    "@hugeicons/core-free-icons": "4.3.3",
+    "@hugeicons/react": "1.1.10",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-virtual": "3.14.10",
     "@tauri-apps/api": "2.11.1",

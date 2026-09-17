@@ -23,6 +23,7 @@ expression: names
 - threads.read
 - threads.create
 - threads.get
+- threads.tool_output
 - threads.update
 - threads.archive
 - threads.send
@@ -77,6 +78,7 @@ expression: names
 - settings.get
 - settings.update
 - usage.summary
+- usage.limits
 - access.pairing.create
 - access.exposure.get
 - access.exposure.set

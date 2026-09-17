@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from "react"
 import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range, type ReactVirtualizer } from "@tanstack/react-virtual"
 import { reconcileVirtualTopology, type VirtualTopology } from "@/lib/virtualTopology"
+import { recordScrollPosition } from "@/lib/scrollPosition"
 import { TranscriptStateScope } from "./TranscriptStateScope"
 
 export type VirtualRowsController = ReactVirtualizer<HTMLElement, HTMLDivElement>
@@ -67,6 +68,7 @@ function VirtualizedRows<T>({
   const owner = useId()
   const container = useRef<HTMLDivElement>(null)
   const [margin, setMargin] = useState(0)
+  const measuredMargin = useRef<number | null>(null)
   const [pinned, setPinned] = useState<{ focused: string | null; selection: readonly [string, string] | null }>({ focused: null, selection: null })
 
   useLayoutEffect(() => {
@@ -77,6 +79,14 @@ function VirtualizedRows<T>({
     const measure = () => {
       frame = 0
       const next = list.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop
+      const previous = measuredMargin.current
+      measuredMargin.current = next
+      // A top-level history status can disappear once paging is exhausted.
+      // Preserve the reader below it while the list's content origin changes.
+      if (providedViewport && !followEnd && previous !== null && Math.abs(next - previous) >= .5 && scroll.scrollTop > Math.max(previous, next)) {
+        scroll.scrollTop += next - previous
+        recordScrollPosition(scroll)
+      }
       setMargin((current) => Math.abs(current - next) < .5 ? current : next)
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
@@ -94,7 +104,7 @@ function VirtualizedRows<T>({
       cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [viewport, inherited?.origin, items.length])
+  }, [viewport, providedViewport, followEnd, inherited?.origin, items.length])
 
   useLayoutEffect(() => {
     const update = () => {
@@ -126,15 +136,23 @@ function VirtualizedRows<T>({
     // stable row keys before rendering so focused/selected DOM never drops out.
     const indexOf = (key: string | null) => key === null ? -1 : items.findIndex((item, index) => String(getKey(item, index)) === key)
     const indices = new Set(visible)
-    const focused = indexOf(pinned.focused)
+    // WebKit queues selectionchange. A store update can render a new topology
+    // before that notification, so also pin the live DOM endpoints before any
+    // rows are removed. The subscribed pins still invalidate a settled range
+    // when selection/focus changes without a transcript update.
+    const focused = indexOf(containingRow(document.activeElement, owner)?.dataset.virtualKey ?? pinned.focused)
     if (focused >= 0) indices.add(focused)
-    if (pinned.selection) {
-      const a = indexOf(pinned.selection[0]), b = indexOf(pinned.selection[1])
+    const selection = document.getSelection()
+    const anchor = selection && !selection.isCollapsed ? containingRow(selection.anchorNode, owner)?.dataset.virtualKey : undefined
+    const focus = selection && !selection.isCollapsed ? containingRow(selection.focusNode, owner)?.dataset.virtualKey : undefined
+    const endpoints = anchor || focus ? [anchor ?? focus!, focus ?? anchor!] : pinned.selection
+    if (endpoints) {
+      const a = indexOf(endpoints[0]!), b = indexOf(endpoints[1]!)
       if (a >= 0 && b >= 0) for (let index = Math.min(a, b); index <= Math.max(a, b); index++) indices.add(index)
       else if (a >= 0 || b >= 0) indices.add(Math.max(a, b))
     }
     return [...indices].sort((a, b) => a - b)
-  }, [pinned, items, getKey])
+  }, [pinned, items, getKey, owner])
   // TanStack Virtual treats getItemKey identity as measurement topology. An
   // immutable streaming update used to replace this callback every render and
   // rebuild every measurement even when all row keys and estimates were
@@ -148,6 +166,12 @@ function VirtualizedRows<T>({
   if (topology !== previousTopology) setPreviousTopology(topology)
   const getItemKey = useCallback((index: number) => topology.keys[index]!, [topology])
   const estimate = useCallback((index: number) => topology.estimates[index]!, [topology])
+  const committedTopology = useRef(topology)
+  const isRebasing = useCallback((instance: Pick<VirtualRowsController, "options">) => {
+    const keys = committedTopology.current.keys
+    const { count, getItemKey } = instance.options
+    return count !== keys.length || (count > 0 && (getItemKey(0) !== keys[0] || getItemKey(count - 1) !== keys.at(-1)))
+  }, [])
   // This component reads the mutable virtualizer directly; it must not be compiler-memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
@@ -175,15 +199,19 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const current = instance.scrollElement?.scrollTop
-      if (options.adjustments !== undefined && current !== undefined) {
+      if (options.adjustments !== undefined && current !== undefined && !isRebasing(instance)) {
         // A wheel/trackpad move can precede the scroll event that updates the
         // library's cursor. Apply height compensation to the actual position,
         // or it can undo that move. Core adds the adjustment to this cursor.
+        // During prepend/trim, core has already rebased its cursor
+        // before DOM commit. Retain that intended offset until its layout effect
+        // applies it; the DOM still contains the old scroll position here.
         instance.scrollOffset = current
         elementScroll(current, options, instance)
       } else {
         elementScroll(offset, options, instance)
       }
+      recordScrollPosition(instance.scrollElement)
     },
   })
   const measureRow = useCallback((element: HTMLDivElement | null) => {
@@ -192,16 +220,20 @@ function VirtualizedRows<T>({
       // Core normally defers new measurements during scrolling. In normal
       // flow an overscan row's real height already affects visible neighbours;
       // account for it in this commit instead of painting the estimate first.
-      virtualizer.resizeItem(Number(element.dataset.index), element.getBoundingClientRect().height)
+      // Match core's rounded border-box measurements. Mixing fractional mount
+      // sizes with rounded observer sizes repeatedly corrects the same row.
+      virtualizer.resizeItem(Number(element.dataset.index), Math.round(element.getBoundingClientRect().height))
     }
   }, [virtualizer])
   useLayoutEffect(() => {
     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
-      const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
+      const rebasing = isRebasing(instance)
+      const offset = rebasing ? instance.scrollOffset ?? 0 : instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
       if (!instance.itemSizeCache.has(item.key)) return item.start < offset
+      if (rebasing) return item.end <= offset
       // Cached starts can lag newly inserted flow siblings. Use the previous
       // DOM bottom (before this delta) so a visible row is not mistaken for an
       // offscreen row, causing a spurious correction followed by a snap back.
@@ -212,7 +244,8 @@ function VirtualizedRows<T>({
         : item.end <= offset
     }
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
-  }, [virtualizer])
+  }, [virtualizer, isRebasing])
+  useLayoutEffect(() => { committedTopology.current = topology }, [topology])
   useImperativeHandle(controllerRef, () => virtualizer, [virtualizer])
   const setContainer = useCallback((element: HTMLDivElement | null) => {
     container.current = element

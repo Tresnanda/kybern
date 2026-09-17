@@ -11,7 +11,8 @@ pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHist
 pub use transcript_page::{transcript_page, transcript_page_ref};
 
 pub use projection::{
-    project_pending_questions, project_provider_usage, project_runtime_tasks, project_thread_activity, project_transcript,
+    LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, project_pending_questions, project_provider_usage, project_runtime_tasks,
+    project_thread_activity, project_transcript, should_omit_tool_output,
 };
 
 use std::path::Path;
@@ -109,7 +110,7 @@ fn append_event_in_transaction(
 ) -> Result<ThreadEvent> {
     let c = tx;
     let at = Utc::now();
-    let kind = serde_json::to_value(&payload)?.get("kind").and_then(|k| k.as_str()).unwrap_or("unknown").to_string();
+    let kind = payload.kind();
     let serialized = serde_json::to_string(&payload)?;
     c.execute(
         "INSERT INTO events(thread_id, turn_id, at, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1737,16 +1738,162 @@ impl Store {
         })
     }
 
-    pub fn runtime_tasks_for_thread(&self, thread_id: ThreadId) -> Result<Vec<RuntimeTask>> {
+    /// Fold the transcript without retaining every event payload at once.
+    pub fn project_transcript_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<TranscriptEntry>> {
+        self.with(|c| {
+            // Exclude only the known no-op arm of apply_transcript_event. In
+            // particular, terminal/tool output deltas can be large but never
+            // contribute a transcript row. Other projections and replay still
+            // read the unchanged event log. Unknown/new kinds are NOT excluded.
+            // Keep this list aligned with that no-op arm when event behavior changes.
+            let mut statement = c.prepare(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind NOT IN (
+                   'async_questions_requested', 'provider_commands_updated', 'provider_usage_updated',
+                   'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
+                   'project_coordinator_deleted', 'collaboration_group_updated', 'collaboration_member_updated',
+                   'collaboration_assignment_updated', 'collaboration_message_updated', 'collaboration_context_updated',
+                   'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated'
+                 ) ORDER BY seq",
+            )?;
+            let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
+            let mut fold = TranscriptFold::omitting_tool_outputs();
+            while let Some(row) = rows.next()? {
+                fold.apply(&row_to_event(row)?);
+            }
+            Ok(fold.finish())
+        })
+    }
+
+    /// Fetch the completion belonging to this exact start, at the requested
+    /// snapshot. A reused provider call ID must never hydrate an older row with
+    /// a newer invocation's result.
+    pub fn tool_call_output_through(
+        &self,
+        thread_id: ThreadId,
+        tool_call_id: &str,
+        start_seq: Option<EventSeq>,
+        through_seq: EventSeq,
+    ) -> Result<Option<(serde_json::Value, bool)>> {
+        self.with(|c| {
+            let start: Option<EventSeq> = c
+                .query_row(
+                    "SELECT seq FROM events WHERE thread_id = ?1 AND kind = 'tool_call_started'
+                 AND seq <= ?3 AND (?4 IS NULL OR seq = ?4)
+                 AND json_extract(payload, '$.call.id') = ?2 ORDER BY seq DESC LIMIT 1",
+                    params![thread_id.to_string(), tool_call_id, through_seq, start_seq],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(start) = start else { return Ok(None) };
+            let mut statement = c.prepare_cached(TOOL_OUTPUT_AT_START_SQL)?;
+            read_tool_output_at_start(&mut statement, thread_id, tool_call_id, start, through_seq)
+        })
+    }
+
+    /// Hydrate only the page, preserving its sequence barrier and row identities.
+    /// Decode all requested values before publishing any, so corrupt data cannot
+    /// leave a partially hydrated response. Move the last use of each value.
+    pub fn hydrate_tool_outputs_through(&self, thread_id: ThreadId, entries: &mut [TranscriptEntry], through_seq: EventSeq) -> Result<()> {
+        let mut remaining = std::collections::HashMap::new();
+        for entry in entries.iter() {
+            if let TranscriptEntry::ToolCall { seq, call, complete: true, output_omitted: true, .. } = entry {
+                *remaining.entry((*seq, call.id.clone())).or_insert(0usize) += 1;
+            }
+        }
+        if remaining.is_empty() {
+            return Ok(());
+        }
+        let mut outputs = self.with(|c| {
+            let mut statement = c.prepare_cached(TOOL_OUTPUT_AT_START_SQL)?;
+            let mut outputs = std::collections::HashMap::new();
+            for entry in entries.iter() {
+                if let TranscriptEntry::ToolCall { seq, call, complete: true, output_omitted: true, .. } = entry
+                    && let std::collections::hash_map::Entry::Vacant(slot) = outputs.entry((*seq, call.id.clone()))
+                {
+                    slot.insert(read_tool_output_at_start(&mut statement, thread_id, &call.id, *seq, through_seq)?);
+                }
+            }
+            Ok(outputs)
+        })?;
+        for entry in entries {
+            if let TranscriptEntry::ToolCall { seq, call, output, output_omitted, is_error, complete: true, .. } = entry {
+                if !*output_omitted {
+                    continue;
+                }
+                let key = (*seq, call.id.clone());
+                let uses = remaining.get_mut(&key).expect("requested omitted row");
+                *uses -= 1;
+                let result = if *uses == 0 { outputs.remove(&key).flatten() } else { outputs.get(&key).cloned().flatten() };
+                if let Some((value, error)) = result {
+                    *output = Some(value);
+                    *is_error = error;
+                    *output_omitted = false;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn runtime_tasks_for_thread_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<RuntimeTask>> {
         self.with(|c| {
             let mut st = c.prepare(
                 "SELECT seq, thread_id, turn_id, at, payload FROM events
-                 WHERE thread_id = ?1 AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound')
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound')
                  ORDER BY seq",
             )?;
-            let events = st.query_map([thread_id.to_string()], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
+            let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
             Ok(project_runtime_tasks(&events))
         })
+    }
+
+    pub fn provider_usage_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<ProviderUsage> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind = 'provider_usage_updated'
+                 ORDER BY seq",
+            )?;
+            let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
+            Ok(project_provider_usage(&events))
+        })
+    }
+
+    pub fn pending_questions_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<AsyncQuestionRequest>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind IN ('async_questions_requested', 'async_questions_answered')
+                 ORDER BY seq",
+            )?;
+            let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
+            Ok(project_pending_questions(&events))
+        })
+    }
+
+    pub fn provider_commands_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<ProviderCommand>> {
+        self.with(|c| {
+            let payload: Option<String> = c
+                .query_row(
+                    "SELECT payload FROM events
+                     WHERE thread_id = ?1 AND seq <= ?2 AND kind = 'provider_commands_updated'
+                     ORDER BY seq DESC LIMIT 1",
+                    params![thread_id.to_string(), through_seq],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match payload {
+                None => Ok(Vec::new()),
+                Some(text) => match serde_json::from_str::<EventPayload>(&text)? {
+                    EventPayload::ProviderCommandsUpdated { commands } => Ok(commands),
+                    _ => Ok(Vec::new()),
+                },
+            }
+        })
+    }
+
+    pub fn runtime_tasks_for_thread(&self, thread_id: ThreadId) -> Result<Vec<RuntimeTask>> {
+        self.runtime_tasks_for_thread_through(thread_id, i64::MAX)
     }
 
     // ---- approvals ----
@@ -1900,6 +2047,50 @@ impl Store {
         })
     }
 
+    /// Latest reported plan limits per provider, folded from stored
+    /// `provider_usage_updated` events. Last report wins: the most recent event
+    /// (highest seq) for each window is authoritative, even if its percentage is
+    /// lower than an earlier report (a window can reset, or usage can be re-read).
+    pub fn latest_provider_limits(&self) -> Result<Vec<methods::ProviderLimits>> {
+        use std::collections::BTreeMap;
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT t.provider_kind, e.payload FROM events e
+                 JOIN threads t ON t.id = e.thread_id
+                 WHERE e.kind = 'provider_usage_updated' ORDER BY e.seq ASC",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let mut by_provider: BTreeMap<String, BTreeMap<String, UsageLimit>> = BTreeMap::new();
+            for row in rows {
+                let (provider, payload) = row?;
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else { continue };
+                let Some(limits) = value.get("usage").and_then(|u| u.get("limits")).and_then(|l| l.as_array()) else {
+                    continue;
+                };
+                let windows = by_provider.entry(provider).or_default();
+                // Rows arrive in seq order, so a later event overwrites an earlier one.
+                for entry in limits {
+                    let Ok(limit) = serde_json::from_value::<UsageLimit>(entry.clone()) else { continue };
+                    let key = limit.window_minutes.map(|w| w.to_string()).unwrap_or_else(|| limit.name.clone());
+                    windows.insert(key, limit);
+                }
+            }
+            let providers = by_provider
+                .into_iter()
+                .filter_map(|(kind, windows)| {
+                    let provider = kind.parse::<ProviderKind>().ok()?;
+                    if windows.is_empty() {
+                        return None;
+                    }
+                    let mut limits: Vec<UsageLimit> = windows.into_values().collect();
+                    limits.sort_by_key(|l| l.window_minutes.unwrap_or(u64::MAX));
+                    Some(methods::ProviderLimits { provider, limits })
+                })
+                .collect();
+            Ok(providers)
+        })
+    }
+
     // ---- push tokens (mobile, later) ----
 
     pub fn push_token_upsert(&self, token: &str, platform: &str) -> Result<()> {
@@ -1988,6 +2179,37 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
         provider_turn_id: r.get(5)?,
         provider_turn_end: r.get(6)?,
     })
+}
+
+// Completion lookup uses the existing tool_completion_lookup index. The
+// intervening-start check ranges over the thread's sequence index, and prevents
+// crossing a reused call ID without adding a migration or a second read model.
+const TOOL_OUTPUT_AT_START_SQL: &str = "
+    SELECT c.payload FROM events c
+    WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
+      AND json_extract(c.payload, '$.tool_call_id') = ?2
+      AND c.seq > ?3 AND c.seq <= ?4
+      AND EXISTS (SELECT 1 FROM events s WHERE s.seq = ?3 AND s.thread_id = ?1
+                  AND s.kind = 'tool_call_started' AND json_extract(s.payload, '$.call.id') = ?2)
+      AND NOT EXISTS (SELECT 1 FROM events n WHERE n.thread_id = ?1
+                      AND n.seq > ?3 AND n.seq <= c.seq AND n.kind = 'tool_call_started'
+                      AND json_extract(n.payload, '$.call.id') = ?2)
+    ORDER BY c.seq DESC LIMIT 1";
+
+fn read_tool_output_at_start(
+    statement: &mut rusqlite::Statement<'_>,
+    thread_id: ThreadId,
+    tool_call_id: &str,
+    start_seq: EventSeq,
+    through_seq: EventSeq,
+) -> Result<Option<(serde_json::Value, bool)>> {
+    let mut rows = statement.query(params![thread_id.to_string(), tool_call_id, start_seq, through_seq])?;
+    let Some(row) = rows.next()? else { return Ok(None) };
+    let payload: EventPayload = serde_json::from_str(row.get_ref(0)?.as_str()?)?;
+    match payload {
+        EventPayload::ToolCallCompleted { output, is_error, .. } => Ok(Some((output, is_error))),
+        _ => anyhow::bail!("invalid stored tool completion"),
+    }
 }
 
 fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
@@ -2357,5 +2579,273 @@ mod tests {
         assert!(!store.queue_is_pending(intended.id).unwrap());
         assert!(store.queue_is_pending(other.id).unwrap());
         assert_eq!(store.collaboration_message_get(cancelled.id).unwrap().unwrap().state, CollaborationDeliveryState::Cancelled);
+    }
+
+    #[test]
+    fn large_tool_outputs_stay_in_sqlite_until_a_page_asks_for_them() {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let project = Project {
+            id: Uuid::now_v7(),
+            name: "tools".into(),
+            path: format!("/tmp/{}", Uuid::now_v7()),
+            is_git: false,
+            worktrees_default: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let thread = Thread {
+            id: Uuid::now_v7(),
+            project_id: project.id,
+            title: "tools".into(),
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            status: ThreadStatus::Idle,
+            worktree: None,
+            cwd: project.path.clone(),
+            provider_session_id: None,
+            pinned: false,
+            created_at: now,
+            updated_at: now,
+            last_seq: 0,
+            parent_thread_id: None,
+            coordinator_project_id: None,
+            collaboration_group_id: None,
+        };
+        store.thread_upsert(&thread).unwrap();
+        let turn = Uuid::now_v7();
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("run") },
+            )
+            .unwrap();
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::ToolCallStarted {
+                    call: ToolCall { id: "big".into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                    origin: EventOrigin::Root,
+                },
+            )
+            .unwrap();
+        let output = serde_json::json!("x".repeat(LARGE_TOOL_OUTPUT_BYTES + 8));
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::ToolCallCompleted { tool_call_id: "big".into(), output: output.clone(), is_error: false },
+            )
+            .unwrap();
+        for index in 0..49 {
+            let id = format!("big-{index}");
+            store
+                .event_append(
+                    thread.id,
+                    Some(turn),
+                    EventPayload::ToolCallStarted {
+                        call: ToolCall { id: id.clone(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                        origin: EventOrigin::Root,
+                    },
+                )
+                .unwrap();
+            store
+                .event_append(
+                    thread.id,
+                    Some(turn),
+                    EventPayload::ToolCallCompleted { tool_call_id: id, output: output.clone(), is_error: false },
+                )
+                .unwrap();
+        }
+        let events = store.events_for_thread_through(thread.id, i64::MAX).unwrap();
+        let event_bytes = serde_json::to_vec(&events).unwrap().len();
+        let transcript = store.project_transcript_through(thread.id, i64::MAX).unwrap();
+        let transcript_bytes = serde_json::to_vec(&transcript).unwrap().len();
+        assert!(transcript_bytes * 10 < event_bytes, "cached projection {transcript_bytes} should drop the {event_bytes}-byte event log");
+        eprintln!("tool-output-omit event_bytes={event_bytes} transcript_bytes={transcript_bytes}");
+        assert!(matches!(
+            transcript.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { output: None, output_omitted: true, .. })
+        ));
+        let mut page = transcript.clone();
+        store.hydrate_tool_outputs_through(thread.id, &mut page, i64::MAX).unwrap();
+        assert_eq!(store.tool_call_output_through(thread.id, "big", None, i64::MAX).unwrap(), Some((output.clone(), false)));
+        assert!(matches!(
+            page.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { output: Some(value), output_omitted: false, .. }) if *value == output
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tool_output_allocation_tests {
+    use super::*;
+
+    // The real hydration SQL with a small isolated event table. No daemon,
+    // migration, provider process, or production data is involved in this fixture.
+    fn fixture() -> Store {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);",
+        )
+        .unwrap();
+        Store { conn: Arc::new(Mutex::new(conn)) }
+    }
+
+    fn complete(store: &Store, thread: ThreadId, id: &str, output: serde_json::Value, is_error: bool) {
+        let payload = EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, is_error };
+        store.with(|c| {
+            let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE thread_id=?1 AND kind='tool_call_started' AND json_extract(payload, '$.call.id')=?2)", params![thread.to_string(), id], |row| row.get(0))?;
+            if !exists {
+                let start = serde_json::json!({"kind":"tool_call_started","call":{"id":id,"name":"bash","input":{}}});
+                c.execute("INSERT INTO events(thread_id,kind,payload) VALUES (?1,'tool_call_started',?2)", params![thread.to_string(), start.to_string()])?;
+            }
+            c.execute("INSERT INTO events(thread_id,kind,payload) VALUES (?1,?2,?3)", params![thread.to_string(), payload.kind(), serde_json::to_string(&payload)?])?;
+            Ok(())
+        }).unwrap();
+    }
+
+    fn entry(id: &str, complete: bool, omitted: bool) -> TranscriptEntry {
+        serde_json::from_value(serde_json::json!({
+            "role": "tool_call", "turn_id": TurnId::nil(), "seq": if id == "unique" { 6 } else { 1 },
+            "origin": { "kind": "root" }, "call": { "id": id, "name": "bash", "input": {} },
+            "complete": complete, "output_omitted": omitted, "is_error": false,
+            "at": "2026-09-17T00:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn hydrated_unique_and_duplicate_ids_keep_outputs_errors_and_flags() {
+        let store = fixture();
+        let thread = ThreadId::nil();
+        let other_thread = ThreadId::new_v4();
+        complete(&store, thread, "same:id", serde_json::json!("old"), false);
+        let large = serde_json::json!({ "bytes": "é😀\n".repeat(10000), "nested": [1, null, true] });
+        complete(&store, thread, "same:id", large.clone(), true);
+        complete(&store, other_thread, "same:id", serde_json::json!("wrong thread"), false);
+        complete(&store, thread, "unique", serde_json::Value::Null, false);
+        let mut rows = vec![
+            entry("same:id", true, true),
+            entry("unique", true, true),
+            entry("same:id", true, true),
+            entry("missing", true, true),
+            entry("same:id", false, true),
+            entry("same:id", true, false),
+        ];
+        let before = rows.clone();
+        store.hydrate_tool_outputs_through(thread, &mut rows, i64::MAX).unwrap();
+        for index in [0, 2] {
+            let TranscriptEntry::ToolCall { output, output_omitted, is_error, .. } = &rows[index] else { panic!("expected tool") };
+            assert_eq!(output.as_ref(), Some(&large));
+            assert!(!output_omitted);
+            assert!(*is_error);
+        }
+        let TranscriptEntry::ToolCall { output, output_omitted, .. } = &rows[1] else { panic!("expected tool") };
+        assert_eq!(output, &Some(serde_json::Value::Null));
+        assert!(!output_omitted);
+        for index in [3, 4, 5] {
+            assert_eq!(serde_json::to_value(&rows[index]).unwrap(), serde_json::to_value(&before[index]).unwrap());
+        }
+        let first = serde_json::to_value(&rows).unwrap();
+        store.hydrate_tool_outputs_through(thread, &mut rows, i64::MAX).unwrap();
+        assert_eq!(first, serde_json::to_value(&rows).unwrap());
+    }
+
+    #[test]
+    fn invalid_json_still_fails_without_publishing_partial_hydration() {
+        let store = fixture();
+        // A JSON value of the wrong EventPayload shape still matches this query.
+        // json_extract sees the valid id; deserialization must report the corruption.
+        store
+            .with(|c| {
+                c.execute(
+                    "INSERT INTO events(thread_id,kind,payload) VALUES (?1,'tool_call_started',?2)",
+                    params![ThreadId::nil().to_string(), r#"{"kind":"tool_call_started","call":{"id":"broken","name":"bash","input":{}}}"#],
+                )?;
+                c.execute(
+                    "INSERT INTO events(thread_id,kind,payload) VALUES (?1,'tool_call_completed',?2)",
+                    params![
+                        ThreadId::nil().to_string(),
+                        r#"{"kind":"tool_call_completed","tool_call_id":"broken","output":null,"is_error":"not a boolean"}"#
+                    ],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let mut rows = vec![entry("broken", true, true)];
+        let before = serde_json::to_value(&rows).unwrap();
+        assert!(store.hydrate_tool_outputs_through(ThreadId::nil(), &mut rows, i64::MAX).is_err());
+        assert_eq!(before, serde_json::to_value(&rows).unwrap());
+    }
+
+    #[test]
+    fn empty_hydration_does_not_query_events() {
+        let store = Store { conn: Arc::new(Mutex::new(Connection::open_in_memory().unwrap())) };
+        assert!(store.hydrate_tool_outputs_through(ThreadId::nil(), &mut [], i64::MAX).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod transcript_scan_allocation_tests {
+    use super::*;
+
+    #[test]
+    fn filtered_sql_projection_matches_event_fold_at_every_snapshot() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);").unwrap();
+        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        let thread = ThreadId::nil();
+        let turn = TurnId::nil();
+        let payloads = vec![
+            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "start".into(), data: None },
+            EventPayload::ToolCallOutputDelta { tool_call_id: "large".into(), delta: "x".repeat(256 * 1024) },
+            EventPayload::ProviderUsageUpdated { usage: Default::default() },
+            EventPayload::MessageRemoved { message_id: MessageId::nil() },
+            EventPayload::ProviderCommandsUpdated { commands: Vec::new() },
+            EventPayload::ThreadArchived,
+            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "end".into(), data: None },
+        ];
+        let events: Vec<ThreadEvent> = payloads
+            .into_iter()
+            .enumerate()
+            .map(|(index, payload)| ThreadEvent {
+                seq: index as i64 + 1,
+                thread_id: thread,
+                turn_id: Some(turn),
+                at: "2026-09-17T00:00:00Z".parse().unwrap(),
+                payload,
+            })
+            .collect();
+        store
+            .with(|c| {
+                for event in &events {
+                    c.execute(
+                        "INSERT INTO events(seq,thread_id,turn_id,at,kind,payload) VALUES (?1,?2,?3,?4,?5,?6)",
+                        params![
+                            event.seq,
+                            thread.to_string(),
+                            turn.to_string(),
+                            event.at.to_rfc3339(),
+                            event.payload.kind(),
+                            serde_json::to_string(&event.payload)?
+                        ],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        for end in 0..=events.len() {
+            let expected = project_transcript(&events[..end]);
+            let actual = store.project_transcript_through(thread, end as i64).unwrap();
+            assert_eq!(serde_json::to_value(actual).unwrap(), serde_json::to_value(expected).unwrap(), "snapshot={end}");
+        }
+        assert!(store.project_transcript_through(ThreadId::new_v4(), i64::MAX).unwrap().is_empty());
+        assert_eq!(store.events_for_thread_through(thread, i64::MAX).unwrap().len(), events.len(), "full replay remains untouched");
     }
 }

@@ -77,6 +77,7 @@ fn main() {
     method::<ThreadsRead>(&mut methods);
     method::<ThreadsCreate>(&mut methods);
     method::<ThreadsGet>(&mut methods);
+    method::<ThreadsToolOutput>(&mut methods);
     method::<ThreadsUpdate>(&mut methods);
     method::<ThreadsArchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);
@@ -131,6 +132,7 @@ fn main() {
     method::<SettingsGet>(&mut methods);
     method::<SettingsUpdate>(&mut methods);
     method::<UsageSummary>(&mut methods);
+    method::<UsageLimits>(&mut methods);
     method::<PairingCreate>(&mut methods);
     method::<ExposureGet>(&mut methods);
     method::<ExposureSet>(&mut methods);

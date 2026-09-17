@@ -72,6 +72,7 @@ async function run() {
   stage("history ready")
   const historyMessages = document.querySelectorAll('[data-slot="message"]').length
   const historyNodes = document.querySelectorAll("*").length
+  const initialViewport = { height: viewport.clientHeight, scrollHeight: viewport.scrollHeight, top: viewport.scrollTop, virtualRows: viewport.querySelectorAll("[data-virtual-owner]").length }
   let messageRects = 0
   let listRects = 0
   const rect = Element.prototype.getBoundingClientRect
@@ -132,7 +133,7 @@ async function run() {
   const finalCommitMs = performance.now() - finalAt
   for (let attempt = 0; attempt < 100 && !document.getElementById("stream-viewport")?.textContent?.endsWith("FINAL_MARKER"); attempt++) await sleep(20)
   const finalPass = document.getElementById("stream-viewport")?.textContent?.endsWith("FINAL_MARKER") === true && document.querySelectorAll("#stream-viewport table").length === 180
-  const result = { historyTurns: HISTORY + 1, mountMs, historyMessages, historyNodes, messageRects, listRects, scrollFrameP95: p95(scrollFrames), scrollFramesOver25ms: scrollFrames.filter((value) => value > 25).length, expandMs, grouped: !!grouped, workRows, expandedNodes, streamChars: text.length, streamFrames: streamFrames.length, streamFrameP95: p95(streamFrames), streamFramesOver25ms: streamFrames.filter((value) => value > 25).length, inputTicks, inputEvents, inputFrameP95: p95(inputDelay), finalCommitMs, finalPass }
+  const result = { historyTurns: HISTORY + 1, mountMs, historyMessages, historyNodes, initialViewport, messageRects, listRects, scrollFrameP95: p95(scrollFrames), scrollFramesOver25ms: scrollFrames.filter((value) => value > 25).length, expandMs, grouped: !!grouped, workRows, expandedNodes, streamChars: text.length, streamFrames: streamFrames.length, streamFrameP95: p95(streamFrames), streamFramesOver25ms: streamFrames.filter((value) => value > 25).length, inputTicks, inputEvents, inputFrameP95: p95(inputDelay), finalCommitMs, finalPass }
   const responsivenessPass = p95(streamFrames) < 50 && p95(inputDelay) < 50 && inputEvents === inputTicks && inputEvents >= 20 && finalCommitMs < 30
   const pass = responsivenessPass && historyMessages > 0 && historyMessages < 100 && !!grouped && workRows > 0 && workRows < 160 && messageRects < 5000 && listRects < 10 && finalPass
   const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }

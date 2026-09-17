@@ -1,0 +1,756 @@
+{
+  "baseline": {
+    "tool-memory": [
+      {
+        "log": "baseline-tool-memory.log",
+        "memory": [
+          {
+            "footprint": "Physical footprint:         63.3M",
+            "sample": "tool-startup",
+            "pid": 23902,
+            "peak": "Physical footprint (peak):  64.1M"
+          },
+          {
+            "footprint": "Physical footprint:         159.1M",
+            "sample": "tools-collapsed",
+            "pid": 23902,
+            "peak": "Physical footprint (peak):  159.7M"
+          },
+          {
+            "footprint": "Physical footprint:         196.2M",
+            "sample": "tool-expanded",
+            "pid": 23902,
+            "peak": "Physical footprint (peak):  219.8M"
+          },
+          {
+            "footprint": "Physical footprint:         194.5M",
+            "sample": "tools-released",
+            "pid": 23902,
+            "peak": "Physical footprint (peak):  219.8M"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "baseline-repeat-tool-memory.log",
+        "memory": [
+          {
+            "sample": "tool-startup",
+            "pid": 48871,
+            "footprint": "Physical footprint:         65.8M",
+            "peak": "Physical footprint (peak):  67.0M"
+          },
+          {
+            "sample": "tools-collapsed",
+            "pid": 48871,
+            "footprint": "Physical footprint:         156.5M",
+            "peak": "Physical footprint (peak):  157.3M"
+          },
+          {
+            "sample": "tool-expanded",
+            "pid": 48871,
+            "footprint": "Physical footprint:         191.5M",
+            "peak": "Physical footprint (peak):  220.9M"
+          },
+          {
+            "sample": "tools-released",
+            "pid": 48871,
+            "footprint": "Physical footprint:         195.8M",
+            "peak": "Physical footprint (peak):  220.9M"
+          }
+        ],
+        "pass": true
+      }
+    ],
+    "terminal-memory": [
+      {
+        "log": "baseline-terminal-memory.log",
+        "memory": [
+          {
+            "peak": "Physical footprint (peak):  43.3M",
+            "footprint": "Physical footprint:         42.7M",
+            "sample": "terminal-startup",
+            "pid": 23989
+          },
+          {
+            "peak": "Physical footprint (peak):  188.9M",
+            "footprint": "Physical footprint:         126.7M",
+            "sample": "six-tabs-inactive",
+            "pid": 23989
+          },
+          {
+            "peak": "Physical footprint (peak):  188.9M",
+            "footprint": "Physical footprint:         120.0M",
+            "sample": "terminal-active",
+            "pid": 23989
+          },
+          {
+            "peak": "Physical footprint (peak):  188.9M",
+            "footprint": "Physical footprint:         165.1M",
+            "sample": "terminal-inactive",
+            "pid": 23989
+          },
+          {
+            "peak": "Physical footprint (peak):  188.9M",
+            "footprint": "Physical footprint:         106.0M",
+            "sample": "terminal-released",
+            "pid": 23989
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "baseline-repeat-terminal-memory.log",
+        "memory": [
+          {
+            "sample": "terminal-startup",
+            "footprint": "Physical footprint:         42.5M",
+            "peak": "Physical footprint (peak):  43.1M",
+            "pid": 48933
+          },
+          {
+            "sample": "six-tabs-inactive",
+            "footprint": "Physical footprint:         149.5M",
+            "peak": "Physical footprint (peak):  212.1M",
+            "pid": 48933
+          },
+          {
+            "sample": "terminal-active",
+            "footprint": "Physical footprint:         94.3M",
+            "peak": "Physical footprint (peak):  212.1M",
+            "pid": 48933
+          },
+          {
+            "sample": "terminal-inactive",
+            "footprint": "Physical footprint:         91.7M",
+            "peak": "Physical footprint (peak):  212.1M",
+            "pid": 48933
+          },
+          {
+            "sample": "terminal-released",
+            "footprint": "Physical footprint:         86.5M",
+            "peak": "Physical footprint (peak):  212.1M",
+            "pid": 48933
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "baseline-terminal-3.log",
+        "memory": [
+          {
+            "sample": "terminal-startup",
+            "pid": 88614,
+            "footprint": "Physical footprint:         42.5M",
+            "peak": "Physical footprint (peak):  43.0M"
+          },
+          {
+            "sample": "six-tabs-inactive",
+            "pid": 88614,
+            "footprint": "Physical footprint:         162.0M",
+            "peak": "Physical footprint (peak):  216.3M"
+          },
+          {
+            "sample": "terminal-active",
+            "pid": 88614,
+            "footprint": "Physical footprint:         106.5M",
+            "peak": "Physical footprint (peak):  216.3M"
+          },
+          {
+            "sample": "terminal-inactive",
+            "pid": 88614,
+            "footprint": "Physical footprint:         127.8M",
+            "peak": "Physical footprint (peak):  216.3M"
+          },
+          {
+            "sample": "terminal-released",
+            "pid": 88614,
+            "footprint": "Physical footprint:         122.4M",
+            "peak": "Physical footprint (peak):  216.3M"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "baseline-terminal-4.log",
+        "memory": [
+          {
+            "pid": 88720,
+            "sample": "terminal-startup",
+            "footprint": "Physical footprint:         42.6M",
+            "peak": "Physical footprint (peak):  43.1M"
+          },
+          {
+            "pid": 88720,
+            "sample": "six-tabs-inactive",
+            "footprint": "Physical footprint:         149.7M",
+            "peak": "Physical footprint (peak):  217.6M"
+          },
+          {
+            "pid": 88720,
+            "sample": "terminal-active",
+            "footprint": "Physical footprint:         109.1M",
+            "peak": "Physical footprint (peak):  217.6M"
+          },
+          {
+            "pid": 88720,
+            "sample": "terminal-inactive",
+            "footprint": "Physical footprint:         103.8M",
+            "peak": "Physical footprint (peak):  217.6M"
+          },
+          {
+            "pid": 88720,
+            "sample": "terminal-released",
+            "footprint": "Physical footprint:         98.6M",
+            "peak": "Physical footprint (peak):  217.6M"
+          }
+        ],
+        "pass": true
+      }
+    ],
+    "scrolling": [
+      {
+        "log": "baseline-scrolling.log",
+        "memory": [
+          {
+            "sample": "history-cold memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  258.5M",
+            "footprint": "Physical footprint:         256.4M"
+          },
+          {
+            "sample": "history-warm memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  269.4M",
+            "footprint": "Physical footprint:         249.0M"
+          },
+          {
+            "sample": "history-fast memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  339.7M",
+            "footprint": "Physical footprint:         319.7M"
+          },
+          {
+            "sample": "mixed-work memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  383.4M",
+            "footprint": "Physical footprint:         226.8M"
+          },
+          {
+            "sample": "mixed-work-streaming memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  383.4M",
+            "footprint": "Physical footprint:         229.6M"
+          },
+          {
+            "sample": "expanded-thinking memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  399.2M",
+            "footprint": "Physical footprint:         267.3M"
+          },
+          {
+            "sample": "expanded-tools memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  399.2M",
+            "footprint": "Physical footprint:         224.4M"
+          },
+          {
+            "sample": "long-code memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  399.2M",
+            "footprint": "Physical footprint:         227.3M"
+          },
+          {
+            "sample": "settled-idle memory",
+            "pid": 24072,
+            "peak": "Physical footprint (peak):  399.2M",
+            "footprint": "Physical footprint:         179.3M"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "baseline-repeat-scrolling.log",
+        "memory": [
+          {
+            "sample": "history-cold memory",
+            "footprint": "Physical footprint:         256.8M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  258.6M"
+          },
+          {
+            "sample": "history-warm memory",
+            "footprint": "Physical footprint:         235.8M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  269.8M"
+          },
+          {
+            "sample": "history-fast memory",
+            "footprint": "Physical footprint:         302.1M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  331.9M"
+          },
+          {
+            "sample": "mixed-work memory",
+            "footprint": "Physical footprint:         231.3M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  366.5M"
+          },
+          {
+            "sample": "mixed-work-streaming memory",
+            "footprint": "Physical footprint:         227.1M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  366.5M"
+          },
+          {
+            "sample": "expanded-thinking memory",
+            "footprint": "Physical footprint:         267.1M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  404.5M"
+          },
+          {
+            "sample": "expanded-tools memory",
+            "footprint": "Physical footprint:         233.2M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  404.5M"
+          },
+          {
+            "sample": "long-code memory",
+            "footprint": "Physical footprint:         257.8M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  404.5M"
+          },
+          {
+            "sample": "settled-idle memory",
+            "footprint": "Physical footprint:         228.7M",
+            "pid": 48999,
+            "peak": "Physical footprint (peak):  404.5M"
+          }
+        ],
+        "pass": true
+      }
+    ]
+  },
+  "candidate": {
+    "tool-memory": [
+      {
+        "log": "candidate-tool-memory.log",
+        "memory": [
+          {
+            "footprint": "Physical footprint:         65.0M",
+            "sample": "tool-startup",
+            "peak": "Physical footprint (peak):  66.3M",
+            "pid": 47624
+          },
+          {
+            "footprint": "Physical footprint:         173.5M",
+            "sample": "tools-collapsed",
+            "peak": "Physical footprint (peak):  174.0M",
+            "pid": 47624
+          },
+          {
+            "footprint": "Physical footprint:         187.2M",
+            "sample": "tool-expanded",
+            "peak": "Physical footprint (peak):  210.5M",
+            "pid": 47624
+          },
+          {
+            "footprint": "Physical footprint:         173.0M",
+            "sample": "tools-released",
+            "peak": "Physical footprint (peak):  210.5M",
+            "pid": 47624
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "candidate-repeat-tool-memory.log",
+        "memory": [
+          {
+            "peak": "Physical footprint (peak):  66.0M",
+            "footprint": "Physical footprint:         65.2M",
+            "sample": "tool-startup",
+            "pid": 67248
+          },
+          {
+            "peak": "Physical footprint (peak):  159.1M",
+            "footprint": "Physical footprint:         158.4M",
+            "sample": "tools-collapsed",
+            "pid": 67248
+          },
+          {
+            "peak": "Physical footprint (peak):  205.4M",
+            "footprint": "Physical footprint:         176.0M",
+            "sample": "tool-expanded",
+            "pid": 67248
+          },
+          {
+            "peak": "Physical footprint (peak):  205.4M",
+            "footprint": "Physical footprint:         198.0M",
+            "sample": "tools-released",
+            "pid": 67248
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "final-tool-memory.log",
+        "memory": [
+          {
+            "peak": "Physical footprint (peak):  65.3M",
+            "footprint": "Physical footprint:         64.6M",
+            "sample": "tool-startup",
+            "pid": 88823
+          },
+          {
+            "peak": "Physical footprint (peak):  162.0M",
+            "footprint": "Physical footprint:         161.3M",
+            "sample": "tools-collapsed",
+            "pid": 88823
+          },
+          {
+            "peak": "Physical footprint (peak):  204.3M",
+            "footprint": "Physical footprint:         180.7M",
+            "sample": "tool-expanded",
+            "pid": 88823
+          },
+          {
+            "peak": "Physical footprint (peak):  204.3M",
+            "footprint": "Physical footprint:         185.9M",
+            "sample": "tools-released",
+            "pid": 88823
+          }
+        ],
+        "pass": true
+      }
+    ],
+    "terminal-memory": [
+      {
+        "log": "candidate-terminal-memory.log",
+        "memory": [
+          {
+            "footprint": "Physical footprint:         42.6M",
+            "sample": "terminal-startup",
+            "peak": "Physical footprint (peak):  42.9M",
+            "pid": 47666
+          },
+          {
+            "footprint": "Physical footprint:         196.4M",
+            "sample": "six-tabs-inactive",
+            "peak": "Physical footprint (peak):  260.3M",
+            "pid": 47666
+          },
+          {
+            "footprint": "Physical footprint:         151.9M",
+            "sample": "terminal-active",
+            "peak": "Physical footprint (peak):  260.3M",
+            "pid": 47666
+          },
+          {
+            "footprint": "Physical footprint:         174.7M",
+            "sample": "terminal-inactive",
+            "peak": "Physical footprint (peak):  260.3M",
+            "pid": 47666
+          },
+          {
+            "footprint": "Physical footprint:         134.3M",
+            "sample": "terminal-released",
+            "peak": "Physical footprint (peak):  260.3M",
+            "pid": 47666
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "candidate-repeat-terminal-memory.log",
+        "memory": [
+          {
+            "sample": "terminal-startup",
+            "footprint": "Physical footprint:         42.7M",
+            "peak": "Physical footprint (peak):  43.1M",
+            "pid": 67292
+          },
+          {
+            "sample": "six-tabs-inactive",
+            "footprint": "Physical footprint:         163.0M",
+            "peak": "Physical footprint (peak):  216.8M",
+            "pid": 67292
+          },
+          {
+            "sample": "terminal-active",
+            "footprint": "Physical footprint:         106.2M",
+            "peak": "Physical footprint (peak):  216.8M",
+            "pid": 67292
+          },
+          {
+            "sample": "terminal-inactive",
+            "footprint": "Physical footprint:         123.0M",
+            "peak": "Physical footprint (peak):  216.8M",
+            "pid": 67292
+          },
+          {
+            "sample": "terminal-released",
+            "footprint": "Physical footprint:         96.4M",
+            "peak": "Physical footprint (peak):  216.8M",
+            "pid": 67292
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "final-terminal-3.log",
+        "memory": [
+          {
+            "pid": 88675,
+            "sample": "terminal-startup",
+            "footprint": "Physical footprint:         42.6M",
+            "peak": "Physical footprint (peak):  43.1M"
+          },
+          {
+            "pid": 88675,
+            "sample": "six-tabs-inactive",
+            "footprint": "Physical footprint:         122.5M",
+            "peak": "Physical footprint (peak):  218.9M"
+          },
+          {
+            "pid": 88675,
+            "sample": "terminal-active",
+            "footprint": "Physical footprint:         106.4M",
+            "peak": "Physical footprint (peak):  218.9M"
+          },
+          {
+            "pid": 88675,
+            "sample": "terminal-inactive",
+            "footprint": "Physical footprint:         109.4M",
+            "peak": "Physical footprint (peak):  218.9M"
+          },
+          {
+            "pid": 88675,
+            "sample": "terminal-released",
+            "footprint": "Physical footprint:         83.5M",
+            "peak": "Physical footprint (peak):  218.9M"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "final-terminal-4.log",
+        "memory": [
+          {
+            "footprint": "Physical footprint:         42.7M",
+            "pid": 88781,
+            "sample": "terminal-startup",
+            "peak": "Physical footprint (peak):  43.0M"
+          },
+          {
+            "footprint": "Physical footprint:         220.5M",
+            "pid": 88781,
+            "sample": "six-tabs-inactive",
+            "peak": "Physical footprint (peak):  270.8M"
+          },
+          {
+            "footprint": "Physical footprint:         151.6M",
+            "pid": 88781,
+            "sample": "terminal-active",
+            "peak": "Physical footprint (peak):  270.8M"
+          },
+          {
+            "footprint": "Physical footprint:         152.6M",
+            "pid": 88781,
+            "sample": "terminal-inactive",
+            "peak": "Physical footprint (peak):  270.8M"
+          },
+          {
+            "footprint": "Physical footprint:         147.4M",
+            "pid": 88781,
+            "sample": "terminal-released",
+            "peak": "Physical footprint (peak):  270.8M"
+          }
+        ],
+        "pass": true
+      }
+    ],
+    "scrolling": [
+      {
+        "log": "candidate-scrolling.log",
+        "memory": [
+          {
+            "pid": 47726,
+            "sample": "history-cold memory",
+            "footprint": "Physical footprint:         256.8M",
+            "peak": "Physical footprint (peak):  258.7M"
+          },
+          {
+            "pid": 47726,
+            "sample": "history-warm memory",
+            "footprint": "Physical footprint:         246.4M",
+            "peak": "Physical footprint (peak):  269.4M"
+          },
+          {
+            "pid": 47726,
+            "sample": "history-fast memory",
+            "footprint": "Physical footprint:         301.9M",
+            "peak": "Physical footprint (peak):  328.4M"
+          },
+          {
+            "pid": 47726,
+            "sample": "mixed-work memory",
+            "footprint": "Physical footprint:         224.9M",
+            "peak": "Physical footprint (peak):  369.0M"
+          },
+          {
+            "pid": 47726,
+            "sample": "mixed-work-streaming memory",
+            "footprint": "Physical footprint:         222.4M",
+            "peak": "Physical footprint (peak):  369.0M"
+          },
+          {
+            "pid": 47726,
+            "sample": "expanded-thinking memory",
+            "footprint": "Physical footprint:         247.0M",
+            "peak": "Physical footprint (peak):  390.0M"
+          },
+          {
+            "pid": 47726,
+            "sample": "expanded-tools memory",
+            "footprint": "Physical footprint:         214.3M",
+            "peak": "Physical footprint (peak):  390.0M"
+          },
+          {
+            "pid": 47726,
+            "sample": "long-code memory",
+            "footprint": "Physical footprint:         237.2M",
+            "peak": "Physical footprint (peak):  390.0M"
+          },
+          {
+            "pid": 47726,
+            "sample": "settled-idle memory",
+            "footprint": "Physical footprint:         208.2M",
+            "peak": "Physical footprint (peak):  390.0M"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "candidate-repeat-scrolling.log",
+        "memory": [
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  269.8M",
+            "sample": "history-cold memory",
+            "footprint": "Physical footprint:         268.9M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  282.3M",
+            "sample": "history-warm memory",
+            "footprint": "Physical footprint:         239.4M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  333.5M",
+            "sample": "history-fast memory",
+            "footprint": "Physical footprint:         303.5M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  365.5M",
+            "sample": "mixed-work memory",
+            "footprint": "Physical footprint:         225.1M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  365.5M",
+            "sample": "mixed-work-streaming memory",
+            "footprint": "Physical footprint:         227.1M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  396.9M",
+            "sample": "expanded-thinking memory",
+            "footprint": "Physical footprint:         262.3M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  396.9M",
+            "sample": "expanded-tools memory",
+            "footprint": "Physical footprint:         221.2M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  396.9M",
+            "sample": "long-code memory",
+            "footprint": "Physical footprint:         241.2M"
+          },
+          {
+            "pid": 67357,
+            "peak": "Physical footprint (peak):  396.9M",
+            "sample": "settled-idle memory",
+            "footprint": "Physical footprint:         201.3M"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "log": "final-scrolling.log",
+        "memory": [
+          {
+            "footprint": "Physical footprint:         269.9M",
+            "peak": "Physical footprint (peak):  322.5M",
+            "pid": 88880,
+            "sample": "history-cold memory"
+          },
+          {
+            "footprint": "Physical footprint:         235.6M",
+            "peak": "Physical footprint (peak):  322.5M",
+            "pid": 88880,
+            "sample": "history-warm memory"
+          },
+          {
+            "footprint": "Physical footprint:         313.0M",
+            "peak": "Physical footprint (peak):  343.0M",
+            "pid": 88880,
+            "sample": "history-fast memory"
+          },
+          {
+            "footprint": "Physical footprint:         242.8M",
+            "peak": "Physical footprint (peak):  378.3M",
+            "pid": 88880,
+            "sample": "mixed-work memory"
+          },
+          {
+            "footprint": "Physical footprint:         230.6M",
+            "peak": "Physical footprint (peak):  378.3M",
+            "pid": 88880,
+            "sample": "mixed-work-streaming memory"
+          },
+          {
+            "footprint": "Physical footprint:         260.2M",
+            "peak": "Physical footprint (peak):  390.6M",
+            "pid": 88880,
+            "sample": "expanded-thinking memory"
+          },
+          {
+            "footprint": "Physical footprint:         224.0M",
+            "peak": "Physical footprint (peak):  390.6M",
+            "pid": 88880,
+            "sample": "expanded-tools memory"
+          },
+          {
+            "footprint": "Physical footprint:         250.2M",
+            "peak": "Physical footprint (peak):  390.6M",
+            "pid": 88880,
+            "sample": "long-code memory"
+          },
+          {
+            "footprint": "Physical footprint:         203.9M",
+            "peak": "Physical footprint (peak):  390.6M",
+            "pid": 88880,
+            "sample": "settled-idle memory"
+          }
+        ],
+        "pass": false
+      }
+    ]
+  }
+}

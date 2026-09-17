@@ -1,0 +1,205 @@
+{
+  "baseline": {
+    "startup-observed": {
+      "duration_s": 13.3,
+      "samples": 24,
+      "frontend": 320.188,
+      "daemon": 7.704,
+      "shell": 39.126,
+      "webkit_auxiliary": 36.142,
+      "combined": 402.176
+    },
+    "initial-idle": {
+      "duration_s": 46.02,
+      "samples": 79,
+      "frontend": 131.266,
+      "daemon": 7.751,
+      "shell": 37.892,
+      "webkit_auxiliary": 27.642,
+      "combined": 204.535
+    },
+    "normal-interaction": {
+      "duration_s": 56.05,
+      "samples": 97,
+      "frontend": 300.829,
+      "daemon": 153.376,
+      "shell": 38.47,
+      "webkit_auxiliary": 37.986,
+      "combined": 528.692
+    },
+    "large-tool-result": {
+      "duration_s": 48.88,
+      "samples": 85,
+      "frontend": 395.657,
+      "daemon": 153.376,
+      "shell": 38.345,
+      "webkit_auxiliary": 39.049,
+      "combined": 626.411
+    },
+    "long-history": {
+      "duration_s": 65.29,
+      "samples": 113,
+      "frontend": 297.079,
+      "daemon": 172.094,
+      "shell": 38.501,
+      "webkit_auxiliary": 43.986,
+      "combined": 524.489
+    },
+    "terminal-output": {
+      "duration_s": 87.93,
+      "samples": 152,
+      "frontend": 432.595,
+      "daemon": 185.266,
+      "shell": 38.423,
+      "webkit_auxiliary": 51.94,
+      "combined": 694.036
+    },
+    "streaming": {
+      "duration_s": 38.64,
+      "samples": 68,
+      "frontend": 758.361,
+      "daemon": 95.469,
+      "shell": 34.47,
+      "webkit_auxiliary": 76.221,
+      "combined": 964.099
+    },
+    "post-workload-idle": {
+      "duration_s": 69.55,
+      "samples": 120,
+      "frontend": 331.181,
+      "daemon": 95.469,
+      "shell": 34.235,
+      "webkit_auxiliary": 31.658,
+      "combined": 492.536
+    },
+    "workload-peak": {
+      "frontend": 758.361,
+      "daemon": 185.266,
+      "shell": 38.501,
+      "webkit_auxiliary": 76.221,
+      "combined": 964.099
+    },
+    "coverage": {
+      "all_samples": 745,
+      "complete_samples": 738
+    },
+    "kybern-desktop_sha256": "f4a96c8acc87f0f58c4cdee532bc0f2440e8c0a5baeb8d8172d65b9a332ca0da",
+    "kybernd_sha256": "d6e86d3e475fc0b8d75a0c6bab7662b5ebbd461cc4e406bfdb01bf5aba54f15e"
+  },
+  "candidate": {
+    "startup-observed": {
+      "duration_s": 14.02,
+      "samples": 25,
+      "frontend": 334.876,
+      "daemon": 8.532,
+      "shell": 40.126,
+      "webkit_auxiliary": 35.22,
+      "combined": 418.629
+    },
+    "initial-idle": {
+      "duration_s": 33.84,
+      "samples": 59,
+      "frontend": 128.735,
+      "daemon": 8.829,
+      "shell": 39.22,
+      "webkit_auxiliary": 19.72,
+      "combined": 196.301
+    },
+    "normal-interaction": {
+      "duration_s": 41.36,
+      "samples": 72,
+      "frontend": 410.111,
+      "daemon": 12.829,
+      "shell": 39.798,
+      "webkit_auxiliary": 36.783,
+      "combined": 494.02
+    },
+    "large-tool-result": {
+      "duration_s": 44.85,
+      "samples": 78,
+      "frontend": 504.017,
+      "daemon": 12.829,
+      "shell": 39.782,
+      "webkit_auxiliary": 39.346,
+      "combined": 595.958
+    },
+    "long-history": {
+      "duration_s": 64.63,
+      "samples": 112,
+      "frontend": 387.204,
+      "daemon": 13.751,
+      "shell": 40.282,
+      "webkit_auxiliary": 40.096,
+      "combined": 481.224
+    },
+    "terminal-output": {
+      "duration_s": 68.19,
+      "samples": 118,
+      "frontend": 523.454,
+      "daemon": 14.126,
+      "shell": 38.329,
+      "webkit_auxiliary": 54.83,
+      "combined": 630.239
+    },
+    "streaming": {
+      "duration_s": 36.31,
+      "samples": 64,
+      "frontend": 720.673,
+      "daemon": 14.688,
+      "shell": 36.251,
+      "webkit_auxiliary": 62.831,
+      "combined": 833.818
+    },
+    "post-workload-idle": {
+      "duration_s": 72.23,
+      "samples": 125,
+      "frontend": 294.579,
+      "daemon": 14.344,
+      "shell": 35.876,
+      "webkit_auxiliary": 32.987,
+      "combined": 378.084
+    },
+    "workload-peak": {
+      "frontend": 720.673,
+      "daemon": 14.688,
+      "shell": 40.282,
+      "webkit_auxiliary": 62.831,
+      "combined": 833.818
+    },
+    "coverage": {
+      "all_samples": 660,
+      "complete_samples": 653
+    },
+    "kybern-desktop_sha256": "1ad6fda8e90c79a2f7cb9aca6dcd036ac07c7fd3bf06ef2f5bba9870b8eab9ff",
+    "kybernd_sha256": "dbb158567880e5249a690df6591bd4463dd66e5815a3f3294c34882cc11b43f5"
+  },
+  "baseline_commit": "c85f3bfd35c0fa55d3a99eccbaf86ae6de9479b2",
+  "candidate_commit": "308e35776274114950bf020439389b25b33dc6fa",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428\n",
+  "hardware": "MacBookPro17,1\n17179869184\nApple M1\n",
+  "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+  "window_geometry": {
+    "width": 1440,
+    "height": 900
+  },
+  "frontend_url": "tauri://localhost?environment=local",
+  "sampling": "0.5 second target; dynamic resource-coalition ownership, kernel process identity; sum of physical footprints is not unique physical RAM",
+  "limitations": [
+    "One full manually paced pair; no across-run frontend variability estimate",
+    "Four identical 12-page scroll gestures reached different history depth (310 baseline, 327 candidate)",
+    "Phase durations differ; peak comparisons are observations, not statistical claims",
+    "Unrelated production daemon and agents remained active, excluded from totals",
+    "All seven incomplete startup samples per build excluded from complete totals"
+  ],
+  "workload": "400 synthetic turns, 800 tools, 6400 events; open thread; expand file-399-0.ts; close; scroll up four times 12 pages; return latest; terminal 77x36 with 3000 Unicode lines; 500 Unicode deltas at 20ms via offline driver fixture; idle",
+  "stream_verification": {
+    "baseline": {
+      "exact": true,
+      "sha256": "8433c63c7755c8637d8adbd6e87da2d00c8a457deefb6b2777a612ed99a787fa"
+    },
+    "candidate": {
+      "exact": true,
+      "sha256": "8433c63c7755c8637d8adbd6e87da2d00c8a457deefb6b2777a612ed99a787fa"
+    }
+  }
+}

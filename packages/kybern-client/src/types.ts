@@ -544,6 +544,8 @@ export type TranscriptEntry =
       origin: EventOrigin;
       call: ToolCall;
       output?: JsonValue;
+      /** Settled result exists in the event log but was not inlined here. */
+      output_omitted?: boolean;
       is_error: boolean;
       complete: boolean;
       at: DateTime;
@@ -875,6 +877,20 @@ export interface ThreadsGetParams {
   before_seq?: EventSeq;
   /** Snapshot barrier for loading history while live events continue. */
   through_seq?: EventSeq;
+  /** When false, large settled tool results are omitted from the page. */
+  include_tool_output?: boolean;
+}
+
+export interface ThreadsToolOutputParams {
+  thread_id: ThreadId;
+  tool_call_id: string;
+  start_seq?: EventSeq;
+  through_seq?: EventSeq;
+}
+
+export interface ThreadsToolOutputResult {
+  output: JsonValue;
+  is_error: boolean;
 }
 
 export interface AsyncQuestionRequest { id: string; questions: { title: string; options: string[] }[] }
@@ -1138,6 +1154,15 @@ export interface UsageSummaryResult {
   total: UsageRow;
 }
 
+export interface UsageLimitsParams {}
+export interface ProviderLimits {
+  provider: ProviderKind;
+  limits: NonNullable<ProviderUsage["limits"]>;
+}
+export interface UsageLimitsResult {
+  providers: ProviderLimits[];
+}
+
 export interface PullRequest {
   number: number;
   title: string;
@@ -1383,6 +1408,7 @@ export interface Methods {
   "threads.read": [{ thread_id: ThreadId; before_seq?: EventSeq | null; through_seq?: EventSeq | null; limit?: number; message_seq?: EventSeq | null; text_offset?: number | null }, ThreadsReadResult];
   "threads.create": [ThreadsCreateParams, Thread];
   "threads.get": [ThreadsGetParams, ThreadsGetResult];
+  "threads.tool_output": [ThreadsToolOutputParams, ThreadsToolOutputResult];
   "threads.update": [ThreadsUpdateParams, Thread];
   "threads.archive": [ThreadsArchiveParams, Empty];
   "threads.send": [ThreadsSendParams, ThreadsSendResult];
@@ -1435,6 +1461,7 @@ export interface Methods {
   "settings.get": [Empty, Settings];
   "settings.update": [SettingsUpdateParams, Settings];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
+  "usage.limits": [UsageLimitsParams, UsageLimitsResult];
   "git.status": [GitStatusParams, GitStatus];
   "git.branches": [GitBranchesParams, GitBranchesResult];
   "git.commit": [GitCommitParams, GitCommitResult];

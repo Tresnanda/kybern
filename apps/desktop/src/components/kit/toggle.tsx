@@ -4,7 +4,10 @@ import { Toggle as TogglePrimitive } from "@base-ui/react/toggle";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
-import { extendButtonIconChildSelectors } from "@/lib/kit/central-icons";
+
+// Icons render as <svg>; the `[&_svg]` child rules apply directly. Identity wrapper
+// kept after Central's masked-<span> icons were removed (see button.tsx).
+const extendButtonIconChildSelectors = (className: string) => className;
 
 const toggleVariants = cva(
   extendButtonIconChildSelectors(

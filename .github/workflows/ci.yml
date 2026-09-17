@@ -73,6 +73,8 @@ jobs:
       - name: test
         working-directory: apps/desktop
         run: pnpm test
+      - name: Release gate regression tests
+        run: node --test scripts/check-release-ci.test.mjs
       - name: lint
         working-directory: apps/desktop
         run: pnpm lint
@@ -105,11 +107,17 @@ jobs:
         working-directory: apps/desktop
         run: |
           node scripts/check-rendering.mjs history-retention
-          KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
+          for offset in 100 200 400 1000 100 200 400 1000; do
+            VITE_HISTORY_READING_OFFSET=$offset KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
+          done
       - name: Native WebKit deferred tool output
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs tool-memory
+      - name: Native WebKit usage environment isolation
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs usage
       - name: Native WebKit terminal graphics lifecycle
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop

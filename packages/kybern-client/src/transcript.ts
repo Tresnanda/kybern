@@ -50,6 +50,7 @@ export type Block =
       call: ToolCall
       stream: string
       output: JsonValue | null
+      outputOmitted?: boolean
       isError: boolean
       complete: boolean
     }
@@ -181,6 +182,7 @@ function entryToBlock(e: TranscriptEntry): Block | null {
         call: e.call,
         stream: "",
         output: e.output ?? null,
+        outputOmitted: e.output_omitted ?? false,
         isError: e.is_error,
         complete: e.complete,
       }
@@ -345,7 +347,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       const b = blocks[idx]
       // Final output owns exact duplicate text. Keep distinct/fallback streams,
       // including transport-only agent/task receipts used by activity views.
-      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, stream: ev.output === b.stream && !/^\s*(?:agent|task)[_ ]?id\s*:/i.test(b.stream) ? "" : b.stream, output: ev.output, isError: ev.is_error, complete: true })
+      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, stream: ev.output === b.stream && !/^\s*(?:agent|task)[_ ]?id\s*:/i.test(b.stream) ? "" : b.stream, output: ev.output, outputOmitted: false, isError: ev.is_error, complete: true })
       break
     }
     case "runtime_task_started":

@@ -2,6 +2,7 @@
 // beui.dev/components/agents/message-scroller
 
 import { observeResizeFrame } from "@/lib/resizeObserver"
+import { matchesScrollPosition } from "@/lib/scrollPosition"
 import { useReducedMotion } from "motion/react";
 import { flushSync } from "react-dom";
 import {
@@ -9,6 +10,7 @@ import {
   type Ref,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -106,7 +108,12 @@ export interface MessageNavigationModel {
   cancelScroll?: () => void;
 }
 
+export interface MessageScrollerController {
+  scrollToEnd: () => void;
+}
+
 export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
+  controllerRef?: Ref<MessageScrollerController>;
   /** Keep streamed output pinned while the reader remains near the end. */
   followOutput?: boolean;
   /** Changing this value resumes following and jumps to the live edge. */
@@ -144,6 +151,7 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
 }
 
 export function MessageScroller({
+  controllerRef,
   followOutput = true,
   followKey,
   followThreshold = 56,
@@ -172,6 +180,7 @@ export function MessageScroller({
   const contentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(followOutput);
   const lastScrollTopRef = useRef(0);
+  const lastScrollSizeRef = useRef({ height: 0, client: 0 });
   const resumeFollowingRef = useRef(true);
   const touchYRef = useRef<number | null>(null);
   const programmaticScrollRef = useRef(false);
@@ -211,6 +220,7 @@ export function MessageScroller({
 
   const setFollowing = useCallback(
     (next: boolean) => {
+      if (next) resumeFollowingRef.current = true;
       if (followingRef.current === next) return;
       followingRef.current = next;
       onFollowChange?.(next);
@@ -361,26 +371,14 @@ export function MessageScroller({
     }, behavior === "smooth" ? 320 : 0);
   }, []);
 
-  const handleScroll = useCallback(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const top = Math.max(0, viewport.scrollTop);
-    const previous = lastScrollTopRef.current;
-    lastScrollTopRef.current = top;
-    if (programmaticScrollRef.current) return;
-
-    const distance =
-      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    // Once the reader leaves, resume only at the actual bottom. Reusing the
-    // near-end tolerance here pulled small upward gestures back during output.
-    // WebKit can echo a scroll event after layout without user movement. In a
-    // short conversation that event is also "at bottom"; resuming on it would
-    // undo an upward gesture as soon as more work arrives. Resume only after
-    // actual downward movement, including scrollbar, keyboard, and touch input.
-    if (followingRef.current) setFollowing(distance <= followThreshold);
-    else if (resumeFollowingRef.current && top > previous) setFollowing(distance <= 1);
-    scheduleActiveRailItem();
-  }, [followThreshold, setFollowing, scheduleActiveRailItem]);
+  useImperativeHandle(controllerRef, () => ({
+    scrollToEnd() {
+      // Resume immediately, so a subsequent reader gesture can cancel even
+      // before React commits another transcript update.
+      setFollowing(true);
+      scrollToEnd("auto");
+    },
+  }), [scrollToEnd, setFollowing]);
 
   const leaveLiveEdge = useCallback((stopFollowing = true) => {
     programmaticScrollRef.current = false;
@@ -394,6 +392,35 @@ export function MessageScroller({
       navigationModelRef.current?.cancelScroll?.();
     }
   }, [setFollowing]);
+
+  const handleScroll = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const top = Math.max(0, viewport.scrollTop);
+    const previous = lastScrollTopRef.current;
+    lastScrollTopRef.current = top;
+    const size = { height: viewport.scrollHeight, client: viewport.clientHeight };
+    const resized = size.height !== lastScrollSizeRef.current.height || size.client !== lastScrollSizeRef.current.client;
+    lastScrollSizeRef.current = size;
+    const distance =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    // Native accessibility scrolling has no preceding input event. Cancel a
+    // pending virtual end target on upward movement in an unchanged viewport,
+    // even while our previous programmatic scroll is still settling.
+    if (followingRef.current && !resized && top < previous && distance > followThreshold && !matchesScrollPosition(viewport, top)) {
+      leaveLiveEdge();
+      resumeFollowingRef.current = true;
+    }
+    if (programmaticScrollRef.current) return;
+    // Once the reader leaves, resume only at the actual bottom. Reusing the
+    // near-end tolerance here pulled small upward gestures back during output.
+    // WebKit can echo a scroll event after layout without user movement. In a
+    // short conversation that event is also "at bottom"; resuming on it would
+    // undo an upward gesture as soon as more work arrives. Resume only after
+    // actual downward movement, including scrollbar, keyboard, and touch input.
+    if (!followingRef.current && resumeFollowingRef.current && top > previous) setFollowing(distance <= 1);
+    scheduleActiveRailItem();
+  }, [followThreshold, leaveLiveEdge, setFollowing, scheduleActiveRailItem]);
 
   useLayoutEffect(() => {
     if (!followOutput) {
@@ -415,11 +442,14 @@ export function MessageScroller({
     const content = contentRef.current;
     if (!content || typeof ResizeObserver === "undefined") return;
 
-    return observeResizeFrame(content, () => {
+    const resize = () => {
       scheduleRailSync();
       if (!followOutput || !followingRef.current) return;
       scrollToEnd(reduce || !smooth ? "auto" : "smooth");
-    });
+    };
+    const stopContent = observeResizeFrame(content, resize);
+    const stopViewport = viewportRef.current ? observeResizeFrame(viewportRef.current, resize) : undefined;
+    return () => { stopContent(); stopViewport?.(); };
   }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth]);
 
   useEffect(() => {
@@ -560,13 +590,17 @@ export function MessageScroller({
         onViewportTouchMove?.(event);
       }}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget) leaveLiveEdge(false);
+        if (event.target === event.currentTarget) {
+          // Native scrollbar dragging has no wheel/key direction signal.
+          leaveLiveEdge();
+          resumeFollowingRef.current = true;
+        }
         onViewportPointerDown?.(event);
       }}
       onKeyDown={(event) => {
-        if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
+        if (["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey)) {
           leaveLiveEdge();
-        } else if (["ArrowDown", "PageDown", "End"].includes(event.key)) {
+        } else if (["ArrowDown", "PageDown", "End", " "].includes(event.key)) {
           resumeFollowingRef.current = true;
         }
         onViewportKeyDown?.(event);

@@ -7,7 +7,21 @@ import { defineConfig } from "vite"
 const host = process.env.TAURI_DEV_HOST
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), {
+    name: "styles-before-entry",
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // WebKit on macOS 15 can run the entry before subsequent stylesheets
+        // over Tauri's asset scheme. Virtual rows must measure styled layout.
+        // Apply the same asset ordering to the app and native fixtures.
+        const styles = html.match(/<link\b[^>]*\brel="stylesheet"[^>]*>/g) ?? []
+        if (!styles.length || !/<script\b[^>]*\btype="module"/.test(html)) return html
+        const withoutStyles = html.replace(/<link\b[^>]*\brel="stylesheet"[^>]*>/g, "")
+        return withoutStyles.replace(/<script\b[^>]*\btype="module"/, (script) => `${styles.join("\n")}\n${script}`)
+      },
+    },
+  }],
   resolve: { alias: {
     "@": path.resolve(import.meta.dirname, "./src"),
     // Vite workers inherit browser export conditions. The default decoder uses
