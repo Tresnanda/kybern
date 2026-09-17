@@ -68,6 +68,7 @@ function VirtualizedRows<T>({
   const owner = useId()
   const container = useRef<HTMLDivElement>(null)
   const [margin, setMargin] = useState(0)
+  const measuredMargin = useRef<number | null>(null)
   const [pinned, setPinned] = useState<{ focused: string | null; selection: readonly [string, string] | null }>({ focused: null, selection: null })
 
   useLayoutEffect(() => {
@@ -78,6 +79,14 @@ function VirtualizedRows<T>({
     const measure = () => {
       frame = 0
       const next = list.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop
+      const previous = measuredMargin.current
+      measuredMargin.current = next
+      // A top-level history status can disappear once paging is exhausted.
+      // Preserve the reader below it while the list's content origin changes.
+      if (providedViewport && !followEnd && previous !== null && Math.abs(next - previous) >= .5 && scroll.scrollTop > Math.max(previous, next)) {
+        scroll.scrollTop += next - previous
+        recordScrollPosition(scroll)
+      }
       setMargin((current) => Math.abs(current - next) < .5 ? current : next)
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
@@ -95,7 +104,7 @@ function VirtualizedRows<T>({
       cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [viewport, inherited?.origin, items.length])
+  }, [viewport, providedViewport, followEnd, inherited?.origin, items.length])
 
   useLayoutEffect(() => {
     const update = () => {
@@ -157,6 +166,12 @@ function VirtualizedRows<T>({
   if (topology !== previousTopology) setPreviousTopology(topology)
   const getItemKey = useCallback((index: number) => topology.keys[index]!, [topology])
   const estimate = useCallback((index: number) => topology.estimates[index]!, [topology])
+  const committedTopology = useRef(topology)
+  const isRebasing = useCallback((instance: Pick<VirtualRowsController, "options">) => {
+    const keys = committedTopology.current.keys
+    const { count, getItemKey } = instance.options
+    return count !== keys.length || (count > 0 && (getItemKey(0) !== keys[0] || getItemKey(count - 1) !== keys.at(-1)))
+  }, [])
   // This component reads the mutable virtualizer directly; it must not be compiler-memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
@@ -184,10 +199,13 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const current = instance.scrollElement?.scrollTop
-      if (options.adjustments !== undefined && current !== undefined) {
+      if (options.adjustments !== undefined && current !== undefined && !isRebasing(instance)) {
         // A wheel/trackpad move can precede the scroll event that updates the
         // library's cursor. Apply height compensation to the actual position,
         // or it can undo that move. Core adds the adjustment to this cursor.
+        // During prepend/trim, however, core has already rebased its cursor
+        // before DOM commit. Retain that intended offset until its layout effect
+        // applies it; the DOM still contains the old scroll position here.
         instance.scrollOffset = current
         elementScroll(current, options, instance)
       } else {
@@ -207,11 +225,13 @@ function VirtualizedRows<T>({
   }, [virtualizer])
   useLayoutEffect(() => {
     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
-      const offset = instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
+      const rebasing = isRebasing(instance)
+      const offset = rebasing ? instance.scrollOffset ?? 0 : instance.scrollElement?.scrollTop ?? instance.scrollOffset ?? 0
       // Compensate settled rows above the viewport in both scroll directions
       // (including late Markdown formatting). A partially visible growing row
       // should keep its top fixed rather than moving the reader with its end.
       if (!instance.itemSizeCache.has(item.key)) return item.start < offset
+      if (rebasing) return item.end <= offset
       // Cached starts can lag newly inserted flow siblings. Use the previous
       // DOM bottom (before this delta) so a visible row is not mistaken for an
       // offscreen row, causing a spurious correction followed by a snap back.
@@ -222,7 +242,8 @@ function VirtualizedRows<T>({
         : item.end <= offset
     }
     return () => { virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined }
-  }, [virtualizer])
+  }, [virtualizer, isRebasing])
+  useLayoutEffect(() => { committedTopology.current = topology }, [topology])
   useImperativeHandle(controllerRef, () => virtualizer, [virtualizer])
   const setContainer = useCallback((element: HTMLDivElement | null) => {
     container.current = element

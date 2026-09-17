@@ -82,7 +82,7 @@ async function run() {
   // The store changes before React commits and WebKit finishes end anchoring.
   await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 60, "Cleanup preserves following position")
   scroll().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
-  scroll().scrollTop = 1000
+  scroll().scrollTop = Number(import.meta.env.VITE_HISTORY_READING_OFFSET ?? 1000)
   await sleep(60)
   const top = scroll().getBoundingClientRect().top
   const anchor = [...document.querySelectorAll<HTMLElement>("[data-turn-id]")].find(node => node.getBoundingClientRect().top >= top && node.getBoundingClientRect().top < top + scroll().clientHeight)!

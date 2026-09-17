@@ -245,10 +245,9 @@ export function Transcript({
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
-  const historyOffset = state?.nextBeforeSeq != null ? 1 : 0
-  const virtualGroups = useMemo<readonly (TurnGroup | null)[]>(() => historyOffset ? [null, ...groups] : groups, [groups, historyOffset])
-  const virtualKey = useCallback((group: TurnGroup | null, index: number) => group ? turnKey(group, index - historyOffset) : "history-control", [historyOffset])
-  const virtualEstimate = useCallback((group: TurnGroup | null) => group ? estimateTurnSize(group) : 48, [])
+  const hasEarlier = state?.nextBeforeSeq != null
+  const virtualKey = useCallback(turnKey, [])
+  const virtualEstimate = useCallback(estimateTurnSize, [])
   const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
   const selectedActivity = agentActivityTrail.at(-1)
   const runtimeTasks = useStore((s) => selectedActivity?.threadId === threadId ? s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS : EMPTY_RUNTIME_TASKS)
@@ -312,7 +311,7 @@ export function Transcript({
         if (viewport.current) rows.current?.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
       },
       activeId(scroll) {
-        const index = (rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0) - historyOffset
+        const index = (rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0)
         const candidates = byTurn.get(index) ?? []
         const group = groups[index]
         if (!group) return ""
@@ -334,7 +333,7 @@ export function Transcript({
         const scroll = viewport.current
         if (!item || !scroll) return
         cancelAnimationFrame(navigationFrame.current)
-        rows.current?.scrollToIndex(item.turnIndex + historyOffset, { align: "start" })
+        rows.current?.scrollToIndex(item.turnIndex, { align: "start" })
         let attempts = 0
         const refine = () => {
           const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
@@ -348,7 +347,7 @@ export function Transcript({
         navigationFrame.current = requestAnimationFrame(refine)
       },
     }
-  }, [groups, navigationItems, historyOffset])
+  }, [groups, navigationItems])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
   const scroller = useRef<MessageScrollerController>(null)
@@ -413,8 +412,11 @@ export function Transcript({
               )}
             </div>
           ) : (
-            <TranscriptStateRoot key={threadId}><VirtualRows items={virtualGroups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
-              {(g, i) => g ? <div data-turn-id={turnKey(g, i - historyOffset)}><Turn group={g} threadId={threadId} isLast={i === virtualGroups.length - 1} onOpenAgentActivity={openAgentActivity} /></div> : (
+            <TranscriptStateRoot key={threadId}>
+              {/* The status stays outside the keyed transcript. Anchoring to a
+                  persistent status row would discard the reader's position when
+                  older turns are inserted immediately after that row. */}
+              {hasEarlier && (
                 <div className={cn(ROW, "py-2")}>
                   <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
                     {earlier.error ? <>
@@ -424,7 +426,10 @@ export function Transcript({
                   </div>
                 </div>
               )}
-            </VirtualRows></TranscriptStateRoot>
+              <VirtualRows items={groups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
+                {(g, i) => <div data-turn-id={turnKey(g, i)}><Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} /></div>}
+              </VirtualRows>
+            </TranscriptStateRoot>
           )}
         </MessageScroller>
         {/* Maskless bottom fade for opaque content surfaces (see kit.css). */}

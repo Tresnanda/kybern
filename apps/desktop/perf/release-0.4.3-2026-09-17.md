@@ -121,7 +121,7 @@ These synthetic figures are not whole-app latency or memory guarantees.
   Claude integration catalog test; two subsequent CI runs passed that suite.
   The original failure log is retained. Exact release-commit CI is pending.
 
-## Release hold: intermittent narrow-history anchor failure
+## Native anchor investigation and correction
 
 The final documentation-only rerun at `6d58bf3` failed the 480 px history-retention
 fixture with `Reload preserves reading position: 63.171875px`
@@ -142,13 +142,30 @@ occupies the original anchor position and avoids extra intermediate anchor
 rectangles. Across the three diagnostic runs, 23 narrow repetitions passed
 without a production fix; the original failure remains unresolved.
 
-The final sidecar-aware production Tauri build passed on `6d58bf3` (production
-implementation `f205a96`); binary hashes are preserved in
-`final-production-build.json`. Subsequent commits change diagnostics and CI
-repetition only. Local typecheck and lint pass. Local native reproduction is
-blocked by the locked macOS session; the lock screen and production daemon are
-left unchanged. Main integration and the 0.4.3 tag remain on hold pending
-resolution, rather than publishing from an earlier passing run.
+After the Mac was unlocked, the default workload passed ten local repetitions.
+Moving the reading point from 1,000 px to 100 px then reproduced a deterministic
+failure: turn `t800` was unmounted and scrollTop remained 51 px after 40 older
+turns were prepended. The persistent history-status row was selected as the
+virtualizer's anchor; since that row never moved, the transcript was not rebased.
+The status now sits outside the keyed transcript. Its eventual removal preserves
+the reading position below it through the existing list-origin measurement.
+
+That change exposed a second deterministic error: three newly mounted rows
+were each 49 px shorter than estimated, moving the anchor 147 px. During commit,
+measurement callbacks compared new row positions with the old DOM scrollTop,
+instead of the virtualizer's already-rebased cursor. The correction preserves
+that cursor while edge keys/count are being committed, then resumes the existing
+DOM-relative wheel/trackpad adjustment. The 100 px reproducer now retains the
+same connected row at exactly 9 px. Native coverage includes reading offsets
+100, 200, 400, and 1,000 px, without changing tolerances. The isolated original
+CI timing is not claimed to have been replayed exactly; the deterministic
+prepend/measurement failures and their before/after traces are preserved.
+
+The last production build before this correction passed on `6d58bf3` (production
+implementation `f205a96`), with hashes in `final-production-build.json`. The new
+correction requires fresh native checks and a sidecar-aware production build
+before integration and release. Production daemon and packaged GUI stay active;
+scratch fixtures use isolated data and builds.
 
 ## Combined daemon changes: matched allocator comparison
 
