@@ -389,7 +389,10 @@ export function Transcript({
           onFollowChange={setFollowing}
           busy={busy}
           viewportRef={setViewport}
-          className="h-full min-h-0"
+          // Keep the scroller out of intrinsic flex sizing. Older WebKit can
+          // initially resolve nested percentage heights against the entire
+          // history, causing the virtualizer to mount every row before layout.
+          className="absolute inset-0 min-h-0"
           style={{ "--rail-bottom": `${bottomInset + 24}px` } as CSSProperties}
           railClassName="!top-3 !bottom-[var(--rail-bottom)] text-muted-foreground/70"
           viewportClassName={cn("scroll-fade-b h-full overflow-x-hidden overscroll-y-contain py-3 sm:py-4 focus-visible:ring-0", CHAT_COLUMN_GUTTER)}
