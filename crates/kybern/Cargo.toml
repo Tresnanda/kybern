@@ -20,6 +20,11 @@ path = "src/bin/kybern.rs"
 kybern-daemon.workspace = true
 kybern-cli.workspace = true
 anyhow.workspace = true
+# kybernd folds whole-thread transcripts per request; the system allocator on
+# macOS retains those freed pages as resident ("Malloc Large (empty)"). jemalloc
+# with background purge returns decayed pages to the OS under a heavy store.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
 
 [dev-dependencies]
 kybern-client.workspace = true
