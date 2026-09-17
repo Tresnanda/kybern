@@ -589,9 +589,9 @@ export function MessageScroller({
         onViewportPointerDown?.(event);
       }}
       onKeyDown={(event) => {
-        if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
+        if (["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey)) {
           leaveLiveEdge();
-        } else if (["ArrowDown", "PageDown", "End"].includes(event.key)) {
+        } else if (["ArrowDown", "PageDown", "End", " "].includes(event.key)) {
           resumeFollowingRef.current = true;
         }
         onViewportKeyDown?.(event);

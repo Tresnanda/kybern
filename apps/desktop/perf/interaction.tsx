@@ -213,6 +213,17 @@ async function run() {
   await sleep(300)
   check(Math.abs(viewport().scrollTop - smallScrollTop) < 2, "A small upward scroll is not pulled back to the live edge")
   results.smallScrollAway = true
+  const reading = viewport()
+  document.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')!.click()
+  await sleep(150)
+  reading.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: " ", shiftKey: true }))
+  reading.scrollTop -= 80
+  await sleep(60)
+  const keyboardTop = reading.scrollTop
+  publish(blocks.map(block => block.id === "answer-heavy" && block.kind === "assistant" ? { ...block, text: block.text + "\n\n" + "Keyboard reading. ".repeat(50) } : block))
+  await sleep(300)
+  check(Math.abs(reading.scrollTop - keyboardTop) < 2, "Shift-Space reading is not pulled back by output")
+  results.shiftSpaceReading = true
   for (const gesture of ["wheel", "keyboard", "scrollbar", "touch"]) {
     const view = viewport()
     view.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -80 }))

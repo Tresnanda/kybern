@@ -126,15 +126,23 @@ function VirtualizedRows<T>({
     // stable row keys before rendering so focused/selected DOM never drops out.
     const indexOf = (key: string | null) => key === null ? -1 : items.findIndex((item, index) => String(getKey(item, index)) === key)
     const indices = new Set(visible)
-    const focused = indexOf(pinned.focused)
+    // WebKit queues selectionchange. A store update can render a new topology
+    // before that notification, so also pin the live DOM endpoints before any
+    // rows are removed. The subscribed pins still invalidate a settled range
+    // when selection/focus changes without a transcript update.
+    const focused = indexOf(containingRow(document.activeElement, owner)?.dataset.virtualKey ?? pinned.focused)
     if (focused >= 0) indices.add(focused)
-    if (pinned.selection) {
-      const a = indexOf(pinned.selection[0]), b = indexOf(pinned.selection[1])
+    const selection = document.getSelection()
+    const anchor = selection && !selection.isCollapsed ? containingRow(selection.anchorNode, owner)?.dataset.virtualKey : undefined
+    const focus = selection && !selection.isCollapsed ? containingRow(selection.focusNode, owner)?.dataset.virtualKey : undefined
+    const endpoints = anchor || focus ? [anchor ?? focus!, focus ?? anchor!] : pinned.selection
+    if (endpoints) {
+      const a = indexOf(endpoints[0]!), b = indexOf(endpoints[1]!)
       if (a >= 0 && b >= 0) for (let index = Math.min(a, b); index <= Math.max(a, b); index++) indices.add(index)
       else if (a >= 0 || b >= 0) indices.add(Math.max(a, b))
     }
     return [...indices].sort((a, b) => a - b)
-  }, [pinned, items, getKey])
+  }, [pinned, items, getKey, owner])
   // TanStack Virtual treats getItemKey identity as measurement topology. An
   // immutable streaming update used to replace this callback every render and
   // rebuild every measurement even when all row keys and estimates were
