@@ -644,3 +644,23 @@ test("a new snapshot of the same tool rejects an older hydration", async () => {
     assert.equal(f.store.getState().transcripts.t.blocks[0].output, "current snapshot")
   } finally { f.runtime.disconnect() }
 })
+
+test("activity hydration selects the exact row when another turn reused the call ID", async () => {
+  const f = await toolOutputRuntimeFixture("activity-reused-id", 2)
+  const releases = []
+  try {
+    f.store.getState().updateTranscript("t", state => ({
+      ...state,
+      blocks: state.blocks.map(block => ({ ...block, call: { ...block.call, id: "shared" }, turnId: `turn-${block.seq}` })),
+    }))
+    f.client.reply = async (method, params) => method === "threads.tool_output"
+      ? { output: `exact:${params.start_seq}`, is_error: false }
+      : { checkpoints: [] }
+    releases.push(f.runtime.retainToolOutput("t", "shared", 1), f.runtime.retainToolOutput("t", "shared", 2))
+    await Promise.all([f.runtime.hydrateToolOutput("t", "shared", 1), f.runtime.hydrateToolOutput("t", "shared", 2)])
+    assert.deepEqual(f.store.getState().transcripts.t.blocks.map(block => block.output), ["exact:1", "exact:2"])
+  } finally {
+    for (const release of releases) release()
+    f.runtime.disconnect()
+  }
+})

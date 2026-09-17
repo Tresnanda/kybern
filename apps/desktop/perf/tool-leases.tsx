@@ -48,7 +48,9 @@ async function run() {
     const disclosures = () => [...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].filter(b => b.textContent?.includes("lease-"))
     check(disclosures().length === 32, "Both panes must mount all 16 results")
     for (const button of disclosures()) button.click()
-    await until(() => document.querySelectorAll("pre").length === 32 && tools().every(b => b.kind === "tool" && !b.outputOmitted), "Mounted results did not hydrate")
+    await until(() => document.querySelectorAll("pre").length === 32 && tools().every(b => b.kind === "tool" && !b.outputOmitted), "Mounted results did not hydrate").catch(error => {
+      throw new Error(`${error}; ${JSON.stringify({ calls, rendered: document.querySelectorAll("pre").length, connection: useStore.getState().connection, tools: tools().map(b => ({ id: b.call.id, seq: b.seq, omitted: b.outputOmitted })) })}`)
+    })
     await sleep(500)
     check(calls === 16, `Shared panes fetched ${calls} times instead of 16`)
     for (const pane of document.querySelectorAll('[data-pane]')) {

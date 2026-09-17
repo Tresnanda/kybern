@@ -107,6 +107,7 @@ interface AgentActivityDetail {
   result: string | null
   resultPending: boolean
   resultLoading: boolean
+  resultTool: ToolBlock | undefined
   failed: boolean
   entries: AgentActivityEntry[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
@@ -218,6 +219,7 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     result: block ? runtimeActivityResult(block.output, block.stream) : null,
     resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
     resultLoading: !!block?.outputOmitted,
+    resultTool: block,
     failed: block?.isError || task?.status === "failed",
     entries,
     tasksByToolCall,
@@ -254,19 +256,16 @@ export function Transcript({
     () => selectedActivity?.threadId === threadId ? resolveAgentActivityDetail(groups, runtimeTasks, selectedActivity) : null,
     [groups, runtimeTasks, selectedActivity, threadId],
   )
-  const activityToolCallId = selectedActivity?.threadId === threadId && selectedActivity.kind === "tool"
-    ? selectedActivity.toolCallId : null
+  const activityResult = agentActivityDetail?.resultTool
+  const activityToolCallId = activityResult?.call.id
+  const activityToolSeq = activityResult?.seq
   useEffect(() => {
-    if (activityToolCallId === null) return
-    return retainToolOutput(threadId, activityToolCallId)
-  }, [threadId, activityToolCallId])
+    if (activityToolCallId === undefined || activityToolSeq === undefined) return
+    return retainToolOutput(threadId, activityToolCallId, activityToolSeq)
+  }, [threadId, activityToolCallId, activityToolSeq])
   useEffect(() => {
-    if (!connected || activityToolCallId === null) return
-    const omitted = groups.some((group) =>
-      group.work.some((block) => block.kind === "tool" && block.call.id === activityToolCallId && block.outputOmitted),
-    )
-    if (omitted) void hydrateToolOutput(threadId, activityToolCallId)
-  }, [threadId, activityToolCallId, groups, connected])
+    if (connected && activityResult?.outputOmitted) void hydrateToolOutput(threadId, activityResult.call.id, activityResult.seq)
+  }, [threadId, activityResult, connected])
   const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
     const selection: AgentActivitySelection = { ...target, threadId }
     setAgentActivityTrail((current) => current.at(-1)?.threadId === threadId ? [...current, selection] : [selection])
