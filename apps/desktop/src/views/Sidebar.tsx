@@ -4,7 +4,6 @@ import { collaborationThreadRows } from "../../../../packages/kybern-client/src/
 // with Settings and Help.
 
 import { useMemo, useState } from "react"
-import { HiOutlineArchiveBox } from "react-icons/hi2"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
@@ -553,7 +552,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
                   }}
                 />
                 <SidebarIconButton
-                  icon={HiOutlineArchiveBox}
+                  icon={ArchiveIcon}
                   label="Archive"
                   size="md"
                   iconClassName="size-[15px] shrink-0"

@@ -167,7 +167,13 @@ export const PanelCollapseIcon: LucideIcon = hugeIcon(HiMinimize);
 export const BackToParentIcon: LucideIcon = hugeIcon(HiUndo);
 export const WorkflowIcon: LucideIcon = hugeIcon(HcAgents);
 export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
-export const ComposerSendArrowIcon: LucideIcon = hugeIcon(HiArrowUp);
+const ComposerSendArrowGlyph = hugeIcon(HiArrowUp);
+/** Round send control. The up-chevron's visual mass sits above its geometric
+ *  center, so the glyph is shifted down and the button (not this wrapper)
+ *  owns the circle. */
+export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
+  <ComposerSendArrowGlyph className={cn("translate-y-[1.5px]", className)} {...props} />
+);
 export const HandoffIcon: LucideIcon = hugeIcon(HcHandoff);
 export const SkillCubeIcon: LucideIcon = hugeIcon(HcSkill);
 export const NewThreadIcon: LucideIcon = hugeIcon(HcCompose);

@@ -27,6 +27,7 @@ import {
   COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
   COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
   COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME,
+  COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
@@ -1161,8 +1162,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       }
                     >
                       <IconSwap
+                        className="size-full"
                         active={sending ? "b" : "a"}
-                        a={<ComposerSendArrowIcon className="size-5 shrink-0 translate-y-px" />}
+                        a={<ComposerSendArrowIcon className={COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME} />}
                         b={
                           <svg width={12} height={12} viewBox="0 0 14 14" className="animate-spin" aria-hidden>
                             <circle cx={7} cy={7} r={5.5} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="20 12" fill="none" />

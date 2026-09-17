@@ -3,7 +3,7 @@ import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from
 import { notificationPermission, notify, type NotificationPermissionState } from "@/lib/tauri"
 // Dedicated settings screen. The workspace remains mounted behind it for a lossless return.
 
-import { Fragment, useEffect, useId, useRef, useState } from "react"
+import { Fragment, useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
@@ -20,6 +20,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/
 import { MatrixLoader, TextSwap } from "@/components/kybern/motion"
 import { PERMISSION_HINT, PERMISSION_LABEL } from "@/lib/format"
 import { DeviceLaptopIcon, MoonIcon, SunIcon } from "@/lib/kit/icons"
+import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import {
   SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -30,9 +31,18 @@ import {
   SETTINGS_SECTION_LABEL_CLASS_NAME,
   SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
 } from "@/lib/kit/settingsPanelStyles"
-import { SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
+import {
+  SETTINGS_SIDEBAR_ICON_CLASS_NAME,
+  SETTINGS_SIDEBAR_ICON_SLOT_CLASS_NAME,
+  SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
+  SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME,
+  SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME,
+  SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME,
+} from "@/lib/kit/settingsSidebarNavStyles"
+import { SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
+import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "@/views/chrome"
 import type { BackgroundSettings, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, rpc } from "@/state/rpc"
@@ -69,7 +79,11 @@ const SEARCH_TERMS: Record<Tab, string> = {
   about: "version update protocol host data folder machine",
 }
 
-export function SettingsScreen() {
+export function SettingsScreen({
+  sidebarResize,
+}: {
+  sidebarResize?: { onPointerDown: (e: ReactPointerEvent) => void; dragging: boolean }
+} = {}) {
   const set = useStore((s) => s.set)
   const tab = useStore((s) => s.settingsTab)
   const environmentId = useStore((s) => s.environmentId)
@@ -101,9 +115,14 @@ export function SettingsScreen() {
       <aside className="settings-navigation app-sidebar-surface">
         <div className="drag-region h-[46px] shrink-0" />
         <div className="settings-navigation-inner">
-          <Button variant="ghost" size="sm" className="settings-back justify-start" onClick={close}>
-            <ArrowLeftIcon className="size-4" /> Back to workspace
-          </Button>
+          <button
+            type="button"
+            className={cn(SETTINGS_SIDEBAR_ITEM_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, "settings-back")}
+            onClick={close}
+          >
+            <span className={SETTINGS_SIDEBAR_ICON_SLOT_CLASS_NAME}><ArrowLeftIcon className={cn(SETTINGS_SIDEBAR_ICON_CLASS_NAME, "shrink-0")} /></span>
+            <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>Back to workspace</span>
+          </button>
           <InputGroup className="settings-search">
             <SearchIcon className="ms-3 size-3.5 shrink-0 text-muted-foreground" />
             <InputGroupInput aria-label="Search settings" placeholder="Search settings…" value={query}
@@ -111,20 +130,21 @@ export function SettingsScreen() {
               onKeyDown={(event) => { if (event.key === "Enter" && matches[0]) { select(matches[0][0], true); heading.current?.focus() } }} />
           </InputGroup>
           <nav aria-label="Settings sections">
-            <ul ref={navRef} className="t-tabs settings-nav-list">
+            <ul ref={navRef} className={cn("t-tabs settings-nav-list", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
               {!query && <li aria-hidden className="t-tabs-pill z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />}
               {NAV_GROUPS.map((group) => {
                 const items = group.tabs.flatMap((id) => matches.filter((item) => item[0] === id))
                 if (!items.length) return null
                 return <Fragment key={group.label}>
-                  <li className="settings-nav-category"><h2>{group.label}</h2></li>
+                  <li className="settings-nav-category"><h2 className={cn(SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME, "m-0")}>{group.label}</h2></li>
                   {items.map(([id, label]) => {
                     const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: PluginIcon, appearance: AppearanceIcon, usage: ClockIcon, notifications: BellIcon, background: BackgroundTrayIcon, about: InfoIcon }[id]
                     return <li key={id} className="relative z-[1]">
                       <button type="button" aria-current={tab === id ? "page" : undefined} data-tab-active={tab === id}
                         onClick={(event) => select(id, event.detail === 0)}
-                        className={cn(SIDEBAR_HEADER_ROW_CLASS_NAME, "settings-nav-item", tab === id ? "text-foreground" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}>
-                        <span className="settings-nav-icon"><Icon className="size-4 shrink-0" /></span><span>{label}</span>
+                        className={cn(SETTINGS_SIDEBAR_ITEM_CLASS_NAME, "settings-nav-item", tab === id ? "text-foreground" : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME))}>
+                        <span className={SETTINGS_SIDEBAR_ICON_SLOT_CLASS_NAME}><Icon className={cn(SETTINGS_SIDEBAR_ICON_CLASS_NAME, "shrink-0")} /></span>
+                        <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>{label}</span>
                       </button>
                     </li>
                   })}
@@ -136,8 +156,19 @@ export function SettingsScreen() {
           <div className="settings-nav-footer"><span className="size-1.5 rounded-full bg-muted-foreground/50" />{activeEnvironment()?.name ?? "This machine"}</div>
         </div>
       </aside>
-      <main className="settings-content app-settings-surface">
-        <div className="drag-region settings-titlebar"><span>Settings<span className="mx-2 text-muted-foreground/40">/</span>{current[1]}</span></div>
+      <main className="settings-content app-settings-surface chat-content-card relative z-[15] overflow-hidden">
+        {sidebarResize && (
+          <ResizeHandle
+            edge="left"
+            label="Resize sidebar"
+            onPointerDown={sidebarResize.onPointerDown}
+            dragging={sidebarResize.dragging}
+            className="z-[25] max-[580px]:hidden"
+          />
+        )}
+        <div className={cn("drag-region settings-titlebar", CHAT_SURFACE_HEADER_ROW_CLASS_NAME)}>
+          <span>Settings<span className="mx-2 text-muted-foreground/40">/</span>{current[1]}</span>
+        </div>
         <div ref={scroll} className="settings-scroll">
           <div className={cn("settings-page", tab === "usage" && "settings-page-wide")}>
             <header className="settings-page-heading">

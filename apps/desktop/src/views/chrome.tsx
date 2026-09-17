@@ -3,14 +3,12 @@
 // back/forward cluster that moves into the route header when the sidebar collapses.
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react"
-import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io"
-
 import { Button } from "@/components/kit/button"
 import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/kit/sidebar"
 import { Toggle } from "@/components/kit/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
-import { LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
+import { ArrowLeftIcon, ArrowRightIcon, LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
 import { mod } from "@/lib/format"
 import { isTauri, platform } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -118,7 +116,7 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
 )
 
 /** One footprint for the sidebar toggle and the back/forward arrows: 28px squares,
- *  no gap, secondary ink at full strength (Base Button dims SVGs to 80%). */
+ *  size-4 Hugeicons (stroke 2.5) so they match the file-tree / explorer glyphs. */
 const SIDEBAR_TRIGGER_CLASS_NAME = cn(
   "!size-7 shrink-0 rounded-lg [&_svg]:!opacity-100 [&_svg]:mx-0",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
@@ -163,7 +161,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                 />
               }
             >
-              <IoIosArrowRoundBack className="size-[22px]" />
+              <ArrowLeftIcon className="size-4" />
             </TooltipTrigger>
             <TooltipPopup side="bottom">Back ({mod}[)</TooltipPopup>
           </Tooltip>
@@ -179,7 +177,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                 />
               }
             >
-              <IoIosArrowRoundForward className="size-[22px]" />
+              <ArrowRightIcon className="size-4" />
             </TooltipTrigger>
             <TooltipPopup side="bottom">Forward ({mod}])</TooltipPopup>
           </Tooltip>

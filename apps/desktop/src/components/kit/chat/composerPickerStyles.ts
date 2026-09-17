@@ -289,5 +289,11 @@ export const COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME =
 export const COMPOSER_FOOTER_ICON_BUTTON_CLASS_NAME =
   "size-7 shrink-0 rounded-lg sm:size-7 [&_svg]:mx-0 [&_svg]:!opacity-100";
 
-/** Round 32px send / stop control, as the Codex ink circle. */
-export const COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME = "size-8 sm:size-8 disabled:opacity-30";
+/** Round 32px send / stop control, as the Codex ink circle.
+ *  `grid` + zeroed SVG margins beat the base Button `inline-flex` / `[&_svg]:-mx-0.5`
+ *  so the chevron is centered in the circle instead of sitting on a text baseline. */
+export const COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME =
+  "grid size-8 place-items-center rounded-full leading-none sm:size-8 disabled:opacity-30 [&_svg]:m-0 [&_svg]:block [&_svg]:!opacity-100";
+
+/** Send chevron size. Optical Y offset lives on `ComposerSendArrowIcon`. */
+export const COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME = "size-5 shrink-0";
