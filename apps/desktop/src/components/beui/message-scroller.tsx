@@ -179,6 +179,7 @@ export function MessageScroller({
   const contentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(followOutput);
   const lastScrollTopRef = useRef(0);
+  const lastScrollSizeRef = useRef({ height: 0, client: 0 });
   const resumeFollowingRef = useRef(true);
   const touchYRef = useRef<number | null>(null);
   const programmaticScrollRef = useRef(false);
@@ -218,6 +219,7 @@ export function MessageScroller({
 
   const setFollowing = useCallback(
     (next: boolean) => {
+      if (next) resumeFollowingRef.current = true;
       if (followingRef.current === next) return;
       followingRef.current = next;
       onFollowChange?.(next);
@@ -377,29 +379,6 @@ export function MessageScroller({
     },
   }), [scrollToEnd, setFollowing]);
 
-  const handleScroll = useCallback(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const top = Math.max(0, viewport.scrollTop);
-    const previous = lastScrollTopRef.current;
-    lastScrollTopRef.current = top;
-    if (programmaticScrollRef.current) return;
-
-    const distance =
-      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    // Once the reader leaves, resume only at the actual bottom. Reusing the
-    // near-end tolerance here pulled small upward gestures back during output.
-    // WebKit can echo a scroll event after layout without user movement. In a
-    // short conversation that event is also "at bottom"; resuming on it would
-    // undo an upward gesture as soon as more work arrives. Resume only after
-    // actual downward movement, including scrollbar, keyboard, and touch input.
-    // Layout/viewport changes also emit scroll events. Only reader input may
-    // leave the live edge; otherwise opening a dock pauses following before
-    // the resize observer can restore the end position.
-    if (!followingRef.current && resumeFollowingRef.current && top > previous) setFollowing(distance <= 1);
-    scheduleActiveRailItem();
-  }, [setFollowing, scheduleActiveRailItem]);
-
   const leaveLiveEdge = useCallback((stopFollowing = true) => {
     programmaticScrollRef.current = false;
     lastScrollTopRef.current = Math.max(0, viewportRef.current?.scrollTop ?? 0);
@@ -412,6 +391,35 @@ export function MessageScroller({
       navigationModelRef.current?.cancelScroll?.();
     }
   }, [setFollowing]);
+
+  const handleScroll = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const top = Math.max(0, viewport.scrollTop);
+    const previous = lastScrollTopRef.current;
+    lastScrollTopRef.current = top;
+    const size = { height: viewport.scrollHeight, client: viewport.clientHeight };
+    const resized = size.height !== lastScrollSizeRef.current.height || size.client !== lastScrollSizeRef.current.client;
+    lastScrollSizeRef.current = size;
+    const distance =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    // Native accessibility scrolling has no preceding input event. Cancel a
+    // pending virtual end target on upward movement in an unchanged viewport,
+    // even while our previous programmatic scroll is still settling.
+    if (followingRef.current && !resized && top < previous && distance > followThreshold) {
+      leaveLiveEdge();
+      resumeFollowingRef.current = true;
+    }
+    if (programmaticScrollRef.current) return;
+    // Once the reader leaves, resume only at the actual bottom. Reusing the
+    // near-end tolerance here pulled small upward gestures back during output.
+    // WebKit can echo a scroll event after layout without user movement. In a
+    // short conversation that event is also "at bottom"; resuming on it would
+    // undo an upward gesture as soon as more work arrives. Resume only after
+    // actual downward movement, including scrollbar, keyboard, and touch input.
+    if (!followingRef.current && resumeFollowingRef.current && top > previous) setFollowing(distance <= 1);
+    scheduleActiveRailItem();
+  }, [followThreshold, leaveLiveEdge, setFollowing, scheduleActiveRailItem]);
 
   useLayoutEffect(() => {
     if (!followOutput) {

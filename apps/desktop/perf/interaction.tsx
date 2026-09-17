@@ -224,6 +224,23 @@ async function run() {
   await sleep(300)
   check(Math.abs(reading.scrollTop - keyboardTop) < 2, "Shift-Space reading is not pulled back by output")
   results.shiftSpaceReading = true
+  document.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')!.click()
+  await sleep(150)
+  // Accessibility scroll actions may move the native scroll position without
+  // producing a wheel, pointer, touch, or keyboard event in the document.
+  reading.scrollTop -= 80
+  await sleep(60)
+  const accessibleTop = reading.scrollTop
+  publish(blocks.map(block => block.id === "answer-heavy" && block.kind === "assistant" ? { ...block, text: block.text + "\n\n" + "Accessible reading. ".repeat(50) } : block))
+  await sleep(300)
+  check(Math.abs(reading.scrollTop - accessibleTop) < 2, "Native accessibility scrolling leaves the live edge")
+  results.accessibilityScroll = true
+  reading.scrollTop = reading.scrollHeight
+  await sleep(100)
+  publish(blocks.map(block => block.id === "answer-heavy" && block.kind === "assistant" ? { ...block, text: block.text + "\n\n" + "Accessible following. ".repeat(50) } : block))
+  await sleep(300)
+  check(reading.scrollHeight - reading.scrollTop - reading.clientHeight < 60, "Native accessibility scrolling back to the bottom resumes following")
+  results.accessibilityResume = true
   for (const gesture of ["wheel", "keyboard", "scrollbar", "touch"]) {
     const view = viewport()
     view.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -80 }))

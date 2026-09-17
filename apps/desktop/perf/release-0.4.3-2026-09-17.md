@@ -54,6 +54,18 @@ live selection endpoints before row removal: WebKit may queue `selectionchange`
 until after a transcript update. The macOS 15 history fixture then passes
 selection retention. Shift-Space reading is covered explicitly.
 
+A final accessibility regression check exposed native scroll actions that move
+scrollTop without DOM wheel/key/pointer events. While an automatic end target
+was settling, the scroller could ignore that upward movement and pull the reader
+back. The final correction cancels that target when the cursor moves upward in
+an unchanged viewport; resizing alone does not cancel following. Explicit
+resume restores native scrolling back to the bottom. Both accessibility
+checks, the dock-resize fixture, and the immediate-upward-gesture streaming
+fixture pass. The last streaming rerun recorded 19 ms frame p95, 16 ms input p95,
+5 ms commit p95, exact output, no overlaps, and zero chrome invalidations for
+100 text deltas. This final small follow correction was not part of the
+incomplete `bf4018a` full-Tauri measurement.
+
 Local native scaling at `d871d92`: 8 mounted messages, 45 ms mount commit,
 18 ms streaming frame-interval p95, 14 ms input-frame p95, 1 ms final commit.
 History retention passed at 1100 and 480 px with zero anchor shift, selection,
