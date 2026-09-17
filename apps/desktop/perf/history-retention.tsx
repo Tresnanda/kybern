@@ -15,7 +15,7 @@ let readingAnchor: HTMLElement | undefined
 function recordAnchor(stage: string, target?: number) {
   const view = scroll()
   if (!view || !readingAnchor) return
-  anchorTrace.push({ stage, elapsed: Math.round(performance.now()), target, top: view.scrollTop, height: view.scrollHeight, blocks: state().blocks.length, anchor: readingAnchor.dataset.turnId, anchorTop: readingAnchor.getBoundingClientRect().top, connected: readingAnchor.isConnected })
+  anchorTrace.push({ stage, elapsed: Math.round(performance.now()), target, top: view.scrollTop, height: view.scrollHeight, blocks: state().blocks.length, anchor: readingAnchor.dataset.turnId, anchorTop: stage === "captured" || stage === "settled" ? readingAnchor.getBoundingClientRect().top : undefined, connected: readingAnchor.isConnected })
   if (anchorTrace.length > 60) anchorTrace.shift()
 }
 let previousSample = ""
@@ -104,7 +104,8 @@ async function run() {
   const anchorShift = Math.abs(anchor.getBoundingClientRect().top - anchorTop)
   recordAnchor("settled")
   view.scrollTo = originalScrollTo
-  check(anchor.isConnected && anchorShift < 2, `Reload preserves reading position: ${anchorShift}px`)
+  const replacementAnchor = document.querySelector<HTMLElement>(`[data-turn-id="${anchor.dataset.turnId}"]`)
+  check(anchor.isConnected && anchorShift < 2, `Reload preserves reading position: ${anchorShift}px; connected=${anchor.isConnected}; replacementTop=${replacementAnchor?.getBoundingClientRect().top}`)
   document.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')!.click()
   await waitFor(() => document.body.innerText.includes("Answer 999") && scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Explicit return reaches the latest answer")
   // Opening a dock changes the transcript's available geometry. Returning to
