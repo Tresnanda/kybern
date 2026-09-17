@@ -107,7 +107,9 @@ jobs:
         working-directory: apps/desktop
         run: |
           node scripts/check-rendering.mjs history-retention
-          KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
+          for attempt in 1 2 3; do
+            KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
+          done
       - name: Native WebKit deferred tool output
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop

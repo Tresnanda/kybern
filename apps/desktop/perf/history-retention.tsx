@@ -10,6 +10,14 @@ import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 const liveEdgeTrace: unknown[] = []
+const anchorTrace: unknown[] = []
+let readingAnchor: HTMLElement | undefined
+function recordAnchor(stage: string, target?: number) {
+  const view = scroll()
+  if (!view || !readingAnchor) return
+  anchorTrace.push({ stage, elapsed: Math.round(performance.now()), target, top: view.scrollTop, height: view.scrollHeight, blocks: state().blocks.length, anchor: readingAnchor.dataset.turnId, anchorTop: readingAnchor.getBoundingClientRect().top, connected: readingAnchor.isConnected })
+  if (anchorTrace.length > 60) anchorTrace.shift()
+}
 let previousSample = ""
 function recordLiveEdge(stage: string) {
   const viewport = scroll()
@@ -80,10 +88,22 @@ async function run() {
   const anchor = [...document.querySelectorAll<HTMLElement>("[data-turn-id]")].find(node => node.getBoundingClientRect().top >= top && node.getBoundingClientRect().top < top + scroll().clientHeight)!
   check(anchor, "Reading anchor exists")
   const anchorTop = anchor.getBoundingClientRect().top
+  readingAnchor = anchor
+  recordAnchor("captured")
+  const view = scroll()
+  const originalScrollTo = view.scrollTo.bind(view)
+  view.scrollTo = ((...args: [ScrollToOptions] | [number, number]) => {
+    recordAnchor("before write", typeof args[0] === "number" ? args[1] : args[0].top)
+    if (typeof args[0] === "number") originalScrollTo(args[0], args[1]!)
+    else originalScrollTo(args[0])
+    recordAnchor("after write")
+  }) as typeof view.scrollTo
   await waitFor(() => calls.length === 1 && !state().loadingEarlier, "Released history reloads on upward reading")
   await sleep(350)
   check(state().blocks.length === 720, "Reloaded history stays retained while reading")
   const anchorShift = Math.abs(anchor.getBoundingClientRect().top - anchorTop)
+  recordAnchor("settled")
+  view.scrollTo = originalScrollTo
   check(anchor.isConnected && anchorShift < 2, `Reload preserves reading position: ${anchorShift}px`)
   document.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')!.click()
   await waitFor(() => document.body.innerText.includes("Answer 999") && scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Explicit return reaches the latest answer")
@@ -121,4 +141,4 @@ async function run() {
   return { pass: true, beforeBlocks: 3000, afterBlocks: state().blocks.length, beforeBytes, afterBytes, anchorShift, reload: true, selection: true, focus: true, identity: true }
 }
 const w = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }
-run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), liveEdgeTrace, blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))
+run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), anchorTrace, liveEdgeTrace, blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))
