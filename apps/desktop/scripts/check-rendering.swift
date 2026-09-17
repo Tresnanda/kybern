@@ -55,6 +55,36 @@ final class Bench: NSObject, WKScriptMessageHandler {
   let json = (message.body as? String)?.data(using: .utf8)
   let result = json.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
   if result?["stage"] != nil {
+   if result?["copySelection"] as? Bool == true, let expected = result?["expected"] as? String {
+    // Exercise WebKit's native Copy action, preserving the user's pasteboard.
+    let board = NSPasteboard.general
+    let saved = (board.pasteboardItems ?? []).map { item in
+     let copy = NSPasteboardItem()
+     for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+     return copy
+    }
+    window.makeFirstResponder(web)
+    let before = board.changeCount
+    let sent = NSApp.sendAction(NSSelectorFromString("copy:"), to: web, from: nil)
+    // Copy crosses the WebContent process boundary; wait for its reply before
+    // reading or restoring the pasteboard, rather than racing the IPC.
+    let deadline = Date().addingTimeInterval(3)
+    func finishCopy() {
+     if sent && board.changeCount == before && Date() < deadline {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: finishCopy)
+      return
+     }
+     let copied = sent && board.changeCount != before && board.string(forType: .string) == expected
+     // Do not overwrite a concurrent copy made by the user in another app.
+     if copied {
+      board.clearContents()
+      if !saved.isEmpty { board.writeObjects(saved) }
+     }
+     web.evaluateJavaScript("window.__clipboardContinue(\(copied ? "true" : "false"))")
+    }
+    finishCopy()
+    return
+   }
    if result?["process"] as? Bool == true, web.responds(to: NSSelectorFromString("_webProcessIdentifier")), let pid = web.value(forKey: "_webProcessIdentifier") as? Int {
     print("{\"webPid\":\(pid)}")
    }

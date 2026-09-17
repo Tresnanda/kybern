@@ -72,6 +72,15 @@ async function run() {
     const range = document.createRange(); range.selectNodeContents(pre)
     document.getSelection()!.removeAllRanges(); document.getSelection()!.addRange(range)
     check(document.getSelection()!.toString() === expected(0), "Exact selected/copyable Unicode output differs")
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Native copy did not complete")), 5000)
+      const bridge = window as unknown as { __clipboardContinue: (matches: boolean) => void }
+      bridge.__clipboardContinue = (matches) => {
+        clearTimeout(timer)
+        if (matches) resolve(); else reject(new Error("Native clipboard lost exact Unicode output"))
+      }
+      w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ stage: "native-copy", copySelection: true, expected: expected(0) }))
+    })
     document.getSelection()!.removeAllRanges()
     render(1)
     await sleep(500)
@@ -102,7 +111,7 @@ async function run() {
     await sleep(300)
     check(tools().every((block, index) => block === settled[index]), "Obsolete hydration replaced reconnected rows")
     for (const [index, output] of [...document.querySelectorAll("pre")].entries()) check(output.textContent === expected(index), "Reconnect lost exact output")
-    w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, mountedResults: 32, uniqueResults: 16, lifecycleCalls, calls, sharedPanes: true, exactUnicodeSelection: true, closeReopen: true, reconnectDuringHydration: true, transport: "real scratch daemon" }))
+    w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, mountedResults: 32, uniqueResults: 16, lifecycleCalls, calls, sharedPanes: true, exactUnicodeSelection: true, exactNativeCopy: true, closeReopen: true, reconnectDuringHydration: true, transport: "real scratch daemon" }))
   } finally {
     releaseResponses?.()
     flushSync(() => root.unmount())

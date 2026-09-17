@@ -1,5 +1,12 @@
 # Bound saved tool results and reduce daemon transcript allocations
 
+Integration follow-up: [PR #31](https://github.com/Tresnanda/kybern/pull/31) combines
+this implementation with the requested release/allocator/icon PRs. Its
+[0.4.3 report](../release-0.4.3-2026-09-17.md) records subsequent scroll/selection
+fixes, passing macOS/Linux CI, repeated allocator measurements, and the remaining
+full-Tauri automation limitation. The original scoped PR description below is
+historical; its renderer measurements must not be promoted to whole-app savings.
+
 Large saved tool outputs previously forced full-history payload retention and repeated projection work. Opening more than twelve results could evict mounted content, and a burst of result requests could exhaust the daemon's RPC lane. This change retains mounted results across panes, queues hydration within existing backpressure, and selects outputs by exact start sequence and snapshot. It also reduces paging, canonical-message, event-kind and notification allocations without changing the event log or graphics behavior.
 
 Measured baseline: `c85f3bfd35c0fa55d3a99eccbaf86ae6de9479b2`. Final implementation: `b7024bd400679d805525bcd92c58216ed9c6f61b`; its daemon binary is identical to the measured `08162402de19527ec74ea67605fab8010a1c2f67` build.

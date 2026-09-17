@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3
+
+<!-- kybern-release-title: Less retained work, steadier history -->
+<!-- kybern-release-summary: Large saved results load when opened, long chats retain less daemon memory, and refreshed icons and usage views keep the workspace clear. -->
+
+- Saved tool results load when opened. Results shared across panes stay available while visible, and closing details releases their mounted content without losing exact output or reconnect recovery.
+- The daemon avoids unnecessary transcript and notification copies, omits irrelevant history events from transcript reconstruction, and returns unused allocator pages sooner on supported platforms.
+- Long histories start with a correctly sized viewport, avoiding an initial full-history mount and preserving the live edge while older content is released.
+- Refreshed Hugeicons, integration controls, and usage details improve workspace consistency. Account limits stay with their environment when switching connections.
+- Release publication now requires successful CI for the exact main-branch release commit and successful desktop bundles for every supported platform.
+
 ## 0.4.2
 
 <!-- kybern-release-title: A clearer place for your preferences -->
