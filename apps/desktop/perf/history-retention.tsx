@@ -138,7 +138,7 @@ async function run() {
   check(state().blocks.length === 3000 && document.activeElement === focus, `Focused message controls pin history; connected=${focus.isConnected}, active=${document.activeElement?.outerHTML.slice(0, 600)}`)
   focus.blur()
   await waitFor(() => state().blocks.length === 600, "Leaving the focused control permits cleanup")
-  return { pass: true, beforeBlocks: 3000, afterBlocks: state().blocks.length, beforeBytes, afterBytes, anchorShift, reload: true, selection: true, focus: true, identity: true }
+  return { pass: true, beforeBlocks: 3000, afterBlocks: state().blocks.length, beforeBytes, afterBytes, anchorShift, reload: true, selection: true, focus: true, identity: true, anchorTrace }
 }
 const w = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }
 run().then(result => w.webkit.messageHandlers.bench.postMessage(JSON.stringify(result))).catch(error => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: false, error: String(error), anchorTrace, liveEdgeTrace, blocks: state()?.blocks.length, hidden: document.hidden, selection: { collapsed: document.getSelection()?.isCollapsed, ranges: document.getSelection()?.rangeCount }, active: document.activeElement?.outerHTML.slice(0, 200), scroll: { top: scroll()?.scrollTop, height: scroll()?.scrollHeight, client: scroll()?.clientHeight }, bottomButton: document.querySelector('[aria-label="Scroll to bottom"]')?.className })))

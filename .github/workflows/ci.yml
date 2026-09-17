@@ -107,7 +107,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           node scripts/check-rendering.mjs history-retention
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
             KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
           done
       - name: Native WebKit deferred tool output
