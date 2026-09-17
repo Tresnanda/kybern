@@ -25,7 +25,14 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "settings" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "usage" ? [{
+    name: "usage-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/UsagePage.tsx")) return
+      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "usage-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "settings" ? [{
     name: "settings-fixture-transport",
     enforce: "pre",
     transform(code, id) {

@@ -58,7 +58,7 @@ export function UsagePage() {
   // Authoritative limits from the daemon's store — available without opening a
   // thread or prompting first. Falls back to the live per-thread values while it
   // loads (or if an older daemon lacks the method).
-  const [storedLimits, setStoredLimits] = useState<ProviderLimits[] | null>(null)
+  const [storedLimits, setStoredLimits] = useState<{ environmentId: string; providers: ProviderLimits[] } | null>(null)
   const [period, setPeriod] = useState<Period>("30")
   const [group, setGroup] = useState<UsageGroup>("provider")
   const [revision, refresh] = useState(0)
@@ -90,15 +90,15 @@ export function UsagePage() {
     if (connection !== "open") return
     let canceled = false
     rpc().call("usage.limits", {}).then((result) => {
-      if (!canceled) setStoredLimits(result.providers)
+      if (!canceled) setStoredLimits({ environmentId, providers: result.providers })
     }).catch(() => { /* older daemon lacks the method: keep the per-thread fallback */ })
     return () => { canceled = true }
   }, [environmentId, connection, revision])
   // The daemon's usage.limits is authoritative (store's last-reported values plus
   // a live Codex read); use the live per-thread values only until it loads or if
   // an older daemon lacks the method.
-  const accountLimits = (storedLimits
-    ? storedLimits.map((entry) => ({ kind: entry.provider, limits: entry.limits }))
+  const accountLimits = (storedLimits?.environmentId === environmentId
+    ? storedLimits.providers.map((entry) => ({ kind: entry.provider, limits: entry.limits }))
     : providerLimits
   ).filter((entry) => entry.limits.length > 0)
   // Never show the previous filter's totals under the next filter's label.
