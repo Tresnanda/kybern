@@ -122,6 +122,21 @@ test("a failed hydration releases its queue slot and disposal cancels queued wor
   assert.equal(f.writes, 0)
 })
 
+test("queued deleted rows never issue an RPC and deleted in-flight rows suppress late errors", async () => {
+  const pending = []
+  const f = fixture(() => { const value = deferred(); pending.push(value); return value.promise })
+  for (let i = 0; i < 8; i++) f.add(`c${i}`)
+  const requests = Array.from({ length: 8 }, (_, i) => f.cache.hydrate("t", `c${i}`))
+  await Promise.resolve()
+  assert.equal(f.calls, 4)
+  f.blocks.clear()
+  for (const item of pending) item.reject(new Error("deleted"))
+  await Promise.all(requests)
+  assert.equal(f.calls, 4)
+  assert.equal(f.writes, 0)
+  assert.equal(f.errors.length, 0)
+})
+
 test("13 mounted results are all retained and fetched only once", async () => {
   const f = fixture()
   const releases = []

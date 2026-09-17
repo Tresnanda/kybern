@@ -47,6 +47,11 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
   let activeLoads = 0
   let queuedLoads: { start(): void; cancel(): void }[] = []
 
+  function stillOmitted(identity: ToolOutputIdentity): boolean {
+    const current = options.read(identity.threadId, identity.toolCallId, identity.seq)
+    return !!current?.omitted && current.seq === identity.seq && current.turnId === identity.turnId && current.revision === identity.revision
+  }
+
   function drainLoads(): void {
     while (activeLoads < MAX_CONCURRENT_LOADS && queuedLoads.length) queuedLoads.shift()!.start()
   }
@@ -57,7 +62,7 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
       queuedLoads.push({
         cancel: () => resolve(undefined),
         start() {
-          if (!isCurrent()) { resolve(undefined); return }
+          if (!isCurrent() || !stillOmitted(identity)) { resolve(undefined); return }
           activeLoads++
           const finish = () => {
             if (queuedGeneration !== generation) return
@@ -149,7 +154,7 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
         evict()
       })
       .catch((error: unknown) => {
-        if (isCurrent()) options.onError(error)
+        if (isCurrent() && stillOmitted(identity)) options.onError(error)
       })
       .finally(() => {
         // A stale completion must not remove a newer request for the same key.
