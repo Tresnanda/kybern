@@ -28,6 +28,12 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [the consolidated memory review](memory-review-2026-09-17/REPORT.md) for
+snapshot-safe tool hydration, mounted result leases, borrowed daemon paging,
+matched release-daemon measurements, and the remaining whole-app and page-aware
+reconstruction gates. Run `tool-leases` with a release daemon to exercise real
+RPC hydration of 16 results shared across two native WebKit panes.
+
 See [scroll tile accumulation](memory-tiles-2026-09-15.md) for the attribution of
 the remaining native peak to WebKit's scroll tiles, the paint-host layer rule,
 and the diagnostic hooks (`KYBERN_SCROLL_EXTRA_CSS`, `KYBERN_PERF_DEBUG_LAYERS`).

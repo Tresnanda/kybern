@@ -1,0 +1,24 @@
+{
+  "baseline_commit": "c85f3bfd35c0fa55d3a99eccbaf86ae6de9479b2",
+  "branch": "fix/memory-followup-reviewed",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428\n",
+  "hardware": "Apple M1\n17179869184\n",
+  "webkit": "22625.1.29.11.27",
+  "rust": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: aarch64-apple-darwin\nrelease: 1.96.0\nLLVM version: 22.1.2\n",
+  "node": "v24.15.0\n",
+  "pnpm": "11.25.0 via npx",
+  "build": "release thin LTO, codegen-units=1, strip=true; frozen lockfiles; worktree-local CARGO_TARGET_DIR",
+  "fixture_geometry": "1100 x 720 CSS pixels; native WKWebView; production CSP; dark opaque fixture defaults",
+  "limitations": [
+    "Production application PID 1366 and daemon PID 1939 host the session and must remain untouched; full Tauri application UI workflows and whole-app attribution unavailable while preserving single-app rule.",
+    "Native fixture WebContent PID is read from its own WKWebView; fixture Swift host is not Tauri shell and is not reported as one.",
+    "Scratch daemon PID comes from Popen; sampled from launch, earliest sub-100ms peak can be missed.",
+    "No production ~/.kybern data read or copied.",
+    "Architecture/design documents referenced by AGENTS.md are absent from this commit."
+  ],
+  "archive_sha256": "9bca10e88c61b64b4f21c7eb2763ba63313ad0c18868514196a2b959acd9578b",
+  "candidate_source_commit": "b7024bd400679d805525bcd92c58216ed9c6f61b",
+  "candidate_daemon_sha256": "5e677dde6824ad26ffeefebbb3dd4b4f038594c7dbc4fff356bb2baebae85fd1",
+  "candidate_shell_sha256": "b4de8bf2c088ce633668ec1691b541e2aa141468678b7913e8de0d565b8da482",
+  "native_repeat_note": "Initial candidate runs used 0816240; candidate-repeat runs used d0a649d. Final/accepted tool-memory and scrolling runs use b7024bd. Terminal bundles are byte-identical across all revisions. Daemon binary is identical across all candidate revisions."
+}

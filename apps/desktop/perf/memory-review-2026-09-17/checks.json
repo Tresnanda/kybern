@@ -1,0 +1,646 @@
+[
+  {
+    "log": "candidate-rust-tests.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "candidate-clippy.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "candidate-format.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "accepted-desktop-tests.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "accepted-typecheck.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "accepted-lint.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "accepted-tauri-build.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "mobile-typecheck.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "mobile-tests.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "mobile-export.log",
+    "present": true,
+    "status": "passed"
+  },
+  {
+    "log": "candidate-interaction.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "firstNavigation": true,
+      "middleNavigation": true,
+      "actionPaintOverflow": true,
+      "lastNavigation": true,
+      "wrapState": true,
+      "selection": true,
+      "selectionRelease": true,
+      "focus": true,
+      "readingPosition": true,
+      "prepend": true,
+      "mountedTools": 25,
+      "toolState": true,
+      "groupState": true,
+      "resize": true,
+      "threadSwitch": true,
+      "follow": true,
+      "smallScrollAway": true,
+      "resume-wheel": true,
+      "resume-keyboard": true,
+      "resume-scrollbar": true,
+      "resume-touch": true,
+      "agentActivity": true,
+      "liveGrouping": true,
+      "pass": true
+    }
+  },
+  {
+    "log": "candidate-interaction-narrow.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "firstNavigation": true,
+      "middleNavigation": true,
+      "actionPaintOverflow": true,
+      "lastNavigation": true,
+      "wrapState": true,
+      "selection": true,
+      "selectionRelease": true,
+      "focus": true,
+      "readingPosition": true,
+      "prepend": true,
+      "mountedTools": 24,
+      "toolState": true,
+      "groupState": true,
+      "resize": true,
+      "threadSwitch": true,
+      "follow": true,
+      "smallScrollAway": true,
+      "resume-wheel": true,
+      "resume-keyboard": true,
+      "resume-scrollbar": true,
+      "resume-touch": true,
+      "agentActivity": true,
+      "liveGrouping": true,
+      "pass": true
+    }
+  },
+  {
+    "log": "candidate-history-retention.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "pass": true,
+      "beforeBlocks": 3000,
+      "afterBlocks": 600,
+      "beforeBytes": 2341628,
+      "afterBytes": 467828,
+      "anchorShift": 0,
+      "reload": true,
+      "selection": true,
+      "focus": true,
+      "identity": true
+    }
+  },
+  {
+    "log": "candidate-history-retention-narrow.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "pass": true,
+      "beforeBlocks": 3000,
+      "afterBlocks": 600,
+      "beforeBytes": 2341628,
+      "afterBytes": 467828,
+      "anchorShift": 0,
+      "reload": true,
+      "selection": true,
+      "focus": true,
+      "identity": true
+    }
+  },
+  {
+    "log": "candidate-rendering.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "railEditPass": true,
+      "railNavigationPass": true,
+      "followPass": true,
+      "readingPositionPass": true,
+      "historyElements": 120,
+      "railButtons": 54,
+      "historyCachePass": true,
+      "historyReadsDuringUpdates": 0,
+      "codeIdentityPass": true,
+      "unchangedHighlightPass": true,
+      "wrapStatePass": true,
+      "finalTextPass": true,
+      "retainedCodeBlocks": 30,
+      "explanationCommitP95": 1,
+      "streamFrames": 134,
+      "streamFrameP95": 18,
+      "streamFramesOver25ms": 1,
+      "streamRenders": 144,
+      "codeMutations": 5,
+      "highlightBudgetPass": true,
+      "revealBudgetPass": true,
+      "pass": true
+    }
+  },
+  {
+    "log": "candidate-work-stream.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "opening received thinking shows all text": true,
+      "closed thinking unmounts its content": true,
+      "reopening after hidden deltas shows all text": true,
+      "rapid toggles retain thinking": true,
+      "layout scroll echoes do not resume following after an upward gesture": true,
+      "virtual remount retains the entire expanded live trace": true,
+      "completion shows exact thinking": true,
+      "turnCollisions": 0,
+      "expanding and collapsing work keeps adjacent turns separated": true,
+      "mixed read and edit rows never settle overlapping": true,
+      "overlapFrames": 0,
+      "new virtual rows have positions on their first frame": true,
+      "closed tool outputs are unmounted": true,
+      "mixed group exists before virtualization": true,
+      "mixed group is expanded before virtualization": true,
+      "thresholdCollisions": 0,
+      "expanded work has no overlap across virtualization thresholds": true,
+      "mountedNodes": 503,
+      "commitP95": 2,
+      "frameP95": 17,
+      "inputFrameP95": 17,
+      "active work stays responsive": true,
+      "streaming mixed work has no overlap": true,
+      "chromeUpdatesFor100Deltas": 0,
+      "text deltas do not invalidate thread chrome": true,
+      "stream sequence stays exact": true,
+      "failures": [],
+      "pass": true
+    }
+  },
+  {
+    "log": "candidate-markdown-memory.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "pass": true,
+      "retainedBytes": 32795936,
+      "budgetBytes": 37748736,
+      "fixtures": 8
+    }
+  },
+  {
+    "log": "candidate-worker-lifecycle.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "pass": true,
+      "fixture": "worker-lifecycle",
+      "idleMs": 2000,
+      "graceMs": 500,
+      "workersAtIdle": {
+        "constructed": 2,
+        "active": 0,
+        "terminated": 2
+      },
+      "constructed": 4,
+      "active": 0,
+      "terminated": 4,
+      "warmCacheReuse": {
+        "markdown": true,
+        "highlight": true
+      },
+      "workerRestart": {
+        "markdown": true,
+        "highlight": true,
+        "fullMarkdownRevision": true
+      },
+      "cancellation": {
+        "beforeQueue": true,
+        "whileQueued": true
+      },
+      "formattedOutput": {
+        "markdown": true,
+        "highlight": true
+      }
+    }
+  },
+  {
+    "log": "final-scaling.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "historyTurns": 401,
+      "mountMs": 48,
+      "historyMessages": 8,
+      "historyNodes": 451,
+      "messageRects": 136,
+      "listRects": 0,
+      "scrollFrameP95": 19,
+      "scrollFramesOver25ms": 1,
+      "expandMs": 11,
+      "grouped": true,
+      "workRows": 25,
+      "expandedNodes": 723,
+      "streamChars": 46364,
+      "streamFrames": 139,
+      "streamFrameP95": 18,
+      "streamFramesOver25ms": 0,
+      "inputTicks": 27,
+      "inputEvents": 27,
+      "inputFrameP95": 14,
+      "finalCommitMs": 1,
+      "finalPass": true,
+      "responsivenessPass": true,
+      "pass": true
+    }
+  },
+  {
+    "log": "final-tool-leases.log",
+    "status": "passed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "pass": true,
+      "mountedResults": 32,
+      "uniqueResults": 16,
+      "lifecycleCalls": 20,
+      "calls": 28,
+      "sharedPanes": true,
+      "exactUnicodeSelection": true,
+      "closeReopen": true,
+      "reconnectDuringHydration": true,
+      "transport": "real scratch daemon"
+    }
+  },
+  {
+    "log": "final-scrolling.log",
+    "status": "failed",
+    "late_shared_runner_interference": false,
+    "result": {
+      "samples": [
+        {
+          "scenario": "history-cold",
+          "initialTop": 170220,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 102,
+          "anchorFrames": 199,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 32,
+          "over25ms": 2,
+          "correctionP95": 28,
+          "maxCorrection": 28,
+          "maxVisibleJump": 0.03125,
+          "peakNodes": 1656
+        },
+        {
+          "scenario": "history-warm",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 20,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 1,
+          "maxVisibleJump": 1.03125,
+          "peakNodes": 1656
+        },
+        {
+          "scenario": "history-fast",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 198,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 25,
+          "over25ms": 0,
+          "correctionP95": 28,
+          "maxCorrection": 28,
+          "maxVisibleJump": 1.03125,
+          "peakNodes": 1656
+        },
+        {
+          "scenario": "mixed-work",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 1327,
+          "over25ms": 1,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 708
+        },
+        {
+          "scenario": "mixed-work-streaming",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 19,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 708
+        },
+        {
+          "scenario": "expanded-thinking",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 18,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 3,
+          "maxVisibleJump": 2.25,
+          "peakNodes": 708
+        },
+        {
+          "scenario": "expanded-tools",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 18,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 646
+        },
+        {
+          "scenario": "long-code",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 18,
+          "movingFrameP95": 18,
+          "worstFrame": 30,
+          "over25ms": 1,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 206
+        }
+      ],
+      "failures": [],
+      "pass": false
+    }
+  },
+  {
+    "log": "final-scrolling-no-memory.log",
+    "status": "failed",
+    "late_shared_runner_interference": true,
+    "result": {
+      "error": "Rendering check timed out"
+    }
+  },
+  {
+    "log": "accepted-scrolling.log",
+    "status": "failed",
+    "late_shared_runner_interference": true,
+    "result": {
+      "samples": [
+        {
+          "scenario": "history-cold",
+          "initialTop": 99386,
+          "jumpDetails": [
+            {
+              "direction": -1,
+              "i": 26,
+              "before": 98569,
+              "requested": 98454,
+              "actual": 98454,
+              "anchorTop": -429.1796875,
+              "currentTop": -342.1484375,
+              "turn": "turn-157"
+            },
+            {
+              "direction": -1,
+              "i": 27,
+              "before": 98454,
+              "requested": 98336,
+              "actual": 98308,
+              "anchorTop": -342.1484375,
+              "currentTop": -196.1484375,
+              "turn": "turn-157"
+            }
+          ],
+          "frames": 200,
+          "movingFrames": 112,
+          "anchorFrames": 199,
+          "emptyFrames": 0,
+          "frameP95": 21,
+          "movingFrameP95": 21,
+          "worstFrame": 27,
+          "over25ms": 2,
+          "correctionP95": 28,
+          "maxCorrection": 459,
+          "maxVisibleJump": 28,
+          "peakNodes": 1656
+        },
+        {
+          "scenario": "history-warm",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 21,
+          "movingFrameP95": 21,
+          "worstFrame": 24,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 1,
+          "maxVisibleJump": 1.03125,
+          "peakNodes": 1656
+        },
+        {
+          "scenario": "history-fast",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 198,
+          "anchorFrames": 199,
+          "emptyFrames": 0,
+          "frameP95": 22,
+          "movingFrameP95": 22,
+          "worstFrame": 32,
+          "over25ms": 3,
+          "correctionP95": 28,
+          "maxCorrection": 28,
+          "maxVisibleJump": 1.03125,
+          "peakNodes": 1656
+        },
+        {
+          "scenario": "mixed-work",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 20,
+          "movingFrameP95": 20,
+          "worstFrame": 25,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 708
+        },
+        {
+          "scenario": "mixed-work-streaming",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 20,
+          "movingFrameP95": 20,
+          "worstFrame": 23,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 708
+        },
+        {
+          "scenario": "expanded-thinking",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 20,
+          "movingFrameP95": 20,
+          "worstFrame": 25,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 3,
+          "maxVisibleJump": 2.25,
+          "peakNodes": 708
+        },
+        {
+          "scenario": "expanded-tools",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 20,
+          "movingFrameP95": 20,
+          "worstFrame": 22,
+          "over25ms": 0,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 646
+        },
+        {
+          "scenario": "long-code",
+          "initialTop": 0,
+          "jumpDetails": [],
+          "frames": 200,
+          "movingFrames": 196,
+          "anchorFrames": 200,
+          "emptyFrames": 0,
+          "frameP95": 21,
+          "movingFrameP95": 21,
+          "worstFrame": 31,
+          "over25ms": 1,
+          "correctionP95": 0,
+          "maxCorrection": 0,
+          "maxVisibleJump": 0,
+          "peakNodes": 206
+        }
+      ],
+      "failures": [],
+      "pass": false
+    }
+  },
+  {
+    "log": "accepted-tool-leases.log",
+    "status": "passed",
+    "late_shared_runner_interference": true,
+    "result": {
+      "pass": true,
+      "mountedResults": 32,
+      "uniqueResults": 16,
+      "lifecycleCalls": 20,
+      "calls": 28,
+      "sharedPanes": true,
+      "exactUnicodeSelection": true,
+      "closeReopen": true,
+      "reconnectDuringHydration": true,
+      "transport": "real scratch daemon"
+    }
+  }
+]

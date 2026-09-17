@@ -1,0 +1,16 @@
+{
+  "baseline": {
+    "release-background.png": "6978ab320237d756f1a662a6eab0d7ecdef64da0f15e26dda55207919adc43d5",
+    "perf/terminal-memory.html": "c908ddf288a4a05d140e6053339b7289a47c1455cbc33aab480f44649195cb2b",
+    "assets/terminal-memory-BrP-ENHg.css": "0e5386f16cb4be78a2fe911e014a810da76ea2db47d8c8b2a966516b2fd5270b",
+    "assets/addon-webgl-BvMjw_ik.js": "bb219eac4c44de25b45787e59b51e0fee378e5b2167c02cfefee1a99a0b6da3a",
+    "assets/terminal-memory-BUWr8VwG.js": "4cf9c59ca5f3dd0d514e76d26052dc01e60f1c77a50c9aaad3dbb9729470fa91"
+  },
+  "candidate": {
+    "release-background.png": "6978ab320237d756f1a662a6eab0d7ecdef64da0f15e26dda55207919adc43d5",
+    "perf/terminal-memory.html": "c908ddf288a4a05d140e6053339b7289a47c1455cbc33aab480f44649195cb2b",
+    "assets/terminal-memory-BrP-ENHg.css": "0e5386f16cb4be78a2fe911e014a810da76ea2db47d8c8b2a966516b2fd5270b",
+    "assets/addon-webgl-BvMjw_ik.js": "bb219eac4c44de25b45787e59b51e0fee378e5b2167c02cfefee1a99a0b6da3a",
+    "assets/terminal-memory-BUWr8VwG.js": "4cf9c59ca5f3dd0d514e76d26052dc01e60f1c77a50c9aaad3dbb9729470fa91"
+  }
+}
