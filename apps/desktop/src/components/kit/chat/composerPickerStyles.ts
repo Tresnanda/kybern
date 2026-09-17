@@ -290,9 +290,9 @@ export const COMPOSER_FOOTER_ICON_BUTTON_CLASS_NAME =
   "size-7 shrink-0 rounded-lg sm:size-7 [&_svg]:mx-0 [&_svg]:!opacity-100";
 
 /** Round 32px send / stop control, as the Codex ink circle.
- *  Flex-center a size-full SVG; optical Y is `-translate-y` on the glyph. */
+ *  The send glyph is a 32² SVG that fills this disc (see ComposerSendArrowIcon). */
 export const COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME =
-  "relative flex size-8 items-center justify-center overflow-visible rounded-full p-0 leading-none sm:size-8 disabled:opacity-30 [&_svg]:m-0 [&_svg]:block [&_svg]:!opacity-100";
+  "relative flex size-8 items-center justify-center overflow-visible rounded-full p-0 leading-none sm:size-8 disabled:opacity-30 [&_svg]:m-0 [&_svg]:block [&_svg]:size-full [&_svg]:!opacity-100";
 
-/** Send chevron fills the 32px disc; vertical optical offset is on the glyph. */
+/** Send chevron fills the 32px disc; path coordinates own optical Y. */
 export const COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME = "size-full";

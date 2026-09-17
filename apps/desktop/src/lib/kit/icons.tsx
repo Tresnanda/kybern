@@ -168,23 +168,25 @@ export const BackToParentIcon: LucideIcon = hugeIcon(HiUndo);
 export const WorkflowIcon: LucideIcon = hugeIcon(HcAgents);
 export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
 /**
- * Round send control. A chevron's ink sits in the lower half of its viewBox,
- * so centering the 24² box (or a CSS grid shrink-wrap of it) leaves extra
- * space above the peak. Fill the 32px disc and translate the glyph up 4px
- * from the viewBox-centered rest pose so padding above the peak matches
- * padding below the legs on the 32px circle.
+ * Round send control. The disc is 32px; this SVG uses a matching 32² viewBox
+ * so 1 user unit = 1 CSS pixel. A 24² Hugeicons/viewBox glyph shrink-wraps
+ * inside the circle (peak on the midline, large empty cap above). Draw the
+ * chevron so the gap above the peak equals the gap below the legs.
  */
 export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
+    viewBox="0 0 32 32"
+    width={32}
+    height={32}
     fill="none"
     aria-hidden
-    className={cn("block size-full origin-center overflow-visible -translate-y-[4px]", className)}
+    className={cn("pointer-events-none block size-full overflow-visible", className)}
     {...props}
   >
+    {/* Stroke 2.5: outer peak ≈ 11, outer legs ≈ 21, pad 11 = pad 11 on a 32 disc. */}
     <path
-      d="M6 15L12 9L18 15"
+      d="M9.5 20.25L16 11.75L22.5 20.25"
       stroke="currentColor"
       strokeWidth={HUGEICON_STROKE_WIDTH}
       strokeLinecap="round"
