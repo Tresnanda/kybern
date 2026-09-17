@@ -11,7 +11,7 @@ import { connectorApproval, isUserInput } from "@/lib/userInput"
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -69,7 +69,7 @@ import {
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
-import { activeRuntime, errorText, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
+import { activeRuntime, errorText, hydrateToolOutput, retainToolOutput, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
 
@@ -106,6 +106,7 @@ interface AgentActivityDetail {
   prompt: string | null
   result: string | null
   resultPending: boolean
+  resultLoading: boolean
   failed: boolean
   entries: AgentActivityEntry[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
@@ -216,6 +217,7 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     prompt: block ? runtimeActivityPrompt(block.call) : null,
     result: block ? runtimeActivityResult(block.output, block.stream) : null,
     resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
+    resultLoading: !!block?.outputOmitted,
     failed: block?.isError || task?.status === "failed",
     entries,
     tasksByToolCall,
@@ -252,6 +254,19 @@ export function Transcript({
     () => selectedActivity?.threadId === threadId ? resolveAgentActivityDetail(groups, runtimeTasks, selectedActivity) : null,
     [groups, runtimeTasks, selectedActivity, threadId],
   )
+  const activityToolCallId = selectedActivity?.threadId === threadId && selectedActivity.kind === "tool"
+    ? selectedActivity.toolCallId : null
+  useEffect(() => {
+    if (activityToolCallId === null) return
+    return retainToolOutput(threadId, activityToolCallId)
+  }, [threadId, activityToolCallId])
+  useEffect(() => {
+    if (!connected || activityToolCallId === null) return
+    const omitted = groups.some((group) =>
+      group.work.some((block) => block.kind === "tool" && block.call.id === activityToolCallId && block.outputOmitted),
+    )
+    if (omitted) void hydrateToolOutput(threadId, activityToolCallId)
+  }, [threadId, activityToolCallId, groups, connected])
   const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
     const selection: AgentActivitySelection = { ...target, threadId }
     setAgentActivityTrail((current) => current.at(-1)?.threadId === threadId ? [...current, selection] : [selection])
@@ -447,9 +462,11 @@ function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActiv
   const promptTitle = detail.kind === "process" ? "Command" : detail.kind === "monitor" ? "Request" : "Prompt"
   const resultTitle = detail.kind === "process" ? "Output" : "Result"
   const missingPrompt = detail.kind === "process" ? "The command was not exposed by this harness." : "The delegated prompt was not exposed by this harness."
-  const missingResult = detail.resultPending
-    ? detail.kind === "agent" ? "The agent is still working." : "This work is still running."
-    : detail.failed ? "No additional error details were reported." : "This harness did not expose a final result."
+  const missingResult = detail.resultLoading
+    ? "Loading the saved result."
+    : detail.resultPending
+      ? detail.kind === "agent" ? "The agent is still working." : "This work is still running."
+      : detail.failed ? "No additional error details were reported." : "This harness did not expose a final result."
 
   return (
     <div
@@ -795,7 +812,7 @@ async function openThreadReference(threadId: ThreadId) {
     runtime = activeRuntime()
     let thread = store.getState().threads[threadId]
     if (!thread) {
-      const result = await runtime.rpc().call("threads.get", { thread_id: threadId, transcript_limit: 1 })
+      const result = await runtime.rpc().call("threads.get", { thread_id: threadId, transcript_limit: 1, include_tool_output: false })
       if (store !== useStore || activeRuntime() !== runtime) return
       thread = result.thread
       store.getState().set((state) => ({ threads: { ...state.threads, [threadId]: result.thread } }))
@@ -1277,7 +1294,7 @@ function ToolRow({
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
     const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 }
+    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1346,7 +1363,19 @@ function ToolRow({
 
 /** Mounted by DisclosureRegion only while open or completing its exit. */
 function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface: ToolSurface | null; screenshots: string[] }) {
+  const threadId = useContext(ImageThreadContext)
+  const connected = useStore((state) => state.connection.state === "open")
+  useEffect(() => {
+    if (!threadId) return
+    return retainToolOutput(threadId, block.call.id, block.seq)
+  }, [threadId, block.call.id, block.seq])
+  useEffect(() => {
+    if (connected && threadId && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
+  }, [connected, threadId, block])
   const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
+  if (block.outputOmitted && !out.trim() && screenshots.length === 0) {
+    return <p className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
+  }
   return (
     <>
       {screenshots.length > 0 && (

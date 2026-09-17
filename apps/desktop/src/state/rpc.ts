@@ -1,5 +1,6 @@
 import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging"
 import { writeProviderCache } from "./providerCache"
+import { createToolOutputCache } from "./toolOutputCache"
 // Owns the daemon connection: boots the client, subscribes to every thread's
 // events, folds them into the store, and exposes typed actions for the views.
 
@@ -17,6 +18,7 @@ import {
   type ApprovalId,
   type Diff,
   type GitStatus,
+  type JsonValue,
   type PermissionMode,
   type ProjectId,
   type ProviderKind,
@@ -26,6 +28,7 @@ import {
   type SkillInfo,
   type ThreadEvent,
   type ThreadId,
+  type ThreadsGetParams,
   type ThreadsGetResult,
   type TurnId,
   type UserMessage,
@@ -61,13 +64,78 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const reusableSnapshots = new Set<ThreadId>()
   const uploads = new AbortController()
   const collaborationListeners = new Set<(event: ThreadEvent | null) => void>()
+  // Weak keys distinguish replacement snapshots of the same tool row without
+  // retaining an old block, transcript, or output in an in-flight request.
+  const toolOutputRevisions = new WeakMap<object, number>()
+  let nextToolOutputRevision = 0
+  const toolOutputs = createToolOutputCache<JsonValue>({
+    read(threadId, toolCallId, seq) {
+      const block = useStore.getState().transcripts[threadId]?.blocks.find(
+        (block) => block.kind === "tool" && block.call.id === toolCallId && (seq === undefined || block.seq === seq),
+      )
+      if (block?.kind !== "tool") return
+      let revision = toolOutputRevisions.get(block)
+      if (revision === undefined) {
+        revision = ++nextToolOutputRevision
+        toolOutputRevisions.set(block, revision)
+      }
+      return { seq: block.seq, turnId: block.turnId, omitted: !!block.outputOmitted, throughSeq: useStore.getState().transcripts[threadId]?.lastSeq, revision }
+    },
+    load: (threadId, toolCallId, identity) => rpc().call("threads.tool_output", {
+      thread_id: threadId, tool_call_id: toolCallId, start_seq: identity.seq, through_seq: identity.throughSeq,
+    }),
+    apply({ threadId, toolCallId, seq, turnId, revision }, result) {
+      if (!useStore.getState().transcripts[threadId]) return false
+      let changed = false
+      useStore.getState().updateTranscript(threadId, (state) => {
+        const index = state.blocks.findIndex((block) =>
+          block.kind === "tool" && block.call.id === toolCallId &&
+          block.seq === seq && block.turnId === turnId && block.outputOmitted && toolOutputRevisions.get(block) === revision,
+        )
+        if (index < 0) return state
+        const block = state.blocks[index]
+        if (block.kind !== "tool") return state
+        const blocks = state.blocks.slice()
+        blocks[index] = { ...block, output: result.output, isError: result.is_error, outputOmitted: false }
+        toolOutputRevisions.set(blocks[index], revision!)
+        changed = true
+        return { ...state, blocks }
+      })
+      return changed
+    },
+    omit({ threadId, toolCallId, seq, turnId, revision }) {
+      if (!useStore.getState().transcripts[threadId]) return
+      useStore.getState().updateTranscript(threadId, (state) => {
+        const index = state.blocks.findIndex((block) =>
+          block.kind === "tool" && block.call.id === toolCallId &&
+          block.seq === seq && block.turnId === turnId && !block.outputOmitted && block.output != null && toolOutputRevisions.get(block) === revision,
+        )
+        if (index < 0) return state
+        const block = state.blocks[index]
+        if (block.kind !== "tool") return state
+        const blocks = state.blocks.slice()
+        blocks[index] = { ...block, output: null, outputOmitted: true }
+        return { ...state, blocks }
+      })
+    },
+    onError(error) {
+      toast.error("Unable to load tool result", { description: errorText(error) })
+    },
+  })
+  const hydrateToolOutput = toolOutputs.hydrate
+  const retainToolOutput = toolOutputs.retain
 
   function rpc(): KybernClient {
     if (!client) throw new ConnectionClosedError("Not connected")
     return client
   }
 
+  function transcriptGet(threadId: ThreadId, extra: Omit<ThreadsGetParams, "thread_id" | "include_tool_output"> = {}) {
+    return rpc().call("threads.get", { thread_id: threadId, include_tool_output: false, ...extra })
+  }
+
   function connect(ep: EndpointInfo): void {
+    toolOutputs.invalidatePending()
     const store = useStore.getState()
     store.set({ connection: { state: "connecting" } })
     httpBase = ep.http_base
@@ -79,6 +147,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     client.onStatus((status, detail) => {
       const s = useStore.getState()
       if (status !== "open") {
+        toolOutputs.invalidatePending()
         canReuseSnapshots = false
         hydrationGeneration++
       }
@@ -222,7 +291,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         const oldest = previous?.nextBeforeSeq ?? previous?.blocks[0]?.seq ?? 0
         let res: ThreadsGetResult | undefined
         async function getSnapshot(): Promise<ThreadsGetResult> {
-          const snapshot = await rpc().call("threads.get", { thread_id: id, transcript_limit: Math.min(requested, 500) })
+          const snapshot = await transcriptGet(id, { transcript_limit: Math.min(requested, 500) })
           if (requested <= 500 || snapshot.next_before_seq == null) return snapshot
           // Preserve the already-loaded reading window without falling back to an
           // unlimited response. Every page belongs to the first snapshot's head;
@@ -232,8 +301,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           const entries = new Map(snapshot.transcript.map(entry => [key(entry), entry]))
           while (snapshot.next_before_seq != null && snapshot.next_before_seq > oldest && isCurrentHydration(generation) && isThreadVisible(useStore.getState(), id)) {
             const before: number = snapshot.next_before_seq
-            const page: ThreadsGetResult = await rpc().call("threads.get", {
-              thread_id: id, transcript_limit: Math.min(Math.max(remaining, 60), 500),
+            const page: ThreadsGetResult = await transcriptGet(id, {
+              transcript_limit: Math.min(Math.max(remaining, 60), 500),
               before_seq: before, through_seq: snapshot.thread.last_seq,
             })
             if (page.thread.last_seq !== snapshot.thread.last_seq || (page.next_before_seq != null && page.next_before_seq >= before))
@@ -318,8 +387,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const record = { promise: Promise.resolve(), buffer: createSnapshotReplay() }
     historyLoads.set(id, record)
     useStore.getState().updateTranscript(id, (state) => ({ ...state, loadingEarlier: true }))
-    record.promise = rpc().call("threads.get", {
-      thread_id: id, transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
+    record.promise = transcriptGet(id, {
+      transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
     }).then((page) => {
       if (!isCurrentHydration(generation) || historyLoads.get(id) !== record) return
       const replay = record.buffer.after(base.lastSeq)
@@ -661,7 +730,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const thread = s.threads[threadId]
     if (!thread) throw new Error("Thread not found")
     const cached = s.transcripts[threadId]
-    const t = cached?.loaded ? cached : seedFromGet(await rpc().call("threads.get", { thread_id: threadId }))
+    const t = cached?.loaded ? cached : seedFromGet(await transcriptGet(threadId))
     const lines: string[] = []
     for (const b of t?.blocks ?? []) {
       if (b.kind === "user") {
@@ -858,6 +927,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     snapshots.clear()
     historyLoads.clear()
     reusableSnapshots.clear()
+    toolOutputs.dispose()
     useStore.getState().releaseCachedData()
     hydrationGeneration++
     uploads.abort()
@@ -875,6 +945,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     rpc,
     loadThread,
     loadEarlier,
+    hydrateToolOutput,
+    retainToolOutput,
     refreshProviders,
     loadDiff,
     loadFileDiff,
@@ -921,6 +993,10 @@ export const rpc: EnvironmentRuntime["rpc"] = (...args) =>
 export const loadEarlier: EnvironmentRuntime["loadEarlier"] = (...args) => activeRuntime().loadEarlier(...args)
 export const loadThread: EnvironmentRuntime["loadThread"] = (...args) =>
   activeRuntime().loadThread(...args)
+export const hydrateToolOutput: EnvironmentRuntime["hydrateToolOutput"] = (...args) =>
+  currentRuntime?.hydrateToolOutput(...args) ?? Promise.resolve()
+export const retainToolOutput: EnvironmentRuntime["retainToolOutput"] = (...args) =>
+  currentRuntime?.retainToolOutput(...args) ?? (() => {})
 export const refreshProviders: EnvironmentRuntime["refreshProviders"] = (
   ...args
 ) => activeRuntime().refreshProviders(...args)

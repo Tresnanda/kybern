@@ -66,8 +66,28 @@ struct Outbox {
     closed: tokio_util::sync::CancellationToken,
 }
 
+// Internal serialization-only envelopes. Public wire/schema types stay unchanged.
+// These typed notifications always have object params; null-param notifications
+// keep using RpcNotification so its skip-null behavior is preserved.
+#[derive(serde::Serialize)]
+struct TypedNotification<P> {
+    jsonrpc: JsonRpcVersion,
+    method: &'static str,
+    params: P,
+}
+
+#[derive(serde::Serialize)]
+struct BorrowedEventNotification<'a> {
+    subscription_id: SubscriptionId,
+    event: &'a ThreadEvent,
+}
+
 impl Outbox {
-    async fn send(&self, frame: ServerFrame) -> Result<(), ()> {
+    async fn notify(&self, method: &'static str, params: impl serde::Serialize) -> Result<(), ()> {
+        self.send(TypedNotification { jsonrpc: JsonRpcVersion, method, params }).await
+    }
+
+    async fn send(&self, frame: impl serde::Serialize) -> Result<(), ()> {
         struct Count(usize);
         impl std::io::Write for Count {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -163,13 +183,7 @@ impl ConnectionCtx {
             return;
         }
         let ready = kybern_protocol::EventsReadyNotification { subscription_id, head_seq };
-        let _ = self
-            .out
-            .send(ServerFrame::Notification(RpcNotification::new(
-                kybern_protocol::EVENTS_READY_NOTIFICATION,
-                serde_json::to_value(ready).unwrap(),
-            )))
-            .await;
+        let _ = self.out.notify(kybern_protocol::EVENTS_READY_NOTIFICATION, ready).await;
     }
 
     /// Forward a terminal's output to this connection until it exits or is unsubscribed.
@@ -178,27 +192,19 @@ impl ConnectionCtx {
         let id = terminal.info().id;
         self.unsubscribe_terminal(id).await;
         let (mut rx, data) = terminal.subscribe_output(replay);
+        let replay_data = (replay && !data.is_empty()).then(|| base64::engine::general_purpose::STANDARD.encode(&data));
+        // The terminal's own ring stays intact. Release only this owned replay copy
+        // before a slow socket can make the serialized notification wait.
+        drop(data);
         let out = self.out.clone();
         if replay {
-            if !data.is_empty() {
-                let params = serde_json::to_value(kybern_protocol::methods::TerminalOutputNotification {
-                    terminal_id: id,
-                    data: base64::engine::general_purpose::STANDARD.encode(&data),
-                })
-                .unwrap_or(Value::Null);
-                let _ = out
-                    .send(ServerFrame::Notification(RpcNotification::new(kybern_protocol::methods::TERMINAL_OUTPUT_NOTIFICATION, params)))
-                    .await;
+            if let Some(data) = replay_data {
+                let params = kybern_protocol::methods::TerminalOutputNotification { terminal_id: id, data };
+                let _ = out.notify(kybern_protocol::methods::TERMINAL_OUTPUT_NOTIFICATION, params).await;
             }
             if !terminal.info().alive {
-                let params = serde_json::to_value(kybern_protocol::methods::TerminalExitedNotification {
-                    terminal_id: id,
-                    exit_code: terminal.info().exit_code,
-                })
-                .unwrap_or(Value::Null);
-                let _ = out
-                    .send(ServerFrame::Notification(RpcNotification::new(kybern_protocol::methods::TERMINAL_EXITED_NOTIFICATION, params)))
-                    .await;
+                let params = kybern_protocol::methods::TerminalExitedNotification { terminal_id: id, exit_code: terminal.info().exit_code };
+                let _ = out.notify(kybern_protocol::methods::TERMINAL_EXITED_NOTIFICATION, params).await;
                 return;
             }
         }
@@ -207,34 +213,17 @@ impl ConnectionCtx {
                 match rx.recv().await {
                     Ok(ev) => match &*ev {
                         crate::terminal::TerminalEvent::Output(bytes) => {
-                            let params = serde_json::to_value(kybern_protocol::methods::TerminalOutputNotification {
+                            let params = kybern_protocol::methods::TerminalOutputNotification {
                                 terminal_id: id,
                                 data: base64::engine::general_purpose::STANDARD.encode(bytes),
-                            })
-                            .unwrap_or(Value::Null);
-                            if out
-                                .send(ServerFrame::Notification(RpcNotification::new(
-                                    kybern_protocol::methods::TERMINAL_OUTPUT_NOTIFICATION,
-                                    params,
-                                )))
-                                .await
-                                .is_err()
-                            {
+                            };
+                            if out.notify(kybern_protocol::methods::TERMINAL_OUTPUT_NOTIFICATION, params).await.is_err() {
                                 break;
                             }
                         }
                         crate::terminal::TerminalEvent::Exited(code) => {
-                            let params = serde_json::to_value(kybern_protocol::methods::TerminalExitedNotification {
-                                terminal_id: id,
-                                exit_code: *code,
-                            })
-                            .unwrap_or(Value::Null);
-                            let _ = out
-                                .send(ServerFrame::Notification(RpcNotification::new(
-                                    kybern_protocol::methods::TERMINAL_EXITED_NOTIFICATION,
-                                    params,
-                                )))
-                                .await;
+                            let params = kybern_protocol::methods::TerminalExitedNotification { terminal_id: id, exit_code: *code };
+                            let _ = out.notify(kybern_protocol::methods::TERMINAL_EXITED_NOTIFICATION, params).await;
                             break;
                         }
                     },
@@ -280,15 +269,15 @@ impl ConnectionCtx {
                     return Ok(());
                 }
                 cursor = ev.seq;
-                self.send_event(subscription_id, ev).await;
+                self.send_event(subscription_id, &ev).await;
             }
         }
         Ok(())
     }
 
-    async fn send_event(&self, subscription_id: SubscriptionId, event: ThreadEvent) {
-        let params = serde_json::to_value(EventNotification { subscription_id, event }).unwrap_or(Value::Null);
-        let _ = self.out.send(ServerFrame::Notification(RpcNotification::new(EVENT_NOTIFICATION, params))).await;
+    async fn send_event(&self, subscription_id: SubscriptionId, event: &ThreadEvent) {
+        let params = BorrowedEventNotification { subscription_id, event };
+        let _ = self.out.notify(EVENT_NOTIFICATION, params).await;
     }
 
     async fn deliver_live(&self, ev: &ThreadEvent) {
@@ -298,7 +287,7 @@ impl ConnectionCtx {
             subs.iter().filter(|(_, s)| s.thread_id.is_none_or(|t| t == ev.thread_id) && ev.seq > s.floor_seq).map(|(id, _)| *id).collect()
         };
         for id in targets {
-            self.send_event(id, ev.clone()).await;
+            self.send_event(id, ev).await;
         }
     }
 }
@@ -476,5 +465,115 @@ mod memory_tests {
         };
         out.closed.cancel();
         assert!(waiting.await.unwrap().is_err());
+    }
+}
+
+#[cfg(test)]
+mod typed_notification_memory_tests {
+    use super::*;
+
+    fn event(output: Value) -> ThreadEvent {
+        ThreadEvent {
+            seq: 17,
+            thread_id: ThreadId::nil(),
+            turn_id: Some(TurnId::nil()),
+            at: "2026-09-17T00:00:00Z".parse().unwrap(),
+            payload: EventPayload::ToolCallCompleted { tool_call_id: "a:b\n\0é".into(), output, is_error: false },
+        }
+    }
+
+    fn assert_typed_wire<T: serde::Serialize>(method: &'static str, params: T) {
+        let old = ServerFrame::Notification(RpcNotification::new(method, serde_json::to_value(&params).unwrap()));
+        let new = TypedNotification { jsonrpc: JsonRpcVersion, method, params };
+        assert_eq!(serde_json::to_string(&new).unwrap(), serde_json::to_string(&old).unwrap());
+    }
+
+    #[test]
+    fn borrowed_event_matches_owned_notification_wire_bytes() {
+        for output in
+            [Value::Null, serde_json::json!([null, true, -3, 0.125, "😀\n\"\\\0"]), serde_json::json!({ "long": "x".repeat(1024 * 1024) })]
+        {
+            let event = event(output);
+            for turn_id in [None, Some(TurnId::nil())] {
+                let event = ThreadEvent { turn_id, ..event.clone() };
+                let params = BorrowedEventNotification { subscription_id: SubscriptionId::nil(), event: &event };
+                let old = ServerFrame::Notification(RpcNotification::new(
+                    EVENT_NOTIFICATION,
+                    serde_json::to_value(EventNotification { subscription_id: SubscriptionId::nil(), event: event.clone() }).unwrap(),
+                ));
+                let new = TypedNotification { jsonrpc: JsonRpcVersion, method: EVENT_NOTIFICATION, params };
+                let wire = serde_json::to_string(&new).unwrap();
+                assert_eq!(wire, serde_json::to_string(&old).unwrap());
+                assert!(matches!(serde_json::from_str::<ServerFrame>(&wire).unwrap(), ServerFrame::Notification(_)));
+            }
+        }
+    }
+
+    #[test]
+    fn typed_ready_and_terminal_notifications_preserve_wire_fields() {
+        use kybern_protocol::methods::*;
+        assert_typed_wire(EVENTS_READY_NOTIFICATION, EventsReadyNotification { subscription_id: SubscriptionId::nil(), head_seq: 123 });
+        assert_typed_wire(
+            TERMINAL_OUTPUT_NOTIFICATION,
+            TerminalOutputNotification { terminal_id: TerminalId::nil(), data: "AAECAw==".into() },
+        );
+        assert_typed_wire(TERMINAL_EXITED_NOTIFICATION, TerminalExitedNotification { terminal_id: TerminalId::nil(), exit_code: None });
+        assert_typed_wire(TERMINAL_EXITED_NOTIFICATION, TerminalExitedNotification { terminal_id: TerminalId::nil(), exit_code: Some(2) });
+    }
+
+    #[tokio::test]
+    async fn queued_wire_owns_data_after_borrowed_source_drops() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let out = Outbox {
+            sender,
+            budget: Arc::new(tokio::sync::Semaphore::new(OUTBOX_BYTES)),
+            closed: tokio_util::sync::CancellationToken::new(),
+        };
+        {
+            let event = event(serde_json::json!({ "preserved": "😀\n" }));
+            out.notify(EVENT_NOTIFICATION, BorrowedEventNotification { subscription_id: SubscriptionId::nil(), event: &event })
+                .await
+                .unwrap();
+        }
+        let queued = receiver.recv().await.unwrap();
+        let wire: Value = serde_json::from_str(&queued.text).unwrap();
+        assert_eq!(wire["params"]["event"]["output"]["preserved"], "😀\n");
+        assert_eq!(out.budget.available_permits(), OUTBOX_BYTES - queued.text.len());
+        drop(queued);
+        assert_eq!(out.budget.available_permits(), OUTBOX_BYTES);
+    }
+
+    #[tokio::test]
+    async fn typed_large_frames_obey_existing_budget_and_cancellation() {
+        use kybern_protocol::methods::*;
+        let (sender, mut receiver) = mpsc::channel(1);
+        let out = Outbox {
+            sender,
+            budget: Arc::new(tokio::sync::Semaphore::new(OUTBOX_BYTES)),
+            closed: tokio_util::sync::CancellationToken::new(),
+        };
+        out.notify(
+            TERMINAL_OUTPUT_NOTIFICATION,
+            TerminalOutputNotification { terminal_id: TerminalId::nil(), data: "x".repeat(OUTBOX_BYTES + 1) },
+        )
+        .await
+        .unwrap();
+        let queued = receiver.recv().await.unwrap();
+        assert!(queued.text.len() > OUTBOX_BYTES);
+        assert_eq!(out.budget.available_permits(), 0);
+        let waiting = {
+            let out = out.clone();
+            tokio::spawn(async move {
+                out.notify(TERMINAL_OUTPUT_NOTIFICATION, TerminalOutputNotification { terminal_id: TerminalId::nil(), data: "next".into() })
+                    .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        out.closed.cancel();
+        assert!(waiting.await.unwrap().is_err());
+        drop(queued);
+        assert_eq!(out.budget.available_permits(), OUTBOX_BYTES);
+        assert!(receiver.try_recv().is_err());
     }
 }

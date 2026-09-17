@@ -324,6 +324,11 @@ pub struct ThreadsGetParams {
     /// Freeze the projection at this acknowledged event sequence while paging.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub through_seq: Option<crate::EventSeq>,
+    /// When `Some(false)`, large settled tool results are omitted from the page
+    /// and `output_omitted` is set so clients can fetch them on demand. Omit or
+    /// `true` keeps compatibility with CLI and older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_tool_output: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
@@ -346,6 +351,24 @@ pub struct ThreadsGetResult {
     pub runtime_tasks: Vec<RuntimeTask>,
 }
 method!(ThreadsGet, "threads.get", Some(Scope::OrchestrationRead), ThreadsGetParams, ThreadsGetResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsToolOutputParams {
+    pub thread_id: ThreadId,
+    pub tool_call_id: String,
+    /// Exact tool-start row, required to disambiguate reused provider IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_seq: Option<crate::EventSeq>,
+    /// Never read a completion newer than this snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through_seq: Option<crate::EventSeq>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsToolOutputResult {
+    pub output: serde_json::Value,
+    pub is_error: bool,
+}
+method!(ThreadsToolOutput, "threads.tool_output", Some(Scope::OrchestrationRead), ThreadsToolOutputParams, ThreadsToolOutputResult);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsUpdateParams {
@@ -1599,6 +1622,7 @@ registry!(
     ThreadsRead,
     ThreadsCreate,
     ThreadsGet,
+    ThreadsToolOutput,
     ThreadsUpdate,
     ThreadsArchive,
     ThreadsSend,

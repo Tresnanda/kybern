@@ -44,6 +44,8 @@ expression: scopes
   - "orchestration:operate"
 - - threads.get
   - "orchestration:read"
+- - threads.tool_output
+  - "orchestration:read"
 - - threads.update
   - "orchestration:operate"
 - - threads.archive

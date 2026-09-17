@@ -235,12 +235,21 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let projection = state
                 .thread_projections
                 .get_or_build((id, through_seq), move || {
-                    let events = store.events_for_thread_through(id, through_seq)?;
-                    Ok(crate::thread_projection::ThreadProjection::from_events(&events))
+                    Ok(crate::thread_projection::ThreadProjection {
+                        transcript: store.project_transcript_through(id, through_seq)?,
+                        runtime_tasks: store.runtime_tasks_for_thread_through(id, through_seq)?,
+                        provider_usage: store.provider_usage_through(id, through_seq)?,
+                        provider_commands: store.provider_commands_through(id, through_seq)?,
+                        pending_questions: store.pending_questions_through(id, through_seq)?,
+                    })
                 })
                 .await
                 .map_err(internal)?;
-            let (transcript, next_before_seq) = kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            let (mut transcript, next_before_seq) =
+                kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            if p.include_tool_output.unwrap_or(true) {
+                state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
+            }
             let pending_approvals = state.store.approvals_pending(Some(id)).map_err(internal)?;
             ok(ThreadsGetResult {
                 notes: state.store.thread_notes(thread.id).map_err(internal)?,
@@ -253,6 +262,20 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 provider_commands: projection.provider_commands.clone(),
                 pending_questions: projection.pending_questions.clone(),
             })
+        }
+        ThreadsToolOutput::NAME => {
+            let p: ThreadsToolOutputParams = parse(params)?;
+            if p.start_seq.is_some_and(|seq| seq < 0) || p.through_seq.is_some_and(|seq| seq < 0) {
+                return Err(RpcError::invalid_params("use nonnegative tool and snapshot sequences"));
+            }
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let through_seq = p.through_seq.unwrap_or(thread.last_seq).min(thread.last_seq);
+            let (output, is_error) = state
+                .store
+                .tool_call_output_through(p.thread_id, &p.tool_call_id, p.start_seq, through_seq)
+                .map_err(internal)?
+                .ok_or_else(|| RpcError::not_found("tool output"))?;
+            ok(ThreadsToolOutputResult { output, is_error })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
@@ -579,7 +602,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
-            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let _thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             let limit = p.limit.clamp(1, 100) as usize;
             let mut artifacts = state.store.artifact_calls(p.thread_id, p.before_seq, limit as u32 + 1).map_err(internal)?;
             let more = artifacts.len() > limit;

@@ -4,6 +4,7 @@ import { mergeConfig } from "vite"
 import base from "../vite.config"
 export default mergeConfig(base, {
   define: {
+    __TOOL_LEASE_ENDPOINT__: process.env.KYBERN_TOOL_LEASE_ENDPOINT ?? "null",
     __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
     __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]",
     __WORK_REPLAY__: process.env.KYBERN_WORK_REPLAY ? readFileSync(process.env.KYBERN_WORK_REPLAY, "utf8") : "[]",

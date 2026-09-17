@@ -7,10 +7,27 @@ import { spawn, spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["settings", "history-retention", "terminal-memory", "tool-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 let daemon
 try {
+  if (fixture === "tool-leases") {
+    const repo = path.resolve(desktop, "../..")
+    const binary = path.join(process.env.CARGO_TARGET_DIR ?? path.join(repo, "target"), "release/kybernd")
+    const dataDir = path.join(scratch, "daemon")
+    const initialize = spawnSync(binary, ["--data-dir", dataDir, "--print-token"], { stdio: "ignore" })
+    if (initialize.error || initialize.status !== 0) throw new Error("Build the release daemon before the tool-leases fixture")
+    const seed = spawnSync("python3", [path.join(desktop, "scripts/seed-tool-leases.py"), dataDir], { encoding: "utf8" })
+    if (seed.error || seed.status !== 0) throw new Error("Could not seed scratch lease data")
+    daemon = spawn(binary, ["--data-dir", dataDir, "--port", "0"], { stdio: "ignore" })
+    const until = Date.now() + 10000
+    let port
+    while (!port && Date.now() < until) {
+      try { port = readFileSync(path.join(dataDir, "daemon.port"), "utf8").trim() } catch { await new Promise(resolve => setTimeout(resolve, 50)) }
+    }
+    if (!port) throw new Error("Scratch lease daemon did not start")
+    process.env.KYBERN_TOOL_LEASE_ENDPOINT = JSON.stringify({ url: `ws://127.0.0.1:${port}/ws`, http_base: `http://127.0.0.1:${port}`, token: readFileSync(path.join(dataDir, "daemon.token"), "utf8").trim(), environmentId: seed.stdout.trim() })
+  }
   if (fixture === "integrations") {
     const repo = path.resolve(desktop, "../..")
     const dataDir = path.join(scratch, "daemon")

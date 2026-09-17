@@ -48,6 +48,103 @@ test("background payloads are discarded while approval controls and sequence rem
   assert.deepEqual(state.pendingApprovals, [])
 })
 
+test("hydrated history keeps large tool results out of retained state until fetched", async () => {
+  const { retainedSize } = await import("./src/lib/retainedSize.ts")
+  const large = "x".repeat(200_000)
+  const at = "2026-09-07T00:00:00Z"
+  const call = { id: "c", name: "bash", input: {} }
+  const full = seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call, output: large, is_error: false, complete: true, at }],
+    pending_approvals: [],
+  })
+  const omitted = seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call, output_omitted: true, is_error: false, complete: true, at }],
+    pending_approvals: [],
+  })
+  assert.equal(omitted.blocks[0].outputOmitted, true)
+  assert.equal(omitted.blocks[0].output, null)
+  assert.ok(retainedSize(full.blocks) > retainedSize(omitted.blocks) * 20)
+})
+
+test("hydrateToolOutput is a no-op without a connected runtime", async () => {
+  const { hydrateToolOutput } = await import("./src/state/rpc.ts")
+  await hydrateToolOutput("t", "c")
+})
+test("hydrateToolOutput skips inlined tool results", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("inlined-tool-output")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  client.reply = async () => { throw new Error("should not fetch inlined tool output") }
+  store.getState().updateTranscript("t", () => seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call: { id: "c", name: "Task", input: { prompt: "Inspect" } }, output: "The agent finished reviewing.", is_error: false, complete: true, at: "2026-09-07T00:00:00Z" }],
+    pending_approvals: [],
+  }))
+  try {
+    await runtime.hydrateToolOutput("t", "c")
+    assert.equal(store.getState().transcripts.t.blocks[0].output, "The agent finished reviewing.")
+  } finally { runtime.disconnect() }
+})
+test("expanding an omitted tool result fetches only that payload", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("tool-output")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  let fetched
+  client.reply = async (method, params) => {
+    if (method === "threads.tool_output") {
+      fetched = params
+      return { output: "full result", is_error: false }
+    }
+    return { checkpoints: [] }
+  }
+  store.getState().updateTranscript("t", () => seedFromGet({
+    thread: { id: "t", last_seq: 1 },
+    transcript: [{ role: "tool_call", turn_id: "turn", seq: 1, origin: { kind: "root" }, call: { id: "c", name: "bash", input: {} }, output_omitted: true, is_error: false, complete: true, at: "2026-09-07T00:00:00Z" }],
+    pending_approvals: [],
+  }))
+  try {
+    await runtime.hydrateToolOutput("t", "c")
+    assert.deepEqual(fetched, { thread_id: "t", tool_call_id: "c", start_seq: 1, through_seq: 1 })
+    const block = store.getState().transcripts.t.blocks[0]
+    assert.equal(block.output, "full result")
+    assert.equal(block.outputOmitted, false)
+  } finally { runtime.disconnect() }
+})
+test("hydrated tool results stay bounded: the least-recently-viewed one is re-omitted", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("tool-output-lru")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  client.reply = async (method) => (method === "threads.tool_output" ? { output: "full", is_error: false } : { checkpoints: [] })
+  const total = 14 // above the retained cap of 12
+  store.getState().updateTranscript("t", () => seedFromGet({
+    thread: { id: "t", last_seq: total },
+    transcript: Array.from({ length: total }, (_, i) => ({
+      role: "tool_call", turn_id: "turn", seq: i + 1, origin: { kind: "root" },
+      call: { id: `c${i}`, name: "bash", input: {} }, output_omitted: true, is_error: false, complete: true, at: "2026-09-07T00:00:00Z",
+    })),
+    pending_approvals: [],
+  }))
+  try {
+    for (let i = 0; i < total; i++) await runtime.hydrateToolOutput("t", `c${i}`)
+    const blocks = store.getState().transcripts.t.blocks
+    const hydrated = blocks.filter((b) => b.kind === "tool" && !b.outputOmitted && b.output != null)
+    assert.equal(hydrated.length, 12, "retained hydrated outputs are capped")
+    // The two oldest (c0, c1) were dropped back to omitted stubs; the newest stays.
+    assert.equal(blocks[0].outputOmitted, true)
+    assert.equal(blocks[0].output, null)
+    assert.equal(blocks[1].outputOmitted, true)
+    assert.equal(blocks[total - 1].outputOmitted, false)
+    assert.equal(blocks[total - 1].output, "full")
+  } finally { runtime.disconnect() }
+})
 test("inactive cache eviction preserves visible split panes and pending user data", () => {
   const store = createEnvironmentStore("retention")
   const a = history("a".repeat(4000)), b = history("b".repeat(4000)), c = history("c".repeat(4000))
@@ -238,6 +335,7 @@ test("refresh of a large loaded history stays paged and replays concurrent outpu
     if (method !== "threads.get") return { checkpoints: [] }
     requests.push(params)
     assert.ok(params.transcript_limit > 0 && params.transcript_limit <= 500, "every refresh request must be bounded")
+    assert.equal(params.include_tool_output, false)
     if (requests.length === 2) {
       assert.equal(params.through_seq, 2000)
       client.event(event(2001, { kind: "assistant_text_delta", message_id: "m1999", delta: " live" }))
@@ -340,4 +438,209 @@ test("following-history cutoffs never split interleaved turns around pinned work
   for (const block of trimmed.blocks) {
     assert.equal(trimmed.blocks.filter(row => row.turnId === block.turnId).length, blocks.filter(row => row.turnId === block.turnId).length)
   }
+})
+
+// Uses this file's existing real store/runtime imports and mocked transport.
+async function toolOutputRuntimeFixture(name, count = 1) {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore(name)
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  let calls = 0
+  client.reply = async (method, params) => {
+    if (method === "threads.tool_output") {
+      calls++
+      return { output: `full:${params.tool_call_id}`, is_error: false }
+    }
+    return { checkpoints: [] }
+  }
+  store.getState().updateTranscript("t", () => seedFromGet({
+    thread: { id: "t", last_seq: count },
+    transcript: Array.from({ length: count }, (_, i) => ({
+      role: "tool_call", turn_id: "turn", seq: i + 1, origin: { kind: "root" },
+      call: { id: `c${i}`, name: "bash", input: {} }, output_omitted: true,
+      is_error: false, complete: true, at: "2026-09-07T00:00:00Z",
+    })),
+    pending_approvals: [],
+  }))
+  return { store, runtime, client, get calls() { return calls } }
+}
+
+test("mounted output leases prevent a 13-result runtime refetch cycle", async () => {
+  const f = await toolOutputRuntimeFixture("leased-tool-outputs", 13)
+  const releases = []
+  try {
+    for (let i = 0; i < 13; i++) {
+      releases.push(f.runtime.retainToolOutput("t", `c${i}`))
+      await f.runtime.hydrateToolOutput("t", `c${i}`)
+    }
+    assert.equal(f.calls, 13)
+    assert.ok(f.store.getState().transcripts.t.blocks.every(block => !block.outputOmitted))
+    for (let i = 0; i < 13; i++) await f.runtime.hydrateToolOutput("t", `c${i}`)
+    assert.equal(f.calls, 13)
+    for (const release of releases) release()
+    assert.equal(f.store.getState().transcripts.t.blocks.filter(block => !block.outputOmitted).length, 12)
+  } finally {
+    for (const release of releases) release()
+    f.runtime.disconnect()
+  }
+})
+
+test("shared runtime result leases survive one viewer closing", async () => {
+  const f = await toolOutputRuntimeFixture("shared-tool-output", 27)
+  const first = f.runtime.retainToolOutput("t", "c0")
+  const second = f.runtime.retainToolOutput("t", "c0")
+  try {
+    await f.runtime.hydrateToolOutput("t", "c0")
+    first(); first()
+    for (let i = 1; i < 27; i++) await f.runtime.hydrateToolOutput("t", `c${i}`)
+    assert.equal(f.store.getState().transcripts.t.blocks[0].outputOmitted, false)
+    second(); second()
+    assert.equal(f.store.getState().transcripts.t.blocks.filter(block => !block.outputOmitted).length, 12)
+  } finally { first(); second(); f.runtime.disconnect() }
+})
+
+test("runtime reconnect ignores the old hydration response and permits a fresh one", async () => {
+  const f = await toolOutputRuntimeFixture("tool-output-reconnect")
+  let completeOld, completeNew, calls = 0
+  f.client.reply = async (method) => {
+    if (method !== "threads.tool_output") return { checkpoints: [] }
+    calls++
+    return new Promise(resolve => { if (calls === 1) completeOld = resolve; else completeNew = resolve })
+  }
+  try {
+    const old = f.runtime.hydrateToolOutput("t", "c0")
+    await Promise.resolve()
+    f.client.status = "reconnecting"
+    f.client.statusCallback("reconnecting")
+    f.client.status = "open"
+    f.client.statusCallback("open")
+    const fresh = f.runtime.hydrateToolOutput("t", "c0")
+    await Promise.resolve()
+    completeOld({ output: "stale", is_error: false })
+    await old
+    assert.equal(f.store.getState().transcripts.t.blocks[0].outputOmitted, true)
+    assert.strictEqual(f.runtime.hydrateToolOutput("t", "c0"), fresh)
+    completeNew({ output: "fresh", is_error: false })
+    await fresh
+    assert.equal(f.store.getState().transcripts.t.blocks[0].output, "fresh")
+    assert.equal(calls, 2)
+  } finally { f.runtime.disconnect() }
+})
+
+test("runtime disconnect cannot be undone by a late tool result", async () => {
+  const f = await toolOutputRuntimeFixture("late-tool-output")
+  let complete
+  f.client.reply = async (method) => method === "threads.tool_output"
+    ? new Promise(resolve => { complete = resolve }) : { checkpoints: [] }
+  try {
+    const request = f.runtime.hydrateToolOutput("t", "c0")
+    await Promise.resolve()
+    f.runtime.disconnect()
+    const disconnected = f.store.getState().transcripts.t
+    complete({ output: "late", is_error: false })
+    await request
+    assert.strictEqual(f.store.getState().transcripts.t, disconnected)
+    assert.equal(f.store.getState().transcripts.t.blocks.length, 0)
+  } finally { f.runtime.disconnect() }
+})
+
+test("hydration changes only the target block and a warm revisit allocates no new block array", async () => {
+  const f = await toolOutputRuntimeFixture("tool-output-identities", 3)
+  try {
+    const before = f.store.getState().transcripts.t.blocks
+    await f.runtime.hydrateToolOutput("t", "c1")
+    const after = f.store.getState().transcripts.t.blocks
+    assert.notStrictEqual(after, before)
+    assert.strictEqual(after[0], before[0])
+    assert.strictEqual(after[2], before[2])
+    assert.notStrictEqual(after[1], before[1])
+    await f.runtime.hydrateToolOutput("t", "c1")
+    assert.strictEqual(f.store.getState().transcripts.t.blocks, after)
+  } finally { f.runtime.disconnect() }
+})
+
+test("a replacement tool identity rejects the old result without copying the replacement blocks", async () => {
+  const f = await toolOutputRuntimeFixture("replaced-tool-output")
+  let complete
+  f.client.reply = async (method) => method === "threads.tool_output"
+    ? new Promise(resolve => { complete = resolve }) : { checkpoints: [] }
+  try {
+    const request = f.runtime.hydrateToolOutput("t", "c0")
+    await Promise.resolve()
+    f.store.getState().updateTranscript("t", state => ({
+      ...state,
+      blocks: state.blocks.map(block => ({ ...block, seq: 100, turnId: "replacement-turn" })),
+    }))
+    const replaced = f.store.getState().transcripts.t.blocks
+    complete({ output: "obsolete", is_error: false })
+    await request
+    assert.strictEqual(f.store.getState().transcripts.t.blocks, replaced)
+    assert.equal(replaced[0].outputOmitted, true)
+  } finally { f.runtime.disconnect() }
+})
+
+
+test("live completion wins over an in-flight saved result", async () => {
+  const f = await toolOutputRuntimeFixture("live-beats-hydration")
+  let complete
+  f.client.reply = async () => new Promise(resolve => { complete = resolve })
+  try {
+    const pending = f.runtime.hydrateToolOutput("t", "c0")
+    await Promise.resolve()
+    f.store.getState().updateTranscript("t", state => applyEvent(state, event(2, { kind: "tool_call_completed", tool_call_id: "c0", output: "authoritative é😀", is_error: false })))
+    complete({ output: "stale", is_error: true }); await pending
+    const block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.output, "authoritative é😀")
+    assert.equal(block.outputOmitted, false)
+  } finally { f.runtime.disconnect() }
+})
+
+test("a row replacement can hydrate while its obsolete request remains pending", async () => {
+  const f = await toolOutputRuntimeFixture("new-row-pending")
+  const completions = [], requests = []
+  f.client.reply = async (_method, params) => { requests.push(params); return new Promise(resolve => completions.push(resolve)) }
+  try {
+    const old = f.runtime.hydrateToolOutput("t", "c0"); await Promise.resolve()
+    f.store.getState().updateTranscript("t", state => ({ ...state, lastSeq: 100, blocks: state.blocks.map(block => ({ ...block, seq: 99, turnId: "new" })) }))
+    const fresh = f.runtime.hydrateToolOutput("t", "c0"); await Promise.resolve()
+    assert.equal(requests.length, 2)
+    assert.equal(requests[1].start_seq, 99)
+    assert.equal(requests[1].through_seq, 100)
+    completions[0]({ output: "old", is_error: false }); await old
+    completions[1]({ output: "new", is_error: false }); await fresh
+    assert.equal(f.store.getState().transcripts.t.blocks[0].output, "new")
+  } finally { f.runtime.disconnect() }
+})
+
+test("activity and result panes share leases for the same exact row", async () => {
+  const f = await toolOutputRuntimeFixture("mixed-lease-keys", 26)
+  const releaseActivity = f.runtime.retainToolOutput("t", "c0")
+  const releaseResult = f.runtime.retainToolOutput("t", "c0", 1)
+  try {
+    await f.runtime.hydrateToolOutput("t", "c0", 1)
+    releaseResult()
+    for (let i = 1; i < 26; i++) await f.runtime.hydrateToolOutput("t", `c${i}`)
+    assert.equal(f.store.getState().transcripts.t.blocks[0].outputOmitted, false)
+    releaseActivity()
+    assert.equal(f.store.getState().transcripts.t.blocks.filter(b => !b.outputOmitted).length, 12)
+  } finally { releaseResult(); releaseActivity(); f.runtime.disconnect() }
+})
+
+
+test("a new snapshot of the same tool rejects an older hydration", async () => {
+  const f = await toolOutputRuntimeFixture("same-row-new-snapshot")
+  const completions = []
+  f.client.reply = async () => new Promise(resolve => completions.push(resolve))
+  try {
+    const old = f.runtime.hydrateToolOutput("t", "c0"); await Promise.resolve()
+    f.store.getState().updateTranscript("t", state => ({ ...state, lastSeq: 100, blocks: state.blocks.map(block => ({ ...block })) }))
+    const fresh = f.runtime.hydrateToolOutput("t", "c0"); await Promise.resolve()
+    assert.equal(completions.length, 2)
+    completions[0]({ output: "old", is_error: false }); await old
+    assert.equal(f.store.getState().transcripts.t.blocks[0].outputOmitted, true)
+    completions[1]({ output: "current snapshot", is_error: false }); await fresh
+    assert.equal(f.store.getState().transcripts.t.blocks[0].output, "current snapshot")
+  } finally { f.runtime.disconnect() }
 })
