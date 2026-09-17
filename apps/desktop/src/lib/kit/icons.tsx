@@ -172,7 +172,7 @@ const ComposerSendArrowGlyph = hugeIcon(HiArrowUp);
  *  center, so the glyph is shifted down and the button (not this wrapper)
  *  owns the circle. */
 export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
-  <ComposerSendArrowGlyph className={cn("translate-y-[1.5px]", className)} {...props} />
+  <ComposerSendArrowGlyph className={cn("translate-y-[3px]", className)} {...props} />
 );
 export const HandoffIcon: LucideIcon = hugeIcon(HcHandoff);
 export const SkillCubeIcon: LucideIcon = hugeIcon(HcSkill);
