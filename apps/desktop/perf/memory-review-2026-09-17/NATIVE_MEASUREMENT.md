@@ -1,5 +1,14 @@
 # Measurement method and reproduction
 
+Integration update: [PR #31](https://github.com/Tresnanda/kybern/pull/31) includes
+this scoped implementation and the separately reviewed allocator/icon/release
+changes. The [0.4.3 report](../release-0.4.3-2026-09-17.md#completed-runtime-isolated-tauri-pair)
+records the corrected native anchor implementation, passing final CI and native
+checks, completed production Tauri workflows, exact binary hashes, and mixed
+frontend memory results. The original measurements and blockers below are
+historical and must not be presented as the final integration status.
+Page-aware reconstruction remains outstanding.
+
 ## Isolation and builds
 
 Baseline: `c85f3bfd35c0fa55d3a99eccbaf86ae6de9479b2`. Reviewed daemon: `08162402de19527ec74ea67605fab8010a1c2f67`. Use separate worktrees and explicitly set each checkout's own `CARGO_TARGET_DIR`. Never point tests at `~/.kybern` or overwrite the packaged sidecar.

@@ -3,8 +3,7 @@
 Integration follow-up: [PR #31](https://github.com/Tresnanda/kybern/pull/31) combines
 this implementation with the requested release/allocator/icon PRs. Its
 [0.4.3 report](../release-0.4.3-2026-09-17.md) records subsequent scroll/selection
-fixes, passing macOS/Linux CI, repeated allocator measurements, and the remaining
-full-Tauri automation limitation. The original scoped PR description below is
+fixes, passing macOS/Linux CI, repeated allocator measurements, and the completed runtime-isolated Tauri workflow and its mixed frontend results. The original scoped PR description below is
 historical; its renderer measurements must not be promoted to whole-app savings.
 
 Large saved tool outputs previously forced full-history payload retention and repeated projection work. Opening more than twelve results could evict mounted content, and a burst of result requests could exhaust the daemon's RPC lane. This change retains mounted results across panes, queues hydration within existing backpressure, and selects outputs by exact start sequence and snapshot. It also reduces paging, canonical-message, event-kind and notification allocations without changing the event log or graphics behavior.
@@ -26,6 +25,6 @@ The measured reduction is about 195.23 MiB / 88.28% for this daemon workload. Th
 
 Validation: Rust fmt, protocol/store/daemon tests, workspace Clippy, release daemon, sidecar-aware production Tauri app, 233 desktop tests, typecheck/lint/frontend build, mobile typecheck/110 tests/Android+iOS export, sampler tests, and native production-CSP fixtures. Expo Doctor reports one existing failed check (19 pinned patch-version mismatches), unchanged by this PR.
 
-Keep this PR **draft**. Full Tauri-shell/helper/combined memory, full app workflows and visual accessibility/material acceptance require a dedicated session; the user's active packaged app and production data were preserved. Native responsiveness acceptance is incomplete: an instrumented run failed with a 1,327 ms frame, and later repeats overlapped an unrelated Xcode build (timeout and 28 px anchor-jump failure). Thresholds were not relaxed. Renderer variability and all failed checks are retained in the report. Page-aware/persisted reconstruction is profiled and assessed but remains unimplemented.
+Historical scoped-PR status (superseded by integration PR #31): keep this PR **draft**. Full Tauri-shell/helper/combined memory, full app workflows and visual accessibility/material acceptance require a dedicated session; the user's active packaged app and production data were preserved. Native responsiveness acceptance is incomplete: an instrumented run failed with a 1,327 ms frame, and later repeats overlapped an unrelated Xcode build (timeout and 28 px anchor-jump failure). Thresholds were not relaxed. Renderer variability and all failed checks are retained in the report. Page-aware/persisted reconstruction is profiled and assessed but remains unimplemented.
 
 Exact revisions, repeated samples, native fixture outcomes, reproduction commands and limitations: [optimization report](https://github.com/Tresnanda/kybern/blob/fix/memory-followup-reviewed/apps/desktop/perf/memory-review-2026-09-17/REPORT.md).

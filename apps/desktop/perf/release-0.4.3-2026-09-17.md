@@ -127,8 +127,8 @@ The final documentation-only rerun at `6d58bf3` failed the 480 px history-retent
 fixture with `Reload preserves reading position: 63.171875px`
 ([run 35182644085](https://github.com/Tresnanda/kybern/actions/runs/35182644085)).
 The preceding wide-window test passed. This is not classified as an unrelated
-failure: its root cause and whether it reflects position movement or DOM
-replacement are still unconfirmed. No tolerance or acceptance criterion was
+failure: at that stage its root cause and whether it reflected position movement or DOM
+replacement were unconfirmed. No tolerance or acceptance criterion was
 relaxed, and no production-code change has been made solely to obtain a pass.
 
 Additional diagnostics record the existing anchor, topology size, and scroll
@@ -140,7 +140,7 @@ passed, and [all five CI jobs](https://github.com/Tresnanda/kybern/actions/runs/
 completed successfully. That diagnostic checks whether a replacement row
 occupies the original anchor position and avoids extra intermediate anchor
 rectangles. Across the three diagnostic runs, 23 narrow repetitions passed
-without a production fix; the original failure remains unresolved.
+without a production fix; the original timing had not yet been reproduced.
 
 After the Mac was unlocked, the default workload passed ten local repetitions.
 Moving the reading point from 1,000 px to 100 px then reproduced a deterministic
@@ -177,11 +177,17 @@ fractional row geometry on every native runner. The failed run was cancelled
 after collecting the failure so the correction can receive a complete new run;
 it is not recorded as a pass.
 
-The last production build before this correction passed on `6d58bf3` (production
-implementation `f205a96`), with hashes in `final-production-build.json`. The new
-correction requires fresh native checks and a sidecar-aware production build
-before integration and release. Production daemon and packaged GUI stay active;
-scratch fixtures use isolated data and builds.
+Final source `308e35776274114950bf020439389b25b33dc6fa` passed all five
+[CI jobs](https://github.com/Tresnanda/kybern/actions/runs/35187029505), including
+eight narrow native repetitions at offsets 100/200/400/1,000 px and the wide test.
+Local narrow shifts were 0.75/0.5/0.25/0 px; the full retention test stayed below
+0.672 px. All 1,600 scrolling frames passed (maximum visible jump 0.5 px,
+18–20 ms frame p95, 31 ms worst frame), as did interaction, scaling and
+work-stream (18 ms frame p95, 16 ms input p95, 4 ms commit p95, exact final text,
+no overlap or chrome invalidation). These are fixture-specific measurements.
+Both the unchanged baseline and this corrected source then passed the production
+sidecar-aware Tauri wrapper build. Runtime-isolated build hashes and native
+measurements are recorded below. No failing threshold was weakened.
 
 ## Combined daemon changes: matched allocator comparison
 
@@ -331,6 +337,93 @@ applies to claims about full-app responsiveness; fixture timing is reported as
 fixture timing. Raw logs are `tauri-baseline-isolated.jsonl`,
 `tauri-candidate-fixed.jsonl`, `tauri-final-partial-summary.json`, the corresponding
 window geometry/screenshots, and `tauri-candidate-fixed-timeout-sample.txt`.
+
+## Completed runtime-isolated Tauri pair
+
+After the Mac was unlocked, the corrected build completed the full workflow.
+This supersedes the earlier automation blocker, while retaining those failed and
+incomplete runs above. Baseline source: `c85f3bfd35c0fa55d3a99eccbaf86ae6de9479b2`;
+candidate: `308e35776274114950bf020439389b25b33dc6fa`.
+Both were built with `pnpm@11.25.0 tauri build --bundles app --config ...`, their
+own `CARGO_TARGET_DIR`, and `CARGO_BUILD_JOBS=2`. The config overrides only the
+native identifier and 1440 × 900 window geometry; production CSP, appearance,
+assets and optimization settings remain enabled. Hardware/runtime are the same
+M1/16 GiB/macOS 27/WebKit environment described above. No compilers ran during
+sampling. Exact compiler version, binary hashes, configs and phase summaries are
+committed beside [the measured summary](memory-review-2026-09-17/tauri-runtime-matched-summary.json).
+
+A further isolation review found that the earlier copies changed Info.plist but
+not the compiled Tauri identifier: native window preferences could still be
+shared. Those prior samples remain exploratory, not accepted savings evidence.
+The new builds use distinct **compiled** identifiers
+`dev.kybern.memory-profile.baseline5` / `dev.kybern.memory-profile.candidate3`.
+Read-only open-file inspection verified separate `Library/WebKit` stores.
+`KYBERN_DATA_DIR` and `KYBERN_CLIENT_CONFIG_DIR` are also distinct scratch paths;
+LaunchServices launches pass both, and copied bundles carry matching environment
+metadata. The pinned Tauri macro rejected an optional `dataStoreIdentifier`
+override (`expected [u8;16], found Vec<u8>`) on both sources. That unsupported
+override was removed; no dependency upgrade or source bypass was made.
+
+The same sanitized seed was used: 400 turns, 800 tools, 6,400 events. Each run
+opened the thread and `file-399-0.ts`, closed the result, scrolled upward four
+times by 12 pages, returned to example 399, opened a 77 × 36 terminal and printed
+3,000 numbered Unicode lines. Line 2999 and unchanged visual materials were
+verified in app-window screenshots. An offline Claude-shaped fixture then sent
+500 numbered Unicode deltas at 20 ms intervals through the actual driver,
+daemon, store and WebSocket into the app. Both durable canonical messages equal
+the expected 500-line text exactly; both turns completed. The fixture is
+`scripts/profile-stream-driver.py`, not a real-provider/network performance test.
+Because scratch folders are inside the original repository, automatic checkpoint
+summaries displayed three scratch SQLite files in both runs; no production data
+was used. Post-workload idle lasted about 70 seconds. The packaged GUI was
+restored; production daemon PID 1939 stayed active throughout.
+
+Physical footprint, MiB (startup/workload rows: sampled maxima; idle: medians):
+
+| Stage / build | Frontend | Daemon | Shell | WebKit helpers | Combined |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Observed startup / baseline | 320.2 | 7.7 | 39.1 | 36.1 | 402.2 |
+| Observed startup / candidate | 334.9 | 8.5 | 40.1 | 35.2 | 418.6 |
+| Initial idle / baseline | 131.3 | 7.8 | 37.9 | 27.6 | 204.5 |
+| Initial idle / candidate | 128.7 | 8.8 | 39.2 | 19.7 | 196.3 |
+| Large result peak / baseline | 395.7 | 153.4 | 38.3 | 39.0 | 626.4 |
+| Large result peak / candidate | 504.0 | 12.8 | 39.8 | 39.3 | 596.0 |
+| Workload peak / baseline | 758.4 | 185.3 | 38.5 | 76.2 | 964.1 |
+| Workload peak / candidate | 720.7 | 14.7 | 40.3 | 62.8 | 833.8 |
+| Post-workload idle / baseline | 331.2 | 95.5 | 34.2 | 31.7 | 492.5 |
+| Post-workload idle / candidate | 294.6 | 14.3 | 35.9 | 33.0 | 378.1 |
+
+The combined sampled workload peak fell from 964.1 to 833.8 MiB; post-workload
+idle fell from 492.5 to 378.1 MiB. These are **one-pair observations**, not a
+repeatable whole-app percentage claim. Frontend post-idle was 331.2/294.6 MiB,
+but large-result frontend median was **178.1/233.9 MiB**, with sampled peaks
+395.7/504.0 MiB. Startup frontend also rose. Therefore this does **not** establish
+a general `tauri://localhost` savings claim or uniformly lower frontend memory.
+The robust repeated daemon-only result remains separately documented.
+
+Native large-result vmmap snapshots attribute graphics dirty memory of
+88.5/141.5 MiB, while WebKit malloc dirty memory was 82.3/81.3 MiB. The roughly
+53 MiB graphics difference accounts for much of that stage's frontend increase;
+this is an attribution observation, not proof of which rendering operation caused
+it. Terminal graphics dirty memory was 124.5/135.1 MiB, with WebKit malloc dirty
+121.3/107.4 MiB. Reserved/resident graphics mappings are not counted as RAM
+savings. No visual effect or graphics behavior was removed to improve a number.
+The frontend increase is retained in the report; further repeated layer/tile
+profiling is needed before claiming an improvement there. Native responsiveness,
+selection, focus, anchoring, formatted output and final follow behavior pass.
+
+Limitations: only one full pair; manual phase timings differ (recorded in JSON),
+and identical scroll gestures reached example 310 in the baseline versus 327 in
+the corrected candidate. Thus history depth is not perfectly matched. Independent
+production agents were active but excluded from totals and can affect machine
+load. Sampling targets 0.5 s and can miss transient peaks; vmmap's kernel lifetime
+high-water marks exceeded sampled stage peaks. Seven startup samples per build
+lacked all roles and were excluded from complete totals. Combined maxima are
+simultaneous sums, so component maxima need not add. No across-run frontend
+variability or full-app latency claim is made. Repeated daemon pairs and native
+fixture timings provide separate evidence. Raw samples/screenshots/vmmap logs
+remain in the original checkout's `perf-artifacts/memory-followup-20260917/`
+under `runtime-*`; summaries and hashes are committed for review.
 
 ## Outstanding optimization
 

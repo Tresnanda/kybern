@@ -1,12 +1,21 @@
 # Consolidated memory follow-up: reviewed implementation and measurements
 
+Integration update: [PR #31](https://github.com/Tresnanda/kybern/pull/31) includes
+this scoped implementation and the separately reviewed allocator/icon/release
+changes. The [0.4.3 report](../release-0.4.3-2026-09-17.md#completed-runtime-isolated-tauri-pair)
+records the corrected native anchor implementation, passing final CI and native
+checks, completed production Tauri workflows, exact binary hashes, and mixed
+frontend memory results. The original measurements and blockers below are
+historical and must not be presented as the final integration status.
+Page-aware reconstruction remains outstanding.
+
 ## Result and scope
 
 The consolidated archive has been ported, corrected and committed in the isolated `fix/memory-followup-reviewed` worktree. The implementation includes the previously unmerged omitted-output prerequisites and integrates them with the existing projection cache. It does not downgrade to PR #28, include PR #29's allocator change, or alter graphics effects.
 
 The release daemon's sampled peak footprint decreased from **221.16 MiB to 25.92 MiB** (median of three runs, **195.23 MiB / 88.28%**). The same workload's ten-second post-workload idle decreased from **221.14 MiB to 25.91 MiB** (**195.23 MiB / 88.28%**). These are measured daemon-only results, including the prerequisites, and must not be described as whole-app savings or attributed exclusively to the follow-up patch.
 
-**Page-aware/persisted reconstruction remains outstanding. Whole Tauri application memory and workflow acceptance remains outstanding.** [PR #30](https://github.com/Tresnanda/kybern/pull/30) is a draft because fixture coverage does not replace the remaining whole-app gates and the native responsiveness failures remain unresolved.
+**Historical scoped-PR status:** page-aware/persisted reconstruction and whole Tauri application acceptance were outstanding at this stage. [PR #30](https://github.com/Tresnanda/kybern/pull/30) is a draft because fixture coverage does not replace the remaining whole-app gates and the native responsiveness failures remain unresolved.
 
 ## Provenance and repository state
 
