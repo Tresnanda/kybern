@@ -166,9 +166,13 @@ reported a 3.171875 px shift in the near-top case. Its trace exposed fractional
 measurement corrections: synchronous mount measurement kept fractions while
 the default ResizeObserver measurement rounded them. WebKit also rounded DOM
 scroll writes, and using that rounded value as the next adjustment base lost
-fractions repeatedly. Both measurement paths now preserve fractional sizes,
-and our own recorded scroll writes retain the virtualizer's fractional cursor;
-actual reader movement still rebases against the DOM. The fixture includes
+fractions repeatedly. The final correction uses the virtualizer's existing rounded-size policy in
+both paths, including our forced synchronous scrolling measurement. A custom
+fractional measurement callback introduced a 28 px cold-history jump; two
+matched cold runs with the default callback passed at 1.03125 px. That custom
+callback and the speculative preservation of ordinary scroll cursors were
+removed. Ordinary corrections continue to use the current DOM position; only
+the pending prepend/trim commit uses the virtualizer's rebased cursor. The fixture includes
 fractional row geometry on every native runner. The failed run was cancelled
 after collecting the failure so the correction can receive a complete new run;
 it is not recorded as a pass.

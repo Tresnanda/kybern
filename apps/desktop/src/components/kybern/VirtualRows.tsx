@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from "react"
 import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range, type ReactVirtualizer } from "@tanstack/react-virtual"
 import { reconcileVirtualTopology, type VirtualTopology } from "@/lib/virtualTopology"
-import { matchesScrollPosition, recordScrollPosition } from "@/lib/scrollPosition"
+import { recordScrollPosition } from "@/lib/scrollPosition"
 import { TranscriptStateScope } from "./TranscriptStateScope"
 
 export type VirtualRowsController = ReactVirtualizer<HTMLElement, HTMLDivElement>
@@ -182,14 +182,6 @@ function VirtualizedRows<T>({
     initialOffset: () => viewport?.current?.scrollTop ?? 0,
     getItemKey,
     estimateSize: estimate,
-    measureElement: (element, entry, instance) => {
-      // Normal-flow rows can have fractional font metrics. Keep the same
-      // precision in synchronous and observer measurements; alternating rounded
-      // observer sizes with fractional mount sizes creates spurious corrections.
-      if (entry) return entry.borderBoxSize?.[0]?.blockSize ?? element.getBoundingClientRect().height
-      const key = instance.options.getItemKey(Number(element.dataset.index))
-      return instance.itemSizeCache.get(key) ?? element.getBoundingClientRect().height
-    },
     scrollMargin: margin,
     rangeExtractor,
     overscan: providedViewport ? 2 : 8,
@@ -207,12 +199,10 @@ function VirtualizedRows<T>({
     useFlushSync: false,
     scrollToFn: (offset, options, instance) => {
       const current = instance.scrollElement?.scrollTop
-      if (options.adjustments !== undefined && current !== undefined && !isRebasing(instance) && !matchesScrollPosition(instance.scrollElement!, current)) {
+      if (options.adjustments !== undefined && current !== undefined && !isRebasing(instance)) {
         // A wheel/trackpad move can precede the scroll event that updates the
         // library's cursor. Apply height compensation to the actual position,
         // or it can undo that move. Core adds the adjustment to this cursor.
-        // Our own previous writes can be pixel-rounded by WebKit. Keep core's
-        // fractional cursor for those writes rather than losing the remainder.
         // During prepend/trim, core has already rebased its cursor
         // before DOM commit. Retain that intended offset until its layout effect
         // applies it; the DOM still contains the old scroll position here.
@@ -230,7 +220,9 @@ function VirtualizedRows<T>({
       // Core normally defers new measurements during scrolling. In normal
       // flow an overscan row's real height already affects visible neighbours;
       // account for it in this commit instead of painting the estimate first.
-      virtualizer.resizeItem(Number(element.dataset.index), element.getBoundingClientRect().height)
+      // Match core's rounded border-box measurements. Mixing fractional mount
+      // sizes with rounded observer sizes repeatedly corrects the same row.
+      virtualizer.resizeItem(Number(element.dataset.index), Math.round(element.getBoundingClientRect().height))
     }
   }, [virtualizer])
   useLayoutEffect(() => {
