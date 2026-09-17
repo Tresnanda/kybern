@@ -6,13 +6,13 @@ The consolidated archive has been ported, corrected and committed in the isolate
 
 The release daemon's sampled peak footprint decreased from **221.16 MiB to 25.92 MiB** (median of three runs, **195.23 MiB / 88.28%**). The same workload's ten-second post-workload idle decreased from **221.14 MiB to 25.91 MiB** (**195.23 MiB / 88.28%**). These are measured daemon-only results, including the prerequisites, and must not be described as whole-app savings or attributed exclusively to the follow-up patch.
 
-**Page-aware/persisted reconstruction remains outstanding. Whole Tauri application memory and workflow acceptance remains outstanding.** The PR is a draft because fixture coverage does not replace the remaining whole-app gates.
+**Page-aware/persisted reconstruction remains outstanding. Whole Tauri application memory and workflow acceptance remains outstanding.** [PR #30](https://github.com/Tresnanda/kybern/pull/30) is a draft because fixture coverage does not replace the remaining whole-app gates and the native responsiveness failures remain unresolved.
 
 ## Provenance and repository state
 
 - Baseline: `c85f3bfd35c0fa55d3a99eccbaf86ae6de9479b2`, original branch `feat/hugeicons-icons`.
 - Reviewed daemon/source implementation: `08162402de19527ec74ea67605fab8010a1c2f67`.
-- Final reviewed source: `b7024bd`; activity-pane correction `d0a649d`, hydration backpressure `8d7e005`, real reconnect fixture `f2a6d5a`, queued deletion/error handling `b7024bd`. Daemon sources/binary are unchanged from `0816240`.
+- Final reviewed source: `b7024bd400679d805525bcd92c58216ed9c6f61b`; activity-pane correction `d0a649d`, hydration backpressure `8d7e005`, real reconnect fixture `f2a6d5a`, queued deletion/error handling `b7024bd`. Daemon sources/binary are unchanged from `0816240`.
 - Archive SHA-256: `9bca10e88c61b64b4f21c7eb2763ba63313ad0c18868514196a2b959acd9578b`. All package manifest checksums passed. README, REPORT, NATIVE_MEASUREMENT, PR_DRAFT and installer were read before integration.
 - Read repository instructions, desktop performance guide and affected reports. `docs/architecture.md` and `docs/design.md`, referenced by AGENTS.md, are absent at this repository revision.
 - Original untracked notes/screenshots/artifacts and original branch remained untouched. All builds use `/Users/mymac/projects/kybern-memory-review/target`; all daemon workloads use isolated scratch data. No production `~/.kybern` data was used.

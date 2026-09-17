@@ -2,6 +2,8 @@
 
 Large saved tool outputs previously forced full-history payload retention and repeated projection work. Opening more than twelve results could evict mounted content, and a burst of result requests could exhaust the daemon's RPC lane. This change retains mounted results across panes, queues hydration within existing backpressure, and selects outputs by exact start sequence and snapshot. It also reduces paging, canonical-message, event-kind and notification allocations without changing the event log or graphics behavior.
 
+Measured baseline: `c85f3bfd35c0fa55d3a99eccbaf86ae6de9479b2`. Final implementation: `b7024bd400679d805525bcd92c58216ed9c6f61b`; its daemon binary is identical to the measured `08162402de19527ec74ea67605fab8010a1c2f67` build.
+
 This is a reviewed manual port of the consolidated `kybern-memory-followup.zip`, including required unmerged #24/#28 changes. It preserves the newer source at `c85f3bf`, including Hugeicons and provider limits. It excludes #29's allocator change. This PR is stacked on `feat/hugeicons-icons` (#27) to avoid mixing that branch's unrelated changes into the review. It does not close or merge those PRs.
 
 Review corrections include stale/deleted/reused-ID and historical-snapshot handling, full-output compatibility for non-UI projection callers, exact activity-pane hydration, queued-load cancellation, and real socket reconnect tests. A native two-pane fixture caught the RPC saturation bug; the corrected fixture verifies 32 mounted views of 16 outputs, exact Unicode text, close/reopen and reconnect while hydration is pending.
