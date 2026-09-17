@@ -167,12 +167,29 @@ export const PanelCollapseIcon: LucideIcon = hugeIcon(HiMinimize);
 export const BackToParentIcon: LucideIcon = hugeIcon(HiUndo);
 export const WorkflowIcon: LucideIcon = hugeIcon(HcAgents);
 export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
-const ComposerSendArrowGlyph = hugeIcon(HiArrowUp);
-/** Round send control. The up-chevron's visual mass sits above its geometric
- *  center, so the glyph is shifted down and the button (not this wrapper)
- *  owns the circle. */
+/**
+ * Round send control. Hugeicons `ArrowUp01` is already centered in its 24²
+ * viewBox; a CSS translate on that glyph dropped the caret into the lower
+ * half of the circle. Draw a sharp chevron on the viewBox midlines and let
+ * the button's `size-full` SVG map 1:1 onto the 32px disc — no translate.
+ */
 export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
-  <ComposerSendArrowGlyph className={cn("translate-y-[3px]", className)} {...props} />
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden
+    className={cn("block overflow-visible", className)}
+    {...props}
+  >
+    <path
+      d="M6 15L12 9L18 15"
+      stroke="currentColor"
+      strokeWidth={HUGEICON_STROKE_WIDTH}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
 );
 export const HandoffIcon: LucideIcon = hugeIcon(HcHandoff);
 export const SkillCubeIcon: LucideIcon = hugeIcon(HcSkill);
