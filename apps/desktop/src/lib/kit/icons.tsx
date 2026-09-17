@@ -170,8 +170,9 @@ export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
 /**
  * Round send control. A chevron's ink sits in the lower half of its viewBox,
  * so centering the 24² box (or a CSS grid shrink-wrap of it) leaves extra
- * space above the peak. Fill the 32px disc and translate the glyph up until
- * padding above the peak matches padding below the legs.
+ * space above the peak. Fill the 32px disc and translate the glyph up 4px
+ * from the viewBox-centered rest pose so padding above the peak matches
+ * padding below the legs on the 32px circle.
  */
 export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
   <svg
@@ -179,7 +180,7 @@ export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
     viewBox="0 0 24 24"
     fill="none"
     aria-hidden
-    className={cn("block size-full origin-center overflow-visible -translate-y-[2px]", className)}
+    className={cn("block size-full origin-center overflow-visible -translate-y-[4px]", className)}
     {...props}
   >
     <path
