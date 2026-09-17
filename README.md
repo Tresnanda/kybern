@@ -321,6 +321,11 @@ validate packages and warm caches. Publishing is a separate action.
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 
+Tag-triggered release workflows require successful main CI for the exact tagged
+commit, including all five Rust/desktop jobs. They wait for an in-progress run
+and block publication on failures, skipped jobs, missing results, or timeout.
+Desktop publication also requires every platform bundle to succeed.
+
 Before running `scripts/release.sh X.Y.Z`, add a matching `## X.Y.Z` entry near
 the top of `CHANGELOG.md` with concise, user-visible bullets. Cargo-dist copies
 that entry into the GitHub Release, and the desktop updater uses its first bullet
