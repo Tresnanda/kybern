@@ -21,6 +21,16 @@ function recordLiveEdge(stage: string) {
     latestVisibleText: document.body.innerText.includes("Answer 999"),
     latestMountedText: document.body.textContent?.includes("Answer 999"),
     lastTurn: [...document.querySelectorAll<HTMLElement>("[data-turn-id]")].at(-1)?.dataset.turnId,
+    documentState: document.readyState, innerHeight: window.innerHeight,
+    sheets: document.styleSheets.length,
+    layout: (() => {
+      const result = []
+      for (let node: HTMLElement | null = viewport; node; node = node.parentElement) {
+        const style = getComputedStyle(node)
+        result.push({ tag: node.tagName, className: node.className, height: node.clientHeight, cssHeight: style.height, display: style.display, position: style.position, flex: style.flex })
+      }
+      return result
+    })(),
   }
   const signature = JSON.stringify(sample)
   if (signature === previousSample) return
