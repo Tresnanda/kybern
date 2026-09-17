@@ -9,6 +9,7 @@ import {
   type Ref,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -106,7 +107,12 @@ export interface MessageNavigationModel {
   cancelScroll?: () => void;
 }
 
+export interface MessageScrollerController {
+  scrollToEnd: () => void;
+}
+
 export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
+  controllerRef?: Ref<MessageScrollerController>;
   /** Keep streamed output pinned while the reader remains near the end. */
   followOutput?: boolean;
   /** Changing this value resumes following and jumps to the live edge. */
@@ -144,6 +150,7 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
 }
 
 export function MessageScroller({
+  controllerRef,
   followOutput = true,
   followKey,
   followThreshold = 56,
@@ -360,6 +367,15 @@ export function MessageScroller({
       programmaticScrollRef.current = false;
     }, behavior === "smooth" ? 320 : 0);
   }, []);
+
+  useImperativeHandle(controllerRef, () => ({
+    scrollToEnd() {
+      // Resume immediately, so a subsequent reader gesture can cancel even
+      // before React commits another transcript update.
+      setFollowing(true);
+      scrollToEnd("auto");
+    },
+  }), [scrollToEnd, setFollowing]);
 
   const handleScroll = useCallback(() => {
     const viewport = viewportRef.current;

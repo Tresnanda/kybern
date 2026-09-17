@@ -37,7 +37,7 @@ import {
 import { clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
 import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
-import { MessageScroller, type MessageNavigationModel } from "@/components/beui/message-scroller"
+import { MessageScroller, type MessageNavigationModel, type MessageScrollerController } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
 import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
@@ -351,13 +351,11 @@ export function Transcript({
   }, [groups, navigationItems, historyOffset])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
-  const [followRequest, setFollowRequest] = useState(0)
+  const scroller = useRef<MessageScrollerController>(null)
   useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
-    setFollowing(true)
-    // Resume MessageScroller's follow state too, including its resize handler.
-    setFollowRequest((request) => request + 1)
+    scroller.current?.scrollToEnd()
   }
 
   if (!state?.loaded) {
@@ -381,12 +379,13 @@ export function Transcript({
         )}
       >
         <MessageScroller
+          controllerRef={scroller}
           navigation={surfaceMode === "split" ? undefined : "rail"}
           navigationModel={navigationModel}
           navigationLabel="Message navigation"
           navigationSide="left"
           followOutput
-          followKey={`${latestUserMessageId ?? ""}:${followRequest}`}
+          followKey={latestUserMessageId}
           followThreshold={56}
           onFollowChange={setFollowing}
           busy={busy}
