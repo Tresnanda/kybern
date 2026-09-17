@@ -121,6 +121,35 @@ These synthetic figures are not whole-app latency or memory guarantees.
   Claude integration catalog test; two subsequent CI runs passed that suite.
   The original failure log is retained. Exact release-commit CI is pending.
 
+## Release hold: intermittent narrow-history anchor failure
+
+The final documentation-only rerun at `6d58bf3` failed the 480 px history-retention
+fixture with `Reload preserves reading position: 63.171875px`
+([run 35182644085](https://github.com/Tresnanda/kybern/actions/runs/35182644085)).
+The preceding wide-window test passed. This is not classified as an unrelated
+failure: its root cause and whether it reflects position movement or DOM
+replacement are still unconfirmed. No tolerance or acceptance criterion was
+relaxed, and no production-code change has been made solely to obtain a pass.
+
+Additional diagnostics record the existing anchor, topology size, and scroll
+writes. Three narrow repetitions at `5e60eab` and ten at `8dfcfff` passed; both
+complete five-job CI runs passed. The latter traces recorded 0–1 px residual
+anchor movement. These passes do not prove that the intermittent failure is
+fixed. A further ten repetitions at `fff44c573018db77188e1030691efca7f75805dc` also
+passed, and [all five CI jobs](https://github.com/Tresnanda/kybern/actions/runs/35183957057)
+completed successfully. That diagnostic checks whether a replacement row
+occupies the original anchor position and avoids extra intermediate anchor
+rectangles. Across the three diagnostic runs, 23 narrow repetitions passed
+without a production fix; the original failure remains unresolved.
+
+The final sidecar-aware production Tauri build passed on `6d58bf3` (production
+implementation `f205a96`); binary hashes are preserved in
+`final-production-build.json`. Subsequent commits change diagnostics and CI
+repetition only. Local typecheck and lint pass. Local native reproduction is
+blocked by the locked macOS session; the lock screen and production daemon are
+left unchanged. Main integration and the 0.4.3 tag remain on hold pending
+resolution, rather than publishing from an earlier passing run.
+
 ## Combined daemon changes: matched allocator comparison
 
 Three alternating system/jemalloc pairs ran the same scratch-daemon workload
