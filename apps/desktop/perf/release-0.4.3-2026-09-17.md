@@ -64,7 +64,13 @@ checks, the dock-resize fixture, and the immediate-upward-gesture streaming
 fixture pass. The last streaming rerun recorded 19 ms frame p95, 16 ms input p95,
 5 ms commit p95, exact output, no overlaps, and zero chrome invalidations for
 100 text deltas. This final small follow correction was not part of the
-incomplete `bf4018a` full-Tauri measurement.
+incomplete `bf4018a` full-Tauri measurement. CI on `d09cb23` exposed an initial
+virtualizer correction that was mistaken for accessibility input, leaving a
+105 px gap. VirtualRows now records its own applied scroll positions in a
+weak-keyed map; the scroller excludes those writes from reader-input detection.
+This preserves initial reconciliation as well as native accessibility
+cancellation. Local interaction and history-retention fixtures pass together;
+the failed CI attempt is retained and the full gate is rerun.
 
 Local native scaling at `d871d92`: 8 mounted messages, 45 ms mount commit,
 18 ms streaming frame-interval p95, 14 ms input-frame p95, 1 ms final commit.

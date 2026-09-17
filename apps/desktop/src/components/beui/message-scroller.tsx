@@ -2,6 +2,7 @@
 // beui.dev/components/agents/message-scroller
 
 import { observeResizeFrame } from "@/lib/resizeObserver"
+import { matchesScrollPosition } from "@/lib/scrollPosition"
 import { useReducedMotion } from "motion/react";
 import { flushSync } from "react-dom";
 import {
@@ -406,7 +407,7 @@ export function MessageScroller({
     // Native accessibility scrolling has no preceding input event. Cancel a
     // pending virtual end target on upward movement in an unchanged viewport,
     // even while our previous programmatic scroll is still settling.
-    if (followingRef.current && !resized && top < previous && distance > followThreshold) {
+    if (followingRef.current && !resized && top < previous && distance > followThreshold && !matchesScrollPosition(viewport, top)) {
       leaveLiveEdge();
       resumeFollowingRef.current = true;
     }

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from "react"
 import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range, type ReactVirtualizer } from "@tanstack/react-virtual"
 import { reconcileVirtualTopology, type VirtualTopology } from "@/lib/virtualTopology"
+import { recordScrollPosition } from "@/lib/scrollPosition"
 import { TranscriptStateScope } from "./TranscriptStateScope"
 
 export type VirtualRowsController = ReactVirtualizer<HTMLElement, HTMLDivElement>
@@ -192,6 +193,7 @@ function VirtualizedRows<T>({
       } else {
         elementScroll(offset, options, instance)
       }
+      recordScrollPosition(instance.scrollElement)
     },
   })
   const measureRow = useCallback((element: HTMLDivElement | null) => {
