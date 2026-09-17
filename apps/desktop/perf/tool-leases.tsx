@@ -29,6 +29,9 @@ async function run() {
   let calls = 0
   const responses: unknown[] = []
   const errors: string[] = []
+  let heldResponses = 0
+  let responseGate: Promise<void> | undefined
+  let releaseResponses: (() => void) | undefined
   try {
     await until(() => useStore.getState().connection.state === "open", "Scratch connection did not open")
     await runtime.loadThread(threadId)
@@ -38,8 +41,11 @@ async function run() {
     const call = client.call.bind(client)
     client.call = ((method, params) => {
       if (method === "threads.tool_output") calls++
-      return call(method, params).then(result => {
-        if (method === "threads.tool_output") responses.push(params)
+      return call(method, params).then(async result => {
+        if (method === "threads.tool_output") {
+          responses.push(params)
+          if (responseGate) { heldResponses++; await responseGate }
+        }
         return result
       }, error => { errors.push(String(error)); throw error })
     }) as typeof client.call
@@ -77,8 +83,28 @@ async function run() {
     for (const button of disclosures()) button.click()
     await until(() => document.querySelectorAll("pre").length === 16 && tools().every(b => b.kind === "tool" && !b.outputOmitted), "Reopening results lost content")
     check(calls === 20, `Expected four reloads after closing all, got ${calls - 16}`)
-    w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, mountedResults: 32, uniqueResults: 16, calls, sharedPanes: true, exactUnicodeSelection: true, closeReopen: true, transport: "real scratch daemon" }))
+    const lifecycleCalls = calls
+    // Delay real responses at the runtime boundary, then close the actual socket.
+    // The client's normal reconnect and replay path must recover mounted results
+    // even while four callbacks from the obsolete connection remain pending.
+    for (const button of disclosures()) button.click()
+    await until(() => document.querySelectorAll("pre").length === 0, "Reconnect setup did not close results")
+    responseGate = new Promise(resolve => { releaseResponses = resolve })
+    for (const button of disclosures()) button.click()
+    await until(() => heldResponses === 4, "Expected four in-flight real hydration responses")
+    const socket = (client as unknown as { ws: WebSocket }).ws
+    socket.close()
+    await until(() => useStore.getState().connection.state !== "open", "Socket closure did not reach runtime")
+    responseGate = undefined
+    await until(() => useStore.getState().connection.state === "open" && tools().every(b => !b.outputOmitted) && document.querySelectorAll("pre").length === 16, "Reconnect did not recover mounted results")
+    const settled = tools()
+    releaseResponses!()
+    await sleep(300)
+    check(tools().every((block, index) => block === settled[index]), "Obsolete hydration replaced reconnected rows")
+    for (const [index, output] of [...document.querySelectorAll("pre")].entries()) check(output.textContent === expected(index), "Reconnect lost exact output")
+    w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, mountedResults: 32, uniqueResults: 16, lifecycleCalls, calls, sharedPanes: true, exactUnicodeSelection: true, closeReopen: true, reconnectDuringHydration: true, transport: "real scratch daemon" }))
   } finally {
+    releaseResponses?.()
     flushSync(() => root.unmount())
     runtime.disconnect(); setEnvironmentRuntime(null)
   }
