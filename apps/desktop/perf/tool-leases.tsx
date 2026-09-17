@@ -27,6 +27,8 @@ async function run() {
   runtime.connect(__TOOL_LEASE_ENDPOINT__)
   const root = createRoot(document.getElementById("root")!)
   let calls = 0
+  const responses: unknown[] = []
+  const errors: string[] = []
   try {
     await until(() => useStore.getState().connection.state === "open", "Scratch connection did not open")
     await runtime.loadThread(threadId)
@@ -36,7 +38,10 @@ async function run() {
     const call = client.call.bind(client)
     client.call = ((method, params) => {
       if (method === "threads.tool_output") calls++
-      return call(method, params)
+      return call(method, params).then(result => {
+        if (method === "threads.tool_output") responses.push(params)
+        return result
+      }, error => { errors.push(String(error)); throw error })
     }) as typeof client.call
     const render = (panes: number) => flushSync(() => root.render(
       <ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
@@ -49,7 +54,7 @@ async function run() {
     check(disclosures().length === 32, "Both panes must mount all 16 results")
     for (const button of disclosures()) button.click()
     await until(() => document.querySelectorAll("pre").length === 32 && tools().every(b => b.kind === "tool" && !b.outputOmitted), "Mounted results did not hydrate").catch(error => {
-      throw new Error(`${error}; ${JSON.stringify({ calls, rendered: document.querySelectorAll("pre").length, connection: useStore.getState().connection, tools: tools().map(b => ({ id: b.call.id, seq: b.seq, omitted: b.outputOmitted })) })}`)
+      throw new Error(`${error}; ${JSON.stringify({ calls, responses, errors, rendered: document.querySelectorAll("pre").length, connection: useStore.getState().connection, tools: tools().map(b => ({ id: b.call.id, seq: b.seq, omitted: b.outputOmitted })) })}`)
     })
     await sleep(500)
     check(calls === 16, `Shared panes fetched ${calls} times instead of 16`)

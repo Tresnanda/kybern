@@ -57,6 +57,71 @@ async function loadInactive(f, start, count) {
   }
 }
 
+test("opening many mounted results queues hydration below the RPC lane limit", async () => {
+  let active = 0, peak = 0
+  const f = fixture(async (_thread, id) => {
+    active++
+    peak = Math.max(peak, active)
+    await new Promise(resolve => setImmediate(resolve))
+    active--
+    return response(`exact:${id}`)
+  })
+  const releases = [], requests = []
+  for (let i = 0; i < 40; i++) {
+    f.add(`c${i}`)
+    releases.push(f.cache.retain("t", `c${i}`))
+    requests.push(f.cache.hydrate("t", `c${i}`))
+  }
+  await Promise.all(requests)
+  assert.equal(peak, 4)
+  assert.equal(f.calls, 40)
+  assert.equal(f.writes, 40)
+  assert.equal(f.errors.length, 0)
+  for (let i = 0; i < 40; i++) assert.equal(f.get(`c${i}`).output, `exact:c${i}`)
+  for (const release of releases) release()
+})
+
+test("reconnect cancels queued loads and old completions cannot drain the new queue", async () => {
+  const pending = []
+  const f = fixture(() => { const value = deferred(); pending.push(value); return value.promise })
+  for (let i = 0; i < 8; i++) f.add(`c${i}`)
+  const old = Array.from({ length: 8 }, (_, i) => f.cache.hydrate("t", `c${i}`))
+  await Promise.resolve()
+  assert.equal(f.calls, 4)
+  f.cache.invalidatePending()
+  const fresh = Array.from({ length: 8 }, (_, i) => f.cache.hydrate("t", `c${i}`))
+  await Promise.resolve()
+  assert.equal(f.calls, 8)
+  for (const item of pending.slice(0, 4)) item.resolve(response("obsolete"))
+  await Promise.all(old)
+  assert.equal(f.calls, 8)
+  assert.equal(f.writes, 0)
+  for (const item of pending.slice(4, 8)) item.resolve(response("fresh"))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.calls, 12)
+  for (const item of pending.slice(8)) item.resolve(response("fresh"))
+  await Promise.all(fresh)
+  assert.equal(f.writes, 8)
+  assert.ok([...f.blocks.values()].every(block => block.output === "fresh"))
+})
+
+test("a failed hydration releases its queue slot and disposal cancels queued work", async () => {
+  const pending = []
+  const f = fixture(() => { const value = deferred(); pending.push(value); return value.promise })
+  for (let i = 0; i < 8; i++) f.add(`c${i}`)
+  const requests = Array.from({ length: 8 }, (_, i) => f.cache.hydrate("t", `c${i}`))
+  await Promise.resolve()
+  pending[0].reject(new Error("current failure"))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.calls, 5)
+  assert.equal(f.errors.length, 1)
+  f.cache.dispose()
+  for (const item of pending.slice(1)) item.resolve(response("late"))
+  await Promise.all(requests)
+  assert.equal(f.calls, 5)
+  assert.equal(f.writes, 0)
+})
+
 test("13 mounted results are all retained and fetched only once", async () => {
   const f = fixture()
   const releases = []

@@ -35,6 +35,8 @@ interface ToolOutputCacheOptions<Output> {
 // Preserve the previous warm-cache allowance for results not currently in use.
 // Mounted content is not an eviction candidate: evicting it causes a refetch loop.
 const MAX_INACTIVE_OUTPUTS = 12
+// Leave room in the daemon's 16-request lane for subscriptions and interaction.
+const MAX_CONCURRENT_LOADS = 4
 
 export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Output>) {
   const hydrated = new Map<string, ToolOutputIdentity>()
@@ -42,6 +44,37 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
   const loads = new Map<string, { identity: ToolOutputIdentity; request: Promise<void> }>()
   let generation = 0
   let disposed = false
+  let activeLoads = 0
+  let queuedLoads: { start(): void; cancel(): void }[] = []
+
+  function drainLoads(): void {
+    while (activeLoads < MAX_CONCURRENT_LOADS && queuedLoads.length) queuedLoads.shift()!.start()
+  }
+
+  function loadQueued(identity: ToolOutputIdentity, isCurrent: () => boolean): Promise<ToolOutputResponse<Output> | undefined> {
+    const queuedGeneration = generation
+    return new Promise((resolve, reject) => {
+      queuedLoads.push({
+        cancel: () => resolve(undefined),
+        start() {
+          if (!isCurrent()) { resolve(undefined); return }
+          activeLoads++
+          const finish = () => {
+            if (queuedGeneration !== generation) return
+            activeLoads--
+            drainLoads()
+          }
+          try {
+            void options.load(identity.threadId, identity.toolCallId, identity).then(resolve, reject).finally(finish)
+          } catch (error) {
+            reject(error)
+            finish()
+          }
+        },
+      })
+      drainLoads()
+    })
+  }
 
   // Thread IDs are UUIDs; tool-call IDs may themselves contain colons.
   const keyFor = (threadId: string, toolCallId: string, seq?: number) => JSON.stringify([threadId, toolCallId, seq])
@@ -104,7 +137,7 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
     const request = Promise.resolve()
       .then(() => {
         if (!isCurrent()) return
-        return options.load(threadId, toolCallId, identity)
+        return loadQueued(identity, isCurrent)
       })
       .then((result) => {
         if (!result || !isCurrent()) return
@@ -131,6 +164,9 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
   function invalidatePending(): void {
     generation++
     loads.clear()
+    for (const load of queuedLoads) load.cancel()
+    queuedLoads = []
+    activeLoads = 0
   }
 
   function dispose(): void {
