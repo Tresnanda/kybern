@@ -351,11 +351,13 @@ export function Transcript({
   }, [groups, navigationItems, historyOffset])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
+  const [followRequest, setFollowRequest] = useState(0)
   useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
   const busy = groups.some((g) => g.running)
   const scrollToBottom = () => {
     setFollowing(true)
-    rows.current?.scrollToEnd()
+    // Resume MessageScroller's follow state too, including its resize handler.
+    setFollowRequest((request) => request + 1)
   }
 
   if (!state?.loaded) {
@@ -384,15 +386,12 @@ export function Transcript({
           navigationLabel="Message navigation"
           navigationSide="left"
           followOutput
-          followKey={latestUserMessageId}
+          followKey={`${latestUserMessageId ?? ""}:${followRequest}`}
           followThreshold={56}
           onFollowChange={setFollowing}
           busy={busy}
           viewportRef={setViewport}
-          // Keep the scroller out of intrinsic flex sizing. Older WebKit can
-          // initially resolve nested percentage heights against the entire
-          // history, causing the virtualizer to mount every row before layout.
-          className="absolute inset-0 min-h-0"
+          className="h-full min-h-0"
           style={{ "--rail-bottom": `${bottomInset + 24}px` } as CSSProperties}
           railClassName="!top-3 !bottom-[var(--rail-bottom)] text-muted-foreground/70"
           viewportClassName={cn("scroll-fade-b h-full overflow-x-hidden overscroll-y-contain py-3 sm:py-4 focus-visible:ring-0", CHAT_COLUMN_GUTTER)}

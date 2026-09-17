@@ -86,7 +86,18 @@ async function run() {
   const anchorShift = Math.abs(anchor.getBoundingClientRect().top - anchorTop)
   check(anchor.isConnected && anchorShift < 2, `Reload preserves reading position: ${anchorShift}px`)
   document.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')!.click()
-  await sleep(250)
+  await waitFor(() => document.body.innerText.includes("Answer 999") && scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Explicit return reaches the latest answer")
+  // Opening a dock changes the transcript's available geometry. Returning to
+  // latest must resume the scroller's follow state as well as move its cursor.
+  const pane = document.querySelector<HTMLElement>("[data-chat-transcript-pane]")!
+  pane.style.flex = "none"
+  pane.style.height = "360px"
+  pane.style.width = "420px"
+  await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Following survives opening a dock")
+  pane.style.removeProperty("flex")
+  pane.style.removeProperty("height")
+  pane.style.removeProperty("width")
+  await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 2, "Following survives closing a dock")
   const answer = [...document.querySelectorAll<HTMLElement>(".chat-markdown")].at(-1)!
   const range = document.createRange()
   range.selectNodeContents(answer)

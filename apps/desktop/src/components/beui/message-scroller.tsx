@@ -377,10 +377,12 @@ export function MessageScroller({
     // short conversation that event is also "at bottom"; resuming on it would
     // undo an upward gesture as soon as more work arrives. Resume only after
     // actual downward movement, including scrollbar, keyboard, and touch input.
-    if (followingRef.current) setFollowing(distance <= followThreshold);
-    else if (resumeFollowingRef.current && top > previous) setFollowing(distance <= 1);
+    // Layout/viewport changes also emit scroll events. Only reader input may
+    // leave the live edge; otherwise opening a dock pauses following before
+    // the resize observer can restore the end position.
+    if (!followingRef.current && resumeFollowingRef.current && top > previous) setFollowing(distance <= 1);
     scheduleActiveRailItem();
-  }, [followThreshold, setFollowing, scheduleActiveRailItem]);
+  }, [setFollowing, scheduleActiveRailItem]);
 
   const leaveLiveEdge = useCallback((stopFollowing = true) => {
     programmaticScrollRef.current = false;
@@ -415,11 +417,14 @@ export function MessageScroller({
     const content = contentRef.current;
     if (!content || typeof ResizeObserver === "undefined") return;
 
-    return observeResizeFrame(content, () => {
+    const resize = () => {
       scheduleRailSync();
       if (!followOutput || !followingRef.current) return;
       scrollToEnd(reduce || !smooth ? "auto" : "smooth");
-    });
+    };
+    const stopContent = observeResizeFrame(content, resize);
+    const stopViewport = viewportRef.current ? observeResizeFrame(viewportRef.current, resize) : undefined;
+    return () => { stopContent(); stopViewport?.(); };
   }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth]);
 
   useEffect(() => {
@@ -560,7 +565,11 @@ export function MessageScroller({
         onViewportTouchMove?.(event);
       }}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget) leaveLiveEdge(false);
+        if (event.target === event.currentTarget) {
+          // Native scrollbar dragging has no wheel/key direction signal.
+          leaveLiveEdge();
+          resumeFollowingRef.current = true;
+        }
         onViewportPointerDown?.(event);
       }}
       onKeyDown={(event) => {
