@@ -168,10 +168,10 @@ export const BackToParentIcon: LucideIcon = hugeIcon(HiUndo);
 export const WorkflowIcon: LucideIcon = hugeIcon(HcAgents);
 export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
 /**
- * Round send control. Hugeicons `ArrowUp01` is already centered in its 24²
- * viewBox; a CSS translate on that glyph dropped the caret into the lower
- * half of the circle. Draw a sharp chevron on the viewBox midlines and let
- * the button's `size-full` SVG map 1:1 onto the 32px disc — no translate.
+ * Round send control. A chevron's ink sits in the lower half of its viewBox,
+ * so centering the 24² box (or a CSS grid shrink-wrap of it) leaves extra
+ * space above the peak. Fill the 32px disc and translate the glyph up until
+ * padding above the peak matches padding below the legs.
  */
 export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
   <svg
@@ -179,7 +179,7 @@ export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
     viewBox="0 0 24 24"
     fill="none"
     aria-hidden
-    className={cn("block overflow-visible", className)}
+    className={cn("block size-full origin-center overflow-visible -translate-y-[2px]", className)}
     {...props}
   >
     <path
