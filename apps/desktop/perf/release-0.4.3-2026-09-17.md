@@ -161,6 +161,18 @@ same connected row at exactly 9 px. Native coverage includes reading offsets
 CI timing is not claimed to have been replayed exactly; the deterministic
 prepend/measurement failures and their before/after traces are preserved.
 
+The first macOS 15 run of that correction (`a00c262`) retained the anchor but
+reported a 3.171875 px shift in the near-top case. Its trace exposed fractional
+measurement corrections: synchronous mount measurement kept fractions while
+the default ResizeObserver measurement rounded them. WebKit also rounded DOM
+scroll writes, and using that rounded value as the next adjustment base lost
+fractions repeatedly. Both measurement paths now preserve fractional sizes,
+and our own recorded scroll writes retain the virtualizer's fractional cursor;
+actual reader movement still rebases against the DOM. The fixture includes
+fractional row geometry on every native runner. The failed run was cancelled
+after collecting the failure so the correction can receive a complete new run;
+it is not recorded as a pass.
+
 The last production build before this correction passed on `6d58bf3` (production
 implementation `f205a96`), with hashes in `final-production-build.json`. The new
 correction requires fresh native checks and a sidecar-aware production build

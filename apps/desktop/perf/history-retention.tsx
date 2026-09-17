@@ -62,6 +62,9 @@ const state = () => useStore.getState().transcripts.history!
 const scroll = () => document.querySelector<HTMLElement>("[data-chat-scroll-container]")!
 async function run() {
   document.documentElement.classList.add("dark")
+  // Fractional font metrics occur on supported WebKit versions. Exercise them
+  // on every runner, including machines whose default font rounds to pixels.
+  document.head.appendChild(Object.assign(document.createElement("style"), { textContent: ".chat-markdown { padding-bottom: 0.375px; }" }))
   useStore.getState().set({ selected: { kind: "thread", id: "history" }, connection: { state: "open" }, transcripts: { history: { ...emptyThreadState(), loaded: true, blocks: fixture.all, lastSeq: 3000 } } })
   const beforeBytes = retainedSize(state().blocks)
   flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex h-screen flex-col"><Transcript threadId="history" bottomInset={0} /></div></ThemeProviderContext>))
