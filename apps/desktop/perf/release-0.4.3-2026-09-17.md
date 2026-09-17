@@ -70,7 +70,10 @@ virtualizer correction that was mistaken for accessibility input, leaving a
 weak-keyed map; the scroller excludes those writes from reader-input detection.
 This preserves initial reconciliation as well as native accessibility
 cancellation. Local interaction and history-retention fixtures pass together;
-the failed CI attempt is retained and the full gate is rerun.
+the failed CI attempt is retained. The full five-job gate passed at
+`f205a96d80d3e61d11ae7d7436e010c3c318bdeb`
+([CI run](https://github.com/Tresnanda/kybern/actions/runs/35182163274)),
+including native macOS 15 history, scaling, and interaction checks.
 
 Local native scaling at `d871d92`: 8 mounted messages, 45 ms mount commit,
 18 ms streaming frame-interval p95, 14 ms input-frame p95, 1 ms final commit.
@@ -101,7 +104,7 @@ These synthetic figures are not whole-app latency or memory guarantees.
 - Current desktop tests (233), typecheck, lint, and native selection/dock/keyboard
   fixtures pass. [CI at `bf4018a`](https://github.com/Tresnanda/kybern/actions/runs/35179709099)
   passed all five jobs, including macOS 15 native WebKit checks.
-- The final local 1,600-frame scrolling rerun passed every scenario with no empty
+- The local 1,600-frame scrolling rerun at `bf4018a` passed every scenario with no empty
   frames, 18–19 ms frame p95, at most 25 ms worst frame, and at most 2.25 px
   visible anchor movement. Scaling, 480 px retention, and work-stream passed.
 - The real-daemon tool-leases fixture now also invokes native WebKit Copy and
@@ -109,6 +112,11 @@ These synthetic figures are not whole-app latency or memory guarantees.
   pasteboard. Copy crosses an asynchronous process boundary; an initial
   synchronous harness read failed and was corrected to wait for the response.
   Its complete 32-view/16-result lifecycle and real reconnect check passed.
+- Final local frame-based reruns at `f205a96` did not complete: scrolling
+  stopped at its first frame stage and scaling stopped after history setup.
+  Read-only IORegistry inspection confirmed `CGSSessionScreenIsLocked=Yes`;
+  these runs are incomplete, not passes. The lock screen was left unchanged.
+  The corresponding macOS CI fixtures passed at that exact source revision.
 - One earlier Linux driver-unit run failed intermittently in the unchanged
   Claude integration catalog test; two subsequent CI runs passed that suite.
   The original failure log is retained. Exact release-commit CI is pending.
