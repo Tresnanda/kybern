@@ -1498,10 +1498,13 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   }
 
   return (
-    <div className="chat-paint-host mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
+    // Diff rows already host themselves. Promoting this card (or its overflow
+    // clip) makes one tiled layer as tall as an expanded file — the same class
+    // as work-list containers. Keep the radius clip; do not will-change it.
+    <div data-edited-files className="mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
       <div
         className={cn(
-          "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-chat-code-surface)_40%,transparent)] px-3 py-1.5",
+          "chat-paint-host flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-chat-code-surface)_40%,transparent)] px-3 py-1.5",
           expanded && "border-b border-[color:var(--color-border-light)]",
         )}
       >
@@ -1548,7 +1551,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
           <button
             type="button"
             onClick={() => setShowAllFor(showAll ? null : restKey)}
-            className="flex w-full items-center justify-start gap-1.5 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2 font-system-ui font-normal text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+            className="chat-paint-host flex w-full items-center justify-start gap-1.5 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2 font-system-ui font-normal text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
             style={CHAT_FONT}
           >
             <DisclosureChevron open={showAll} />
@@ -1585,7 +1588,7 @@ function EditedFileRow({ file, threadId, turnId, first, open, onToggle, onReview
     <div className={cn("border-t border-[color:var(--color-border-light)]", first && "border-t-0")}>
       <div
         data-edited-file-row
-        className="flex w-full min-w-0 items-center gap-1.5 overflow-hidden bg-transparent py-1.5 pr-2 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
+        className="chat-paint-host flex w-full min-w-0 items-center gap-1.5 overflow-hidden bg-transparent py-1.5 pr-2 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
       >
         <button
           type="button"

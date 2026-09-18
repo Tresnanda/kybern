@@ -20,6 +20,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
+| Inline edited-files card layer | The “Edited N files” card hosted the whole expanded diff as one layer past 1024 CSS px. | Leave `[data-edited-files]` unhosted; host the header and each diff `tr`. Native A/B: `KYBERN_PERF_LIVE_EDITED_FILES_LAYER=1`. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
@@ -39,6 +40,10 @@ exceeded it.
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,
 primary-source research, and the remaining 200–300 MB whole-app acceptance work.
+
+See [inline edited-files card layer](edited-files-layer-2026-09-18.md) for why
+the transcript “Edited N files” card must not promote an expanded diff, and
+the native A/B control (`KYBERN_PERF_LIVE_EDITED_FILES_LAYER`).
 
 See [live tool result retention](live-tool-retention-2026-09-18.md) for the live
 completion path that previously bypassed lazy-result budgets, its byte/count

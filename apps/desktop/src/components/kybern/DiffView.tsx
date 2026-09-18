@@ -53,7 +53,7 @@ export function FileDiffHeader({ file, open, onToggle, trailing }: { file: FileD
 function HunkRows({ hunk, first }: { hunk: DiffHunk; first: boolean }) {
   return (
     <>
-      <tr className={cn(SEP_BG, "font-system-ui text-muted-foreground")}>
+      <tr className={cn("chat-paint-host", SEP_BG, "font-system-ui text-muted-foreground")}>
         <td colSpan={2} className={cn("w-px py-0.5 pr-2 pl-3 text-right whitespace-nowrap text-muted-foreground/45 select-none", !first && "border-t border-[color:var(--color-border-light)]")}>
           ⋯
         </td>
@@ -62,7 +62,7 @@ function HunkRows({ hunk, first }: { hunk: DiffHunk; first: boolean }) {
         </td>
       </tr>
       {hunk.lines.map((l, i) => (
-        <tr key={i} className={cn(l.kind === "add" && ADD_BG, l.kind === "del" && DEL_BG, l.kind === "ctx" && "hover:bg-[color-mix(in_srgb,var(--background)_96%,var(--foreground))]")}>
+        <tr key={i} className={cn("chat-paint-host", l.kind === "add" && ADD_BG, l.kind === "del" && DEL_BG, l.kind === "ctx" && "hover:bg-[color-mix(in_srgb,var(--background)_96%,var(--foreground))]")}>
           <td className={cn("w-px min-w-[3ch] pr-1 pl-3 text-right align-top font-system-ui tabular-nums text-muted-foreground/45 select-none", l.kind === "add" && ADD_NUM_BG, l.kind === "del" && DEL_NUM_BG)}>
             {l.oldNo ?? ""}
           </td>
@@ -96,8 +96,8 @@ export function FileDiffBody({ file, truncated = false }: { file: FileDiff; trun
     return hunks
   }, [file.hunks, visibleLines])
 
-  if (file.binary) return <p className="px-3 py-2 text-[11px] text-muted-foreground/75">Binary file changed.</p>
-  if (file.hunks.length === 0) return <p className="px-3 py-2 text-[11px] text-muted-foreground/75">No textual changes.</p>
+  if (file.binary) return <p className="chat-paint-host px-3 py-2 text-[11px] text-muted-foreground/75">Binary file changed.</p>
+  if (file.hunks.length === 0) return <p className="chat-paint-host px-3 py-2 text-[11px] text-muted-foreground/75">No textual changes.</p>
   return (
     <>
       <div className="selectable overflow-x-auto">
@@ -110,12 +110,12 @@ export function FileDiffBody({ file, truncated = false }: { file: FileDiff; trun
         </table>
       </div>
       {visibleLines < totalLines && (
-        <button type="button" onClick={() => setVisibleLines((count) => count + DIFF_LINES_BATCH)} className="flex w-full items-center justify-center border-t border-[color:var(--color-border-light)] px-3 py-2 font-system-ui text-[11px] text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground">
+        <button type="button" onClick={() => setVisibleLines((count) => count + DIFF_LINES_BATCH)} className="chat-paint-host flex w-full items-center justify-center border-t border-[color:var(--color-border-light)] px-3 py-2 font-system-ui text-[11px] text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground">
           Show {Math.min(DIFF_LINES_BATCH, totalLines - visibleLines)} more lines
         </button>
       )}
       {truncated && (
-        <p className="border-t border-[color:var(--color-border-light)] px-3 py-2 font-system-ui text-[11px] text-muted-foreground/75">Large diff truncated at 1 MiB. Open the repository in your editor for the full patch.</p>
+        <p className="chat-paint-host border-t border-[color:var(--color-border-light)] px-3 py-2 font-system-ui text-[11px] text-muted-foreground/75">Large diff truncated at 1 MiB. Open the repository in your editor for the full patch.</p>
       )}
     </>
   )
