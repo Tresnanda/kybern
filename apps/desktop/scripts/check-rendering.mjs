@@ -17,7 +17,9 @@ try {
     const dataDir = path.join(scratch, "daemon")
     const initialize = spawnSync(binary, ["--data-dir", dataDir, "--print-token"], { stdio: "ignore" })
     if (initialize.error || initialize.status !== 0) throw new Error("Build the release daemon before the tool-leases fixture")
-    const seed = spawnSync("python3", [path.join(desktop, fixture === "live-tool-memory" ? "scripts/seed-live-tools.py" : "scripts/seed-tool-leases.py"), dataDir], { encoding: "utf8" })
+    const seedArgs = [path.join(desktop, fixture === "live-tool-memory" ? "scripts/seed-live-tools.py" : "scripts/seed-tool-leases.py"), dataDir]
+    if (fixture === "live-tool-memory" && process.env.KYBERN_PERF_LIVE_HISTORY === "1") seedArgs.push("--history")
+    const seed = spawnSync("python3", seedArgs, { encoding: "utf8" })
     if (seed.error || seed.status !== 0) throw new Error("Could not seed scratch lease data")
     daemon = spawn(binary, ["--data-dir", dataDir, "--port", "0"], { stdio: "ignore" })
     const until = Date.now() + 10000
@@ -56,7 +58,12 @@ try {
     process.env.KYBERN_INTEGRATION_PREVIEW_URLS = JSON.stringify(urls)
   }
   const dist = path.join(scratch, "dist")
-  const build = spawnSync("pnpm", ["exec", "vite", "build", "--config", "perf/vite.config.ts", "--outDir", dist], { cwd: desktop, encoding: "utf8", env: { ...process.env, KYBERN_PERF_FIXTURE: fixture } })
+  const build = spawnSync("pnpm", ["exec", "vite", "build", "--config", "perf/vite.config.ts", "--outDir", dist], { cwd: desktop, encoding: "utf8", env: {
+    ...process.env,
+    KYBERN_PERF_FIXTURE: fixture,
+    VITE_LIVE_TOOLS_HISTORY: process.env.KYBERN_PERF_LIVE_HISTORY ?? "0",
+    VITE_EARLIER_STATUS_UNHOSTED: process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED ?? "0",
+  } })
   if (build.error) throw build.error
   if (build.status !== 0) throw new Error(build.stdout + build.stderr)
   const config = JSON.parse(readFileSync(path.join(desktop, "src-tauri/tauri.conf.json"), "utf8"))

@@ -12,6 +12,7 @@ declare const __TOOL_LEASE_ENDPOINT__: { url: string; token: string; http_base: 
 const threadId = "20000000-0000-4000-8000-000000000001"
 const baseline = import.meta.env.VITE_LIVE_TOOLS_BASELINE === "1"
 const fullEvents = baseline || import.meta.env.VITE_LIVE_TOOLS_FULL_EVENTS === "1"
+const seededHistory = import.meta.env.VITE_LIVE_TOOLS_HISTORY === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -21,6 +22,7 @@ async function until(test: () => boolean, message: string) {
 }
 const expected = (i: number) => `Result ${String(i).padStart(3, "0")}: é😀\n` + `${String(i).padStart(3, "0")} exact payload\n`.repeat(65536)
 const tools = () => useStore.getState().transcripts[threadId]?.blocks.filter(b => b.kind === "tool") ?? []
+const liveTools = () => tools().filter(block => block.call.id.startsWith("live-"))
 async function mark(stage: string) {
   await sleep(500)
   await new Promise<void>(resolve => { w.__memoryContinue = resolve; w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ stage, memory: true })) })
@@ -68,32 +70,52 @@ async function run() {
       </ThemeProviderContext>,
     ))
     render(1)
+    if (seededHistory) {
+      const earlier = document.querySelector<HTMLElement>("[data-earlier-history-status]")
+      check(earlier?.classList.contains("chat-paint-host") === true || import.meta.env.VITE_EARLIER_STATUS_UNHOSTED === "1", "Earlier-history status row was not hosted")
+    }
     await mark("live-startup")
     await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
-    await until(() => tools().length === 64 && tools().every(b => b.complete) && useStore.getState().threads[threadId]?.status === "idle", "Live turn did not complete")
-    const bytes = tools().reduce((total, block) => total + retainedSize(block.output), 0)
+    await until(() => liveTools().length === 64 && liveTools().every(b => b.complete) && useStore.getState().threads[threadId]?.status === "idle", "Live turn did not complete")
+    const bytes = liveTools().reduce((total, block) => total + retainedSize(block.output), 0)
     check(calls === 0, "Closed live output was unnecessarily fetched")
     if (!baseline) check(bytes <= 8 * 1024 * 1024, `Closed live payloads exceed budget: ${bytes}`)
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     await mark("live-results-closed")
+    if (seededHistory) {
+      const first = liveTools()[0]!
+      const result = await client.call("threads.tool_output", {
+        thread_id: threadId,
+        tool_call_id: first.call.id,
+        start_seq: first.seq,
+        through_seq: useStore.getState().transcripts[threadId]?.lastSeq,
+        include_tool_stream: false,
+      })
+      const content = result.output && typeof result.output === "object" && !Array.isArray(result.output) && "content" in result.output ? result.output.content : result.output
+      check(content === expected(0), "Exact Unicode live output changed on direct reload")
+      await sleep(3000)
+      await mark("live-post-workload-idle")
+      w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, baseline, fullEvents, seededHistory, deliveredOutputChars, omittedCompletions, closedRetainedBytes: bytes, liveResults: 64, hydrationCalls: calls, exactOutput: true }))
+      return
+    }
     // Directly mount two independent consumers of the same omitted early row;
     // the existing Transcript view owns its real leases and hydration effects.
-    const first = tools()[0]!
+    const first = liveTools()[0]!
     useStore.getState().set({ expandedWork: { [first.turnId]: true } })
     render(2)
     await sleep(500)
     for (const viewport of document.querySelectorAll<HTMLElement>("[data-chat-scroll-container]")) {
-      viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
-      viewport.scrollTop = 0
+      viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: seededHistory ? 100 : -100 }))
+      viewport.scrollTop = seededHistory ? viewport.scrollHeight : 0
     }
     await sleep(500)
     await until(() => document.querySelectorAll('button[aria-expanded="false"]').length > 1, "No live work disclosures")
     const openFirst = () => [...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].filter(b => b.textContent?.includes("live-000.txt"))
     await until(() => openFirst().length === 2, "Early live result not reachable in both panes")
     for (const button of openFirst()) button.click()
-    await until(() => document.querySelectorAll("pre").length === 2, "Shared live result did not hydrate").catch(error => { throw new Error(`${error}; ${JSON.stringify({ calls, pre: document.querySelectorAll("pre").length, first: tools()[0] && { omitted: tools()[0]!.outputOmitted, stream: tools()[0]!.stream.slice(0, 80), output: String(tools()[0]!.output).slice(0, 80) }, buttons: openFirst().map(b => ({ text: b.textContent, open: b.getAttribute("aria-expanded") })), text: document.body.innerText.slice(0, 1500) })}`) })
+    await until(() => document.querySelectorAll("pre").length === 2, "Shared live result did not hydrate").catch(error => { throw new Error(`${error}; ${JSON.stringify({ calls, pre: document.querySelectorAll("pre").length, first: liveTools()[0] && { omitted: liveTools()[0]!.outputOmitted, stream: liveTools()[0]!.stream.slice(0, 80), output: String(liveTools()[0]!.output).slice(0, 80) }, buttons: openFirst().map(b => ({ text: b.textContent, open: b.getAttribute("aria-expanded") })), text: document.body.innerText.slice(0, 1500) })}`) })
     for (const pre of document.querySelectorAll("pre")) check(pre.textContent === expected(0), "Exact Unicode live output changed on reload")
     check(calls === (baseline ? 0 : 1), `Shared live result fetched ${calls} times`)
     await mark("live-result-open-shared")
