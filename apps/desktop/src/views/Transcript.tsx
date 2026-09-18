@@ -642,9 +642,11 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
         <div className={cn(ROW, "pb-2")} data-timeline-row-kind="live-work">
           <WorkingHeader since={group.user?.at ?? ""} />
           {hasWork && (
-            <div className="chat-paint-host mt-1 space-y-0.5" data-timeline-row-kind="work">
+            <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
               {/* Every live event stays at its sequence position. Only the tail
-                  assistant segment streams; earlier prose never gets reparented. */}
+                  assistant segment streams; earlier prose never gets reparented.
+                  VirtualRows owns the bounded paint host for every item. This
+                  growing list must not become one tiled compositing layer. */}
               <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
