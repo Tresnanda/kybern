@@ -371,7 +371,7 @@ fn completion_consumes_superseded_worker_wakeups_and_late_updates_stay_durable()
                 to_thread_id: fixture.coordinator.id,
                 purpose: CollaborationMessagePurpose::Result,
                 reply_to: None,
-                body: "late duplicate result remains available for audit".into(),
+                body: queued[1].body.clone(),
             },
             Some(fixture.worker.id),
         )
@@ -379,6 +379,25 @@ fn completion_consumes_superseded_worker_wakeups_and_late_updates_stay_durable()
     assert_eq!(late.state, CollaborationDeliveryState::Persisted);
     assert!(!fixture.store.queue_is_pending(late.id).unwrap());
     assert_eq!(fixture.store.queue_list(Some(fixture.coordinator.id)).unwrap().len(), 2);
+
+    let fresh_result = fixture
+        .orchestrator
+        .collaboration_message_send(
+            methods::CollaborationMessagesSendParams {
+                operation_id: Uuid::now_v7(),
+                group_id: fixture.group.id,
+                assignment_id: Some(assignment.id),
+                from_thread_id: None,
+                to_thread_id: fixture.coordinator.id,
+                purpose: CollaborationMessagePurpose::Result,
+                reply_to: None,
+                body: "New follow-up commit after review".into(),
+            },
+            Some(fixture.worker.id),
+        )
+        .unwrap();
+    assert_eq!(fresh_result.state, CollaborationDeliveryState::Queued);
+    assert!(fixture.store.queue_is_pending(fresh_result.id).unwrap());
 
     let change_request = fixture
         .orchestrator

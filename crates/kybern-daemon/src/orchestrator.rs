@@ -1702,10 +1702,23 @@ impl Orchestrator {
         let terminal_recovery = assignment.as_ref().is_some_and(|assignment| {
             params.purpose == CollaborationMessagePurpose::Result && params.operation_id == derived_operation_id(assignment.id, 0x72)
         });
+        let duplicate_result = assignment_is_terminal
+            && from_thread_id.is_some()
+            && params.purpose == CollaborationMessagePurpose::Result
+            && !terminal_recovery
+            && existing_messages.iter().any(|message| {
+                message.assignment_id == params.assignment_id
+                    && message.from_thread_id == from_thread_id
+                    && message.to_thread_id == params.to_thread_id
+                    && message.purpose == params.purpose
+                    && message.reply_to == params.reply_to
+                    && message.body == params.body
+                    && !matches!(message.state, CollaborationDeliveryState::Failed | CollaborationDeliveryState::Uncertain)
+            });
         let mut should_wake = group.status == GroupStatus::Active
             && recipient_group_status != Some(GroupStatus::Paused)
             && params.purpose != CollaborationMessagePurpose::Progress
-            && (!assignment_is_terminal || params.purpose != CollaborationMessagePurpose::Result || terminal_recovery);
+            && !duplicate_result;
         if pending >= group.policy.max_pending_messages as usize && terminal_notification {
             should_wake = false;
         }
@@ -2410,14 +2423,31 @@ impl Orchestrator {
         turn_id: TurnId,
         assignments: &[CollaborationAssignment],
     ) -> Result<()> {
-        let surfaced =
-            assignments.iter().filter(|assignment| assignment.result.is_some()).map(|assignment| assignment.id).collect::<HashSet<_>>();
+        let surfaced = assignments
+            .iter()
+            .filter_map(|assignment| {
+                assignment.result.as_ref().map(|result| {
+                    (
+                        assignment.id,
+                        (
+                            assignment.owner_thread_id,
+                            format!("Assignment {} finished with {:?}: {}", assignment.id, result.outcome, result.summary),
+                        ),
+                    )
+                })
+            })
+            .collect::<HashMap<_, _>>();
         if surfaced.is_empty() {
             return Ok(());
         }
         let Some(group_id) = assignments.first().map(|assignment| assignment.group_id) else { return Ok(()) };
         let mut messages = self.inner.store.collaboration_queued_results(group_id, thread_id)?;
-        messages.retain(|message| message.assignment_id.is_some_and(|assignment_id| surfaced.contains(&assignment_id)));
+        messages.retain(|message| {
+            message
+                .assignment_id
+                .and_then(|id| surfaced.get(&id))
+                .is_some_and(|(owner, body)| message.from_thread_id == *owner && message.reply_to.is_none() && message.body == *body)
+        });
         self.observe_collaboration_messages(thread_id, turn_id, &mut messages)
     }
 
@@ -6496,7 +6526,7 @@ mod tests {
             external_recipient: false,
             purpose: CollaborationMessagePurpose::Result,
             reply_to: None,
-            body: "Assignment finished".into(),
+            body: format!("Assignment {} finished with Success: The structured result surfaced", assignment.id),
             state: CollaborationDeliveryState::Queued,
             delivery_turn_id: None,
             wakeup_count: 1,
@@ -6525,6 +6555,15 @@ mod tests {
         fixture.store.collaboration_message_put(&actionable, Some(actionable.id)).unwrap();
         fixture.store.collaboration_message_queue(&actionable).unwrap();
 
+        let fresh_result = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            purpose: CollaborationMessagePurpose::Result,
+            body: "A new follow-up commit that is not in the old structured report".into(),
+            ..actionable.clone()
+        };
+        fixture.store.collaboration_message_put(&fresh_result, Some(fresh_result.id)).unwrap();
+        fixture.store.collaboration_message_queue(&fresh_result).unwrap();
         let (live, _) = fixture.active_app_tool_session(&thread).await;
         let value = fixture
             .orchestrator
@@ -6542,6 +6581,10 @@ mod tests {
         assert!(!fixture.store.queue_is_pending(result_notification.id).unwrap(), "surfaced structured result consumes its wakeup");
         assert!(fixture.store.queue_is_pending(unrelated[100].id).unwrap(), "unrelated message outside the page stays queued");
         assert!(fixture.store.queue_is_pending(actionable.id).unwrap(), "actionable same-assignment follow-up stays queued");
+        assert!(
+            fixture.store.queue_is_pending(fresh_result.id).unwrap(),
+            "an unseen follow-up result is not represented by an older report"
+        );
     }
 
     #[test]
