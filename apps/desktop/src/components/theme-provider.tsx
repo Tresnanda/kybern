@@ -1,7 +1,7 @@
 import * as React from "react"
 
 import { applyAppearance } from "@/lib/kit/applyTheme"
-import { isTauri, setWindowVibrancy } from "@/lib/tauri"
+import { isTauri } from "@/lib/tauri"
 import { isTheme, ThemeProviderContext, type Theme } from "@/components/theme-context"
 
 type ResolvedTheme = "dark" | "light"
@@ -88,10 +88,9 @@ export function ThemeProvider({
   }, [])
   React.useLayoutEffect(() => {
     document.documentElement.toggleAttribute("data-full-translucency", translucent)
-    // Native material is invisible behind opaque CSS, but it still owns a
-    // full-window effect view and associated WebKit/WindowServer resources.
-    // Best effort matches theme synchronization: CSS remains authoritative.
-    void setWindowVibrancy(translucent).catch(() => {})
+    // This preference changes the content surfaces only. The normal macOS
+    // sidebar is translucent too and always needs the native window material
+    // configured by Tauri; disabling it exposes sharp windows behind Kybern.
   }, [translucent])
 
   const [theme, setThemeState] = React.useState<Theme>(() => {

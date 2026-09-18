@@ -1,5 +1,13 @@
 # Native window material memory
 
+> Superseded by the v0.4.8 sidebar regression: the full-translucency preference
+> controls content surfaces, not the normal macOS sidebar. Clearing vibrancy
+> when that preference is off exposes unblurred windows behind the sidebar.
+> Keep the configured native material in both modes. The savings below must not
+> be treated as an accepted optimization; the earlier fixture did not exercise
+> the production ThemeProvider lifecycle.
+
+
 ## Finding
 
 The desktop's **Use translucent surfaces** preference changed CSS only. Tauri's
