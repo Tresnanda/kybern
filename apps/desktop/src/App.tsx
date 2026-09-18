@@ -36,17 +36,22 @@ import { SurfaceHeader } from "@/views/chrome"
 
 const DOCK_MOTION = { type: "spring", stiffness: 420, damping: 42, mass: 0.7 } as const
 
-/** The dock opens at half the shell, never narrower than 26rem; the seam is draggable. */
+/** Reserve readable chat width; use an overlay when both panes cannot fit. */
 const RIGHT_DOCK_MIN_WIDTH = 26 * 16
 function useDockWidth() {
-  const [max, setMax] = useState(() => Math.max(RIGHT_DOCK_MIN_WIDTH, Math.round(window.innerWidth * 0.7)))
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [available, setAvailable] = useState(window.innerWidth)
   useEffect(() => {
-    const onResize = () => setMax(Math.max(RIGHT_DOCK_MIN_WIDTH, Math.round(window.innerWidth * 0.7)))
-    window.addEventListener("resize", onResize)
-    return () => window.removeEventListener("resize", onResize)
+    const container = containerRef.current
+    if (!container) return
+    const observer = new ResizeObserver(([entry]) => setAvailable(entry.contentRect.width))
+    observer.observe(container)
+    return () => observer.disconnect()
   }, [])
+  const overlay = available < RIGHT_DOCK_MIN_WIDTH + 320
+  const max = Math.max(0, overlay ? available : available - 320)
   const resize = useResize({ initial: Math.max(RIGHT_DOCK_MIN_WIDTH, Math.round(window.innerWidth * 0.42)), min: RIGHT_DOCK_MIN_WIDTH, max, side: "right", storageKey: "kybern.dock.width" })
-  return { ...resize, width: Math.min(resize.width, max) }
+  return { ...resize, containerRef, overlay, width: Math.min(resize.width, max) }
 }
 
 export default function App() {
@@ -121,8 +126,8 @@ function Workspace() {
             data-slot="sidebar-inset-surface"
             className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card relative z-[15] overflow-hidden"
           >
-            <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
-              <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            <div ref={dock.containerRef} className="relative flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
+              <main data-workspace-chat className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <ConnectionBanner />
                 {connecting ? <Welcome /> : splitView ? (
                   <SplitThreads splitView={splitView} />
@@ -144,12 +149,14 @@ function Workspace() {
               <AnimatePresence initial={false}>
                 {rightOpen && !connecting && (
                   <motion.aside
+                    data-workspace-dock
+                    data-overlay={dock.overlay || undefined}
                     key="dock"
                     initial={{ width: 0, opacity: 0 }}
                     animate={{ width: dockWidth, opacity: 1 }}
                     exit={{ width: 0, opacity: 0 }}
                     transition={dock.dragging ? { duration: 0 } : DOCK_MOTION}
-                    className="relative shrink-0 border-l border-[color:var(--app-surface-divider)]"
+                    className={cn("shrink-0 border-l border-[color:var(--app-surface-divider)]", dock.overlay ? "absolute inset-y-0 right-0 z-30 bg-[var(--color-background-surface)] shadow-xl" : "relative")}
                   >
                     <ResizeHandle edge="left" label="Resize right sidebar" onPointerDown={dock.onPointerDown} dragging={dock.dragging} />
                     <div className="h-full overflow-hidden" style={{ width: dockWidth }}>
