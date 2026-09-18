@@ -594,6 +594,57 @@ impl Store {
                 assignment.group_id,
                 EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() },
             )?;
+            // The structured terminal result is authoritative for the finished
+            // assignment. Older worker-to-recipient updates can remain queued
+            // behind a long coordinator turn and otherwise wake it one at a
+            // time after integration has already finished. Preserve every row
+            // for audit, but atomically consume only queued updates on this
+            // exact return route before enqueuing the terminal notification.
+            if let Some((_, _, terminal, _)) = notification {
+                let superseded = {
+                    let mut statement = tx.prepare(
+                        "SELECT payload FROM collaboration_messages
+                         WHERE assignment_id=?1 AND from_thread_id IS ?2 AND to_thread_id=?3
+                           AND state='queued' AND id<>?4
+                           AND json_extract(payload,'$.purpose')='result'
+                           AND EXISTS (SELECT 1 FROM queued_messages
+                             WHERE queued_messages.id=collaboration_messages.delivery_message_id
+                               AND queued_messages.pending=1)
+                         ORDER BY id",
+                    )?;
+                    statement
+                        .query_map(
+                            params![
+                                assignment.id.to_string(),
+                                terminal.from_thread_id.map(|id| id.to_string()),
+                                terminal.to_thread_id.to_string(),
+                                terminal.id.to_string()
+                            ],
+                            |row| row.get::<_, String>(0),
+                        )?
+                        .collect::<std::result::Result<Vec<_>, _>>()?
+                };
+                for payload in superseded {
+                    let mut message: CollaborationMessage = serde_json::from_str(&payload)?;
+                    message.state = CollaborationDeliveryState::Cancelled;
+                    message.updated_at = Utc::now();
+                    tx.execute(
+                        "UPDATE collaboration_messages SET state=?2,payload=?3 WHERE id=?1 AND state='queued'",
+                        params![message.id.to_string(), snake(message.state)?, serde_json::to_string(&message)?],
+                    )?;
+                    events.push(append_event_in_transaction(
+                        &tx,
+                        message.to_thread_id,
+                        None,
+                        EventPayload::MessageRemoved { message_id: message.id },
+                    )?);
+                    events.extend(append_collaboration_events_in_transaction(
+                        &tx,
+                        message.group_id,
+                        EventPayload::CollaborationMessageUpdated { message },
+                    )?);
+                }
+            }
             if let Some((notification_actor, notification_request, message, delivery_message_id)) = notification
                 && collaboration_tx_receipt(
                     &tx,
@@ -845,6 +896,19 @@ impl Store {
         self.with(|c| {
             let mut st = c.prepare("SELECT payload FROM collaboration_messages WHERE state IN ('persisted','queued') ORDER BY id")?;
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        })
+    }
+
+    pub fn collaboration_queued_results(&self, group_id: GroupId, to_thread_id: ThreadId) -> Result<Vec<CollaborationMessage>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT payload FROM collaboration_messages
+                 WHERE group_id=?1 AND to_thread_id=?2 AND state='queued'
+                   AND json_extract(payload,'$.purpose')='result'
+                 ORDER BY id",
+            )?;
+            let rows = statement.query_map(params![group_id.to_string(), to_thread_id.to_string()], |row| row.get::<_, String>(0))?;
             rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
         })
     }

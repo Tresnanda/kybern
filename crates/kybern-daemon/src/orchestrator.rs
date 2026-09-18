@@ -1393,6 +1393,17 @@ impl Orchestrator {
         {
             return Err(anyhow!("finish or cancel active child assignments before completing their parent"));
         }
+        if !late_after_stop
+            && let Some(owner_thread_id) = assignment.owner_thread_id
+            && self.inner.store.collaboration_messages(group.id)?.iter().any(|message| {
+                message.assignment_id == Some(assignment.id)
+                    && message.to_thread_id == owner_thread_id
+                    && message.from_thread_id != Some(owner_thread_id)
+                    && message.state == CollaborationDeliveryState::Queued
+            })
+        {
+            return Err(anyhow!("assignment has unread collaboration instructions; read them before reporting completion"));
+        }
         params.result.completed_at = Utc::now();
         if !late_after_stop {
             assignment.status = match params.result.outcome {
@@ -1685,9 +1696,16 @@ impl Orchestrator {
         }
         let now = Utc::now();
         let request = params.clone();
+        let assignment_is_terminal = assignment.as_ref().is_some_and(|assignment| {
+            matches!(assignment.status, AssignmentStatus::Completed | AssignmentStatus::Failed | AssignmentStatus::Cancelled)
+        });
+        let terminal_recovery = assignment.as_ref().is_some_and(|assignment| {
+            params.purpose == CollaborationMessagePurpose::Result && params.operation_id == derived_operation_id(assignment.id, 0x72)
+        });
         let mut should_wake = group.status == GroupStatus::Active
             && recipient_group_status != Some(GroupStatus::Paused)
-            && params.purpose != CollaborationMessagePurpose::Progress;
+            && params.purpose != CollaborationMessagePurpose::Progress
+            && (!assignment_is_terminal || params.purpose != CollaborationMessagePurpose::Result || terminal_recovery);
         if pending >= group.policy.max_pending_messages as usize && terminal_notification {
             should_wake = false;
         }
@@ -2193,6 +2211,7 @@ impl Orchestrator {
                             return Err(anyhow!("native tool caller turn ended before read delivery acknowledgement"));
                         }
                         self.observe_collaboration_messages(thread_id, turn_id, &mut detail.pending_messages)?;
+                        self.observe_collaboration_assignment_results(thread_id, turn_id, &detail.assignments)?;
                         value["pending_messages"] = serde_json::to_value(detail.pending_messages)?;
                         drop(guard);
                         value
@@ -2206,6 +2225,7 @@ impl Orchestrator {
                             return Err(anyhow!("native tool caller turn ended before wait delivery acknowledgement"));
                         }
                         self.observe_collaboration_messages(thread_id, turn_id, &mut result.messages)?;
+                        self.observe_collaboration_assignment_results(thread_id, turn_id, &result.assignments)?;
                         drop(guard);
                         serde_json::to_value(result)?
                     }
@@ -2378,6 +2398,27 @@ impl Orchestrator {
             self.broadcast_committed_collaboration(events);
         }
         Ok(())
+    }
+
+    /// A structured terminal assignment returned by read/wait carries the same
+    /// information as its queued result notification. Consume that exact class
+    /// of wakeup even when bounded message pagination omitted it; questions,
+    /// change requests, replies, failures, and unrelated results remain queued.
+    fn observe_collaboration_assignment_results(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        assignments: &[CollaborationAssignment],
+    ) -> Result<()> {
+        let surfaced =
+            assignments.iter().filter(|assignment| assignment.result.is_some()).map(|assignment| assignment.id).collect::<HashSet<_>>();
+        if surfaced.is_empty() {
+            return Ok(());
+        }
+        let Some(group_id) = assignments.first().map(|assignment| assignment.group_id) else { return Ok(()) };
+        let mut messages = self.inner.store.collaboration_queued_results(group_id, thread_id)?;
+        messages.retain(|message| message.assignment_id.is_some_and(|assignment_id| surfaced.contains(&assignment_id)));
+        self.observe_collaboration_messages(thread_id, turn_id, &mut messages)
     }
 
     /// Called only after the native harness accepted a persisted message.
@@ -6362,6 +6403,145 @@ mod tests {
                 assert!(fixture.store.queue_is_pending(messages[100].id).unwrap(), "outside snapshot");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn collaboration_read_consumes_result_notification_omitted_by_message_pagination() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let group = fixture
+            .orchestrator
+            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
+                operation_id: Uuid::now_v7(),
+                project_id: thread.project_id,
+                coordinator_thread_id: thread.id,
+                objective: "Read a structured assignment result".into(),
+                success_criteria: vec![],
+                coordinator_mode: Some(CoordinatorMode::Ordinary),
+                policy: None,
+            })
+            .unwrap();
+        let worker = fixture.thread(ThreadStatus::Idle);
+        fixture
+            .store
+            .collaboration_member_put(&GroupMember {
+                group_id: group.id,
+                thread_id: worker.id,
+                role: GroupMemberRole::Worker,
+                active: true,
+                joined_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        let now = chrono::Utc::now();
+        let assignment = CollaborationAssignment {
+            id: Uuid::now_v7(),
+            group_id: group.id,
+            parent_assignment_id: None,
+            owner_thread_id: Some(worker.id),
+            requested_child: None,
+            created_by_thread_id: Some(thread.id),
+            title: "Finished work".into(),
+            instructions: "Return one durable result".into(),
+            kind: AssignmentKind::Research,
+            status: AssignmentStatus::Completed,
+            dispatch_message_id: None,
+            base_revision: None,
+            depth: 0,
+            result: Some(AssignmentResult {
+                outcome: AssignmentOutcome::Success,
+                summary: "The structured result surfaced".into(),
+                changes: Vec::new(),
+                checks: Vec::new(),
+                artifacts: Vec::new(),
+                unresolved: Vec::new(),
+                completed_at: now,
+            }),
+            uncertainty: None,
+            revision: 2,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_assignment_put(&assignment).unwrap();
+
+        let mut unrelated = Vec::new();
+        for index in 0..101 {
+            let message = CollaborationMessage {
+                id: Uuid::now_v7(),
+                operation_id: Uuid::now_v7(),
+                group_id: group.id,
+                assignment_id: None,
+                from_thread_id: Some(worker.id),
+                to_thread_id: thread.id,
+                external_recipient: false,
+                purpose: CollaborationMessagePurpose::Question,
+                reply_to: None,
+                body: format!("unrelated question {index}"),
+                state: CollaborationDeliveryState::Queued,
+                delivery_turn_id: None,
+                wakeup_count: 1,
+                created_at: now,
+                updated_at: now,
+            };
+            fixture.store.collaboration_message_put(&message, Some(message.id)).unwrap();
+            fixture.store.collaboration_message_queue(&message).unwrap();
+            unrelated.push(message);
+        }
+        let result_notification = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            group_id: group.id,
+            assignment_id: Some(assignment.id),
+            from_thread_id: Some(worker.id),
+            to_thread_id: thread.id,
+            external_recipient: false,
+            purpose: CollaborationMessagePurpose::Result,
+            reply_to: None,
+            body: "Assignment finished".into(),
+            state: CollaborationDeliveryState::Queued,
+            delivery_turn_id: None,
+            wakeup_count: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_message_put(&result_notification, Some(result_notification.id)).unwrap();
+        fixture.store.collaboration_message_queue(&result_notification).unwrap();
+        let actionable = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            group_id: group.id,
+            assignment_id: Some(assignment.id),
+            from_thread_id: Some(worker.id),
+            to_thread_id: thread.id,
+            external_recipient: false,
+            purpose: CollaborationMessagePurpose::ChangeRequest,
+            reply_to: None,
+            body: "Do not consume this actionable follow-up".into(),
+            state: CollaborationDeliveryState::Queued,
+            delivery_turn_id: None,
+            wakeup_count: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_message_put(&actionable, Some(actionable.id)).unwrap();
+        fixture.store.collaboration_message_queue(&actionable).unwrap();
+
+        let (live, _) = fixture.active_app_tool_session(&thread).await;
+        let value = fixture
+            .orchestrator
+            .execute_native_app_tool_call(
+                thread.id,
+                live.session_instance_id,
+                "read-structured-result",
+                "kybern_collaboration_read",
+                json!({}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value["pending_messages"].as_array().unwrap().len(), 100);
+        assert_eq!(value["assignments"][0]["result"]["summary"], "The structured result surfaced");
+        assert!(!fixture.store.queue_is_pending(result_notification.id).unwrap(), "surfaced structured result consumes its wakeup");
+        assert!(fixture.store.queue_is_pending(unrelated[100].id).unwrap(), "unrelated message outside the page stays queued");
+        assert!(fixture.store.queue_is_pending(actionable.id).unwrap(), "actionable same-assignment follow-up stays queued");
     }
 
     #[test]
