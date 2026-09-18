@@ -1,12 +1,30 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react"
+import { toast } from "sonner"
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
 import { Button } from "@/components/kit/button"
+import { IconSwap } from "@/components/kybern/motion"
+import { CheckIcon, CopyIcon, DownloadIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
 import { fetchThreadImage } from "@/state/rpc"
 import { cn } from "@/lib/utils"
 
 type ImageError = { message: string; retryable: boolean }
+type ImageAction = "copy" | "download"
+
+function imageMime(value: string): string | null {
+  const direct = value.match(/^image\/(png|jpeg|gif|webp|avif)(?:[;,]|$)/i)?.[0]
+  if (direct) return direct.split(/[;,]/, 1)[0]!.toLowerCase()
+  const extension = value.match(/\.(png|jpe?g|gif|webp|avif)(?:[?#]|$)/i)?.[1]?.toLowerCase()
+  if (!extension) return null
+  return extension === "jpg" || extension === "jpeg" ? "image/jpeg" : `image/${extension}`
+}
+
+function imageDownloadName(label: string, source: string, mime: string): string {
+  const safeLabel = label.trim().replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "image"
+  if (/\.(png|jpe?g|gif|webp|avif)$/i.test(safeLabel)) return safeLabel
+  return `${safeLabel}.${mime.split("/")[1] === "jpeg" ? "jpg" : mime.split("/")[1] || imageMime(source)?.split("/")[1] || "png"}`
+}
 
 /** Local previews and originals share the authenticated thread boundary. */
 export function ResponseImage({ source, label = "Agent image", compact = false, thumbnail = false, linkLabel }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; linkLabel?: ReactNode }) {
@@ -30,6 +48,13 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const [original, setOriginal] = useState(direct)
   const [originalError, setOriginalError] = useState(initialError)
   const [originalRetry, setOriginalRetry] = useState(0)
+  const [imageAction, setImageAction] = useState<ImageAction | null>(null)
+  const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<number | null>(null)
+
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current)
+  }, [])
 
   useEffect(() => {
     if (isLink || !preview.current) return
@@ -67,12 +92,55 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   }, [source, threadId, open, originalRetry])
 
   const changeOpen = (next: boolean) => {
-    if (next) { setOriginal(direct); setOriginalError(initialError) }
+    if (next) {
+      setOriginal(direct)
+      setOriginalError(initialError)
+      setImageAction(null)
+      setCopied(false)
+    }
     setOpen(next)
   }
   const retryPreview = () => { setError(null); setLoaded(false); setUrl(direct); setRetry((n) => n + 1) }
   const retryOriginal = () => { setOriginalError(null); setOriginal(direct); setOriginalRetry((n) => n + 1) }
   const displayError = (): ImageError => ({ message: "Unable to display image. Check that the file is still available, then retry.", retryable: true })
+  const runImageAction = async (kind: ImageAction) => {
+    if (!original || imageAction) return
+    setImageAction(kind)
+    try {
+      const response = await fetch(original)
+      if (!response.ok) throw new Error(`Image request failed with ${response.status}`)
+      const blob = await response.blob()
+      const mime = imageMime(blob.type) ?? imageMime(source) ?? "image/png"
+      const image = blob.type === mime ? blob : new Blob([blob], { type: mime })
+      if (kind === "copy") {
+        if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+          throw new Error("Image copying is not available in this window.")
+        }
+        await navigator.clipboard.write([new ClipboardItem({ [mime]: image })])
+        setCopied(true)
+        if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current)
+        copiedTimer.current = window.setTimeout(() => {
+          copiedTimer.current = null
+          setCopied(false)
+        }, 1400)
+      } else {
+        const downloadUrl = URL.createObjectURL(image)
+        const link = document.createElement("a")
+        link.href = downloadUrl
+        link.download = imageDownloadName(label, source, mime)
+        document.body.append(link)
+        link.click()
+        link.remove()
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0)
+      }
+    } catch {
+      toast.error(kind === "copy" ? "Unable to copy image" : "Unable to download image", {
+        description: kind === "copy" ? "Use Download image instead, or check clipboard permissions." : "Check that the image is still available, then retry.",
+      })
+    } finally {
+      setImageAction(null)
+    }
+  }
   const status = (error: ImageError | null, retry: () => void, inline = false) => error
     ? <span role="status" className="flex flex-wrap items-center gap-3 rounded-lg bg-[var(--color-background-button-secondary)] p-3 text-sm">
       <span>{label}: {error.message}</span>
@@ -90,7 +158,35 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
       </button>}
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogPopup finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
-        <DialogTitle className="pe-8 text-sm">{label}</DialogTitle>
+        <div className="flex min-w-0 items-center justify-between gap-3 pe-8">
+          <DialogTitle className="min-w-0 flex-1 truncate text-sm">{label}</DialogTitle>
+          {original && !originalError && <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={copied ? "Image copied" : "Copy image"}
+              title={copied ? "Image copied" : "Copy image"}
+              disabled={imageAction !== null}
+              onClick={() => void runImageAction("copy")}
+            >
+              <IconSwap className="size-3.5" active={copied ? "b" : "a"} a={<CopyIcon className="size-3.5" />} b={<CheckIcon className="size-3.5 text-success" />} />
+              <span>{copied ? "Copied" : "Copy"}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="Download image"
+              title="Download image"
+              disabled={imageAction !== null}
+              onClick={() => void runImageAction("download")}
+            >
+              <DownloadIcon className="size-3.5" />
+              <span>Download</span>
+            </Button>
+          </div>}
+        </div>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>
         {originalError || !original ? status(originalError, retryOriginal) : <img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
       </DialogPopup>

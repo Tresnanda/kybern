@@ -35,6 +35,8 @@ async function openPreview(button: HTMLButtonElement, expected: string) {
   const dialog = document.querySelector('[role="dialog"]')
   const image = dialog?.querySelector("img")
   check(image?.src === expected, "Preview lost the original image")
+  check(dialog?.querySelector('button[aria-label="Copy image"]'), "Preview has no copy image control")
+  check(dialog?.querySelector('button[aria-label="Download image"]'), "Preview has no download image control")
   await image.decode()
   check(image.naturalWidth > 0, "Preview did not decode")
   const close = dialog!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')

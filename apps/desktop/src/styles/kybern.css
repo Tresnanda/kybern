@@ -290,12 +290,12 @@ html[data-thread-pointer-dragging="true"] * {
    Positive accessibility queries also work when WebKit does not know a feature. */
 html[data-full-translucency][data-window-material="translucent"] {
   --app-full-translucency: 1;
-  --app-glass-panel-opacity: 58%;
-  --app-glass-popup-opacity: 64%;
+  --app-glass-panel-opacity: 72%;
+  --app-glass-popup-opacity: 78%;
   --app-glass-control-opacity: 40%;
   --app-glass-surface: color-mix(in srgb, var(--app-opaque-content-surface) 72%, transparent);
   --app-glass-popup-surface: color-mix(in srgb, var(--app-opaque-popover) var(--app-glass-popup-opacity), transparent);
-  --app-glass-backdrop-filter: blur(16px) saturate(125%);
+  --app-glass-backdrop-filter: blur(20px) saturate(125%);
   --color-background-surface: var(--app-glass-surface) !important;
   --app-settings-surface: var(--app-glass-surface) !important;
   /* Settings is already over native vibrancy; a second full-pane blur adds no detail. */

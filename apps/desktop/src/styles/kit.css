@@ -2890,6 +2890,15 @@ diffs-container {
   backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
 }
 
+/* The slash/mention/$ command list is a plain listbox rather than a menu
+   primitive, so give it the same material explicitly. Keep the blur on the
+   panel itself (and no ::before layer) so it owns exactly one backdrop. */
+.composer-command-menu-surface {
+  background: var(--app-composer-picker-surface, var(--popover));
+  -webkit-backdrop-filter: var(--app-composer-picker-backdrop-filter, none);
+  backdrop-filter: var(--app-composer-picker-backdrop-filter, none);
+}
+
 /* Density tokens per size modifier (--normal / --small). Width is opt-in below. */
 .composer-picker-menu--normal {
   --picker-menu-body-p: 0.25rem;
@@ -3034,6 +3043,15 @@ diffs-container {
   --picker-option-min-h: 0;
   --picker-option-px: 0.75rem;
   --picker-option-py: 0.5625rem;
+}
+
+/* Sidebar rows keep the rounded fallback on older WebKit while taking the
+   smoother squircle path on engines that expose corner-shape. The active fill
+   and hover fill therefore share exactly the same edge geometry. */
+@supports (corner-shape: round) {
+  .sidebar-row-surface {
+    corner-shape: squircle;
+  }
 }
 
 .runtime-mode-menu-item {

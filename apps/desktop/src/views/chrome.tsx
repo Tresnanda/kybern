@@ -1,17 +1,19 @@
 // Shared header chrome:
 // a 46px bar, 28px controls on one baseline, and the sidebar-toggle +
-// back/forward cluster that moves into the route header when the sidebar collapses.
+// navigation cluster that moves into the route header when the sidebar collapses.
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react"
 import { Button } from "@/components/kit/button"
 import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/kit/sidebar"
+import { IconSwap } from "@/components/kybern/motion"
 import { Toggle } from "@/components/kit/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
-import { ArrowLeftIcon, ArrowRightIcon, LayoutSidebarIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
+import { ArrowLeftIcon, ArrowRightIcon, LayoutSidebarIcon, NewThreadIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
 import { mod } from "@/lib/format"
 import { isTauri, platform } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { newThread } from "@/state/nav"
 import { useStore } from "@/state/store"
 
 export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_HEIGHT_PX}px]` =
@@ -115,7 +117,7 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
   },
 )
 
-/** One footprint for the sidebar toggle and the back/forward arrows: 28px squares,
+/** One footprint for the sidebar toggle and the navigation cluster: 28px squares,
  *  size-4 Hugeicons (stroke 2.5) so they match the file-tree / explorer glyphs. */
 const SIDEBAR_TRIGGER_CLASS_NAME = cn(
   "!size-7 shrink-0 rounded-lg [&_svg]:!opacity-100 [&_svg]:mx-0",
@@ -123,9 +125,9 @@ const SIDEBAR_TRIGGER_CLASS_NAME = cn(
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 )
 
-/** Sidebar toggle + back/forward. */
+/** Sidebar toggle + back/forward, or a single new-thread action when collapsed. */
 export function SidebarLeadingControls({ className }: { className?: string }) {
-  const { toggleSidebar } = useSidebar()
+  const { open, toggleSidebar } = useSidebar()
   return (
     <div
       data-tauri-drag-region="false"
@@ -148,40 +150,69 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
         <TooltipPopup side="bottom">Toggle sidebar ({mod}B)</TooltipPopup>
       </Tooltip>
       {isTauri() && (
-        <div className="flex shrink-0 items-center gap-0">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className={SIDEBAR_TRIGGER_CLASS_NAME}
-                  aria-label="Back"
-                  onClick={() => history.back()}
-                />
-              }
-            >
-              <ArrowLeftIcon className="size-4" />
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">Back ({mod}[)</TooltipPopup>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className={SIDEBAR_TRIGGER_CLASS_NAME}
-                  aria-label="Forward"
-                  onClick={() => history.forward()}
-                />
-              }
-            >
-              <ArrowRightIcon className="size-4" />
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">Forward ({mod}])</TooltipPopup>
-          </Tooltip>
-        </div>
+        <IconSwap
+          active={open ? "a" : "b"}
+          className="h-7 w-14 shrink-0"
+          a={
+            <div className="flex size-full items-center" aria-hidden={!open}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className={SIDEBAR_TRIGGER_CLASS_NAME}
+                      aria-label="Back"
+                      tabIndex={open ? 0 : -1}
+                      onClick={() => history.back()}
+                    />
+                  }
+                >
+                  <ArrowLeftIcon className="size-4" />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">Back ({mod}[)</TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className={SIDEBAR_TRIGGER_CLASS_NAME}
+                      aria-label="Forward"
+                      tabIndex={open ? 0 : -1}
+                      onClick={() => history.forward()}
+                    />
+                  }
+                >
+                  <ArrowRightIcon className="size-4" />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">Forward ({mod}])</TooltipPopup>
+              </Tooltip>
+            </div>
+          }
+          b={
+            <div className="flex size-full items-center justify-center" aria-hidden={open}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className={SIDEBAR_TRIGGER_CLASS_NAME}
+                      aria-label="New thread"
+                      tabIndex={open ? -1 : 0}
+                      onClick={() => newThread()}
+                    />
+                  }
+                >
+                  <NewThreadIcon className="size-4" />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">New thread</TooltipPopup>
+              </Tooltip>
+            </div>
+          }
+        />
       )}
     </div>
   )
@@ -189,7 +220,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
 
 /**
  * Leading inset that keeps the route header's title clear of the fixed sidebar
- * toggle + nav arrows (`SidebarLeadingControls`) once the sidebar is collapsed.
+ * toggle + navigation cluster (`SidebarLeadingControls`) once the sidebar is collapsed.
  * Measured from the header's own padding edge: on macOS the controls start at the
  * traffic-light gutter, elsewhere at 16px; both are 84px wide and want 16px of air.
  * The header itself pads 20px. This is padding, not a spacer, so the title's
