@@ -36,8 +36,9 @@ RPC hydration of 16 results shared across two native WebKit panes.
 
 See [native window material memory](native-window-material-memory-2026-09-18.md)
 for the opaque-mode Tauri fix. The native macOS effect view now exists only
-while translucent surfaces are enabled; the report records the production-CSP
-WebKit comparison and its substantial run-to-run variance.
+while translucent surfaces are enabled; the report records an exploratory
+production-CSP WebKit diagnostic, its concurrent-run limitation, and its
+substantial run-to-run variance. It is not accepted savings evidence.
 
 See [scroll tile accumulation](memory-tiles-2026-09-15.md) for the attribution of
 the remaining native peak to WebKit's scroll tiles, the paint-host layer rule,

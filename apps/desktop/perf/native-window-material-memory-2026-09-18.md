@@ -22,7 +22,12 @@ makes React StrictMode remounts and repeated preference changes idempotent.
 Opaque CSS remains authoritative if a best-effort native call fails. The
 shipping translucent appearance and active material are unchanged.
 
-## Native comparison
+## Exploratory native diagnostic
+
+These runs overlapped unrelated builds and native fixtures. They were not taken
+in a coordinated quiet window and are **not an accepted before/after comparison**.
+The numbers below only describe the diagnostic that motivated the lifecycle
+review; they must not be used to claim an application-memory optimization.
 
 Apple M1, 16 GiB, macOS 27.0, system WKWebView. The real scrolling fixture ran
 at `tauri://localhost` under the production CSP, 1100 × 720 CSS pixels, dark
@@ -38,20 +43,22 @@ samples and anchor/content checks.
 | No native effect | 405.0, 405.0, 446.1 MiB | 405.0 MiB |
 | Native effect active | 416.4, 411.1, 466.9 MiB | 416.4 MiB |
 
-The observed median difference is 11.4 MiB in this synthetic sequence. Ranges
-overlap, and history-only peak medians moved in the opposite direction, so this
-is evidence for removing unused work, not a universal RAM percentage. Two
+The exploratory median difference was 11.4 MiB in this synthetic sequence.
+Ranges overlap, history-only peak medians moved in the opposite direction, and
+other activity was running on the machine, so this is not savings evidence.
+Two
 effect-active runs passed rendering; the third failed an existing rendering
 gate while still producing all eight memory samples. It is excluded from any
 correctness claim but retained in the memory range above. Frame p95 was 17–19 ms
 in the recorded passing runs. CPU, energy, WindowServer memory, and a two-hour
 ordinary-use workload were not measured.
 
-This experiment isolates the native material choice but is not a complete
-Tauri coalition measurement. It does not supersede the mixed full-application
-results in the 0.4.3 report, and it does not address page-aware transcript
-reconstruction. Translucent mode intentionally retains its native material and
-cost because it is visible product behavior.
+This experiment does not establish an isolated native-material cost and is not
+a complete Tauri coalition measurement. It does not supersede the mixed
+full-application results in the 0.4.3 report, and it does not address the user's
+ordinary-session high-water mark or page-aware transcript reconstruction.
+Translucent mode intentionally retains its native material and cost because it
+is visible product behavior.
 
 ## Sources and dependency review
 
@@ -69,7 +76,7 @@ cost because it is visible product behavior.
 
 ## Verification
 
-- Three effect-off native scrolling runs passed the unchanged memory and
+- Exploratory effect-off native scrolling runs passed the unchanged memory and
   rendering guards; the first full run reported 17–18 ms frame p95 and no empty
   viewport or visible jump above 0.5 px.
 - The TypeScript bridge test verifies both preference states call the scoped
