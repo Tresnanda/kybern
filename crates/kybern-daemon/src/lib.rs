@@ -206,7 +206,7 @@ pub async fn run() -> Result<()> {
 
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;
-        let (code, expires_at) = state.pairing.create(None);
+        let (code, expires_at) = state.pairing.create(None)?;
         let pairing = kybern_protocol::methods::PairingCreateResult { code, expires_at, endpoints };
         print!("{}", kybern_client::pairing::PairingReport::new(&pairing, &state.environment_id)?.render());
         std::io::stdout().flush()?;

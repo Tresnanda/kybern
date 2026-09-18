@@ -557,7 +557,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         PairingCreate::NAME => {
             let p: PairingCreateParams = parse_or_default(params)?;
             let endpoints = crate::access::endpoints(state).await;
-            let (code, expires_at) = state.pairing.create(p.label);
+            let (code, expires_at) = state.pairing.create(p.label).map_err(bad)?;
             ok(PairingCreateResult { code, expires_at, endpoints })
         }
         ExposureGet::NAME => ok(crate::access::exposure(state).await),
@@ -579,7 +579,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: FilesSearchParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             let root = std::path::PathBuf::from(&project.path);
-            let files = crate::files::list(&root).await.map_err(internal)?;
+            let files = state.file_indexes.list(&root).await.map_err(internal)?;
             let total = files.len() as u32;
             let files = crate::files::rank(&files, &p.query, p.limit as usize);
             ok(FilesSearchResult { files, total })

@@ -16,6 +16,9 @@ struct Pending {
     expires_at: DateTime<Utc>,
 }
 
+const MAX_PAIRING_CODES: usize = 128;
+const MAX_PAIRING_LABEL_BYTES: usize = 256;
+
 #[derive(Default)]
 pub struct Pairing {
     codes: Mutex<HashMap<String, Pending>>,
@@ -27,9 +30,15 @@ pub struct Pairing {
 pub struct PairingRateLimited;
 
 impl Pairing {
-    pub fn create(&self, label: Option<String>) -> (String, DateTime<Utc>) {
+    pub fn create(&self, label: Option<String>) -> Result<(String, DateTime<Utc>)> {
+        if label.as_ref().is_some_and(|label| label.len() > MAX_PAIRING_LABEL_BYTES) {
+            return Err(anyhow!("Device label is too long"));
+        }
         let mut codes = self.codes.lock().unwrap();
         codes.retain(|_, p| p.expires_at > Utc::now());
+        if codes.len() >= MAX_PAIRING_CODES {
+            return Err(anyhow!("Too many active pairing invitations. Wait for one to expire and retry"));
+        }
         let code = loop {
             let n: u32 = rand::rng().random_range(0..1_000_000);
             let code = format!("{n:06}");
@@ -39,7 +48,7 @@ impl Pairing {
         };
         let expires_at = Utc::now() + Duration::minutes(10);
         codes.insert(code.clone(), Pending { label: label.unwrap_or_else(|| "paired device".into()), expires_at });
-        (code, expires_at)
+        Ok((code, expires_at))
     }
 
     /// Exchange a code for a new token. Returns the raw token and its scopes.
@@ -145,7 +154,7 @@ mod tests {
     fn pairing_limits_guesses_and_expires_codes() {
         let store = Store::open_in_memory().unwrap();
         let pairing = Pairing::default();
-        let (code, _) = pairing.create(None);
+        let (code, _) = pairing.create(None).unwrap();
         pairing.codes.lock().unwrap().get_mut(&code).unwrap().expires_at = Utc::now() - Duration::seconds(1);
         assert!(pairing.redeem(&store, &code, None).is_err());
         for _ in 0..4 {
@@ -155,10 +164,21 @@ mod tests {
     }
 
     #[test]
+    fn pairing_bounds_pending_codes_and_labels() {
+        let pairing = Pairing::default();
+        assert!(pairing.create(Some("x".repeat(MAX_PAIRING_LABEL_BYTES + 1))).is_err());
+        for _ in 0..MAX_PAIRING_CODES {
+            pairing.create(None).unwrap();
+        }
+        assert!(pairing.create(None).is_err());
+        assert_eq!(pairing.codes.lock().unwrap().len(), MAX_PAIRING_CODES);
+    }
+
+    #[test]
     fn tickets_expire_and_cannot_revive_revoked_devices() {
         let store = Store::open_in_memory().unwrap();
         let pairing = Pairing::default();
-        let (code, _) = pairing.create(None);
+        let (code, _) = pairing.create(None).unwrap();
         let (token, _) = pairing.redeem(&store, &code, None).unwrap();
         let principal = crate::auth::authenticate(&store, &token).unwrap().unwrap();
         let tickets = Tickets::default();

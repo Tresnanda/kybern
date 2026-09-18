@@ -85,7 +85,7 @@ async fn environments_keep_projects_and_identity_separate() {
 #[tokio::test]
 async fn browser_ticket_is_single_use_and_revocation_closes_an_existing_socket() {
     let host = Host::start().await;
-    let (code, _) = host.state.pairing.create(None);
+    let (code, _) = host.state.pairing.create(None).unwrap();
     let http = reqwest::Client::new();
     let paired: PairResponse = http
         .post(format!("{}/pair", host.url))
