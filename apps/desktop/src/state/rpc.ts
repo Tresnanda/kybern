@@ -538,7 +538,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const kind: NotificationKind | null =
       ev.kind === "turn_failed" ? "failed"
       : ev.kind === "approval_requested" || ev.kind === "user_input_requested" ? "blocked"
-      : ev.kind === "turn_completed" && ev.stop_reason === "completed" ? "done"
+      : ev.kind === "turn_completed" && ev.stop_reason === "completed" && !current.threads[ev.thread_id]?.parent_thread_id ? "done"
       : null
     if (kind === "done") {
       if (completedTurns.get(ev.thread_id) === ev.turn_id) return

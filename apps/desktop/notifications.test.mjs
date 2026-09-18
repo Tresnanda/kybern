@@ -47,7 +47,7 @@ globalThis.nativeAlerts = []
 globalThis.focusProbe = () => false
 const { createEnvironmentStore, mergeRuntimeTasks, summarizeRuntimeTasks } = await import("./src/state/store.ts")
 const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
-const { threadAttentionKind } = await import("./src/state/notifications.ts")
+const { selectAttentionItems, threadAttentionKind } = await import("./src/state/notifications.ts")
 const { createSplitView } = await import("./src/state/splitView.ts")
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 
@@ -132,6 +132,71 @@ test("completion alerts wait for background waves, recheck native focus races, a
   send({ kind: "turn_failed", turn_id: "failed-turn", error: "Provider exited" })
   await tick()
   assert.equal(globalThis.alerts.at(-1).description, "Failed: Provider exited")
+  runtime.disconnect()
+})
+
+test("spawned thread completions stay quiet while failures and approvals still demand attention", async () => {
+  globalThis.alerts.length = 0
+  globalThis.nativeAlerts.length = 0
+  globalThis.document.visibilityState = "visible"
+  globalThis.focusProbe = () => false
+
+  const parent = { id: "parent", title: "User thread", status: "running", last_seq: 0 }
+  const child = { id: "child", title: "Spawned worker", status: "idle", last_seq: 0, parent_thread_id: parent.id }
+  const store = createEnvironmentStore("spawned-notifications")
+  store.getState().set({
+    settings: { notifications: true },
+    selected: { kind: "none" },
+    threads: { [parent.id]: parent, [child.id]: child },
+  })
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  globalThis.memoryClient.reply = () => Promise.resolve({ messages: [], checkpoints: [] })
+  let seq = 0
+  const send = (payload) => globalThis.memoryClient.event({
+    seq: ++seq,
+    thread_id: child.id,
+    turn_id: "child-turn",
+    at: new Date(Date.now() + 1000).toISOString(),
+    ...payload,
+  })
+
+  send({ kind: "turn_completed", stop_reason: "completed", duration_ms: 100, usage: {}, terminal_message_id: "final" })
+  await tick()
+  assert.equal(globalThis.alerts.length, 0, "spawned completion created an in-app alert")
+  assert.equal(globalThis.nativeAlerts.length, 0, "spawned completion created a system alert")
+  assert.equal(store.getState().notifications[child.id], undefined, "spawned completion created an unread entry")
+
+  send({ kind: "turn_failed", error: "Worker crashed" })
+  await tick()
+  assert.equal(globalThis.alerts.at(-1)?.description, "Failed: Worker crashed")
+  assert.equal(globalThis.nativeAlerts.at(-1)?.body, "Failed: Worker crashed")
+
+  send({
+    kind: "approval_requested",
+    approval: {
+      id: "approval",
+      thread_id: child.id,
+      turn_id: "child-turn",
+      tool_name: "shell",
+      input: {},
+      summary: "Run a command",
+      suggestions: [],
+      created_at: new Date().toISOString(),
+    },
+  })
+  await tick()
+  assert.equal(globalThis.alerts.at(-1)?.description, "Needs approval: Run a command")
+  assert.equal(globalThis.nativeAlerts.at(-1)?.body, "Needs approval: Run a command")
+
+  const staleCompletion = { kind: "done", seq: 1, at: new Date().toISOString() }
+  assert.deepEqual(
+    selectAttentionItems({ threads: { [child.id]: child }, notifications: { [child.id]: staleCompletion } }),
+    [],
+    "a persisted spawned completion remained visible in the bell",
+  )
+  assert.equal(threadAttentionKind({ ...child, status: "failed" }, staleCompletion), "failed")
+  assert.equal(threadAttentionKind({ ...child, status: "awaiting-approval" }, staleCompletion), "blocked")
   runtime.disconnect()
 })
 

@@ -70,6 +70,10 @@ export function threadAttentionKind(thread: Thread, notification: ThreadNotifica
   if (thread.status === "archived") return null
   if (thread.status === "awaiting-approval") return "blocked"
   if (thread.status === "failed") return "failed"
+  // Kybern-managed child threads report their result back to the parent. Their
+  // successful completion is coordinator activity, not a second user-facing
+  // completion. Live failures and approval requests above still need attention.
+  if (thread.parent_thread_id) return null
   if (thread.status === "idle" && notification?.kind === "done") return "done"
   return null
 }
