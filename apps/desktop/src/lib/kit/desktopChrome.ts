@@ -15,7 +15,7 @@ export const MAC_TRAFFIC_LIGHT_INSET_X_PX = 16
  * to their default (high) after the window first paints, so `traffic_lights.rs`
  * re-applies this inset on show + resize/move/theme events. Must match
  * `trafficLightPosition.y` in `src-tauri/tauri.conf.json`. */
-export const MAC_TRAFFIC_LIGHT_POSITION_Y_PX = 22
+export const MAC_TRAFFIC_LIGHT_POSITION_Y_PX = 21
 
 /** Radius of a macOS traffic-light dot (~14px across). */
 export const MAC_TRAFFIC_LIGHT_DOT_RADIUS_PX = 7

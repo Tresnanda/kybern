@@ -18,12 +18,13 @@ use tauri::{Runtime, WebviewWindow, WindowEvent};
 /// `trafficLightPosition`.
 const INSET_X: f64 = 16.0;
 /// Vertical inset added to the button height to lower the dots onto the toolbar
-/// centerline. Matches `y` in `trafficLightPosition`. The installed (release) app
-/// renders the dots ~4 CSS px lower than the dev build at the same value: 0.4.4
-/// shipped 25 and sat ~4 low on the installed build, while dev-centered measured
-/// ~25 too. 22 backs it off so the *installed* dots land on the icon centerline
-/// (dev shows it a touch high, which is expected and correct).
-const INSET_Y: f64 = 22.0;
+/// centerline. Matches `y` in `trafficLightPosition`. Calibrate against the
+/// *installed* (release) build, which renders the dots ~1 CSS px lower per unit
+/// than the dev preview: installed 0.4.4 shipped 25 and sat ~4 low, installed
+/// 0.4.5 shipped 22 and sat ~1 low, so 21 lands the installed dots on the icon
+/// centerline. (The dev build shows this a touch high — expected; verify with a
+/// real `pnpm tauri build` bundle, not the dev server.)
+const INSET_Y: f64 = 21.0;
 
 /// Re-position the close/miniaturize/zoom buttons. Must run on the main thread.
 ///
