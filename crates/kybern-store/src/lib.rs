@@ -24,6 +24,14 @@ use kybern_protocol::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use uuid::Uuid;
 
+/// Exact result for one tool invocation at a caller's snapshot boundary.
+pub struct SavedToolResult {
+    pub output: serde_json::Value,
+    pub is_error: bool,
+    pub stream: Option<String>,
+    pub stream_omitted: bool,
+}
+
 fn snake(value: impl serde::Serialize) -> Result<String> {
     Ok(serde_json::to_value(value)?.as_str().ok_or_else(|| anyhow::anyhow!("enum did not serialize as a string"))?.to_owned())
 }
@@ -1942,7 +1950,7 @@ impl Store {
     ) -> Result<Option<(serde_json::Value, bool)>> {
         Ok(self
             .tool_call_result_through(thread_id, tool_call_id, start_seq, through_seq, false)?
-            .map(|(output, is_error, _, _)| (output, is_error)))
+            .map(|result| (result.output, result.is_error)))
     }
 
     /// Fetch a settled tool result and, when requested, its exact persisted
@@ -1955,7 +1963,7 @@ impl Store {
         start_seq: Option<EventSeq>,
         through_seq: EventSeq,
         include_stream: bool,
-    ) -> Result<Option<(serde_json::Value, bool, Option<String>, bool)>> {
+    ) -> Result<Option<SavedToolResult>> {
         self.with(|c| {
             let start: Option<EventSeq> = c
                 .query_row(
@@ -1979,7 +1987,7 @@ impl Store {
             let stream = read_tool_stream_at_start(c, thread_id, tool_call_id, start, through_seq, include_stream)?;
             let stream_omitted = !include_stream && stream.is_some();
             let stream = include_stream.then_some(stream).flatten();
-            Ok(Some((output, is_error, stream, stream_omitted)))
+            Ok(Some(SavedToolResult { output, is_error, stream, stream_omitted }))
         })
     }
 
@@ -2508,9 +2516,9 @@ fn row_to_compact_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> 
     let payload = r.get_ref(5)?.as_str()?;
     let turn: Option<String> = r.get(2)?;
     let payload = if kind == "tool_call_completed" {
-        compact_or_decode_tool_completion(&payload).map_err(other)?
+        compact_or_decode_tool_completion(payload).map_err(other)?
     } else {
-        serde_json::from_str(&payload).map_err(other)?
+        serde_json::from_str(payload).map_err(other)?
     };
     Ok(ThreadEvent {
         seq: r.get(0)?,

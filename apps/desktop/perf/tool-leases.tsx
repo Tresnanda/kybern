@@ -44,8 +44,8 @@ async function run() {
     await until(() => useStore.getState().connection.state === "open", "Scratch connection did not open")
     await runtime.loadThread(threadId)
     await until(() => tools().length === 17, "Missing saved tool rows")
-    const streamTool = () => tools().find(b => b.kind === "tool" && b.call.id === "stream-lease")
-    const canonicalTools = () => tools().filter(b => b.kind === "tool" && b.call.id !== "stream-lease")
+    const streamTool = () => tools().find(b => b.kind === "tool" && b.call.id === "lease-stream")
+    const canonicalTools = () => tools().filter(b => b.kind === "tool" && b.call.id !== "lease-stream")
     const initialStream = streamTool()
     check(canonicalTools().length === 16 && canonicalTools().every(b => b.kind === "tool" && b.outputOmitted), "Large canonical outputs must initially be omitted")
     check(initialStream?.kind === "tool" && initialStream.streamOmitted && !initialStream.outputOmitted && initialStream.stream === "", "Distinct stream must initially be deferred")
@@ -69,6 +69,18 @@ async function run() {
     render(2)
     await until(() => document.querySelectorAll('button[aria-expanded="false"]').length >= 32, "Missing result disclosures")
     const disclosures = () => [...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].filter(b => b.textContent?.includes("lease-"))
+    const closeAllResults = async () => {
+      const buttons = disclosures()
+      const streamDisclosure = buttons.find(button => button.textContent?.includes("lease-stream"))
+      check(streamDisclosure?.getAttribute("aria-expanded") === "true", "Missing open stream disclosure")
+      streamDisclosure.click()
+      await until(() => {
+        const block = streamTool()
+        return document.querySelectorAll("pre").length === 16 && block?.kind === "tool" && !!block.streamOmitted
+      }, "Oversized stream did not evict after its consumers closed")
+      for (const button of buttons) if (button !== streamDisclosure && button.getAttribute("aria-expanded") === "true") button.click()
+      await until(() => document.querySelectorAll("pre").length === 0, "Closed results did not unmount")
+    }
     check(disclosures().length === 34, "Both panes must mount all 17 results")
     for (const button of disclosures()) button.click()
     await until(() => document.querySelectorAll("pre").length === 34 && tools().every(b => b.kind === "tool" && !b.outputOmitted && !b.streamOmitted), "Mounted results did not hydrate").catch(error => {
@@ -98,8 +110,7 @@ async function run() {
     render(1)
     await sleep(500)
     check(document.querySelectorAll("pre").length === 17 && calls === 17, "Closing one pane discarded shared results")
-    for (const button of disclosures()) if (button.getAttribute("aria-expanded") === "true") button.click()
-    await until(() => document.querySelectorAll("pre").length === 0, "Closed results did not unmount")
+    await closeAllResults()
     await sleep(300)
     check(canonicalTools().filter(b => b.kind === "tool" && !b.outputOmitted).length === 12, "Inactive canonical allowance changed")
     const evictedStream = streamTool()
@@ -111,11 +122,12 @@ async function run() {
     // Delay real responses at the runtime boundary, then close the actual socket.
     // The client's normal reconnect and replay path must recover mounted results
     // even while four callbacks from the obsolete connection remain pending.
-    for (const button of disclosures()) button.click()
-    await until(() => document.querySelectorAll("pre").length === 0, "Reconnect setup did not close results")
+    await closeAllResults()
     responseGate = new Promise(resolve => { releaseResponses = resolve })
     for (const button of disclosures()) button.click()
-    await until(() => heldResponses === 5, "Expected five in-flight real hydration responses")
+    await until(() => heldResponses === 4, "Expected four in-flight responses with the fifth hydration queued").catch(error => {
+      throw new Error(`${error}; ${JSON.stringify({ heldResponses, calls, responses: responses.length, tools: tools().map(block => ({ id: block.call.id, outputOmitted: block.outputOmitted, streamOmitted: block.streamOmitted })) })}`)
+    })
     const socket = (client as unknown as { ws: WebSocket }).ws
     socket.close()
     await until(() => useStore.getState().connection.state !== "open", "Socket closure did not reach runtime")
