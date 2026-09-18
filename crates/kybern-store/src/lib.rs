@@ -1914,25 +1914,35 @@ impl Store {
                              ELSE json_extract(payload, '$.tool_call_id') END
                  FROM events
                  WHERE thread_id = ?1 AND seq <= ?2
-                   AND kind IN ('tool_call_started', 'tool_call_output_delta')
+                   AND kind IN ('tool_call_started', 'tool_call_output_delta', 'tool_call_completed')
                  ORDER BY seq",
             )?;
             let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
             let mut active = std::collections::HashMap::<String, EventSeq>::new();
             let mut streamed = std::collections::HashSet::<(EventSeq, String)>::new();
+            let mut completed = std::collections::HashSet::<(EventSeq, String)>::new();
             while let Some(row) = rows.next()? {
                 let seq: EventSeq = row.get(0)?;
                 let kind: String = row.get(1)?;
                 let Some(call_id) = row.get::<_, Option<String>>(2)? else { continue };
                 if kind == "tool_call_started" {
                     active.insert(call_id, seq);
+                } else if kind == "tool_call_completed" {
+                    if let Some(start) = active.get(&call_id) {
+                        completed.insert((*start, call_id));
+                    }
                 } else if let Some(start) = active.get(&call_id) {
                     streamed.insert((*start, call_id));
                 }
             }
             for entry in entries {
                 let TranscriptEntry::ToolCall { seq, call, complete: true, stream_omitted, .. } = entry else { continue };
-                *stream_omitted = streamed.contains(&(*seq, call.id.clone()));
+                let key = (*seq, call.id.clone());
+                // A turn failure can mark an unfinished row complete with a
+                // synthetic null output. It has no durable result to hydrate,
+                // so only advertise a stream when the invocation also has a
+                // persisted completion event.
+                *stream_omitted = streamed.contains(&key) && completed.contains(&key);
             }
             Ok(())
         })
@@ -3059,6 +3069,68 @@ mod tool_output_allocation_tests {
             "at": "2026-09-17T00:00:00Z"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn interrupted_tool_stream_is_not_marked_recoverable_without_completion() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                seq INTEGER PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                turn_id TEXT,
+                at TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        let thread = ThreadId::nil();
+        let turn = TurnId::nil();
+        let at = "2026-09-17T00:00:00Z";
+        let append = |seq, payload: EventPayload| {
+            store
+                .with(|c| {
+                    c.execute(
+                        "INSERT INTO events(seq,thread_id,turn_id,at,kind,payload) VALUES (?1,?2,?3,?4,?5,?6)",
+                        params![seq, thread.to_string(), turn.to_string(), at, payload.kind(), serde_json::to_string(&payload)?],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        };
+        append(1, EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("run") });
+        append(
+            2,
+            EventPayload::ToolCallStarted {
+                call: ToolCall { id: "interrupted".into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                origin: EventOrigin::Root,
+            },
+        );
+        append(3, EventPayload::ToolCallOutputDelta { tool_call_id: "interrupted".into(), delta: "partial output".into() });
+        append(4, EventPayload::TurnFailed { error: "interrupted".into() });
+
+        let events = store.events_for_thread_through(thread, 4).unwrap();
+        let stream: String = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::ToolCallOutputDelta { tool_call_id, delta } if tool_call_id == "interrupted" => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stream, "partial output");
+
+        // Projection marks an unfinished row complete with a synthetic null
+        // output when its turn fails. Without a durable completion event there
+        // is no threads.tool_output result that can hydrate the stream, so the
+        // snapshot must leave the persisted stream unmarked.
+        let mut snapshot = store.project_transcript_through(thread, 4).unwrap();
+        store.mark_tool_streams_omitted_through(thread, &mut snapshot, 4).unwrap();
+        assert!(matches!(
+            snapshot.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { complete: true, output: Some(serde_json::Value::Null), stream_omitted: false, .. })
+        ));
     }
 
     #[test]
