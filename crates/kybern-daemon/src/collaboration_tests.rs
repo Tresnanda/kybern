@@ -138,6 +138,139 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn busy_assignment_stays_pending_then_dispatches_once_when_idle() {
+    for status in [ThreadStatus::Running, ThreadStatus::AwaitingApproval] {
+        let fixture = Fixture::new();
+        let mut worker = fixture.worker.clone();
+        worker.status = status;
+        fixture.store.thread_upsert(&worker).unwrap();
+        let assignment = fixture.assignment(None, Some(worker.id), AssignmentStatus::Pending);
+        fixture.put_assignment(&assignment);
+
+        for _ in 0..3 {
+            assert!(fixture.orchestrator.drain_collaboration_assignments().await.unwrap());
+            let pending = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
+            assert_eq!(pending.status, AssignmentStatus::Pending);
+            assert_eq!(pending.revision, assignment.revision, "waiting must not churn durable state");
+            assert!(pending.dispatch_message_id.is_none());
+            assert!(pending.uncertainty.is_none());
+        }
+        assert!(fixture.store.events_for_thread(worker.id).unwrap().is_empty());
+
+        worker.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&worker).unwrap();
+        fixture.orchestrator.drain_collaboration_assignments().await.unwrap();
+        let dispatched = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
+        assert_eq!(dispatched.status, AssignmentStatus::Waiting);
+        assert!(dispatched.dispatch_message_id.is_some());
+        fixture.orchestrator.drain_collaboration_assignments().await.unwrap();
+        let events = fixture.store.events_for_thread(worker.id).unwrap();
+        assert_eq!(events.iter().filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. })).count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn busy_assignment_does_not_consume_available_worker_slot() {
+    let fixture = Fixture::new();
+    let mut group = fixture.group.clone();
+    group.policy.max_active_workers = 1;
+    fixture.store.collaboration_group_put(&group).unwrap();
+    let mut worker = fixture.worker.clone();
+    worker.status = ThreadStatus::Running;
+    fixture.store.thread_upsert(&worker).unwrap();
+    let busy = fixture.assignment(None, Some(worker.id), AssignmentStatus::Pending);
+    let ready = fixture.assignment(None, Some(fixture.coordinator.id), AssignmentStatus::Pending);
+    fixture.put_assignment(&busy);
+    fixture.put_assignment(&ready);
+    assert!(fixture.orchestrator.drain_collaboration_assignments().await.unwrap());
+    assert_eq!(fixture.store.collaboration_assignment_get(busy.id).unwrap().unwrap().status, AssignmentStatus::Pending);
+    assert_eq!(fixture.store.collaboration_assignment_get(ready.id).unwrap().unwrap().status, AssignmentStatus::Waiting);
+}
+
+#[tokio::test]
+async fn idle_owner_waits_for_background_task_before_assignment_dispatch() {
+    let fixture = Fixture::new();
+    let now = Utc::now();
+    let mut task = RuntimeTask {
+        id: "background-helper".into(),
+        thread_id: fixture.worker.id,
+        origin_turn_id: Uuid::now_v7(),
+        started_seq: 1,
+        updated_seq: 1,
+        kind: RuntimeTaskKind::Agent,
+        status: RuntimeTaskStatus::Running,
+        title: "Finishing work".into(),
+        detail: None,
+        provider_type: None,
+        parent_id: None,
+        tool_call_id: None,
+        provider_thread_id: None,
+        model: None,
+        effort: None,
+        backgrounded: true,
+        last_tool_name: None,
+        usage: None,
+        stats: RuntimeTaskStats::default(),
+        capabilities: RuntimeTaskCapabilities::default(),
+        started_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
+    fixture
+        .store
+        .event_append(fixture.worker.id, Some(task.origin_turn_id), EventPayload::RuntimeTaskStarted { task: task.clone() })
+        .unwrap();
+    let assignment = fixture.assignment(None, Some(fixture.worker.id), AssignmentStatus::Pending);
+    fixture.put_assignment(&assignment);
+    assert!(fixture.orchestrator.drain_collaboration_assignments().await.unwrap());
+    assert_eq!(fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap().status, AssignmentStatus::Pending);
+    task.status = RuntimeTaskStatus::Completed;
+    task.completed_at = Some(Utc::now());
+    fixture.store.event_append(fixture.worker.id, Some(task.origin_turn_id), EventPayload::RuntimeTaskCompleted { task }).unwrap();
+    fixture.orchestrator.drain_collaboration_assignments().await.unwrap();
+    assert_eq!(fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap().status, AssignmentStatus::Waiting);
+}
+
+#[tokio::test]
+async fn archived_assignment_owner_still_requires_attention() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker.clone();
+    worker.status = ThreadStatus::Archived;
+    fixture.store.thread_upsert(&worker).unwrap();
+    let assignment = fixture.assignment(None, Some(worker.id), AssignmentStatus::Pending);
+    fixture.put_assignment(&assignment);
+    fixture.orchestrator.drain_collaboration_assignments().await.unwrap();
+    let failed = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
+    assert_eq!(failed.status, AssignmentStatus::AttentionNeeded);
+    assert!(failed.uncertainty.unwrap().contains("archived"));
+}
+
+#[tokio::test]
+async fn restart_preserves_pending_assignment_and_does_not_replay_old_failure() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker.clone();
+    worker.status = ThreadStatus::Running;
+    fixture.store.thread_upsert(&worker).unwrap();
+    let pending = fixture.assignment(None, Some(worker.id), AssignmentStatus::Pending);
+    let mut historical = fixture.assignment(None, Some(fixture.coordinator.id), AssignmentStatus::AttentionNeeded);
+    historical.uncertainty = Some("could not start assignment: thread is busy".into());
+    fixture.put_assignment(&pending);
+    fixture.put_assignment(&historical);
+    fixture.orchestrator.recover_after_restart().await.unwrap();
+    assert_eq!(fixture.store.collaboration_assignment_get(pending.id).unwrap().unwrap().status, AssignmentStatus::Pending);
+    fixture.orchestrator.drain_collaboration_assignments().await.unwrap();
+    assert_eq!(fixture.store.collaboration_assignment_get(historical.id).unwrap().unwrap().status, AssignmentStatus::AttentionNeeded);
+    assert!(
+        fixture
+            .store
+            .events_for_thread(fixture.coordinator.id)
+            .unwrap()
+            .iter()
+            .all(|event| !matches!(event.payload, EventPayload::TurnStarted { .. }))
+    );
+}
+
+#[tokio::test]
 async fn restart_marks_acknowledged_working_assignment_attention_needed() {
     let fixture = Fixture::new();
     let mut worker = fixture.worker.clone();
@@ -1424,6 +1557,7 @@ async fn non_git_project_can_spawn_read_only_worker() {
     fixture.orchestrator.drain_collaboration_assignments().await.unwrap();
     let started = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
     let owner = fixture.store.thread_get(started.owner_thread_id.unwrap()).unwrap().unwrap();
+    assert_eq!(owner.parent_thread_id, Some(fixture.coordinator.id), "UI-spawned helpers also need parent metadata");
     assert!(owner.worktree.is_none());
     assert_eq!(owner.cwd, fixture.coordinator.cwd);
 }

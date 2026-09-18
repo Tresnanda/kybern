@@ -325,6 +325,7 @@ export function createEnvironmentStore(
       }),
     pushNotification: (threadId, kind, seq, at) =>
       set((state) => {
+        if (state.threads[threadId]?.parent_thread_id) return clearNotificationPatch(state, threadId)
         const existing = state.notifications[threadId]
         // Keep the earliest unseen trigger's timestamp but honour the latest kind.
         const notifications = { ...state.notifications, [threadId]: { kind, seq, at: existing?.at ?? at } }

@@ -27,6 +27,19 @@ pub struct Orchestrator {
     inner: Arc<Inner>,
 }
 
+/// A rejected send, before any turn was accepted. Assignment dispatch may retry
+/// this condition; provider/startup failures must still surface for inspection.
+#[derive(Debug)]
+struct ThreadBusy;
+
+impl std::fmt::Display for ThreadBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("thread is busy")
+    }
+}
+
+impl std::error::Error for ThreadBusy {}
+
 /// Keep the task's constraints and current plan ahead of archived worker reports.
 /// Reports stay in durable context and are fetched selectively by key when needed.
 fn assignment_shared_context(mut context: Vec<ContextEntry>) -> String {
@@ -1170,7 +1183,7 @@ impl Orchestrator {
         Ok(assignment)
     }
 
-    async fn start_collaboration_assignment(&self, group: &CollaborationGroup, assignment: &mut CollaborationAssignment) -> Result<()> {
+    async fn start_collaboration_assignment(&self, group: &CollaborationGroup, assignment: &mut CollaborationAssignment) -> Result<bool> {
         let owner = if let Some(owner) = assignment.owner_thread_id {
             owner
         } else {
@@ -1201,7 +1214,12 @@ impl Orchestrator {
                 joined_at: Utc::now(),
             };
             self.inner.store.collaboration_member_put(&member)?;
-            self.set_thread_relationships(thread.id, assignment.created_by_thread_id, None, Some(group.id))?;
+            self.set_thread_relationships(
+                thread.id,
+                Some(assignment.created_by_thread_id.unwrap_or(group.coordinator_thread_id)),
+                None,
+                Some(group.id),
+            )?;
             self.emit_collaboration(group.id, EventPayload::CollaborationMemberUpdated { member })?;
             assignment.owner_thread_id = Some(thread.id);
             thread.id
@@ -1220,8 +1238,22 @@ impl Orchestrator {
         assignment.updated_at = Utc::now();
         assignment.revision += 1;
         self.inner.store.collaboration_assignment_put(assignment)?;
-        self.send_with_id(owner, message_id, self.assignment_prompt(group, assignment)?, false, false).await?;
-        Ok(())
+        if let Err(error) = self.send_with_id(owner, message_id, self.assignment_prompt(group, assignment)?, false, false).await {
+            if error.is::<ThreadBusy>() {
+                // A direct send can win after the scheduler's availability check.
+                // No turn was accepted, so retain the owner and retry the pending
+                // assignment rather than stranding it or creating another child.
+                assignment.status = AssignmentStatus::Pending;
+                assignment.dispatch_message_id = None;
+                assignment.uncertainty = None;
+                assignment.revision += 1;
+                assignment.updated_at = Utc::now();
+                self.inner.store.collaboration_assignment_put(assignment)?;
+                return Ok(false);
+            }
+            return Err(error);
+        }
+        Ok(true)
     }
 
     pub fn collaboration_assignments_list(
@@ -2499,19 +2531,39 @@ impl Orchestrator {
                 .count();
             let mut slots = group.policy.max_active_workers.saturating_sub(active as u32);
             for assignment in assignments.iter_mut().filter(|a| a.status == AssignmentStatus::Pending) {
+                if let Some(owner) = assignment.owner_thread_id
+                    && let Some(thread) = self.inner.store.thread_get(owner)?
+                    && (matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+                        || (thread.status != ThreadStatus::Archived
+                            && self.inner.store.runtime_tasks_for_thread(owner)?.iter().any(|task| task.status.is_active())))
+                {
+                    // Reporting an assignment can finish before the native turn
+                    // or its background tasks settle. Do not consume a worker
+                    // slot or publish repeated state changes while it is busy.
+                    waiting = true;
+                    continue;
+                }
                 if slots == 0 {
                     waiting = true;
                     break;
                 }
-                if let Err(error) = self.start_collaboration_assignment(&group, assignment).await {
-                    assignment.status = AssignmentStatus::AttentionNeeded;
-                    assignment.uncertainty = Some(format!("could not start assignment: {error}"));
-                    assignment.revision += 1;
-                    assignment.updated_at = Utc::now();
-                    self.inner.store.collaboration_assignment_put(assignment)?;
-                }
+                let dispatched = match self.start_collaboration_assignment(&group, assignment).await {
+                    Ok(dispatched) => dispatched,
+                    Err(error) => {
+                        assignment.status = AssignmentStatus::AttentionNeeded;
+                        assignment.uncertainty = Some(format!("could not start assignment: {error}"));
+                        assignment.revision += 1;
+                        assignment.updated_at = Utc::now();
+                        self.inner.store.collaboration_assignment_put(assignment)?;
+                        false
+                    }
+                };
                 self.emit_collaboration(group.id, EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() })?;
-                slots -= 1;
+                if dispatched {
+                    slots -= 1;
+                } else if assignment.status == AssignmentStatus::Pending {
+                    waiting = true;
+                }
             }
         }
         Ok(waiting)
@@ -3596,7 +3648,7 @@ impl Orchestrator {
             return Err(anyhow!("thread is no longer idle"));
         }
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
-            return Err(anyhow!("thread is busy"));
+            return Err(ThreadBusy.into());
         }
         if thread.status == ThreadStatus::Archived {
             return Err(anyhow!("thread is archived"));
@@ -6454,6 +6506,59 @@ mod tests {
                 assert!(fixture.store.queue_is_pending(messages[101].id).unwrap(), "outside snapshot");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn assignment_dispatch_busy_race_returns_to_pending_without_accepting_turn() {
+        let fixture = Fixture::new();
+        let mut thread = fixture.thread(ThreadStatus::Idle);
+        let group = fixture
+            .orchestrator
+            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
+                operation_id: Uuid::now_v7(),
+                project_id: thread.project_id,
+                coordinator_thread_id: thread.id,
+                objective: "Retry a busy assignment".into(),
+                success_criteria: vec![],
+                coordinator_mode: Some(CoordinatorMode::Ordinary),
+                policy: None,
+            })
+            .unwrap();
+        let mut assignment = fixture
+            .orchestrator
+            .collaboration_assignment_create(
+                methods::CollaborationAssignmentsCreateParams {
+                    operation_id: Uuid::now_v7(),
+                    group_id: group.id,
+                    parent_assignment_id: None,
+                    owner_thread_id: Some(thread.id),
+                    child: None,
+                    title: "Follow-up".into(),
+                    instructions: "Read the result".into(),
+                    kind: AssignmentKind::Research,
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // Another send won after the scheduler observed an idle owner.
+        thread.status = ThreadStatus::Running;
+        fixture.store.thread_upsert(&thread).unwrap();
+        assert!(!fixture.orchestrator.start_collaboration_assignment(&group, &mut assignment).await.unwrap());
+        let pending = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
+        assert_eq!(pending.status, AssignmentStatus::Pending);
+        assert_eq!(pending.owner_thread_id, Some(thread.id));
+        assert!(pending.dispatch_message_id.is_none());
+        assert!(pending.uncertainty.is_none());
+        assert!(
+            fixture
+                .store
+                .events_for_thread(thread.id)
+                .unwrap()
+                .iter()
+                .all(|event| !matches!(event.payload, EventPayload::TurnStarted { .. }))
+        );
     }
 
     #[tokio::test]
