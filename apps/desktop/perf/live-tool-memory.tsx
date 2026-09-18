@@ -35,8 +35,9 @@ async function run() {
   // Install before the asynchronous socket handshake. Both modes use the same
   // production runtime and binary; only this fixture's subscription differs.
   const client = runtime.rpc(), call = client.call.bind(client)
-  let calls = 0, deliveredOutputChars = 0, omittedCompletions = 0
-  const watchdog = setTimeout(() => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ stage: "live-diagnostic", tools: tools().length, complete: tools().filter(b => b.complete).length, status: useStore.getState().threads[threadId]?.status, deliveredOutputChars, omittedCompletions, visibility: document.visibilityState })), 20000)
+  let calls = 0, deliveredOutputChars = 0, omittedCompletions = 0, unexpectedCompletion = false
+  const completionSeqs = new Set<number>()
+  const watchdog = setTimeout(() => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ stage: "live-diagnostic", tools: tools().length, complete: tools().filter(b => b.complete).length, status: useStore.getState().threads[threadId]?.status, deliveredOutputChars, omittedCompletions, uniqueCompletions: completionSeqs.size, unexpectedCompletion, visibility: document.visibilityState })), 20000)
   client.call = ((method, params) => {
     if (method === "threads.tool_output") calls++
     if (method === "events.subscribe" && fullEvents)
@@ -46,6 +47,13 @@ async function run() {
   const unobserve = client.onNotification(EVENT_NOTIFICATION, (params) => {
     const { event } = params as EventNotification
     if (event.thread_id !== threadId || event.kind !== "tool_call_completed") return
+    // Raw notification observers also see replayed frames after a reconnect or
+    // lag recovery. The subscription reducer rejects their old sequence, so
+    // count each durable completion once here too. Keep the probe bounded while
+    // still failing if the workload produces a 65th distinct completion.
+    if (completionSeqs.has(event.seq)) return
+    if (completionSeqs.size >= 64) { unexpectedCompletion = true; return }
+    completionSeqs.add(event.seq)
     const payload = event.output && typeof event.output === "object" && !Array.isArray(event.output) ? event.output.content : event.output
     if (typeof payload === "string") deliveredOutputChars += payload.length
     if (event.output_omitted) omittedCompletions++
@@ -66,6 +74,7 @@ async function run() {
     const bytes = tools().reduce((total, block) => total + retainedSize(block.output), 0)
     check(calls === 0, "Closed live output was unnecessarily fetched")
     if (!baseline) check(bytes <= 8 * 1024 * 1024, `Closed live payloads exceed budget: ${bytes}`)
+    check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     await mark("live-results-closed")
