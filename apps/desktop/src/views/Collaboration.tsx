@@ -99,6 +99,18 @@ const assignmentNeedsAttention = (assignment: CollaborationAssignment) =>
   NEEDS_ATTENTION.has(assignment.status) ||
   assignment.result?.outcome === "partial" ||
   assignment.result?.outcome === "failed"
+const assignmentIsActiveWork = (assignment: CollaborationAssignment) =>
+  assignment.status === "pending" || assignment.status === "working"
+const assignmentWorkDetail = (assignments: CollaborationAssignment[]) => {
+  const queued = assignments.filter((assignment) => assignment.status === "pending").length
+  const working = assignments.filter((assignment) => assignment.status === "working").length
+  const attention = assignments.filter(assignmentNeedsAttention).length
+  return [
+    queued > 0 ? `${queued} queued` : "",
+    working > 0 ? `${working} working` : "",
+    attention > 0 ? `${attention} need${attention === 1 ? "s" : ""} attention` : "",
+  ].filter(Boolean).join(" · ") || "No active tasks"
+}
 const dedicatedUnsupported = (kind: ProviderKind) =>
   kind === "codex" || kind === "cursor"
 
@@ -409,6 +421,7 @@ export function CollaborationPane({
 
   const group = detail.group
   const activeAssignments = assignments.filter((item) => !DONE.has(item.status))
+  const activeWorkAssignments = activeAssignments.filter(assignmentIsActiveWork)
   const finishedAssignments = assignments.filter((item) =>
     DONE.has(item.status)
   )
@@ -725,7 +738,7 @@ export function CollaborationPane({
                   ) === 1
                     ? ""
                     : "s"}{" "}
-                  · {activeAssignments.length} active
+                  · {activeWorkAssignments.length} active
                 </p>
                 {persistentCoordinator && (
                   <p className="mt-1.5 line-clamp-2 max-w-[55ch] text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-foreground/75">
@@ -1929,7 +1942,7 @@ function WorkView({
         <section>
           <SectionHeader
             title="Work"
-            detail={`${assignments.length} active task${assignments.length === 1 ? "" : "s"}`}
+            detail={assignmentWorkDetail(assignments)}
             action={newAction}
           />
           {assignments.length ? (

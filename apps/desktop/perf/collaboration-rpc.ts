@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { CollaborationGroup, CollaborationMessage, ContextEntry, Thread, ThreadEvent } from "../src/protocol"
+import type { CollaborationAssignment, CollaborationGroup, CollaborationMessage, ContextEntry, Thread, ThreadEvent } from "../src/protocol"
 import { collaborationReplay, readReplay } from "./collaboration-replay"
 
 const at = "2026-09-13T08:00:00Z"
@@ -21,11 +21,16 @@ const context: ContextEntry = { id: "context-current", group_id: "group-1", key:
 const observation: ContextEntry = { ...context, id: "context-observation", key: "webkit-finding", kind: "research", body: "The collaboration dock remains readable at 420 points.", user_authored: false, author_thread_id: "thread-worker", revision: 1 }
 const resultReference: ContextEntry = { ...context, id: "context-result-reference", key: "learned-test-command", kind: "result_reference", body: "Run node scripts/check-rendering.mjs collaboration from apps/desktop.", user_authored: false, author_thread_id: "thread-main", revision: 2 }
 const longResultSummary = `Lifecycle works; ${"the coordinator retained assignment identity, review state, and readable result metadata across a deliberately long native WebKit summary. ".repeat(6)}END-OF-FULL-RESULT`
-const assignments = [
+const assignments: CollaborationAssignment[] = [
+  { id: "assignment-queued", group_id: "group-1", created_by_thread_id: "thread-main", title: "Queue accessibility check", instructions: "Wait for a helper slot, then verify keyboard navigation.", kind: "review", status: "pending", depth: 1, revision: 1, created_at: at, updated_at: at },
   { id: "assignment-running", group_id: "group-1", owner_thread_id: "thread-worker", created_by_thread_id: "thread-main", title: "Implement client flow", instructions: "Build desktop and mobile collaboration controls.", kind: "edit", status: "working", base_revision: "main", depth: 1, revision: 2, created_at: at, updated_at: at },
+  { id: "assignment-attention", group_id: "group-1", owner_thread_id: "thread-reviewer", created_by_thread_id: "thread-main", title: "Resolve helper question", instructions: "Confirm the expected retry behavior.", uncertainty: "The helper needs a decision before continuing.", kind: "review", status: "attention_needed", depth: 1, revision: 2, created_at: at, updated_at: at },
+  { id: "assignment-blocked", group_id: "group-1", owner_thread_id: "thread-reviewer", created_by_thread_id: "thread-main", title: "Wait for dependency", instructions: "Resume after the dependency lands.", uncertainty: "Blocked on an external dependency.", kind: "integration", status: "blocked", depth: 1, revision: 2, created_at: at, updated_at: at },
   { id: "assignment-result", group_id: "group-1", owner_thread_id: "thread-reviewer", created_by_thread_id: "thread-main", title: "Review integration", instructions: "Review lifecycle and recovery.", kind: "review", status: "completed", depth: 1, revision: 3, created_at: at, updated_at: at, result: { outcome: "partial", summary: longResultSummary, changes: ["apps/desktop/src/views/Collaboration.tsx"], checks: ["Desktop collaboration fixture"], artifacts: ["artifacts/collaboration-redesign/desktop-work.png"], unresolved: ["Physical device reconnect"], completed_at: at } },
+  { id: "assignment-failed", group_id: "group-1", owner_thread_id: "thread-reviewer", created_by_thread_id: "thread-main", title: "Run unavailable check", instructions: "Run the unavailable integration check.", kind: "review", status: "failed", depth: 1, revision: 3, created_at: at, updated_at: at, result: { outcome: "failed", summary: "The integration service was unavailable.", changes: [], checks: ["Integration check failed"], artifacts: [], unresolved: ["Retry when the service returns"], completed_at: at } },
 ]
-const olderAssignment = { ...assignments[1], id: "assignment-old", title: "Research coordination", result: { ...assignments[1]!.result!, outcome: "success", summary: "Compared coordinator behavior." } }
+const completedAssignment = assignments.find((assignment) => assignment.id === "assignment-result")!
+const olderAssignment: CollaborationAssignment = { ...completedAssignment, id: "assignment-old", title: "Research coordination", result: { ...completedAssignment.result!, outcome: "success", summary: "Compared coordinator behavior." } }
 const messages: CollaborationMessage[] = [{ id: "message-1", operation_id: "operation-1", group_id: "group-1", assignment_id: "assignment-running", from_thread_id: "thread-worker", to_thread_id: "thread-main", purpose: "question", body: `Should the correction replace the old instruction? ${"This deliberately long collaboration message verifies that compact previews remain readable in native WebKit while the complete question stays available on demand. ".repeat(5)}END-OF-FULL-MESSAGE`, state: "submitted", delivery_turn_id: "turn-1", wakeup_count: 1, created_at: at, updated_at: at }]
 
 export function rpc() {
