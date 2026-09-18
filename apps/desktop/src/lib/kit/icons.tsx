@@ -116,7 +116,7 @@ import {
   SidebarRightIcon as HcPanelRight,
   AppWindowMacIcon as HcWindow,
   SidebarLeft01Icon as HcLayoutSidebar,
-  PencilIcon as HcPencil,
+  Edit03Icon as HcPencil,
   PinIcon as HcPin,
   PauseIcon as HcPause,
   PlayIcon as HcPlay,
@@ -311,6 +311,8 @@ export const PanelLeftIcon = hugeIcon(HcPanelLeft);
 export const PanelRightCloseIcon = hugeIcon(HcPanelRight);
 export const WindowIcon: LucideIcon = hugeIcon(HcWindow);
 export const LayoutSidebarIcon: LucideIcon = hugeIcon(HcLayoutSidebar);
+// Canonical edit glyph. Renders Hugeicons `Edit03Icon` (a pencil-on-line mark);
+// the export keeps the `PencilIcon` name so every edit/rename call site is unchanged.
 export const PencilIcon: LucideIcon = hugeIcon(HcPencil);
 export const PinIcon: LucideIcon = hugeIcon(HcPin);
 // Solid pin from the same glyph — used wherever a pin reflects "pinned" status.
