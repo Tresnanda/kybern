@@ -16,6 +16,8 @@ use tauri::Manager;
 mod environments;
 mod notifications;
 mod remote;
+#[cfg(target_os = "macos")]
+mod traffic_lights;
 
 static ENDPOINT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static STARTING_ENDPOINT: tokio::sync::Mutex<Option<StartingEndpoint>> = tokio::sync::Mutex::const_new(None);
@@ -423,6 +425,8 @@ pub fn run() {
                 if std::env::var_os("KYBERN_NO_ACTIVATE").is_none() {
                     let _ = w.set_focus();
                 }
+                #[cfg(target_os = "macos")]
+                traffic_lights::install(&w);
             }
             Ok(())
         })
