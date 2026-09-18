@@ -22,9 +22,21 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const quoteLayer = import.meta.env.VITE_LIVE_TOOLS_QUOTE_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkQuoteLayer() {
+  const quotes = [...document.querySelectorAll<HTMLElement>(".chat-markdown--hosted > blockquote")]
+  if (!quotes.length) return
+  for (const quote of quotes) {
+    check(getComputedStyle(quote).willChange.includes("transform") === quoteLayer, `Hosted markdown quote wrapper paint host changed: ${getComputedStyle(quote).willChange}`)
+    check((getComputedStyle(quote).borderLeftWidth !== "0px") === quoteLayer, `Hosted markdown quote wrapper bar changed: ${getComputedStyle(quote).borderLeftWidth}`)
+    for (const child of [...quote.children] as HTMLElement[]) {
+      check(getComputedStyle(child).willChange.includes("transform") !== quoteLayer, `Hosted markdown quote child paint host changed: ${getComputedStyle(child).willChange}`)
+    }
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -44,6 +56,9 @@ async function run() {
   }
   if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
     textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
+  if (quoteLayer) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: ".chat-markdown--hosted>blockquote{will-change:transform!important;border-left:2px solid var(--border)!important;padding-left:0.8rem!important}.chat-markdown--hosted>blockquote>*{will-change:auto!important;border-left:none!important;padding-left:0!important;padding-top:0!important;padding-bottom:0!important}",
   }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
@@ -124,6 +139,7 @@ async function run() {
       const bounds = viewport.getBoundingClientRect()
       check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar, importApp })}`)
       if (fullShell) check(Math.round(bounds.width) === window.innerWidth - 256 && Math.round(bounds.height) === window.innerHeight - 46, `Full shell viewport changed: ${JSON.stringify({ width: bounds.width, height: bounds.height, windowWidth: window.innerWidth, windowHeight: window.innerHeight })}`)
+      checkQuoteLayer()
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
@@ -142,6 +158,7 @@ async function run() {
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    checkQuoteLayer()
     await mark("live-results-closed")
     if (seededHistory) {
       const first = liveTools()[0]!
