@@ -17,6 +17,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Earlier-history paging | A retry at the top could reuse old scroll intent and download every remaining page. | Consume intent per request; require further reading input before another automatic page, while preserving the anchor. |
 | Markdown and code | Full parsing and highlighting competed with input and scrolling on the renderer thread; serialized equality signatures duplicated retained trees. | Separate module workers, incremental tail parsing, exact structural comparison, bounded queues/caches, cancellation, and source-size limits. Retain prior formatting during updates and readable text on failure. |
 | Diagrams | DOM-based diagram engines and image URLs can outlive visible content. | Load Mermaid only for settled diagrams, bound queued work/cache/output, release its rendering document at idle, and revoke replaced/unmounted image URLs. |
+| Inline preview decode | Compact and default 280px `data:` / `blob:` previews decoded the full raster. | Fit displayed rasters to 560×352 (daemon preview). Dialog, copy, and download keep the original. Tiny data URLs keep src identity. |
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
@@ -35,6 +36,10 @@ It includes repeated-burst observations, paged-history paint boundaries,
 bounded settled streams, title metadata checks and hidden dock measurements.
 The 200–300 MB target is not a verified ceiling; repeated settled use also
 exceeded it.
+
+See [inline preview decode budget](inline-preview-decode-2026-09-18.md) for
+280px compact/default `data:` / `blob:` chips fitted to 560×352. This Linux
+environment cannot reproduce the macOS whole-app physical-footprint coalition.
 
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,
@@ -161,7 +166,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Scroll position corrections, cold history, scrolling during work | `node scripts/check-rendering.mjs scrolling` |
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
 | Combined composer panels, shared seams, constrained pane height | `node scripts/check-rendering.mjs composer-stack` |
-| Attached-image controls, user line breaks, environment menu | `node scripts/check-rendering.mjs chat-fixes` |
+| Attached-image controls, user line breaks, environment menu, inline preview original identity | `node scripts/check-rendering.mjs chat-fixes` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
 | Provider catalogs, sign-in terminals, native artifact preview and publication controls | `node scripts/check-rendering.mjs integrations` |
 | Activity task sorting, retained history, hidden timers | `node scripts/check-rendering.mjs activity` |
