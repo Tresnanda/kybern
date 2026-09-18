@@ -104,7 +104,9 @@ export async function pickFiles(): Promise<string[]> {
 export async function saveImageFile(data: Uint8Array, defaultPath: string): Promise<boolean | null> {
   if (!isTauri()) return null
   const { invoke } = await import("@tauri-apps/api/core")
-  return invoke<boolean>("save_image_file", data, { headers: { "X-Kybern-File-Name": defaultPath } })
+  // IPC headers must be ASCII; JSON escapes preserve Unicode file names.
+  const name = JSON.stringify(defaultPath).replace(/[\u007f-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
+  return invoke<boolean>("save_image_file", data, { headers: { "X-Kybern-File-Name": name } })
 }
 
 export async function writeImageClipboard(data: Uint8Array): Promise<void> {

@@ -451,7 +451,9 @@ fn header_text<'a>(headers: &'a tauri::http::HeaderMap, name: &str) -> Option<&'
 }
 
 fn image_file_name(headers: &tauri::http::HeaderMap) -> String {
-    let candidate = header_text(headers, "x-kybern-file-name").unwrap_or("image.png");
+    let candidate = header_text(headers, "x-kybern-file-name")
+        .and_then(|name| serde_json::from_str::<String>(name).ok())
+        .unwrap_or_else(|| "image.png".into());
     let safe = candidate.replace(['/', '\\'], "-").chars().filter(|character| !character.is_control()).collect::<String>();
     if safe.is_empty() { "image.png".into() } else { safe }
 }
@@ -463,7 +465,6 @@ fn image_file_name(headers: &tauri::http::HeaderMap) -> String {
 async fn save_image_file<R: Runtime>(window: tauri::Window<R>, request: tauri::ipc::Request<'_>) -> Result<bool, String> {
     let data = raw_image_bytes(&request)?;
     let name = image_file_name(request.headers());
-    drop(request);
     let mut dialog = window.app_handle().dialog().file();
     #[cfg(desktop)]
     {
@@ -497,7 +498,7 @@ fn write_image_clipboard(request: tauri::ipc::Request<'_>) -> Result<(), String>
     let data = raw_image_bytes(&request)?;
     #[cfg(target_os = "macos")]
     {
-        return write_png_to_pasteboard(&NSPasteboard::generalPasteboard(), &data);
+        write_png_to_pasteboard(&NSPasteboard::generalPasteboard(), &data)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -571,6 +572,15 @@ mod tests {
     use kybern_protocol::PROTOCOL_VERSION;
     use kybern_protocol::methods::DaemonInfo;
     use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn native_image_file_name_preserves_unicode_without_path_components() {
+        let mut headers = tauri::http::HeaderMap::new();
+        headers.insert("x-kybern-file-name", r#""../Pratinjau \ud83d\ude00.png""#.parse().unwrap());
+        assert_eq!(super::image_file_name(&headers), "..-Pratinjau 😀.png");
+        headers.insert("x-kybern-file-name", "invalid JSON".parse().unwrap());
+        assert_eq!(super::image_file_name(&headers), "image.png");
+    }
 
     #[test]
     fn paired_port_survives_upgrade_and_clean_shutdown() {

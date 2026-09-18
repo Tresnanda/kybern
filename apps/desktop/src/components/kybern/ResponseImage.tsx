@@ -6,7 +6,7 @@ import { IconSwap } from "@/components/kybern/motion"
 import { CheckIcon, CopyIcon, DownloadIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
-import { isTauri, saveImageFile, writeImageClipboard } from "@/lib/tauri"
+import { isTauri, platform, saveImageFile, writeImageClipboard } from "@/lib/tauri"
 import { fetchThreadImage } from "@/state/rpc"
 import { cn } from "@/lib/utils"
 
@@ -154,7 +154,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     setImageAction(kind)
     try {
       if (kind === "copy") {
-        if (isTauri()) {
+        if (isTauri() && platform() === "macos") {
           // The Tauri custom scheme does not consistently expose WebKit's
           // image clipboard API. Keep the conversion native-independent, then
           // send the PNG directly to AppKit without relying on activation.

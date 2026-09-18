@@ -1,4 +1,4 @@
-export { isTauri, saveImageFile, writeImageClipboard } from "../src/lib/tauri"
+export { isTauri, platform, saveImageFile, writeImageClipboard } from "../src/lib/tauri"
 
 export const external: string[] = []
 export const fetched: string[] = []
