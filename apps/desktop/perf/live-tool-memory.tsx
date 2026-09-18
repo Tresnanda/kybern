@@ -22,9 +22,21 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const editedFilesLayer = import.meta.env.VITE_LIVE_TOOLS_EDITED_FILES_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkEditedFilesLayer() {
+  const cards = [...document.querySelectorAll<HTMLElement>("[data-edited-files]")]
+  if (!cards.length) return
+  for (const card of cards) {
+    check(getComputedStyle(card).willChange.includes("transform") === editedFilesLayer, `Edited-files card paint host changed: ${getComputedStyle(card).willChange}`)
+    check(!!card.querySelector(":scope > .chat-paint-host"), "Edited-files card lost its header paint host")
+    for (const row of card.querySelectorAll("tr")) {
+      check(getComputedStyle(row).willChange.includes("transform") !== editedFilesLayer, `Edited-files diff row paint host changed: ${getComputedStyle(row).willChange}`)
+    }
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -44,6 +56,9 @@ async function run() {
   }
   if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
     textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
+  if (editedFilesLayer) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: "[data-edited-files]{will-change:transform!important}[data-edited-files] tr{will-change:auto!important}",
   }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
@@ -124,6 +139,7 @@ async function run() {
       const bounds = viewport.getBoundingClientRect()
       check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar, importApp })}`)
       if (fullShell) check(Math.round(bounds.width) === window.innerWidth - 256 && Math.round(bounds.height) === window.innerHeight - 46, `Full shell viewport changed: ${JSON.stringify({ width: bounds.width, height: bounds.height, windowWidth: window.innerWidth, windowHeight: window.innerHeight })}`)
+      checkEditedFilesLayer()
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
@@ -142,6 +158,7 @@ async function run() {
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    checkEditedFilesLayer()
     await mark("live-results-closed")
     if (seededHistory) {
       const first = liveTools()[0]!
