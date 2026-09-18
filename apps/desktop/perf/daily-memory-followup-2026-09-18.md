@@ -150,6 +150,88 @@ controlled comparison; their individual contributions have not been isolated.
 Reproduce with `KYBERN_PERF_LIVE_THREAD=1 KYBERN_PERF_LIVE_HISTORY=1` at
 1440×900. Raw evidence is in `perf-artifacts/daily-ram-followup-20260918/full-thread-themed-*`.
 
+## Further shell attribution
+
+The follow-up native fixture adds the real `Sidebar`, `SidebarInset` and
+`ThreadSidebar` to the same Thread workload. A second control keeps the shell
+but leaves the sidebar empty. These measurements concern WebContent only.
+
+| Native surface | Startup | Lifetime peak | Later idle |
+| --- | ---: | ---: | ---: |
+| Thread and real theme | 137.0 MiB | 200.7 MiB | 129.9 MiB |
+| Shell with empty sidebar | 211.3 MiB | 308.4 MiB | 141.1 MiB |
+| Shell with populated sidebar | 323.1 MiB | 390.3 MiB | 159.6 MiB |
+
+Startup graphics residency was 66.3, 139.8 and 248.6 MiB respectively, while
+WebKit Malloc residency was 76.2, 77.6 and 82.3 MiB. This associates the extra
+cost with rendered shell graphics, but does not isolate a single cause.
+Controls for fixed versus absolute positioning, persistent animation hints,
+entry animation, root/content paint hosts and scroll masking did not yield a
+reliable reduction (tested shell peaks remained approximately 391–436 MiB).
+Those experimental changes were discarded; no visual effect was removed. A
+subsequent exact stacking-context control did identify a separate opportunity,
+described below.
+
+Reproduce the retained diagnostic with `KYBERN_PERF_LIVE_SHELL=1` and
+`KYBERN_PERF_LIVE_HISTORY=1` at 1440×900. Add
+`KYBERN_PERF_LIVE_EMPTY_SIDEBAR=1` for the empty-sidebar control.
+Evidence is retained under `perf-artifacts/daily-ram-followup-20260918/full-shell-*`
+and `empty-sidebar-*`. This narrower fixture is for attribution, not a
+replacement for the whole-app acceptance workload above.
+
+An additional unmounted `App` import control retained the production module
+graph without rendering it. Startup WebKit Malloc residency rose from 82.3 to
+84.9 MiB (allocated bytes 50.4 to 54.3 MiB). Total footprint rose more, but
+that included an additional 16.6 MiB graphics region despite no extra mounted
+surface. This does not support attributing the whole difference to eager
+JavaScript. Lazy settings/dock modules may reduce startup code, but would not
+explain the large remaining burst; no production lazy-loading change was made.
+
+## Chat surface stacking context
+
+The full-shell fixture exposed one remaining difference: the chat content card
+had `z-index: 15`, creating a stacking context around the entire transcript.
+Keeping the exact same shell/sidebar and 1184×854 transcript viewport while
+changing only that card to `z-index: auto` reduced native WebContent startup
+from 323.1 to 172.9 MiB and burst peak from 390.3 to 258.9 MiB. Later idle
+was 145.7 MiB, versus 159.6 MiB. This is a separate native fixture result;
+the release validation below measures all attributed app processes.
+
+A fresh, sequential release pair used the preserved pre-change `50049f6f`
+bundle and the new `6237e328` build (root production commit `3fb73dfb`). The
+only production source difference is removal of the content card's redundant
+stacking context. Both used fresh external scratch data, the same 1440×900
+window, opaque preference, production CSP and 400-turn/64-result workload.
+
+| Full application physical footprint | Pre-change release | Without card stacking context |
+| --- | ---: | ---: |
+| Loaded history before burst | 254.6 MiB | 239.0 MiB |
+| Burst peak | 454.2 MiB | 385.1 MiB |
+| 60 seconds after burst start | 254.0 MiB | 285.7 MiB |
+
+The peak fell 69.1 MiB (15.2%) in this matched pair. This is a peak reduction,
+not a demonstrated settled-memory saving: the candidate's +60-second footprint
+was higher in this pair, approximately 299.6 decimal MB. The earlier pre-change
+run settled at 282.9 MiB, illustrating why a single idle observation should not
+be presented as a universal limit. Candidate peak WebContent was 287.7 MiB,
+versus 354.0 MiB in the matched control. Both runs kept all 64 outputs with the
+same canonical SHA-256 recorded above. A second burst in the candidate peaked
+at 388.7 MiB and measured 309.6 MiB at +60 seconds (approximately 324.6 MB).
+Both candidate turns independently passed the 64-output hash check. This
+confirms similar burst peaks across two turns; it does not prove a flat
+multi-hour memory profile, and the repeated settled observation exceeds the
+200–300 MB target.
+
+Native interaction and light/dark/translucent/opaque material checks passed,
+as did all 255 desktop tests, typecheck, lint and the sidecar-aware release
+build. UI materials and motion were retained. The release app's environment menu, settings/back navigation and Activity dock
+were also exercised through native accessibility controls. Screenshot capture
+was unavailable for the isolated bundle; the native material checks supplied
+the appearance coverage. The installed production daemon remained untouched. Raw evidence is retained under
+`perf-artifacts/daily-ram-followup-20260918/pre-stack-*` and `stack-*`.
+Reproduce the old native stacking context with
+`KYBERN_PERF_LIVE_STACKED_CONTENT_CARD=1` alongside shell/history mode.
+
 ## Hidden dock layers: isolated native evidence
 
 Four alternating native WKWebView runs used the same 1100×720 opaque fixture,
