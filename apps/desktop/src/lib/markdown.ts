@@ -63,4 +63,14 @@ export function parseMarkdown(input: MarkdownInput, signal: AbortSignal) {
   return queue.request(input, signal).finally(() => idle.settle())
 }
 export function releaseMarkdown(consumer: number) { worker?.postMessage({ release: consumer }); idle.settle() }
+
+/** Drop the parser worker heap immediately. Hidden windows must not wait for
+ * the idle timer; the next parse recreates the worker. */
+export function releaseMarkdownRuntime() {
+  idle.dispose()
+  cache.clear()
+  cacheBytes = 0
+  releaseWorker()
+}
+
 if (import.meta.hot) import.meta.hot.dispose(() => { idle.dispose(); queue.dispose(); worker?.terminate(); cache.clear(); cacheBytes = 0 })

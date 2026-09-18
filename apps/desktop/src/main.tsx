@@ -12,6 +12,7 @@ import { isTauri, platform } from "@/lib/tauri"
 import { startAppUpdateChecks } from "@/lib/appUpdate"
 import { boot } from "@/state/rpc"
 import { installRuntimeErrorReporting } from "@/lib/runtimeErrors"
+import { installRendererWindowHold } from "@/lib/rendererWindowHold"
 import { showRuntimeError } from "@/components/kybern/runtimeErrorNotice"
 
 // Dev only: `VITE_KYBERN_THEME=light pnpm tauri dev` boots the window in a fixed
@@ -36,7 +37,11 @@ document.addEventListener("contextmenu", (e) => {
 })
 
 const stopErrorReporting = installRuntimeErrorReporting(window, showRuntimeError)
-if (import.meta.hot) import.meta.hot.dispose(stopErrorReporting)
+const stopRendererHold = installRendererWindowHold()
+if (import.meta.hot) import.meta.hot.dispose(() => {
+  stopErrorReporting()
+  stopRendererHold()
+})
 
 void boot()
 startAppUpdateChecks()
