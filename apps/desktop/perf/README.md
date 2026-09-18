@@ -20,6 +20,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
+| Work-list container hosts | An opened tool group's container stayed a tiled layer after its rows were hosted (140-tile class of bug). Settled disclosures and grouped-tool panels still wrapped `VirtualRows` in `.chat-paint-host`. | Leave `[data-work-list]` unhosted; nested virtual rows keep the default host. Native A/B: `KYBERN_PERF_LIVE_WORK_LIST_LAYER=1`. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
@@ -35,6 +36,10 @@ It includes repeated-burst observations, paged-history paint boundaries,
 bounded settled streams, title metadata checks and hidden dock measurements.
 The 200–300 MB target is not a verified ceiling; repeated settled use also
 exceeded it.
+
+See [work-list container paint hosts](work-list-host-2026-09-18.md) for why
+settled disclosures and grouped-tool panels must not promote the VirtualRows
+wrapper, and the native A/B control (`KYBERN_PERF_LIVE_WORK_LIST_LAYER`).
 
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,

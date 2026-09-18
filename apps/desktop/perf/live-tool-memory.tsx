@@ -22,9 +22,18 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const workListLayer = import.meta.env.VITE_LIVE_TOOLS_WORK_LIST_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkWorkListHosts() {
+  const lists = [...document.querySelectorAll<HTMLElement>("[data-work-list]")]
+  check(lists.length > 0, "Work-list containers did not mount")
+  for (const list of lists) {
+    check(list.classList.contains("chat-paint-host") === workListLayer, `Work-list container paint host changed: ${list.className}`)
+    check(!!list.querySelector(".chat-paint-host, [data-virtual-key]"), "Opened work list lost nested rows")
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -156,6 +165,9 @@ async function run() {
       check(content === expected(0), "Exact Unicode live output changed on direct reload")
       await sleep(3000)
       await mark("live-post-workload-idle")
+      useStore.getState().set({ expandedWork: { [first.turnId]: true } })
+      await until(() => document.querySelector("[data-work-list]") !== null, "Expanded work list did not mount")
+      checkWorkListHosts()
       w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, baseline, fullEvents, seededHistory, deliveredOutputChars, omittedCompletions, closedRetainedBytes: bytes, liveResults: 64, hydrationCalls: calls, exactOutput: true }))
       return
     }
@@ -171,6 +183,7 @@ async function run() {
     }
     await sleep(500)
     await until(() => document.querySelectorAll('button[aria-expanded="false"]').length > 1, "No live work disclosures")
+    checkWorkListHosts()
     const openFirst = () => [...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].filter(b => b.textContent?.includes("live-000.txt"))
     await until(() => openFirst().length === 2, "Early live result not reachable in both panes")
     for (const button of openFirst()) button.click()

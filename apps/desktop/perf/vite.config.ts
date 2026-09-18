@@ -39,6 +39,14 @@ export default mergeConfig(base, {
       if (!id.endsWith("/views/Transcript.tsx")) return
       return code.replace('className={cn(ROW, "chat-paint-host py-2")}', 'className={cn(ROW, "py-2")}')
     },
+  }] : process.env.KYBERN_PERF_FIXTURE === "live-tool-memory" && process.env.KYBERN_PERF_LIVE_WORK_LIST_LAYER === "1" ? [{
+    name: "live-tool-memory-work-list-layer-control",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/Transcript.tsx")) return
+      if (!code.includes('data-work-list className="')) throw new Error("work-list-layer control could not find data-work-list")
+      return code.replaceAll('data-work-list className="', 'data-work-list className="chat-paint-host ')
+    },
   }] : process.env.KYBERN_PERF_FIXTURE === "chat-fixes" ? [{
     name: "draft-asset-fixture-transport",
     enforce: "pre",

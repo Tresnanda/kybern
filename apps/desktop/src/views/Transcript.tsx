@@ -667,7 +667,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             // shares the same gutter, then a hairline separates work from answer.
             <div className="mb-3 space-y-0.5" data-timeline-row-kind="settled-work">
               {hasPrimaryAgentActivity && (
-                <div data-primary-agent-activity="true" className="chat-paint-host space-y-0.5">
+                // VirtualRows hosts each agent row. Promoting this list would
+                // tile once the stack grows past 1024 CSS px.
+                <div data-primary-agent-activity="true" data-work-list className="space-y-0.5">
                   <WorkRows
                     blocks={settledWork.agentBlocks}
                     tasksByToolCall={settledWork.tasksByToolCall}
@@ -692,7 +694,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                     <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
                   </CollapsibleTrigger>
                   <CollapsiblePanel>
-                    <div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
+                    {/* Same rule as live work: the opened group is a growing
+                        list. Nested VirtualRows already host each row. */}
+                    <div data-work-list className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
                       <WorkRows
                         blocks={settledWork.disclosureBlocks}
                         tasksByToolCall={settledWork.tasksByToolCall}
@@ -1215,7 +1219,7 @@ const ToolGroupRow = memo(function ToolGroupRow({
         </span>
         <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
       </CollapsibleTrigger>
-      <CollapsiblePanel><div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
+      <CollapsiblePanel><div data-work-list className="ms-5 mt-0.5 space-y-0.5 ps-0.5">
         <VirtualRows items={blocks} getKey={blockKey} estimateSize={estimateWorkSize}>{(block) => (
           <ToolRow
             key={block.id}
@@ -1364,7 +1368,7 @@ function ToolRow({
               <p className="pb-0.5 font-system-ui text-[11px] leading-5 text-muted-foreground/45">
                 {activity.kind === "delegate" ? "Subagent activity" : "Nested activity"}
               </p>
-              <div className="chat-paint-host space-y-0.5">
+              <div data-work-list className="space-y-0.5">
                 <WorkRows blocks={childBlocks} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
               </div>
             </section>
