@@ -112,13 +112,14 @@ async function run() {
   firstTick.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse", pointerId: 1 }))
   await sleep(200)
   const railEditPass = document.querySelector('[data-slot="preview-rail-title"]')?.textContent === "Corrected history"
+  const railDescriptionPass = document.querySelector('[data-slot="preview-rail-description"]')?.textContent?.startsWith("History 1.") === true
   firstTick.click()
   await sleep(350)
   const railNavigationPass = viewport.scrollTop < viewport.clientHeight
   rail.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
   await sleep(100)
   const ticks = rail.querySelectorAll<HTMLButtonElement>("button")
-  ;(rail.querySelector<HTMLButtonElement>('[data-rail-index="121"]') ?? ticks[ticks.length - 1]!).click()
+  ;(rail.querySelector<HTMLButtonElement>('[data-rail-index="60"]') ?? ticks[ticks.length - 1]!).click()
   await sleep(100)
   const followPass = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 60
   viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
@@ -128,10 +129,12 @@ async function run() {
   flushSync(() => controls.text(final + "\n\nMore output while reading history."))
   await sleep(150)
   const readingPositionPass = Math.abs(viewport.scrollTop - readingPosition) < 2
-  const result = { railEditPass, railNavigationPass, followPass, readingPositionPass, historyElements: history.length, railButtons: document.querySelectorAll('nav[aria-label="Message navigation"] button').length, historyCachePass, historyReadsDuringUpdates, codeIdentityPass, unchangedHighlightPass, wrapStatePass, finalTextPass, retainedCodeBlocks: retained, explanationCommitP95: p95(commits), streamFrames: frames.length, streamFrameP95: p95(frames), streamFramesOver25ms: frames.filter((n) => n > 25).length, streamRenders, codeMutations }
+  const railButtons = document.querySelectorAll('nav[aria-label="Message navigation"] button').length
+  const userPromptRailPass = railButtons === 61
+  const result = { railEditPass, railDescriptionPass, railNavigationPass, userPromptRailPass, followPass, readingPositionPass, historyElements: history.length, railButtons, historyCachePass, historyReadsDuringUpdates, codeIdentityPass, unchangedHighlightPass, wrapStatePass, finalTextPass, retainedCodeBlocks: retained, explanationCommitP95: p95(commits), streamFrames: frames.length, streamFrameP95: p95(frames), streamFramesOver25ms: frames.filter((n) => n > 25).length, streamRenders, codeMutations }
   const highlightBudgetPass = codeMutations >= 2 && codeMutations <= 20
   const revealBudgetPass = streamRenders <= 200
-  const pass = railEditPass && railNavigationPass && followPass && readingPositionPass && history.length === 120 && historyCachePass && revealBudgetPass && codeIdentityPass && unchangedHighlightPass && wrapStatePass && finalTextPass && highlightBudgetPass
+  const pass = railEditPass && railDescriptionPass && railNavigationPass && userPromptRailPass && followPass && readingPositionPass && history.length === 120 && historyCachePass && revealBudgetPass && codeIdentityPass && unchangedHighlightPass && wrapStatePass && finalTextPass && highlightBudgetPass
   document.title = pass ? "Rendering checks passed" : "Rendering checks failed"
   const native = window as unknown as { webkit?: { messageHandlers?: { bench?: { postMessage: (text: string) => void } } } }
   native.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({ ...result, highlightBudgetPass, revealBudgetPass, pass }))
