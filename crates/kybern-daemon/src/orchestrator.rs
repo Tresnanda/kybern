@@ -4281,13 +4281,8 @@ impl Orchestrator {
         if !self.inner.settings.get().generate_titles {
             return;
         }
-        let Ok(events) = self.inner.store.events_for_thread(thread.id) else { return };
-        let first = events.iter().find_map(|e| match &e.payload {
-            EventPayload::TurnStarted { message, .. } => Some(message.clone()),
-            _ => None,
-        });
+        let Ok((first, turns)) = self.inner.store.first_turn_message_and_count(thread.id) else { return };
         let Some(first) = first else { return };
-        let turns = events.iter().filter(|e| matches!(e.payload, EventPayload::TurnStarted { .. })).count();
         if turns != 1 || thread.title != title_from_message(&first) {
             return;
         }

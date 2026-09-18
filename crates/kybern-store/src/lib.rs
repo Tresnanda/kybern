@@ -1577,6 +1577,33 @@ impl Store {
         })
     }
 
+    /// Read the turn count and, only for a single-turn thread, its first prompt
+    /// for title eligibility. Keep this independent of the full event log:
+    /// completed tool results can be megabytes each, and custom old threads do
+    /// not need their first prompt (which may contain an image) at all.
+    pub fn first_turn_message_and_count(&self, thread_id: ThreadId) -> Result<(Option<UserMessage>, i64)> {
+        self.with(|c| {
+            let thread_id = thread_id.to_string();
+            let count: i64 =
+                c.query_row("SELECT COUNT(*) FROM events WHERE thread_id = ?1 AND kind = 'turn_started'", [&thread_id], |row| row.get(0))?;
+            if count != 1 {
+                return Ok((None, count));
+            }
+            let payload: String = c.query_row(
+                "SELECT payload FROM events
+                 WHERE thread_id = ?1 AND kind = 'turn_started'
+                 ORDER BY seq LIMIT 1",
+                [&thread_id],
+                |row| row.get(0),
+            )?;
+            let first = match serde_json::from_str::<EventPayload>(&payload)? {
+                EventPayload::TurnStarted { message, .. } => Some(message),
+                _ => None,
+            };
+            Ok((first, count))
+        })
+    }
+
     /// Find the durable acceptance record for a client-supplied message id.
     pub fn turn_started_receipt(&self, message_id: MessageId) -> Result<Option<(ThreadId, TurnId, UserMessage)>> {
         self.with(|c| {
@@ -1903,6 +1930,14 @@ impl Store {
         entries: &mut [TranscriptEntry],
         through_seq: EventSeq,
     ) -> Result<()> {
+        let requested: std::collections::HashSet<(EventSeq, String)> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                TranscriptEntry::ToolCall { seq, call, complete: true, .. } => Some((*seq, call.id.clone())),
+                _ => None,
+            })
+            .collect();
+        let requested_ids: std::collections::HashSet<String> = requested.iter().map(|(_, call_id)| call_id.clone()).collect();
         self.with(|c| {
             // Scan the two small JSON identity fields once, instead of issuing
             // one correlated query per transcript row. The active start map
@@ -1914,25 +1949,38 @@ impl Store {
                              ELSE json_extract(payload, '$.tool_call_id') END
                  FROM events
                  WHERE thread_id = ?1 AND seq <= ?2
-                   AND kind IN ('tool_call_started', 'tool_call_output_delta', 'tool_call_completed')
+                   AND kind IN ('tool_call_started', 'tool_call_output_delta')
                  ORDER BY seq",
             )?;
             let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
             let mut active = std::collections::HashMap::<String, EventSeq>::new();
             let mut streamed = std::collections::HashSet::<(EventSeq, String)>::new();
-            let mut completed = std::collections::HashSet::<(EventSeq, String)>::new();
             while let Some(row) = rows.next()? {
                 let seq: EventSeq = row.get(0)?;
                 let kind: String = row.get(1)?;
                 let Some(call_id) = row.get::<_, Option<String>>(2)? else { continue };
                 if kind == "tool_call_started" {
-                    active.insert(call_id, seq);
-                } else if kind == "tool_call_completed" {
-                    if let Some(start) = active.get(&call_id) {
-                        completed.insert((*start, call_id));
+                    if requested_ids.contains(&call_id) {
+                        active.insert(call_id, seq);
                     }
                 } else if let Some(start) = active.get(&call_id) {
-                    streamed.insert((*start, call_id));
+                    let key = (*start, call_id);
+                    if requested.contains(&key) {
+                        streamed.insert(key);
+                    }
+                }
+            }
+            // Check completion existence through the expression index instead
+            // of scanning and JSON-parsing every completion payload. A settled
+            // result can be tens of megabytes, while this query only reads the
+            // indexed call ID and row sequence.
+            let mut completion = c.prepare_cached(TOOL_COMPLETION_EXISTS_AT_START_SQL)?;
+            let mut recoverable = std::collections::HashSet::<(EventSeq, String)>::new();
+            for (start, call_id) in streamed {
+                let exists: Option<i64> =
+                    completion.query_row(params![thread_id.to_string(), call_id, start, through_seq], |row| row.get(0)).optional()?;
+                if exists.is_some() {
+                    recoverable.insert((start, call_id));
                 }
             }
             for entry in entries {
@@ -1942,7 +1990,7 @@ impl Store {
                 // synthetic null output. It has no durable result to hydrate,
                 // so only advertise a stream when the invocation also has a
                 // persisted completion event.
-                *stream_omitted = streamed.contains(&key) && completed.contains(&key);
+                *stream_omitted = recoverable.contains(&key);
             }
             Ok(())
         })
@@ -2394,6 +2442,18 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
 // Completion lookup uses the existing tool_completion_lookup index. The
 // intervening-start check ranges over the thread's sequence index, and prevents
 // crossing a reused call ID without adding a migration or a second read model.
+const TOOL_COMPLETION_EXISTS_AT_START_SQL: &str = "
+    SELECT 1 FROM events c
+    WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
+      AND json_extract(c.payload, '$.tool_call_id') = ?2
+      AND c.seq > ?3 AND c.seq <= ?4
+      AND EXISTS (SELECT 1 FROM events s WHERE s.seq = ?3 AND s.thread_id = ?1
+                  AND s.kind = 'tool_call_started' AND json_extract(s.payload, '$.call.id') = ?2)
+      AND NOT EXISTS (SELECT 1 FROM events n WHERE n.thread_id = ?1
+                      AND n.seq > ?3 AND n.seq <= c.seq AND n.kind = 'tool_call_started'
+                      AND json_extract(n.payload, '$.call.id') = ?2)
+    LIMIT 1";
+
 const TOOL_OUTPUT_AT_START_SQL: &str = "
     SELECT c.seq, c.payload FROM events c
     WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
@@ -3041,7 +3101,9 @@ mod tool_output_allocation_tests {
     fn fixture() -> Store {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);",
+            "CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+             CREATE INDEX tool_completion_lookup ON events(thread_id, json_extract(payload, '$.tool_call_id'))
+               WHERE kind = 'tool_call_completed';",
         )
         .unwrap();
         Store { conn: Arc::new(Mutex::new(conn)) }
@@ -3131,6 +3193,69 @@ mod tool_output_allocation_tests {
             snapshot.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { complete: true, output: Some(serde_json::Value::Null), stream_omitted: false, .. })
         ));
+    }
+
+    #[test]
+    fn completion_guard_uses_the_tool_id_expression_index() {
+        let store = fixture();
+        let plan = store
+            .with(|c| {
+                let mut statement = c.prepare(&format!("EXPLAIN QUERY PLAN {TOOL_COMPLETION_EXISTS_AT_START_SQL}"))?;
+                Ok(statement
+                    .query_map(params![ThreadId::nil().to_string(), "call", 1i64, 2i64], |row| row.get::<_, String>(3))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap();
+        assert!(plan.iter().any(|detail| detail.contains("tool_completion_lookup")), "query plan: {plan:?}");
+    }
+
+    #[test]
+    fn large_canonical_result_without_stream_does_not_need_completion_scan() {
+        let store = fixture();
+        let thread = ThreadId::nil();
+        complete(&store, thread, "canonical-only", serde_json::json!("x".repeat(2 * 1024 * 1024)), false);
+        let mut rows = vec![entry("canonical-only", true, false)];
+        store.mark_tool_streams_omitted_through(thread, &mut rows, i64::MAX).unwrap();
+        assert!(matches!(rows[0], TranscriptEntry::ToolCall { stream_omitted: false, .. }));
+    }
+
+    #[test]
+    fn first_turn_message_and_count_reads_only_title_metadata() {
+        let store = fixture();
+        let thread = ThreadId::nil();
+        let custom_thread = ThreadId::new_v4();
+        let first = EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("first prompt") };
+        store
+            .with(|c| {
+                c.execute(
+                    "INSERT INTO events(seq,thread_id,kind,payload) VALUES (?1,?2,?3,?4)",
+                    params![1, thread.to_string(), first.kind(), serde_json::to_string(&first)?],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let (message, count) = store.first_turn_message_and_count(thread).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(message.unwrap().plain_text(), "first prompt");
+
+        let second = EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("second prompt") };
+        store
+            .with(|c| {
+                for (seq, payload) in [
+                    (2, EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("custom first") }),
+                    (3, second),
+                ] {
+                    c.execute(
+                        "INSERT INTO events(seq,thread_id,kind,payload) VALUES (?1,?2,?3,?4)",
+                        params![seq, custom_thread.to_string(), payload.kind(), serde_json::to_string(&payload)?],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let (message, count) = store.first_turn_message_and_count(custom_thread).unwrap();
+        assert_eq!(count, 2);
+        assert!(message.is_none(), "custom multi-turn threads must not fetch their first prompt");
     }
 
     #[test]
