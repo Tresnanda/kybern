@@ -177,6 +177,20 @@ async function run() {
     check(generatedImage.naturalWidth === 2, "Hydrated generated image content did not decode")
     check(generatedHydrationCalls === variantIndex + 1, "Generated image hydration fetched more than once")
     check(generatedLeases === 1, "Generated image output has no mounted lease")
+    const galleryHost = document.querySelector<HTMLElement>("[data-generated-image-gallery]")
+    check(galleryHost, "Generated image gallery host missing")
+    // marginTop inside MessageScroller grows the content and followOutput
+    // scrolls the gallery back into view. Take it out of flow instead.
+    galleryHost.style.position = "fixed"
+    galleryHost.style.top = "-4000px"
+    galleryHost.style.left = "0"
+    await waitFor(() => generatedLeases === 0, "Offscreen generated image kept its output lease")
+    galleryHost.style.position = ""
+    galleryHost.style.top = ""
+    galleryHost.style.left = ""
+    await waitFor(() => generatedLeases === 1, "Returning to the gallery did not restore its output lease")
+    await waitFor(() => [...document.querySelectorAll<HTMLImageElement>("[data-response-images] img")].some((image) => image.src === generatedSource && image.complete), "Reopened generated image lost exact source")
+    check(generatedHydrationCalls === variantIndex + 1, "Offscreen gallery lease churned hydration")
     check([...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].some((button) => button.textContent?.includes("Worked for") && button.getAttribute("aria-expanded") === "false"), "Generated image required opening its tool disclosure")
     check(document.querySelectorAll('.response-image-preview').length === 3, "Tool images were promoted into the final answer")
     check(document.querySelectorAll('[data-response-images] img').length === 2, "Generated image deliverable was hidden with tool screenshots")
@@ -197,7 +211,7 @@ async function run() {
     useStore.getState().set({ connection: { state: "open" }, composerDrafts: { image: { text: "Draft", attachments: [{ id: "upload", name: "Screenshot.png", media_type: "image/png", size: blob.size, preview: url }], mentions: [], skills: [] } } })
     flushSync(() => view.render(<div className="p-6"><Composer key={variant} draftKey="image" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} /></div>))
     await sleep(200)
-    check(generatedLeases === 0 && generatedReleases === variantIndex + 1, "Unmounting the transcript retained the generated image output lease")
+    check(generatedLeases === 0 && generatedReleases === (variantIndex + 1) * 2, "Unmounting the transcript retained the generated image output lease")
     await openPreview(document.querySelector<HTMLButtonElement>('[aria-label="Preview Screenshot.png"]')!, url)
     // Switching threads destroys local blob URLs; the durable asset ID restores
     // the thumbnail without retaining an image payload in every saved draft.

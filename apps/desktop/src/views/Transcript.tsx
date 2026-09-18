@@ -580,15 +580,55 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
   )
 }
 
-/** Generated images are visible answer content even while tool details stay
- * closed. Own their lazy result for exactly as long as the turn is mounted. */
-function GeneratedImageOutputLease({ threadId, block }: { threadId: ThreadId; block: ToolBlock }) {
+/** Generated images are answer content even while tool details stay closed.
+ * Lease reconstructible payloads only while the gallery is onscreen so
+ * offscreen base64 returns to the inactive tool-output LRU. */
+function GeneratedImageOutputLease({ threadId, block, active }: { threadId: ThreadId; block: ToolBlock; active: boolean }) {
   const connected = useStore((state) => state.connection.state === "open")
-  useEffect(() => retainToolOutput(threadId, block.call.id, block.seq), [threadId, block.call.id, block.seq])
   useEffect(() => {
-    if (connected && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
-  }, [connected, threadId, block])
+    if (!active) return
+    return retainToolOutput(threadId, block.call.id, block.seq)
+  }, [threadId, block.call.id, block.seq, active])
+  useEffect(() => {
+    if (active && connected && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
+  }, [active, connected, threadId, block])
   return null
+}
+
+function GeneratedImageGallery({
+  threadId,
+  imageTools,
+  images,
+}: {
+  threadId: ThreadId
+  imageTools: readonly ToolBlock[]
+  images: readonly { source: string; label: string }[]
+}) {
+  const [host, setHost] = useState<HTMLElement | null>(null)
+  const [visible, setVisible] = useState(true)
+  useEffect(() => {
+    if (!host) return
+    const root = host.closest("[data-chat-scroll-container]")
+    const observer = new IntersectionObserver(([entry]) => setVisible(!!entry?.isIntersecting), {
+      root: root instanceof Element ? root : null,
+      rootMargin: "300px",
+    })
+    observer.observe(host)
+    return () => observer.disconnect()
+  }, [host])
+  if (imageTools.length === 0 && images.length === 0) return null
+  return (
+    <div ref={setHost} data-generated-image-gallery className="min-h-px">
+      {imageTools.map((block) => (
+        <GeneratedImageOutputLease key={block.id} threadId={threadId} block={block} active={visible} />
+      ))}
+      {images.length > 0 && (
+        <div data-response-images className="chat-paint-host">
+          {images.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}
+        </div>
+      )}
+    </div>
+  )
 }
 
 const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
@@ -709,8 +749,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           )}
 
           <div className="chat-paint-host group min-w-0 py-0.5">
-            {imageTools.map((block) => <GeneratedImageOutputLease key={block.id} threadId={threadId} block={block} />)}
-            {deliveredImages.length > 0 && <div data-response-images className="chat-paint-host">{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
+            <GeneratedImageGallery threadId={threadId} imageTools={imageTools} images={deliveredImages} />
             {group.answer && (
               <div data-slot="message-content" className="chat-paint-host">
                 <Markdown text={group.answer.text} className="chat-markdown--hosted" style={TEXT} />
