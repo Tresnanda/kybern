@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { createToolOutputCache, MAX_INACTIVE_OUTPUT_BYTES } from "./src/state/toolOutputCache.ts"
+import { createToolOutputCache, MAX_INACTIVE_OUTPUT_BYTES, OVERSIZED_OUTPUT_BYTES, toolOutputIsOversized } from "./src/state/toolOutputCache.ts"
 
 const response = (output) => ({ output, is_error: false })
 const deferred = () => {
@@ -400,12 +400,33 @@ test("large inactive outputs obey a byte budget while shared mounted output stay
     f.cache.track("t", `large${i}`)
   }
   assert.strictEqual(f.get("visible").output, output)
-  assert.equal([...f.blocks.values()].filter(b => !b.outputOmitted).length, 5)
+  assert.equal(f.get("visible").outputOmitted, false)
+  assert.equal([...f.blocks.values()].filter(b => !b.outputOmitted).length, 1)
   first(); first()
   assert.strictEqual(f.get("visible").output, output)
   second()
   assert.equal(f.get("visible").outputOmitted, true)
   assert.equal(f.calls, 0)
+})
+
+test("oversized reconstructible results leave the inactive LRU while open copies stay exact", async () => {
+  const f = fixture()
+  const output = "é".repeat(OVERSIZED_OUTPUT_BYTES / 2 + 1)
+  assert.equal(toolOutputIsOversized(output.length * 2), true)
+  f.add("open", "t", { outputOmitted: false, output })
+  const release = f.cache.retain("t", "open")
+  f.cache.track("t", "open")
+  await loadInactive(f, 0, 12)
+  assert.strictEqual(f.get("open").output, output)
+  assert.equal([...f.blocks.values()].filter(b => !b.outputOmitted).length, 13)
+  release()
+  assert.equal(f.get("open").outputOmitted, true)
+  assert.equal([...f.blocks.values()].filter(b => !b.outputOmitted).length, 12)
+  f.add("offscreen", "t", { outputOmitted: false, output })
+  f.cache.track("t", "offscreen")
+  f.cache.drop("t", "offscreen")
+  assert.equal(f.get("offscreen").outputOmitted, true)
+  assert.equal([...f.blocks.values()].filter(b => !b.outputOmitted).length, 12)
 })
 
 test("an evicted live replacement cannot accept an obsolete hydration response", async () => {

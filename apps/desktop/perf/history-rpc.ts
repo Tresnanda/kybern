@@ -30,3 +30,4 @@ export async function loadFileDiff() {}
 export async function revertTo() {}
 export async function hydrateToolOutput() {}
 export function retainToolOutput() { return () => {} }
+export function dropToolOutput() {}

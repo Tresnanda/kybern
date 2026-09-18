@@ -161,6 +161,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   })
   const hydrateToolOutput = toolOutputs.hydrate
   const retainToolOutput = toolOutputs.retain
+  const dropToolOutput = toolOutputs.drop
 
   function trackThreadOutputs(threadId: ThreadId) {
     // Snapshot replay can introduce completions that arrived before its rows
@@ -1024,6 +1025,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     loadEarlier,
     hydrateToolOutput,
     retainToolOutput,
+    dropToolOutput,
     refreshProviders,
     loadDiff,
     loadFileDiff,
@@ -1075,6 +1077,8 @@ export const hydrateToolOutput: EnvironmentRuntime["hydrateToolOutput"] = (...ar
   currentRuntime?.hydrateToolOutput(...args) ?? Promise.resolve()
 export const retainToolOutput: EnvironmentRuntime["retainToolOutput"] = (...args) =>
   currentRuntime?.retainToolOutput(...args) ?? (() => {})
+export const dropToolOutput: EnvironmentRuntime["dropToolOutput"] = (...args) =>
+  currentRuntime?.dropToolOutput(...args)
 export const refreshProviders: EnvironmentRuntime["refreshProviders"] = (
   ...args
 ) => activeRuntime().refreshProviders(...args)
