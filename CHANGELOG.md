@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.5
+
+<!-- kybern-release-title: Steady window controls -->
+<!-- kybern-release-summary: The macOS traffic lights settle centered on the toolbar as the window opens, without needing a resize. -->
+
+- The macOS traffic lights settle centered on the toolbar as the window opens, instead of drifting up after the first paint and needing a window resize to correct.
+
 ## 0.4.4
 
 <!-- kybern-release-title: Unified settings chrome, steady window controls -->
