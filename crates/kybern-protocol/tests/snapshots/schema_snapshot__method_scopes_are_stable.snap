@@ -152,6 +152,8 @@ expression: scopes
   - "orchestration:read"
 - - settings.update
   - "orchestration:operate"
+- - computer_use.status
+  - "orchestration:read"
 - - usage.summary
   - "orchestration:read"
 - - usage.limits

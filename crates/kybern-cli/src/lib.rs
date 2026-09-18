@@ -335,6 +335,8 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TerminalCmd,
     },
+    /// Check Cua Driver readiness for computer use (Claude, OpenCode, Pi, Cursor).
+    ComputerUse,
     /// Call any RPC method with raw JSON params.
     Call { method: String, params: Option<String> },
 }
@@ -1040,6 +1042,23 @@ pub async fn run() -> Result<()> {
             }
         },
         Cmd::Terminal { cmd } => render::terminal(&client, cmd, json).await?,
+        Cmd::ComputerUse => {
+            let status = client.call::<ComputerUseStatusMethod>(Empty {}).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
+                println!("{}", status.message);
+                if let Some(binary) = status.binary {
+                    println!("binary  {binary}");
+                }
+                if let Some(version) = status.version {
+                    println!("version {version}");
+                }
+                if !status.attached_harnesses.is_empty() {
+                    println!("tools   {}", status.attached_harnesses.iter().map(|kind| kind.as_str()).collect::<Vec<_>>().join(", "));
+                }
+            }
+        }
         Cmd::Call { method, params } => {
             let params = match params {
                 Some(p) => serde_json::from_str(&p)?,

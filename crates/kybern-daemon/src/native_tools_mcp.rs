@@ -131,6 +131,9 @@ fn mcp_instructions(bridge: &NativeToolBridge) -> Option<String> {
     if bridge.has_tool("kybern_collaboration_spawn") {
         parts.push("Create managed Kybern child chats with kybern_collaboration_spawn.");
     }
+    if bridge.has_tool("computer_use") {
+        parts.push("Drive the host desktop with computer_use.");
+    }
     parts.push("See individual tool descriptions for details. Respect explicit plugin or provider-native choices.");
     Some(parts.join(" "))
 }
@@ -265,8 +268,9 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             let Ok(_permit) = session.permits.try_acquire() else {
                 return rpc_error(id, -32000, "Too many concurrent tool requests", StatusCode::TOO_MANY_REQUESTS);
             };
+            let timeout = if name == crate::computer_use::TOOL_NAME { Duration::from_secs(10 * 60) } else { Duration::from_secs(65) };
             let response = tokio::time::timeout(
-                Duration::from_secs(65),
+                timeout,
                 state.orchestrator.execute_native_app_tool_call(
                     session.thread_id,
                     session.session_instance_id,
@@ -277,6 +281,14 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             )
             .await;
             match response {
+                Ok(Ok(value)) if name == crate::computer_use::TOOL_NAME => {
+                    let body = crate::computer_use::mcp_result(value, false);
+                    if body.to_string().len() > MAX_RESPONSE_BYTES / 2 {
+                        tool_result("Tool result is too large. Narrow the request and retry.".into(), true)
+                    } else {
+                        body
+                    }
+                }
                 Ok(Ok(value)) => tool_result(value.to_string(), false),
                 Ok(Err(error)) => tool_result(bounded_text(&error.to_string(), 4096), true),
                 Err(_) => tool_result("The tool request timed out. Inspect its operation ID before retrying.".into(), true),

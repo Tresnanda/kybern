@@ -1119,6 +1119,8 @@ pub struct SettingsUpdateParams {
 }
 method!(SettingsUpdate, "settings.update", Some(Scope::OrchestrationOperate), SettingsUpdateParams, Settings);
 
+method!(ComputerUseStatusMethod, "computer_use.status", Some(Scope::OrchestrationRead), Empty, ComputerUseStatus);
+
 // ---- usage ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -1696,6 +1698,7 @@ registry!(
     TerminalsUnsubscribe,
     SettingsGet,
     SettingsUpdate,
+    ComputerUseStatusMethod,
     UsageSummary,
     UsageLimits,
     PairingCreate,

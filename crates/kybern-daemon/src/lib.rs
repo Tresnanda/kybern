@@ -5,6 +5,7 @@ mod auth;
 mod bounded_broadcast;
 #[cfg(test)]
 mod collaboration_tests;
+mod computer_use;
 mod config;
 mod discovery;
 mod exposure;

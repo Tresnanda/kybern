@@ -38,6 +38,7 @@ fn main() {
     add::<Checkpoint>(&mut types, "Checkpoint");
     add::<Diff>(&mut types, "Diff");
     add::<Settings>(&mut types, "Settings");
+    add::<ComputerUseStatus>(&mut types, "ComputerUseStatus");
     add::<PairRequest>(&mut types, "PairRequest");
     add::<PairResponse>(&mut types, "PairResponse");
     add::<AssetInfo>(&mut types, "AssetInfo");
@@ -131,6 +132,7 @@ fn main() {
     method::<TerminalsUnsubscribe>(&mut methods);
     method::<SettingsGet>(&mut methods);
     method::<SettingsUpdate>(&mut methods);
+    method::<ComputerUseStatusMethod>(&mut methods);
     method::<UsageSummary>(&mut methods);
     method::<UsageLimits>(&mut methods);
     method::<PairingCreate>(&mut methods);
