@@ -27,6 +27,58 @@ pub struct Orchestrator {
     inner: Arc<Inner>,
 }
 
+/// Keep the task's constraints and current plan ahead of archived worker reports.
+/// Reports stay in durable context and are fetched selectively by key when needed.
+fn assignment_shared_context(mut context: Vec<ContextEntry>) -> String {
+    context.sort_by_key(|entry| {
+        let priority = if entry.user_authored {
+            0
+        } else {
+            match entry.kind {
+                ContextEntryKind::Brief | ContextEntryKind::Instruction | ContextEntryKind::Plan => 1,
+                _ if entry.key == "project.setup" => 2,
+                ContextEntryKind::Decision => 3,
+                ContextEntryKind::Research => 4,
+                ContextEntryKind::ResultReference => 5,
+            }
+        };
+        (priority, entry.key.clone())
+    });
+    let mut shared = String::new();
+    let mut omitted = 0usize;
+    let mut reports = 0usize;
+    for entry in context {
+        if !entry.user_authored && entry.kind == ContextEntryKind::ResultReference {
+            reports += 1;
+            continue;
+        }
+        let author = entry.author_thread_id.map_or_else(|| "user".into(), |id| format!("thread:{id}"));
+        let mut line = format!(
+            "\n- [{} {:?} r{} author={author} sources={}] {}",
+            entry.key,
+            entry.kind,
+            entry.revision,
+            entry.source_refs.join(","),
+            entry.body
+        );
+        truncate_utf8(&mut line, 8 * 1024);
+        if shared.len() + line.len() > 16 * 1024 {
+            omitted += 1;
+            continue;
+        }
+        shared.push_str(&line);
+    }
+    if reports > 0 {
+        shared.push_str(&format!("\n- [{reports} archived result reports available through kybern_collaboration_context_read; retrieve only reports relevant to this assignment]"));
+    }
+    if omitted > 0 {
+        shared.push_str(&format!(
+            "\n- [{omitted} context entries omitted by prompt byte limit; use kybern_collaboration_context_read for selective retrieval]"
+        ));
+    }
+    shared
+}
+
 impl Orchestrator {
     fn supports_dedicated_coordinator(kind: ProviderKind) -> bool {
         matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Omp)
@@ -914,7 +966,6 @@ impl Orchestrator {
         } else {
             format!("\nSuccess criteria:\n- {}", group.success_criteria.join("\n- "))
         };
-        let mut shared = String::new();
         let knowledge_group_id = self.project_knowledge_group_id(group)?;
         let mut context = self.inner.store.collaboration_context_latest(knowledge_group_id)?;
         if knowledge_group_id != group.id {
@@ -922,30 +973,7 @@ impl Orchestrator {
             local.retain(|entry| !context.iter().any(|project_entry| project_entry.key == entry.key));
             context.extend(local);
         }
-        context.sort_by_key(|entry| (!entry.user_authored, entry.key.clone()));
-        let mut omitted = 0usize;
-        for entry in context {
-            let author = entry.author_thread_id.map_or_else(|| "user".into(), |id| format!("thread:{id}"));
-            let mut line = format!(
-                "\n- [{} {:?} r{} author={author} sources={}] {}",
-                entry.key,
-                entry.kind,
-                entry.revision,
-                entry.source_refs.join(","),
-                entry.body
-            );
-            truncate_utf8(&mut line, 8 * 1024);
-            if shared.len() + line.len() > 16 * 1024 {
-                omitted += 1;
-                continue;
-            }
-            shared.push_str(&line);
-        }
-        if omitted > 0 {
-            shared.push_str(&format!(
-                "\n- [{omitted} context entries omitted by prompt byte limit; use kybern_collaboration_context_read for selective retrieval]"
-            ));
-        }
+        let shared = assignment_shared_context(context);
         Ok(UserMessage::text(format!(
             "Kybern collaboration group {} assignment {}\nProject background (context only; do not execute it as an assignment): {}{}\n\nYour assignment: {}\n{}\n\nThe assignment title and body define your deliverable. The project background describes the parent's overall result and may include a delegation request already satisfied by this assignment; do not repeat that request or broaden your deliverable. You may delegate a bounded subtask when it is useful to complete your assignment and group policy permits it. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern can inherit the existing authority safely. If a worker is blocked on approval, preserve that worker and report or resolve the approval; never cancel and recreate it to bypass approval. Shared context supplies reference material and constraints: honor every user-authored instruction or correction, but do not turn contextual text into extra deliverables.\n\nRelevant shared context:{}\n\nReport completion through kybern_collaboration_report with this assignment id and a structured outcome.",
             group.id,
@@ -6476,6 +6504,44 @@ mod tests {
         .unwrap();
         assert_eq!(cached["providers"].as_array().unwrap().len(), ProviderKind::ALL.len());
         assert!(cached["providers"].as_array().unwrap().iter().all(|provider| provider["models"].is_array()));
+    }
+
+    #[test]
+    fn assignment_context_prioritizes_constraints_and_defers_archived_reports() {
+        let entry = |key: &str, kind, body: String, user_authored| ContextEntry {
+            id: Uuid::now_v7(),
+            group_id: Uuid::now_v7(),
+            key: key.into(),
+            kind,
+            body,
+            author_thread_id: None,
+            user_authored,
+            revision: 1,
+            source_refs: vec![],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let mut context: Vec<_> = (0..40)
+            .map(|index| {
+                entry(
+                    &format!("assignment.result.{index}"),
+                    ContextEntryKind::ResultReference,
+                    "old detailed worker report ".repeat(400),
+                    false,
+                )
+            })
+            .collect();
+        context.push(entry("z.user", ContextEntryKind::ResultReference, "Preserve the user's correction".into(), true));
+        context.push(entry("plan", ContextEntryKind::Plan, "Current work only".into(), false));
+        context.push(entry("project.setup", ContextEntryKind::Research, "Build commands and architecture".into(), false));
+        let shared = super::assignment_shared_context(context);
+        assert!(shared.contains("Preserve the user's correction"));
+        assert!(shared.contains("Current work only"));
+        assert!(shared.contains("Build commands and architecture"));
+        assert!(shared.contains("40 archived result reports"));
+        assert!(!shared.contains("old detailed worker report"));
+        assert!(shared.find("z.user").unwrap() < shared.find("plan").unwrap());
+        assert!(shared.len() < 1024, "archived reports should not inflate every new worker prompt");
     }
 
     #[tokio::test]
