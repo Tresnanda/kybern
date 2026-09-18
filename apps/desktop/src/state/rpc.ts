@@ -1,6 +1,7 @@
 import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging"
 import { writeProviderCache } from "./providerCache"
 import { createToolOutputCache } from "./toolOutputCache"
+import { retainedSize } from "@/lib/retainedSize"
 // Owns the daemon connection: boots the client, subscribes to every thread's
 // events, folds them into the store, and exposes typed actions for the views.
 
@@ -35,12 +36,13 @@ import {
 } from "@/protocol"
 
 import { applyEvent, compactThreadState, seedFromGet, prependThreadHistory } from "./transcript"
-import type { NotificationKind } from "./notifications"
+import { trackFocusedThreadReads, type NotificationKind } from "./notifications"
 import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
 import {
   diffKey,
+  isThreadFocused,
   isThreadVisible,
   isRuntimeTaskActive,
   mergeRuntimeTasks,
@@ -65,13 +67,14 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const reusableSnapshots = new Set<ThreadId>()
   const uploads = new AbortController()
   const collaborationListeners = new Set<(event: ThreadEvent | null) => void>()
+  const stopReadTracking = trackFocusedThreadReads(useStore, isWindowFocused)
   // Weak keys distinguish replacement snapshots of the same tool row without
   // retaining an old block, transcript, or output in an in-flight request.
   const toolOutputRevisions = new WeakMap<object, number>()
   let nextToolOutputRevision = 0
   const toolOutputs = createToolOutputCache<JsonValue>({
     read(threadId, toolCallId, seq) {
-      const block = useStore.getState().transcripts[threadId]?.blocks.find(
+      const block = useStore.getState().transcripts[threadId]?.blocks.findLast(
         (block) => block.kind === "tool" && block.call.id === toolCallId && (seq === undefined || block.seq === seq),
       )
       if (block?.kind !== "tool") return
@@ -80,24 +83,49 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         revision = ++nextToolOutputRevision
         toolOutputRevisions.set(block, revision)
       }
-      return { seq: block.seq, turnId: block.turnId, omitted: !!block.outputOmitted, throughSeq: useStore.getState().transcripts[threadId]?.lastSeq, revision }
+      return {
+        seq: block.seq,
+        turnId: block.turnId,
+        omitted: !!block.outputOmitted || !!block.streamOmitted,
+        outputOmitted: !!block.outputOmitted,
+        streamOmitted: !!block.streamOmitted,
+        throughSeq: useStore.getState().transcripts[threadId]?.lastSeq,
+        revision,
+        bytes:
+          (block.outputOmitted ? 0 : retainedSize(block.output)) +
+          (block.streamRecoverable && !block.streamOmitted ? block.stream.length * 2 : 0),
+      }
     },
-    load: (threadId, toolCallId, identity) => rpc().call("threads.tool_output", {
-      thread_id: threadId, tool_call_id: toolCallId, start_seq: identity.seq, through_seq: identity.throughSeq,
-    }),
+    load: async (threadId, toolCallId, identity) => {
+      const result = await rpc().call("threads.tool_output", {
+        thread_id: threadId, tool_call_id: toolCallId, start_seq: identity.seq,
+        through_seq: identity.throughSeq, include_tool_stream: !!identity.streamOmitted,
+      })
+      if (identity.streamOmitted && result.stream === undefined)
+        throw new Error("The daemon did not return the saved tool stream.")
+      return result
+    },
     apply({ threadId, toolCallId, seq, turnId, revision }, result) {
       if (!useStore.getState().transcripts[threadId]) return false
       let changed = false
       useStore.getState().updateTranscript(threadId, (state) => {
         const index = state.blocks.findIndex((block) =>
           block.kind === "tool" && block.call.id === toolCallId &&
-          block.seq === seq && block.turnId === turnId && block.outputOmitted && toolOutputRevisions.get(block) === revision,
+          block.seq === seq && block.turnId === turnId &&
+          (block.outputOmitted || block.streamOmitted) && toolOutputRevisions.get(block) === revision,
         )
         if (index < 0) return state
         const block = state.blocks[index]
         if (block.kind !== "tool") return state
         const blocks = state.blocks.slice()
-        blocks[index] = { ...block, output: result.output, isError: result.is_error, outputOmitted: false }
+        blocks[index] = {
+          ...block,
+          output: block.outputOmitted ? result.output : block.output,
+          stream: block.streamOmitted ? result.stream! : block.stream,
+          isError: result.is_error,
+          outputOmitted: false,
+          streamOmitted: false,
+        }
         toolOutputRevisions.set(blocks[index], revision!)
         changed = true
         return { ...state, blocks }
@@ -109,13 +137,21 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       useStore.getState().updateTranscript(threadId, (state) => {
         const index = state.blocks.findIndex((block) =>
           block.kind === "tool" && block.call.id === toolCallId &&
-          block.seq === seq && block.turnId === turnId && !block.outputOmitted && block.output != null && toolOutputRevisions.get(block) === revision,
+          block.seq === seq && block.turnId === turnId &&
+          (!block.outputOmitted || !block.streamOmitted) &&
+          (block.output != null || block.stream.length > 0) && toolOutputRevisions.get(block) === revision,
         )
         if (index < 0) return state
         const block = state.blocks[index]
         if (block.kind !== "tool") return state
         const blocks = state.blocks.slice()
-        blocks[index] = { ...block, output: null, outputOmitted: true }
+        blocks[index] = {
+          ...block,
+          output: block.output == null ? block.output : null,
+          outputOmitted: block.output == null ? block.outputOmitted : true,
+          stream: block.stream.length === 0 || !block.streamRecoverable ? block.stream : "",
+          streamOmitted: block.stream.length === 0 || !block.streamRecoverable ? block.streamOmitted : true,
+        }
         return { ...state, blocks }
       })
     },
@@ -126,13 +162,24 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const hydrateToolOutput = toolOutputs.hydrate
   const retainToolOutput = toolOutputs.retain
 
+  function trackThreadOutputs(threadId: ThreadId) {
+    // Snapshot replay can introduce completions that arrived before its rows
+    // existed locally. Enroll those too, using each exact invocation sequence.
+    for (const block of useStore.getState().transcripts[threadId]?.blocks ?? []) {
+      if (block.kind === "tool" && block.complete &&
+        ((!block.outputOmitted && block.output != null) ||
+          (block.streamRecoverable && !block.streamOmitted && block.stream.length > 0)))
+        toolOutputs.track(threadId, block.call.id, block.seq)
+    }
+  }
+
   function rpc(): KybernClient {
     if (!client) throw new ConnectionClosedError("Not connected")
     return client
   }
 
-  function transcriptGet(threadId: ThreadId, extra: Omit<ThreadsGetParams, "thread_id" | "include_tool_output"> = {}) {
-    return rpc().call("threads.get", { thread_id: threadId, include_tool_output: false, ...extra })
+  function transcriptGet(threadId: ThreadId, extra: Omit<ThreadsGetParams, "thread_id" | "include_tool_output" | "defer_tool_stream"> = {}) {
+    return rpc().call("threads.get", { thread_id: threadId, include_tool_output: false, defer_tool_stream: true, ...extra })
   }
 
   function connect(ep: EndpointInfo): void {
@@ -165,7 +212,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         })
       }
     })
-    client.subscribeEvents({}, onEvent, (_headSeq, replay) => {
+    client.subscribeEvents({ include_tool_output: false }, onEvent, (_headSeq, replay) => {
       const generation = ++hydrationGeneration
       if (replay.resumed && replay.supported) {
         canReuseSnapshots = false
@@ -347,6 +394,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           for (const event of replay) next = applyEvent(next, event)
           return isThreadVisible(useStore.getState(), id) ? next : compactThreadState(next)
         })
+        trackThreadOutputs(id)
         const cached = useStore.getState().transcripts
         for (const cachedId of reusableSnapshots)
           if (!cached[cachedId]?.loaded) reusableSnapshots.delete(cachedId)
@@ -395,6 +443,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       const replay = record.buffer.after(base.lastSeq)
       if (!replay) throw new Error("Thread is updating too quickly. Try loading earlier messages again.")
       useStore.getState().updateTranscript(id, (current) => prependThreadHistory(base, page, replay, current))
+      trackThreadOutputs(id)
     }).catch((error) => {
       if (isCurrentHydration(generation)) throw error
     }).finally(() => {
@@ -484,6 +533,14 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       storeRuntimeTask(ev.task)
     }
     s.receiveEvent(ev)
+    if (ev.kind === "tool_call_completed") {
+      toolOutputs.track(ev.thread_id, ev.tool_call_id)
+    } else if (ev.kind === "tool_call_output_delta") {
+      const block = useStore.getState().transcripts[ev.thread_id]?.blocks.findLast(
+        candidate => candidate.kind === "tool" && candidate.call.id === ev.tool_call_id,
+      )
+      if (block?.kind === "tool" && block.complete) toolOutputs.track(ev.thread_id, ev.tool_call_id, block.seq)
+    }
     if (ev.kind.startsWith("collaboration_"))
       collaborationListeners.forEach((listener) => listener(ev))
 
@@ -518,12 +575,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     // another background wave may have arrived while it was in flight.
     if (disposed) return
     const current = useStore.getState()
-    const viewing = isThreadVisible(current, ev.thread_id)
-    if (focused && viewing) return
+    const viewing = isThreadFocused(current, ev.thread_id)
+    if (document.visibilityState !== "hidden" && focused && viewing) return
     const kind: NotificationKind | null =
       ev.kind === "turn_failed" ? "failed"
       : ev.kind === "approval_requested" || ev.kind === "user_input_requested" ? "blocked"
-      : ev.kind === "turn_completed" && ev.stop_reason === "completed" ? "done"
+      : ev.kind === "turn_completed" && ev.stop_reason === "completed" && !current.threads[ev.thread_id]?.parent_thread_id ? "done"
       : null
     if (kind === "done") {
       if (completedTurns.get(ev.thread_id) === ev.turn_id) return
@@ -932,8 +989,16 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     return response.blob()
   }
 
+  async function fetchAssetImage(assetId: string, signal: AbortSignal): Promise<Blob> {
+    if (disposed) throw new Error("Environment disconnected")
+    const response = await fetch(`${httpBase}/assets/${encodeURIComponent(assetId)}`, { headers: { authorization: `Bearer ${token}` }, signal })
+    if (!response.ok) throw new Error("Unable to load the attachment preview. Try again.")
+    return response.blob()
+  }
+
   function disconnect() {
     disposed = true
+    stopReadTracking()
     snapshots.clear()
     historyLoads.clear()
     reusableSnapshots.clear()
@@ -979,6 +1044,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     removeProject,
     uploadFile,
     fetchThreadImage,
+    fetchAssetImage,
     artifactPreviewUrl,
     subscribeCollaboration,
   }
@@ -1064,3 +1130,4 @@ export function errorText(e: unknown): string {
 reloadOnHotUpdate(import.meta.hot)
 
 export const fetchThreadImage: EnvironmentRuntime["fetchThreadImage"] = (...args) => activeRuntime().fetchThreadImage(...args)
+export const fetchAssetImage: EnvironmentRuntime["fetchAssetImage"] = (...args) => activeRuntime().fetchAssetImage(...args)

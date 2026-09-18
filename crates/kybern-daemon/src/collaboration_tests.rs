@@ -263,6 +263,228 @@ fn parent_cannot_complete_while_a_child_is_active() {
     assert_eq!(fixture.store.collaboration_assignment_get(parent.id).unwrap().unwrap().status, AssignmentStatus::Working);
 }
 
+#[test]
+fn completion_consumes_superseded_worker_wakeups_and_late_updates_stay_durable() {
+    let fixture = Fixture::new();
+    let assignment = fixture.assignment(None, Some(fixture.worker.id), AssignmentStatus::Working);
+    fixture.put_assignment(&assignment);
+    let queued = [CollaborationMessagePurpose::Question, CollaborationMessagePurpose::Result].map(|purpose| {
+        fixture
+            .orchestrator
+            .collaboration_message_send(
+                methods::CollaborationMessagesSendParams {
+                    operation_id: Uuid::now_v7(),
+                    group_id: fixture.group.id,
+                    assignment_id: Some(assignment.id),
+                    from_thread_id: None,
+                    to_thread_id: fixture.coordinator.id,
+                    purpose,
+                    reply_to: None,
+                    body: format!("queued {purpose:?} from the worker"),
+                },
+                Some(fixture.worker.id),
+            )
+            .unwrap()
+    });
+    assert!(queued.iter().all(|message| message.state == CollaborationDeliveryState::Queued));
+    let in_flight = fixture
+        .orchestrator
+        .collaboration_message_send(
+            methods::CollaborationMessagesSendParams {
+                operation_id: Uuid::now_v7(),
+                group_id: fixture.group.id,
+                assignment_id: Some(assignment.id),
+                from_thread_id: None,
+                to_thread_id: fixture.coordinator.id,
+                purpose: CollaborationMessagePurpose::Result,
+                reply_to: None,
+                body: "provider already owns this delivery".into(),
+            },
+            Some(fixture.worker.id),
+        )
+        .unwrap();
+    fixture
+        .store
+        .event_append(
+            fixture.coordinator.id,
+            Some(Uuid::now_v7()),
+            EventPayload::TurnStarted { message_id: in_flight.id, message: UserMessage::text("delivery already started") },
+        )
+        .unwrap();
+
+    let completed = fixture
+        .orchestrator
+        .collaboration_assignment_complete(
+            CollaborationAssignmentsCompleteParams {
+                operation_id: Uuid::now_v7(),
+                assignment_id: assignment.id,
+                result: AssignmentResult {
+                    outcome: AssignmentOutcome::Success,
+                    summary: "Authoritative terminal result".into(),
+                    changes: vec!["finished once".into()],
+                    checks: Vec::new(),
+                    artifacts: Vec::new(),
+                    unresolved: Vec::new(),
+                    completed_at: Utc::now(),
+                },
+            },
+            Some(fixture.worker.id),
+        )
+        .unwrap();
+    assert_eq!(completed.status, AssignmentStatus::Completed);
+    assert_eq!(
+        fixture.store.collaboration_message_get(queued[0].id).unwrap().unwrap().state,
+        CollaborationDeliveryState::Queued,
+        "questions remain actionable"
+    );
+    assert!(fixture.store.queue_is_pending(queued[0].id).unwrap());
+    assert_eq!(
+        fixture.store.collaboration_message_get(queued[1].id).unwrap().unwrap().state,
+        CollaborationDeliveryState::Cancelled,
+        "the structured terminal result supersedes an older result snapshot"
+    );
+    assert!(!fixture.store.queue_is_pending(queued[1].id).unwrap());
+    assert_eq!(
+        fixture.store.collaboration_message_get(in_flight.id).unwrap().unwrap().state,
+        CollaborationDeliveryState::Queued,
+        "a provider-owned delivery is not falsely cancelled"
+    );
+    assert!(!fixture.store.queue_is_pending(in_flight.id).unwrap());
+    let pending = fixture.store.queue_list(Some(fixture.coordinator.id)).unwrap();
+    assert_eq!(pending.len(), 2, "the question and authoritative result both remain");
+    let terminal = pending
+        .iter()
+        .filter_map(|queued| fixture.store.collaboration_message_for_delivery(queued.id).unwrap())
+        .find(|message| message.purpose == CollaborationMessagePurpose::Result)
+        .unwrap();
+    assert_eq!(terminal.purpose, CollaborationMessagePurpose::Result);
+    assert_eq!(terminal.assignment_id, Some(assignment.id));
+
+    let late = fixture
+        .orchestrator
+        .collaboration_message_send(
+            methods::CollaborationMessagesSendParams {
+                operation_id: Uuid::now_v7(),
+                group_id: fixture.group.id,
+                assignment_id: Some(assignment.id),
+                from_thread_id: None,
+                to_thread_id: fixture.coordinator.id,
+                purpose: CollaborationMessagePurpose::Result,
+                reply_to: None,
+                body: queued[1].body.clone(),
+            },
+            Some(fixture.worker.id),
+        )
+        .unwrap();
+    assert_eq!(late.state, CollaborationDeliveryState::Persisted);
+    assert!(!fixture.store.queue_is_pending(late.id).unwrap());
+    assert_eq!(fixture.store.queue_list(Some(fixture.coordinator.id)).unwrap().len(), 2);
+
+    let fresh_result = fixture
+        .orchestrator
+        .collaboration_message_send(
+            methods::CollaborationMessagesSendParams {
+                operation_id: Uuid::now_v7(),
+                group_id: fixture.group.id,
+                assignment_id: Some(assignment.id),
+                from_thread_id: None,
+                to_thread_id: fixture.coordinator.id,
+                purpose: CollaborationMessagePurpose::Result,
+                reply_to: None,
+                body: "New follow-up commit after review".into(),
+            },
+            Some(fixture.worker.id),
+        )
+        .unwrap();
+    assert_eq!(fresh_result.state, CollaborationDeliveryState::Queued);
+    assert!(fixture.store.queue_is_pending(fresh_result.id).unwrap());
+
+    let change_request = fixture
+        .orchestrator
+        .collaboration_message_send(
+            methods::CollaborationMessagesSendParams {
+                operation_id: Uuid::now_v7(),
+                group_id: fixture.group.id,
+                assignment_id: Some(assignment.id),
+                from_thread_id: None,
+                to_thread_id: fixture.coordinator.id,
+                purpose: CollaborationMessagePurpose::ChangeRequest,
+                reply_to: None,
+                body: "terminal assignment still needs explicit follow-up".into(),
+            },
+            Some(fixture.worker.id),
+        )
+        .unwrap();
+    assert_eq!(change_request.state, CollaborationDeliveryState::Queued);
+    assert!(fixture.store.queue_is_pending(change_request.id).unwrap());
+    let failure = fixture
+        .orchestrator
+        .collaboration_message_send(
+            methods::CollaborationMessagesSendParams {
+                operation_id: Uuid::now_v7(),
+                group_id: fixture.group.id,
+                assignment_id: Some(assignment.id),
+                from_thread_id: None,
+                to_thread_id: fixture.coordinator.id,
+                purpose: CollaborationMessagePurpose::Failure,
+                reply_to: None,
+                body: "late failure contradicts the earlier terminal result".into(),
+            },
+            Some(fixture.worker.id),
+        )
+        .unwrap();
+    assert_eq!(failure.state, CollaborationDeliveryState::Queued);
+    assert!(fixture.store.queue_is_pending(failure.id).unwrap());
+}
+
+#[test]
+fn completion_refuses_to_skip_unread_assignment_instructions() {
+    let fixture = Fixture::new();
+    let assignment = fixture.assignment(None, Some(fixture.worker.id), AssignmentStatus::Working);
+    fixture.put_assignment(&assignment);
+    let instruction = fixture
+        .orchestrator
+        .collaboration_message_send(
+            methods::CollaborationMessagesSendParams {
+                operation_id: Uuid::now_v7(),
+                group_id: fixture.group.id,
+                assignment_id: Some(assignment.id),
+                from_thread_id: None,
+                to_thread_id: fixture.worker.id,
+                purpose: CollaborationMessagePurpose::ChangeRequest,
+                reply_to: None,
+                body: "Preserve this actual new instruction".into(),
+            },
+            Some(fixture.coordinator.id),
+        )
+        .unwrap();
+    let complete = || CollaborationAssignmentsCompleteParams {
+        operation_id: Uuid::now_v7(),
+        assignment_id: assignment.id,
+        result: AssignmentResult {
+            outcome: AssignmentOutcome::Success,
+            summary: "Premature result".into(),
+            changes: Vec::new(),
+            checks: Vec::new(),
+            artifacts: Vec::new(),
+            unresolved: Vec::new(),
+            completed_at: Utc::now(),
+        },
+    };
+
+    let error = fixture.orchestrator.collaboration_assignment_complete(complete(), Some(fixture.worker.id)).unwrap_err();
+    assert!(error.to_string().contains("unread collaboration instructions"));
+    assert!(fixture.store.queue_is_pending(instruction.id).unwrap());
+    assert_eq!(fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap().status, AssignmentStatus::Working);
+
+    let mut observed = instruction.clone();
+    observed.state = CollaborationDeliveryState::Submitted;
+    observed.delivery_turn_id = Some(Uuid::now_v7());
+    fixture.store.collaboration_message_observed(&observed, observed.delivery_turn_id.unwrap()).unwrap();
+    let completed = fixture.orchestrator.collaboration_assignment_complete(complete(), Some(fixture.worker.id)).unwrap();
+    assert_eq!(completed.status, AssignmentStatus::Completed);
+}
+
 #[tokio::test]
 async fn restart_requeues_result_when_only_prior_delivery_is_uncertain() {
     let fixture = Fixture::new();

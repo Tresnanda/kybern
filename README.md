@@ -300,7 +300,8 @@ stage daemon or driver changes as well: `pnpm tauri dev` or `pnpm tauri build`.
 ### macOS app bundle
 
 `scripts/bundle-macos.sh` runs the self-contained `pnpm tauri build`, verifies
-the bundled daemon, signs the app ad hoc, and writes
+the bundled daemon, preserves certificate signing when configured (otherwise
+signs ad hoc), and writes
 `dist/kybern-<version>-<arch>-apple-darwin.dmg`:
 
 ```sh
@@ -308,6 +309,29 @@ scripts/bundle-macos.sh              # SKIP_BUILD=1 reuses the last complete app
 ```
 
 It needs Xcode command line tools (`codesign`, `hdiutil`), Node 22 and pnpm.
+
+Ad-hoc signing needs no paid Apple account, but its designated requirement is
+the hash of one build. macOS privacy grants such as Screen Recording can become
+stale after an update, even while System Settings still shows the app as allowed.
+Re-authorizing the updated app may be necessary. Kybern does not reset TCC or
+change privacy settings automatically.
+
+For a stable distributed identity, configure a **Developer ID Application**
+certificate from a paid Apple Developer membership. A free Apple account or an
+Apple Development certificate is not a Developer ID distribution identity.
+Local builds can set `APPLE_SIGNING_IDENTITY` to an installed certificate.
+CI accepts optional repository secrets `APPLE_CERTIFICATE` (base64-encoded p12),
+`APPLE_CERTIFICATE_PASSWORD`, and `APPLE_SIGNING_IDENTITY`; Tauri imports and
+signs the app and sidecar. `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password),
+and `APPLE_TEAM_ID` additionally enable notarization. Never commit certificate
+private keys or passwords. Without these secrets, the existing ad-hoc release
+path remains available.
+
+Packaging verifies app/sidecar signatures and preserves Tauri's certificate
+instead of replacing it with ad-hoc signing. Keep the bundle ID and signing team
+stable across releases. Moving an existing ad-hoc installation to a certificate
+identity may require one new authorization; this does not retroactively repair
+old grants. See [Apple's code identity explanation](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
 
 ### Releasing
 

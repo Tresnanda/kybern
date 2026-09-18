@@ -273,11 +273,7 @@ impl AgentDriver for OpencodeDriver {
                 context_windows: HashMap::new(),
                 session_id: None,
                 model: config.model.clone(),
-                coordinator_instructions: if config.resume_session_id.is_none() {
-                    config.native_tool_bridge.as_ref().and_then(|bridge| bridge.coordinator_instructions.clone())
-                } else {
-                    None
-                },
+                coordinator_instructions: config.native_tool_bridge.as_ref().and_then(|bridge| bridge.coordinator_instructions.clone()),
                 mode: config.permission_mode,
                 parts: HashMap::new(),
                 message_roles: HashMap::new(),
@@ -552,8 +548,8 @@ struct State {
     commands: Vec<kybern_protocol::ProviderCommand>,
     session_id: Option<String>,
     model: Option<String>,
-    /// Consumed by the first ordinary prompt of a newly-created explicit
-    /// coordinator session. OpenCode persists that system part with history.
+    /// Stable role supplied on each coordinator prompt. OpenCode uses the
+    /// latest user message's system field, not earlier message metadata.
     coordinator_instructions: Option<String>,
     mode: PermissionMode,
     parts: HashMap<String, PartInfo>,
@@ -1298,8 +1294,11 @@ impl AgentSession for Handle {
                 body["model"] = json!({ "providerID": provider, "modelID": model });
             }
         }
-        let coordinator_bootstrap = if command.is_none() { s.state.lock().await.coordinator_instructions.take() } else { None };
-        if let Some(instructions) = coordinator_bootstrap.as_ref() {
+        // OpenCode constructs the system prefix from the latest user message's
+        // system field. It is not a session-level bootstrap: repeat the stable
+        // role on every prompt, including after an idle process resume.
+        let coordinator_instructions = if command.is_none() { s.state.lock().await.coordinator_instructions.clone() } else { None };
+        if let Some(instructions) = coordinator_instructions.as_ref() {
             body["system"] = Value::String(instructions.clone());
         }
         {
@@ -1320,16 +1319,7 @@ impl AgentSession for Handle {
             });
             Ok(())
         } else {
-            let result = s.post(&format!("/session/{session_id}/prompt_async"), body).await;
-            if result.is_err()
-                && let Some(instructions) = coordinator_bootstrap
-            {
-                let mut state = s.state.lock().await;
-                if state.coordinator_instructions.is_none() {
-                    state.coordinator_instructions = Some(instructions);
-                }
-            }
-            result.map(|_| ())
+            s.post(&format!("/session/{session_id}/prompt_async"), body).await.map(|_| ())
         }
     }
 
@@ -1491,7 +1481,7 @@ mod tests {
         assert_eq!(prompt_bodies.len(), 2);
         assert_eq!(prompt_bodies[0]["system"], "COORDINATOR ROLE SENTINEL");
         assert_eq!(prompt_bodies[0]["parts"][0]["text"], "delegate a review");
-        assert!(prompt_bodies[1].get("system").is_none(), "coordinator bootstrap must be consumed exactly once");
+        assert_eq!(prompt_bodies[1]["system"], prompt_bodies[0]["system"], "coordinator system prefix must remain stable");
         assert_eq!(prompt_bodies[1]["parts"][0]["text"], "continue coordinating");
         session.state.lock().await.context_windows.insert("test/model".into(), 200000);
         session.handle_event(&json!({"type":"message.updated", "properties":{"info":{"id":"context", "sessionID":"root", "role":"assistant", "providerID":"test", "modelID":"model", "time":{"completed":1}, "tokens":{"input":1000,"output":100,"reasoning":10,"cache":{"read":200,"write":0}}}}})).await;

@@ -1,2 +1,8 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/STACK:8000000"]
+
+# Rust 1.96's debug stripping can misalign this proc-macro's Mach-O string
+# table, so macOS 27 rejects it as E0463. Keep the build-time library loadable.
+# https://github.com/rust-lang/rust/issues/157750
+[profile.dev.package.tauri-macros]
+strip = "none"

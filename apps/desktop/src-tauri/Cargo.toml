@@ -42,6 +42,7 @@ tauri = { version = "2.11.5", features = ["test"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "=0.6.2"
 objc2 = "=0.6.4"
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSBundle", "NSError", "NSString", "NSGeometry"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSBundle", "NSError", "NSString", "NSGeometry", "NSData"] }
 objc2-user-notifications = { version = "=0.3.2", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSControl", "NSButton"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSControl", "NSButton", "NSPasteboard"] }
+window-vibrancy = "=0.6.0"

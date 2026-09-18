@@ -329,6 +329,11 @@ pub struct ThreadsGetParams {
     /// `true` keeps compatibility with CLI and older clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_tool_output: Option<bool>,
+    /// When true, completed output-delta streams are represented by
+    /// `stream_omitted` markers and can be fetched through
+    /// `threads.tool_output`. Omit to preserve legacy snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defer_tool_stream: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
@@ -362,11 +367,21 @@ pub struct ThreadsToolOutputParams {
     /// Never read a completion newer than this snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub through_seq: Option<crate::EventSeq>,
+    /// Include the exact persisted output-delta stream for this invocation.
+    /// Omit or set false to retain the legacy output-only response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_tool_stream: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsToolOutputResult {
     pub output: serde_json::Value,
     pub is_error: bool,
+    /// Exact persisted output-delta stream when requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
+    /// Deltas exist but were omitted because `include_tool_stream` was false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_omitted: bool,
 }
 method!(ThreadsToolOutput, "threads.tool_output", Some(Scope::OrchestrationRead), ThreadsToolOutputParams, ThreadsToolOutputResult);
 
@@ -1489,6 +1504,11 @@ pub struct EventsSubscribeParams {
     /// Replay persisted events with `seq > after_seq` before going live. Omit for live only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_seq: Option<EventSeq>,
+    /// Include completed tool output in replay and live notifications. Omit or
+    /// set true for the legacy full event stream; false sends large results as
+    /// an explicit `output_omitted` marker that can be fetched by call id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_tool_output: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EventsSubscribeResult {

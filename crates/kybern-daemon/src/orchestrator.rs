@@ -27,6 +27,58 @@ pub struct Orchestrator {
     inner: Arc<Inner>,
 }
 
+/// Keep the task's constraints and current plan ahead of archived worker reports.
+/// Reports stay in durable context and are fetched selectively by key when needed.
+fn assignment_shared_context(mut context: Vec<ContextEntry>) -> String {
+    context.sort_by_key(|entry| {
+        let priority = if entry.user_authored {
+            0
+        } else {
+            match entry.kind {
+                ContextEntryKind::Brief | ContextEntryKind::Instruction | ContextEntryKind::Plan => 1,
+                _ if entry.key == "project.setup" => 2,
+                ContextEntryKind::Decision => 3,
+                ContextEntryKind::Research => 4,
+                ContextEntryKind::ResultReference => 5,
+            }
+        };
+        (priority, entry.key.clone())
+    });
+    let mut shared = String::new();
+    let mut omitted = 0usize;
+    let mut reports = 0usize;
+    for entry in context {
+        if !entry.user_authored && entry.kind == ContextEntryKind::ResultReference {
+            reports += 1;
+            continue;
+        }
+        let author = entry.author_thread_id.map_or_else(|| "user".into(), |id| format!("thread:{id}"));
+        let mut line = format!(
+            "\n- [{} {:?} r{} author={author} sources={}] {}",
+            entry.key,
+            entry.kind,
+            entry.revision,
+            entry.source_refs.join(","),
+            entry.body
+        );
+        truncate_utf8(&mut line, 8 * 1024);
+        if shared.len() + line.len() > 16 * 1024 {
+            omitted += 1;
+            continue;
+        }
+        shared.push_str(&line);
+    }
+    if reports > 0 {
+        shared.push_str(&format!("\n- [{reports} archived result reports available through kybern_collaboration_context_read; retrieve only reports relevant to this assignment]"));
+    }
+    if omitted > 0 {
+        shared.push_str(&format!(
+            "\n- [{omitted} context entries omitted by prompt byte limit; use kybern_collaboration_context_read for selective retrieval]"
+        ));
+    }
+    shared
+}
+
 impl Orchestrator {
     fn supports_dedicated_coordinator(kind: ProviderKind) -> bool {
         matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Omp)
@@ -914,7 +966,6 @@ impl Orchestrator {
         } else {
             format!("\nSuccess criteria:\n- {}", group.success_criteria.join("\n- "))
         };
-        let mut shared = String::new();
         let knowledge_group_id = self.project_knowledge_group_id(group)?;
         let mut context = self.inner.store.collaboration_context_latest(knowledge_group_id)?;
         if knowledge_group_id != group.id {
@@ -922,30 +973,7 @@ impl Orchestrator {
             local.retain(|entry| !context.iter().any(|project_entry| project_entry.key == entry.key));
             context.extend(local);
         }
-        context.sort_by_key(|entry| (!entry.user_authored, entry.key.clone()));
-        let mut omitted = 0usize;
-        for entry in context {
-            let author = entry.author_thread_id.map_or_else(|| "user".into(), |id| format!("thread:{id}"));
-            let mut line = format!(
-                "\n- [{} {:?} r{} author={author} sources={}] {}",
-                entry.key,
-                entry.kind,
-                entry.revision,
-                entry.source_refs.join(","),
-                entry.body
-            );
-            truncate_utf8(&mut line, 8 * 1024);
-            if shared.len() + line.len() > 16 * 1024 {
-                omitted += 1;
-                continue;
-            }
-            shared.push_str(&line);
-        }
-        if omitted > 0 {
-            shared.push_str(&format!(
-                "\n- [{omitted} context entries omitted by prompt byte limit; use kybern_collaboration_context_read for selective retrieval]"
-            ));
-        }
+        let shared = assignment_shared_context(context);
         Ok(UserMessage::text(format!(
             "Kybern collaboration group {} assignment {}\nProject background (context only; do not execute it as an assignment): {}{}\n\nYour assignment: {}\n{}\n\nThe assignment title and body define your deliverable. The project background describes the parent's overall result and may include a delegation request already satisfied by this assignment; do not repeat that request or broaden your deliverable. You may delegate a bounded subtask when it is useful to complete your assignment and group policy permits it. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern can inherit the existing authority safely. If a worker is blocked on approval, preserve that worker and report or resolve the approval; never cancel and recreate it to bypass approval. Shared context supplies reference material and constraints: honor every user-authored instruction or correction, but do not turn contextual text into extra deliverables.\n\nRelevant shared context:{}\n\nReport completion through kybern_collaboration_report with this assignment id and a structured outcome.",
             group.id,
@@ -1365,6 +1393,17 @@ impl Orchestrator {
         {
             return Err(anyhow!("finish or cancel active child assignments before completing their parent"));
         }
+        if !late_after_stop
+            && let Some(owner_thread_id) = assignment.owner_thread_id
+            && self.inner.store.collaboration_messages(group.id)?.iter().any(|message| {
+                message.assignment_id == Some(assignment.id)
+                    && message.to_thread_id == owner_thread_id
+                    && message.from_thread_id != Some(owner_thread_id)
+                    && message.state == CollaborationDeliveryState::Queued
+            })
+        {
+            return Err(anyhow!("assignment has unread collaboration instructions; read them before reporting completion"));
+        }
         params.result.completed_at = Utc::now();
         if !late_after_stop {
             assignment.status = match params.result.outcome {
@@ -1657,9 +1696,29 @@ impl Orchestrator {
         }
         let now = Utc::now();
         let request = params.clone();
+        let assignment_is_terminal = assignment.as_ref().is_some_and(|assignment| {
+            matches!(assignment.status, AssignmentStatus::Completed | AssignmentStatus::Failed | AssignmentStatus::Cancelled)
+        });
+        let terminal_recovery = assignment.as_ref().is_some_and(|assignment| {
+            params.purpose == CollaborationMessagePurpose::Result && params.operation_id == derived_operation_id(assignment.id, 0x72)
+        });
+        let duplicate_result = assignment_is_terminal
+            && from_thread_id.is_some()
+            && params.purpose == CollaborationMessagePurpose::Result
+            && !terminal_recovery
+            && existing_messages.iter().any(|message| {
+                message.assignment_id == params.assignment_id
+                    && message.from_thread_id == from_thread_id
+                    && message.to_thread_id == params.to_thread_id
+                    && message.purpose == params.purpose
+                    && message.reply_to == params.reply_to
+                    && message.body == params.body
+                    && !matches!(message.state, CollaborationDeliveryState::Failed | CollaborationDeliveryState::Uncertain)
+            });
         let mut should_wake = group.status == GroupStatus::Active
             && recipient_group_status != Some(GroupStatus::Paused)
-            && params.purpose != CollaborationMessagePurpose::Progress;
+            && params.purpose != CollaborationMessagePurpose::Progress
+            && !duplicate_result;
         if pending >= group.policy.max_pending_messages as usize && terminal_notification {
             should_wake = false;
         }
@@ -2133,6 +2192,10 @@ impl Orchestrator {
                             return Err(anyhow!("unknown collaboration read fields"));
                         }
                         let mut detail = self.collaboration_group_detail(group_id)?;
+                        // The UI projection is group-wide, but an agent inbox must
+                        // filter by recipient before applying its bound. Otherwise
+                        // old updates to peers can crowd out this caller's new work.
+                        detail.pending_messages = self.inner.store.collaboration_pending_messages_for_thread(group_id, thread_id, 100)?;
                         let mut value = serde_json::to_value(&detail)?;
                         let caller_assignment = self.inner.store.collaboration_active_assignment_for_thread(thread_id)?;
                         value.as_object_mut().expect("detail serializes as object").insert(
@@ -2165,6 +2228,7 @@ impl Orchestrator {
                             return Err(anyhow!("native tool caller turn ended before read delivery acknowledgement"));
                         }
                         self.observe_collaboration_messages(thread_id, turn_id, &mut detail.pending_messages)?;
+                        self.observe_collaboration_assignment_results(thread_id, turn_id, &detail.assignments)?;
                         value["pending_messages"] = serde_json::to_value(detail.pending_messages)?;
                         drop(guard);
                         value
@@ -2178,6 +2242,7 @@ impl Orchestrator {
                             return Err(anyhow!("native tool caller turn ended before wait delivery acknowledgement"));
                         }
                         self.observe_collaboration_messages(thread_id, turn_id, &mut result.messages)?;
+                        self.observe_collaboration_assignment_results(thread_id, turn_id, &result.assignments)?;
                         drop(guard);
                         serde_json::to_value(result)?
                     }
@@ -2350,6 +2415,44 @@ impl Orchestrator {
             self.broadcast_committed_collaboration(events);
         }
         Ok(())
+    }
+
+    /// A structured terminal assignment returned by read/wait carries the same
+    /// information as its queued result notification. Consume that exact class
+    /// of wakeup even when bounded message pagination omitted it; questions,
+    /// change requests, replies, failures, and unrelated results remain queued.
+    fn observe_collaboration_assignment_results(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        assignments: &[CollaborationAssignment],
+    ) -> Result<()> {
+        let surfaced = assignments
+            .iter()
+            .filter_map(|assignment| {
+                assignment.result.as_ref().map(|result| {
+                    (
+                        assignment.id,
+                        (
+                            assignment.owner_thread_id,
+                            format!("Assignment {} finished with {:?}: {}", assignment.id, result.outcome, result.summary),
+                        ),
+                    )
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        if surfaced.is_empty() {
+            return Ok(());
+        }
+        let Some(group_id) = assignments.first().map(|assignment| assignment.group_id) else { return Ok(()) };
+        let mut messages = self.inner.store.collaboration_queued_results(group_id, thread_id)?;
+        messages.retain(|message| {
+            message
+                .assignment_id
+                .and_then(|id| surfaced.get(&id))
+                .is_some_and(|(owner, body)| message.from_thread_id == *owner && message.reply_to.is_none() && message.body == *body)
+        });
+        self.observe_collaboration_messages(thread_id, turn_id, &mut messages)
     }
 
     /// Called only after the native harness accepted a persisted message.
@@ -2558,6 +2661,13 @@ struct LiveSession {
     /// provider session from monopolizing daemon read work.
     app_tool_requests: Mutex<HashSet<String>>,
     app_tool_permits: Arc<Semaphore>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeTaskUpdateKind {
+    Progress,
+    Resume,
+    Complete,
 }
 
 /// Idle expiry includes suspend time, which `Instant` does not count on macOS.
@@ -3966,7 +4076,7 @@ impl Orchestrator {
             thread_id,
             &live,
             DriverRuntimeTaskUpdate::status(task.id.clone(), RuntimeTaskStatus::Stopping),
-            false,
+            RuntimeTaskUpdateKind::Progress,
         )
         .await?
         .ok_or_else(|| anyhow!("task not found"))
@@ -4009,7 +4119,7 @@ impl Orchestrator {
                 stats: None,
                 capabilities: Some(RuntimeTaskCapabilities { stop: task.capabilities.stop, background: false }),
             },
-            false,
+            RuntimeTaskUpdateKind::Progress,
         )
         .await?
         .ok_or_else(|| anyhow!("task not found"))
@@ -4171,13 +4281,8 @@ impl Orchestrator {
         if !self.inner.settings.get().generate_titles {
             return;
         }
-        let Ok(events) = self.inner.store.events_for_thread(thread.id) else { return };
-        let first = events.iter().find_map(|e| match &e.payload {
-            EventPayload::TurnStarted { message, .. } => Some(message.clone()),
-            _ => None,
-        });
+        let Ok((first, turns)) = self.inner.store.first_turn_message_and_count(thread.id) else { return };
         let Some(first) = first else { return };
-        let turns = events.iter().filter(|e| matches!(e.payload, EventPayload::TurnStarted { .. })).count();
         if turns != 1 || thread.title != title_from_message(&first) {
             return;
         }
@@ -4531,91 +4636,17 @@ impl Orchestrator {
         if coordinator_thread_id != thread.id {
             return Ok(None);
         }
-        let group = self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("project coordinator group is missing"))?;
-        let mut objective = group.objective.clone();
-        truncate_utf8(&mut objective, 8 * 1024);
+        // Keep the provider's system/developer prefix stable across idle
+        // releases and resumes. Live project data belongs in tool responses,
+        // after the cached prefix, and is available after a harness switch too.
         let mut instructions = format!(
             "You are Kybern's persistent coordinator for project {project_id}, collaboration group {group_id}.\n\
-             Plan work from the user's brief, delegate every editing and integration task through Kybern collaboration assignments, inspect and review worker results, maintain the project plan and durable project knowledge, and return a clear review to the user. Do not edit or integrate code yourself. Use explicit assignment boundaries and provenance. At each new objective and before delegating, use kybern_collaboration_context_read to refresh the current plan and user-authored corrections; this attach-time snapshot may become stale while the session remains alive. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern inherits the coordinator's existing authority. If a worker is blocked on approval, preserve it and report or resolve that approval; never cancel and recreate a worker to bypass approval. Persist the working plan as kind `plan`, update its status as progress arrives, and update it again with completion or remaining work after reviewing results. Save each reusable verified fact such as architecture notes and test commands as kind `research`, project choices as kind `decision`, and reviewed assignment outcomes as kind `result_reference` with kybern_collaboration_context_put. Record useful findings before reporting completion. Treat user-authored briefs and instructions as authoritative; never replace them with agent-authored claims. Review worker claims and artifacts before presenting them as complete. Some harnesses enforce the non-editing role by restricting tools; for harnesses without enforceable restrictions, this instruction still defines the coordinator role.\n\
-             Current objective: {}\n",
-            objective
+             Plan work from the user's brief, delegate every editing and integration task through Kybern collaboration assignments, inspect and review worker results, maintain the project plan and durable project knowledge, and return a clear review to the user. Do not edit or integrate code yourself. Use explicit assignment boundaries and provenance. At session start, each new objective, and before delegating, use kybern_collaboration_read for the current objective and assignment state, and kybern_collaboration_context_read for the current plan, project.setup, and user-authored corrections. If conversation context is missing after a harness switch, use kybern_thread_read for this coordinator thread's saved conversation. Fetch additional pages as needed; never treat absent context as permission to start over. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern inherits the coordinator's existing authority. If a worker is blocked on approval, preserve it and report or resolve that approval; never cancel and recreate a worker to bypass approval. Persist the working plan as kind `plan`, update its status as progress arrives, and update it again with completion or remaining work after reviewing results. Save each reusable verified fact such as architecture notes and test commands as kind `research`, project choices as kind `decision`, and reviewed assignment outcomes as kind `result_reference` with kybern_collaboration_context_put. Record useful findings before reporting completion. Treat user-authored briefs and instructions as authoritative; never replace them with agent-authored claims. Review worker claims and artifacts before presenting them as complete. Some harnesses enforce the non-editing role by restricting tools; for harnesses without enforceable restrictions, this instruction still defines the coordinator role.\n\
+             Read changing project knowledge and assignment results through these tools; they are intentionally not embedded in this stable role instruction.\n"
         );
 
-        if !self.coordinator_setup_complete(group.id)? {
-            instructions.push_str("\nFirst-time setup is required before implementation. Check current project context first: if project.setup already exists, reuse it and continue without repeating setup. Otherwise, tell the user you are learning the project first. Delegate a research-only assignment to inspect repository instructions, architecture and entry points, development/test commands, and constraints relevant to the user's brief. For an empty project, record what exists and what is missing rather than inventing conventions. Do not edit files or run installation/setup commands during this research. Review the worker's successful result; save a concise verified overview with kybern_collaboration_context_put using key `project.setup`, kind `research`, and source_refs containing the successful research assignment's exact UUID. This records setup completion durably and unlocks editing/integration assignments. If research fails or needs input, explain the blocker and resume setup on the next turn; never claim readiness prematurely. After saving the overview, tell the user setup is complete, persist the task plan, and continue their original request without asking them to repeat it.\n");
-        }
+        instructions.push_str("\nCheck whether first-time setup is required before implementation: if project.setup already exists, reuse it and continue without repeating setup. Otherwise, tell the user you are learning the project first. Delegate a research-only assignment to inspect repository instructions, architecture and entry points, development/test commands, and constraints relevant to the user's brief. For an empty project, record what exists and what is missing rather than inventing conventions. Do not edit files or run installation/setup commands during this research. Review the worker's successful result; save a concise verified overview with kybern_collaboration_context_put using key `project.setup`, kind `research`, and source_refs containing the successful research assignment's exact UUID. This records setup completion durably and unlocks editing/integration assignments. If research fails or needs input, explain the blocker and resume setup on the next turn; never claim readiness prematurely. After saving the overview, tell the user setup is complete, persist the task plan, and continue their original request without asking them to repeat it.\n");
 
-        let mut context = self.inner.store.collaboration_context_latest(group.id)?;
-        context.sort_by_key(|entry| (!entry.user_authored, entry.key.clone()));
-        if !context.is_empty() {
-            instructions.push_str("\nDurable project knowledge (with provenance):\n");
-        }
-        for entry in context {
-            let author = entry.author_thread_id.map_or_else(|| "user".into(), |id| format!("thread:{id}"));
-            let mut line = format!(
-                "- [{} {:?} r{} author={author} sources={}] {}\n",
-                entry.key,
-                entry.kind,
-                entry.revision,
-                entry.source_refs.join(","),
-                entry.body
-            );
-            truncate_utf8(&mut line, 8 * 1024);
-            if instructions.len() + line.len() > 36 * 1024 {
-                instructions.push_str("- Additional project knowledge omitted; retrieve it with kybern_collaboration_context_read.\n");
-                break;
-            }
-            instructions.push_str(&line);
-        }
-
-        let mut assignments = self.inner.store.collaboration_assignments(group.id, true)?;
-        assignments.sort_by_key(|assignment| assignment.updated_at);
-        if !assignments.is_empty() {
-            instructions.push_str("\nRecent assignment state:\n");
-        }
-        for assignment in assignments.into_iter().rev().take(24).rev() {
-            let mut result =
-                assignment.result.as_ref().map_or_else(String::new, |result| format!(" result={:?}: {}", result.outcome, result.summary));
-            truncate_utf8(&mut result, 4 * 1024);
-            let mut line = format!(
-                "- {} [{} {:?}] owner={}{}\n",
-                assignment.id,
-                assignment.title,
-                assignment.status,
-                assignment.owner_thread_id.map_or_else(|| "unassigned".into(), |id| id.to_string()),
-                result
-            );
-            truncate_utf8(&mut line, 6 * 1024);
-            instructions.push_str(&line);
-            if instructions.len() > 46 * 1024 {
-                break;
-            }
-        }
-
-        let events = self.inner.store.events_for_thread_recent(thread.id, 1000)?;
-        let transcript = kybern_store::project_transcript(&events);
-        let recent = transcript
-            .iter()
-            .filter_map(|entry| match entry {
-                TranscriptEntry::User { message, .. } => Some(format!("User: {}", message.plain_text())),
-                TranscriptEntry::Assistant { text, complete: true, origin, .. } if origin.is_root() => Some(format!("Coordinator: {text}")),
-                _ => None,
-            })
-            .rev()
-            .take(16)
-            .collect::<Vec<_>>();
-        if !recent.is_empty() {
-            instructions.push_str("\nBounded handover from the saved coordinator conversation:\n");
-            for mut line in recent.into_iter().rev() {
-                truncate_utf8(&mut line, 8 * 1024);
-                instructions.push_str(&line);
-                instructions.push('\n');
-                if instructions.len() > 60 * 1024 {
-                    break;
-                }
-            }
-        }
-        truncate_utf8(&mut instructions, 63 * 1024);
         Ok(Some(instructions))
     }
 
@@ -4724,20 +4755,22 @@ impl Orchestrator {
         thread_id: ThreadId,
         live: &Arc<LiveSession>,
         update: DriverRuntimeTaskUpdate,
-        completed: bool,
+        kind: RuntimeTaskUpdateKind,
     ) -> Result<Option<RuntimeTask>> {
         let mut tasks = live.tasks.lock().await;
         let Some(task) = tasks.get_mut(&update.id) else {
             tracing::debug!(thread_id = %thread_id, task_id = %update.id, "provider updated an unknown runtime task");
             return Ok(None);
         };
+        let completed = kind == RuntimeTaskUpdateKind::Complete;
+        let resumed = kind == RuntimeTaskUpdateKind::Resume;
         let next_status = match (update.status, completed) {
             (Some(status), true) if status.is_active() => RuntimeTaskStatus::Completed,
             (Some(status), _) => status,
             (None, true) => RuntimeTaskStatus::Completed,
             (None, false) => task.status,
         };
-        if task.status.is_active() || !next_status.is_active() {
+        if resumed || task.status.is_active() || !next_status.is_active() {
             task.status = next_status;
         }
         if let Some(detail) = update.detail {
@@ -4759,13 +4792,17 @@ impl Orchestrator {
             task.capabilities = capabilities;
         }
         task.updated_at = Utc::now();
-        if completed || !task.status.is_active() {
+        if resumed {
+            task.completed_at = None;
+        } else if completed || !task.status.is_active() {
             task.completed_at = Some(task.updated_at);
             task.capabilities = RuntimeTaskCapabilities::default();
         }
         let task = task.clone();
         drop(tasks);
-        let payload = if completed || !task.status.is_active() {
+        let payload = if resumed {
+            EventPayload::RuntimeTaskStarted { task: task.clone() }
+        } else if completed || !task.status.is_active() {
             EventPayload::RuntimeTaskCompleted { task: task.clone() }
         } else {
             EventPayload::RuntimeTaskUpdated { task: task.clone() }
@@ -4778,7 +4815,7 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
-        if completed || !task.status.is_active() {
+        if !resumed && (completed || !task.status.is_active()) {
             self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
         }
         Ok(Some(task))
@@ -4812,7 +4849,7 @@ impl Orchestrator {
                         stats: None,
                         capabilities: None,
                     },
-                    true,
+                    RuntimeTaskUpdateKind::Complete,
                 )
                 .await;
         }
@@ -5135,7 +5172,7 @@ impl Orchestrator {
                                 stats: None,
                                 capabilities: None,
                             },
-                            false,
+                            RuntimeTaskUpdateKind::Progress,
                         )
                         .await?;
                 }
@@ -5151,7 +5188,13 @@ impl Orchestrator {
                 self.emit(
                     thread_id,
                     turn_id,
-                    EventPayload::ToolCallCompleted { tool_call_id: tool_call_id.clone(), output: output.clone(), is_error },
+                    EventPayload::ToolCallCompleted {
+                        tool_call_id: tool_call_id.clone(),
+                        output: output.clone(),
+                        output_omitted: false,
+                        stream_recoverable: false,
+                        is_error,
+                    },
                 )?;
                 let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
                 if matches!(provider, ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Cursor) {
@@ -5180,7 +5223,7 @@ impl Orchestrator {
                                     stats: None,
                                     capabilities: None,
                                 },
-                                true,
+                                RuntimeTaskUpdateKind::Complete,
                             )
                             .await?;
                     }
@@ -5189,11 +5232,14 @@ impl Orchestrator {
             DriverEvent::RuntimeTaskStarted(task) => {
                 self.persist_runtime_task_start(thread_id, live, turn_id, task).await?;
             }
+            DriverEvent::RuntimeTaskResumed(update) => {
+                let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Resume).await?;
+            }
             DriverEvent::RuntimeTaskUpdated(update) => {
-                let _ = self.apply_runtime_task_update(thread_id, live, update, false).await?;
+                let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Progress).await?;
             }
             DriverEvent::RuntimeTaskCompleted(update) => {
-                let _ = self.apply_runtime_task_update(thread_id, live, update, true).await?;
+                let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await?;
             }
             DriverEvent::PermissionRequest { request_id, tool_call_id, tool_name, input, summary, suggestions } => {
                 let Some(turn_id) = turn_id else {
@@ -6399,14 +6445,293 @@ mod tests {
                     .unwrap();
                 assert_eq!(result["pending_messages"].as_array().unwrap().len(), 100);
                 assert!(fixture.store.queue_is_pending(messages[0].id).unwrap(), "other recipient");
-                for message in &messages[1..100] {
+                for message in &messages[1..=100] {
                     assert!(!fixture.store.queue_is_pending(message.id).unwrap(), "{provider:?}, coordinator={coordinator}");
                     let stored = fixture.store.collaboration_message_get(message.id).unwrap().unwrap();
                     assert_eq!(stored.state, CollaborationDeliveryState::Submitted);
                     assert!(stored.delivery_turn_id.is_some());
                 }
-                assert!(fixture.store.queue_is_pending(messages[100].id).unwrap(), "outside snapshot");
+                assert!(fixture.store.queue_is_pending(messages[101].id).unwrap(), "outside snapshot");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn collaboration_read_consumes_result_notification_omitted_by_message_pagination() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let group = fixture
+            .orchestrator
+            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
+                operation_id: Uuid::now_v7(),
+                project_id: thread.project_id,
+                coordinator_thread_id: thread.id,
+                objective: "Read a structured assignment result".into(),
+                success_criteria: vec![],
+                coordinator_mode: Some(CoordinatorMode::Ordinary),
+                policy: None,
+            })
+            .unwrap();
+        let worker = fixture.thread(ThreadStatus::Idle);
+        fixture
+            .store
+            .collaboration_member_put(&GroupMember {
+                group_id: group.id,
+                thread_id: worker.id,
+                role: GroupMemberRole::Worker,
+                active: true,
+                joined_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        let now = chrono::Utc::now();
+        let assignment = CollaborationAssignment {
+            id: Uuid::now_v7(),
+            group_id: group.id,
+            parent_assignment_id: None,
+            owner_thread_id: Some(worker.id),
+            requested_child: None,
+            created_by_thread_id: Some(thread.id),
+            title: "Finished work".into(),
+            instructions: "Return one durable result".into(),
+            kind: AssignmentKind::Research,
+            status: AssignmentStatus::Completed,
+            dispatch_message_id: None,
+            base_revision: None,
+            depth: 0,
+            result: Some(AssignmentResult {
+                outcome: AssignmentOutcome::Success,
+                summary: "The structured result surfaced".into(),
+                changes: Vec::new(),
+                checks: Vec::new(),
+                artifacts: Vec::new(),
+                unresolved: Vec::new(),
+                completed_at: now,
+            }),
+            uncertainty: None,
+            revision: 2,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_assignment_put(&assignment).unwrap();
+
+        let mut unrelated = Vec::new();
+        for index in 0..101 {
+            let message = CollaborationMessage {
+                id: Uuid::now_v7(),
+                operation_id: Uuid::now_v7(),
+                group_id: group.id,
+                assignment_id: None,
+                from_thread_id: Some(worker.id),
+                to_thread_id: thread.id,
+                external_recipient: false,
+                purpose: CollaborationMessagePurpose::Question,
+                reply_to: None,
+                body: format!("unrelated question {index}"),
+                state: CollaborationDeliveryState::Queued,
+                delivery_turn_id: None,
+                wakeup_count: 1,
+                created_at: now,
+                updated_at: now,
+            };
+            fixture.store.collaboration_message_put(&message, Some(message.id)).unwrap();
+            fixture.store.collaboration_message_queue(&message).unwrap();
+            unrelated.push(message);
+        }
+        let result_notification = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            group_id: group.id,
+            assignment_id: Some(assignment.id),
+            from_thread_id: Some(worker.id),
+            to_thread_id: thread.id,
+            external_recipient: false,
+            purpose: CollaborationMessagePurpose::Result,
+            reply_to: None,
+            body: format!("Assignment {} finished with Success: The structured result surfaced", assignment.id),
+            state: CollaborationDeliveryState::Queued,
+            delivery_turn_id: None,
+            wakeup_count: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_message_put(&result_notification, Some(result_notification.id)).unwrap();
+        fixture.store.collaboration_message_queue(&result_notification).unwrap();
+        let actionable = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            group_id: group.id,
+            assignment_id: Some(assignment.id),
+            from_thread_id: Some(worker.id),
+            to_thread_id: thread.id,
+            external_recipient: false,
+            purpose: CollaborationMessagePurpose::ChangeRequest,
+            reply_to: None,
+            body: "Do not consume this actionable follow-up".into(),
+            state: CollaborationDeliveryState::Queued,
+            delivery_turn_id: None,
+            wakeup_count: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_message_put(&actionable, Some(actionable.id)).unwrap();
+        fixture.store.collaboration_message_queue(&actionable).unwrap();
+
+        let fresh_result = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            purpose: CollaborationMessagePurpose::Result,
+            body: "A new follow-up commit that is not in the old structured report".into(),
+            ..actionable.clone()
+        };
+        fixture.store.collaboration_message_put(&fresh_result, Some(fresh_result.id)).unwrap();
+        fixture.store.collaboration_message_queue(&fresh_result).unwrap();
+        let (live, _) = fixture.active_app_tool_session(&thread).await;
+        let value = fixture
+            .orchestrator
+            .execute_native_app_tool_call(
+                thread.id,
+                live.session_instance_id,
+                "read-structured-result",
+                "kybern_collaboration_read",
+                json!({}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value["pending_messages"].as_array().unwrap().len(), 100);
+        assert_eq!(value["assignments"][0]["result"]["summary"], "The structured result surfaced");
+        assert!(!fixture.store.queue_is_pending(result_notification.id).unwrap(), "surfaced structured result consumes its wakeup");
+        assert!(fixture.store.queue_is_pending(unrelated[100].id).unwrap(), "unrelated message outside the page stays queued");
+        assert!(fixture.store.queue_is_pending(actionable.id).unwrap(), "actionable same-assignment follow-up stays queued");
+        assert!(
+            fixture.store.queue_is_pending(fresh_result.id).unwrap(),
+            "an unseen follow-up result is not represented by an older report"
+        );
+    }
+
+    #[tokio::test]
+    async fn collaboration_read_scopes_recipient_before_bounding_and_consumes_own_result() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let group = fixture
+            .orchestrator
+            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
+                operation_id: Uuid::now_v7(),
+                project_id: thread.project_id,
+                coordinator_thread_id: thread.id,
+                objective: "Read a structured assignment result".into(),
+                success_criteria: vec![],
+                coordinator_mode: Some(CoordinatorMode::Ordinary),
+                policy: None,
+            })
+            .unwrap();
+        let worker = fixture.thread(ThreadStatus::Idle);
+        fixture
+            .store
+            .collaboration_member_put(&GroupMember {
+                group_id: group.id,
+                thread_id: worker.id,
+                role: GroupMemberRole::Worker,
+                active: true,
+                joined_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        let now = chrono::Utc::now();
+        let assignment = CollaborationAssignment {
+            id: Uuid::now_v7(),
+            group_id: group.id,
+            parent_assignment_id: None,
+            owner_thread_id: Some(worker.id),
+            requested_child: None,
+            created_by_thread_id: Some(thread.id),
+            title: "Finished work".into(),
+            instructions: "Return one durable result".into(),
+            kind: AssignmentKind::Research,
+            status: AssignmentStatus::Completed,
+            dispatch_message_id: None,
+            base_revision: None,
+            depth: 0,
+            result: Some(AssignmentResult {
+                outcome: AssignmentOutcome::Success,
+                summary: "The structured result surfaced".into(),
+                changes: Vec::new(),
+                checks: Vec::new(),
+                artifacts: Vec::new(),
+                unresolved: Vec::new(),
+                completed_at: now,
+            }),
+            uncertainty: None,
+            revision: 2,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_assignment_put(&assignment).unwrap();
+
+        let mut peer_progress = Vec::new();
+        for index in 0..101 {
+            let message = CollaborationMessage {
+                id: Uuid::now_v7(),
+                operation_id: Uuid::now_v7(),
+                group_id: group.id,
+                assignment_id: None,
+                from_thread_id: Some(worker.id),
+                to_thread_id: worker.id,
+                external_recipient: false,
+                purpose: CollaborationMessagePurpose::Progress,
+                reply_to: None,
+                body: format!("old peer progress {index}"),
+                state: CollaborationDeliveryState::Persisted,
+                delivery_turn_id: None,
+                wakeup_count: 0,
+                created_at: now,
+                updated_at: now,
+            };
+            fixture.store.collaboration_message_put(&message, None).unwrap();
+            peer_progress.push(message);
+        }
+        let result_notification = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            group_id: group.id,
+            assignment_id: Some(assignment.id),
+            from_thread_id: Some(worker.id),
+            to_thread_id: thread.id,
+            external_recipient: false,
+            purpose: CollaborationMessagePurpose::Result,
+            reply_to: None,
+            body: "Assignment finished".into(),
+            state: CollaborationDeliveryState::Queued,
+            delivery_turn_id: None,
+            wakeup_count: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_message_put(&result_notification, Some(result_notification.id)).unwrap();
+        fixture.store.collaboration_message_queue(&result_notification).unwrap();
+
+        let (live, _) = fixture.active_app_tool_session(&thread).await;
+        let value = fixture
+            .orchestrator
+            .execute_native_app_tool_call(
+                thread.id,
+                live.session_instance_id,
+                "read-structured-result",
+                "kybern_collaboration_read",
+                json!({}),
+            )
+            .await
+            .unwrap();
+        let inbox = value["pending_messages"].as_array().unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0]["id"], result_notification.id.to_string());
+        assert_eq!(inbox[0]["state"], "submitted");
+        assert_eq!(value["assignments"][0]["result"]["summary"], "The structured result surfaced");
+        assert!(!fixture.store.queue_is_pending(result_notification.id).unwrap(), "surfaced structured result consumes its wakeup");
+        for message in peer_progress {
+            assert_eq!(
+                fixture.store.collaboration_message_get(message.id).unwrap().unwrap().state,
+                CollaborationDeliveryState::Persisted,
+                "another recipient's inbox remains untouched"
+            );
         }
     }
 
@@ -6552,6 +6877,44 @@ mod tests {
         assert!(cached["providers"].as_array().unwrap().iter().all(|provider| provider["models"].is_array()));
     }
 
+    #[test]
+    fn assignment_context_prioritizes_constraints_and_defers_archived_reports() {
+        let entry = |key: &str, kind, body: String, user_authored| ContextEntry {
+            id: Uuid::now_v7(),
+            group_id: Uuid::now_v7(),
+            key: key.into(),
+            kind,
+            body,
+            author_thread_id: None,
+            user_authored,
+            revision: 1,
+            source_refs: vec![],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let mut context: Vec<_> = (0..40)
+            .map(|index| {
+                entry(
+                    &format!("assignment.result.{index}"),
+                    ContextEntryKind::ResultReference,
+                    "old detailed worker report ".repeat(400),
+                    false,
+                )
+            })
+            .collect();
+        context.push(entry("z.user", ContextEntryKind::ResultReference, "Preserve the user's correction".into(), true));
+        context.push(entry("plan", ContextEntryKind::Plan, "Current work only".into(), false));
+        context.push(entry("project.setup", ContextEntryKind::Research, "Build commands and architecture".into(), false));
+        let shared = super::assignment_shared_context(context);
+        assert!(shared.contains("Preserve the user's correction"));
+        assert!(shared.contains("Current work only"));
+        assert!(shared.contains("Build commands and architecture"));
+        assert!(shared.contains("40 archived result reports"));
+        assert!(!shared.contains("old detailed worker report"));
+        assert!(shared.find("z.user").unwrap() < shared.find("plan").unwrap());
+        assert!(shared.len() < 1024, "archived reports should not inflate every new worker prompt");
+    }
+
     #[tokio::test]
     async fn ordinary_thread_reads_project_knowledge_without_creating_a_group() {
         let fixture = Fixture::new();
@@ -6570,6 +6933,10 @@ mod tests {
             })
             .await
             .unwrap();
+        let role_before = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
+        assert!(role_before.contains("kybern_collaboration_read"));
+        assert!(role_before.contains("kybern_collaboration_context_read"));
+        assert!(role_before.contains("kybern_thread_read"));
         fixture
             .orchestrator
             .collaboration_context_put(
@@ -6602,6 +6969,12 @@ mod tests {
             .unwrap();
         assert_eq!(result["entries"][0]["key"], "shared.fact");
         assert_eq!(fixture.store.collaboration_group_for_thread(thread.id).unwrap(), None);
+        let role_after = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
+        assert_eq!(role_before, role_after, "changing project knowledge must not replace the cached system prefix");
+        assert!(!role_after.contains("The project uses a scratch daemon"), "live knowledge belongs in tool responses");
+        let mut resumed = coordinator.thread.clone();
+        resumed.provider_session_id = Some("saved-provider-session".into());
+        assert_eq!(fixture.orchestrator.coordinator_instructions(&resumed).unwrap().as_deref(), Some(role_before.as_str()));
     }
 
     #[tokio::test]
@@ -6896,6 +7269,70 @@ mod tests {
         fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
         fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
         assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().len(), count, "retired output cannot reopen the turn");
+    }
+
+    #[tokio::test]
+    async fn explicit_runtime_task_resume_reactivates_a_completed_agent() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
+        live.turn_ready.notified().await;
+        let task = DriverRuntimeTask {
+            id: "agent-1".into(),
+            kind: RuntimeTaskKind::Agent,
+            status: RuntimeTaskStatus::Running,
+            title: "Subagent".into(),
+            detail: None,
+            provider_type: Some("sub_agent".into()),
+            parent_id: None,
+            tool_call_id: None,
+            provider_thread_id: Some("agent-1".into()),
+            model: None,
+            effort: None,
+            backgrounded: true,
+            last_tool_name: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities { stop: true, background: false },
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status("agent-1", RuntimeTaskStatus::Completed)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fixture.store.runtime_tasks_for_thread(thread.id).unwrap()[0].status, RuntimeTaskStatus::Completed);
+
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::RuntimeTaskResumed(DriverRuntimeTaskUpdate {
+                    id: "agent-1".into(),
+                    status: Some(RuntimeTaskStatus::Running),
+                    detail: None,
+                    backgrounded: None,
+                    last_tool_name: None,
+                    usage: None,
+                    stats: None,
+                    capabilities: Some(RuntimeTaskCapabilities { stop: true, background: false }),
+                }),
+            )
+            .await
+            .unwrap();
+        let resumed = fixture.store.runtime_tasks_for_thread(thread.id).unwrap();
+        assert_eq!(resumed[0].status, RuntimeTaskStatus::Running);
+        assert!(resumed[0].completed_at.is_none());
+        assert!(matches!(
+            fixture.store.events_for_thread(thread.id).unwrap().last().unwrap().payload,
+            EventPayload::RuntimeTaskStarted { .. }
+        ));
     }
 
     #[tokio::test]
@@ -7432,7 +7869,10 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = Client::connect(&endpoint).await.unwrap();
         client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, ..Default::default() }).await.unwrap();
-        client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None }).await.unwrap();
+        client
+            .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None, include_tool_output: None })
+            .await
+            .unwrap();
         client.call::<DaemonActivityMethod>(Empty {}).await.unwrap();
         server.abort();
 

@@ -247,6 +247,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .map_err(internal)?;
             let (mut transcript, next_before_seq) =
                 kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            if p.defer_tool_stream.unwrap_or(false) {
+                state.store.mark_tool_streams_omitted_through(id, &mut transcript, through_seq).map_err(internal)?;
+            }
             if p.include_tool_output.unwrap_or(true) {
                 state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
             }
@@ -270,12 +273,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             let through_seq = p.through_seq.unwrap_or(thread.last_seq).min(thread.last_seq);
-            let (output, is_error) = state
+            let include_tool_stream = p.include_tool_stream.unwrap_or(false);
+            let result = state
                 .store
-                .tool_call_output_through(p.thread_id, &p.tool_call_id, p.start_seq, through_seq)
+                .tool_call_result_through(p.thread_id, &p.tool_call_id, p.start_seq, through_seq, include_tool_stream)
                 .map_err(internal)?
                 .ok_or_else(|| RpcError::not_found("tool output"))?;
-            ok(ThreadsToolOutputResult { output, is_error })
+            ok(ThreadsToolOutputResult {
+                output: result.output,
+                is_error: result.is_error,
+                stream: result.stream,
+                stream_omitted: result.stream_omitted,
+            })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
@@ -557,7 +566,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         PairingCreate::NAME => {
             let p: PairingCreateParams = parse_or_default(params)?;
             let endpoints = crate::access::endpoints(state).await;
-            let (code, expires_at) = state.pairing.create(p.label);
+            let (code, expires_at) = state.pairing.create(p.label).map_err(bad)?;
             ok(PairingCreateResult { code, expires_at, endpoints })
         }
         ExposureGet::NAME => ok(crate::access::exposure(state).await),
@@ -579,7 +588,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: FilesSearchParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             let root = std::path::PathBuf::from(&project.path);
-            let files = crate::files::list(&root).await.map_err(internal)?;
+            let files = state.file_indexes.list(&root).await.map_err(internal)?;
             let total = files.len() as u32;
             let files = crate::files::rank(&files, &p.query, p.limit as usize);
             ok(FilesSearchResult { files, total })

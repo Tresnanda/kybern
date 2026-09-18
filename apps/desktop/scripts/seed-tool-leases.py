@@ -20,6 +20,9 @@ with sqlite3.connect(root / "state.sqlite") as db:
         seq += 1
         db.execute("INSERT INTO events(seq,thread_id,turn_id,at,kind,payload) VALUES (?,?,?,?,?,?)", (seq, thread, turn, at, kind, json.dumps(dict(kind=kind, **fields), ensure_ascii=False)))
     event("turn_started", message_id=turn, message={"parts": [{"type": "text", "text": "Inspect exact saved results"}]})
+    event("tool_call_started", call={"id": "lease-stream", "name": "Read", "input": {"file_path": "/fixture/lease-stream.txt"}}, origin={"kind": "root"})
+    event("tool_call_output_delta", tool_call_id="lease-stream", delta="Exact stream: é😀\n" + "stream content " * 350_000)
+    event("tool_call_completed", tool_call_id="lease-stream", output=None, is_error=False)
     for index in range(16):
         call = f"lease-{index}"
         event("tool_call_started", call={"id": call, "name": "Read", "input": {"file_path": f"/fixture/lease-{index}.txt"}}, origin={"kind": "root"})

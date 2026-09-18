@@ -131,7 +131,7 @@ export function SettingsScreen({
           </InputGroup>
           <nav aria-label="Settings sections">
             <ul ref={navRef} className={cn("t-tabs settings-nav-list", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
-              {!query && <li aria-hidden className="t-tabs-pill z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />}
+              {!query && <li aria-hidden className="t-tabs-pill sidebar-row-surface z-0 rounded-md bg-[var(--sidebar-accent-active)]" style={pillStyle} data-ready={pillReady} />}
               {NAV_GROUPS.map((group) => {
                 const items = group.tabs.flatMap((id) => matches.filter((item) => item[0] === id))
                 if (!items.length) return null

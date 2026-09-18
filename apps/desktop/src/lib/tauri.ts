@@ -100,6 +100,21 @@ export async function pickFiles(): Promise<string[]> {
   return Array.isArray(r) ? r : r ? [r] : []
 }
 
+/** Save bytes through the native dialog, or return null for browser fallback. */
+export async function saveImageFile(data: Uint8Array, defaultPath: string): Promise<boolean | null> {
+  if (!isTauri()) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  // IPC headers must be ASCII; JSON escapes preserve Unicode file names.
+  const name = JSON.stringify(defaultPath).replace(/[\u007f-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
+  return invoke<boolean>("save_image_file", data, { headers: { "X-Kybern-File-Name": name } })
+}
+
+export async function writeImageClipboard(data: Uint8Array): Promise<void> {
+  if (!isTauri()) throw new Error("Native image copying is not available in this window.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("write_image_clipboard", data)
+}
+
 export async function startDragging(): Promise<void> {
   if (!isTauri()) return
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
@@ -110,6 +125,13 @@ export async function isWindowFocused(): Promise<boolean> {
   if (!isTauri()) return document.hasFocus()
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
   return getCurrentWindow().isFocused()
+}
+
+/** Keep the native macOS backdrop alive only while translucent UI is visible. */
+export async function setWindowVibrancy(enabled: boolean): Promise<void> {
+  if (!isTauri() || platform() !== "macos") return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("set_window_vibrancy", { enabled })
 }
 
 export const platform = (): "macos" | "windows" | "linux" | "web" => {

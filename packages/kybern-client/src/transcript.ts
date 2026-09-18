@@ -49,6 +49,8 @@ export type Block =
       origin: EventOrigin
       call: ToolCall
       stream: string
+      streamRecoverable?: boolean
+      streamOmitted?: boolean
       output: JsonValue | null
       outputOmitted?: boolean
       isError: boolean
@@ -181,6 +183,8 @@ function entryToBlock(e: TranscriptEntry): Block | null {
         origin: e.origin ?? ROOT_ORIGIN,
         call: e.call,
         stream: "",
+        streamRecoverable: e.stream_omitted ?? false,
+        streamOmitted: e.stream_omitted ?? false,
         output: e.output ?? null,
         outputOmitted: e.output_omitted ?? false,
         isError: e.is_error,
@@ -339,7 +343,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "tool_call_output_delta": {
       const idx = findLast(blocks, `tool:${ev.tool_call_id}`)
       const b = blocks[idx]
-      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, stream: b.stream + ev.delta })
+      // Once the exact stream is deferred, individual replay/live suffixes
+      // would be incomplete. Keep the marker and recover the whole sequence.
+      if (b && b.kind === "tool" && !b.streamOmitted) blocks = replaceAt(blocks, idx, { ...b, stream: b.stream + ev.delta })
       break
     }
     case "tool_call_completed": {
@@ -347,7 +353,17 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       const b = blocks[idx]
       // Final output owns exact duplicate text. Keep distinct/fallback streams,
       // including transport-only agent/task receipts used by activity views.
-      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, stream: ev.output === b.stream && !/^\s*(?:agent|task)[_ ]?id\s*:/i.test(b.stream) ? "" : b.stream, output: ev.output, outputOmitted: false, isError: ev.is_error, complete: true })
+      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, {
+        ...b,
+        // An omitted canonical result cannot establish stream equivalence.
+        // Preserve distinct output and agent receipts until exact hydration.
+        stream: !ev.output_omitted && ev.output === b.stream && !/^\s*(?:agent|task)[_ ]?id\s*:/i.test(b.stream) ? "" : b.stream,
+        streamRecoverable: ev.stream_recoverable ?? b.streamRecoverable,
+        output: ev.output_omitted ? null : ev.output,
+        outputOmitted: ev.output_omitted ?? false,
+        isError: ev.is_error,
+        complete: true,
+      })
       break
     }
     case "runtime_task_started":
@@ -360,7 +376,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         : ev.task.started_seq || ev.seq
       const task = { ...ev.task, started_seq: startedSeq, updated_seq: ev.seq }
       if (current?.kind === "runtime_task") {
-        if (isActiveRuntimeStatus(current.task.status) || !isActiveRuntimeStatus(task.status)) {
+        if (isActiveRuntimeStatus(current.task.status) || !isActiveRuntimeStatus(task.status) || ev.kind === "runtime_task_started") {
           blocks = replaceAt(blocks, idx, { ...current, task })
         }
       } else {
@@ -519,6 +535,43 @@ function sameOrigin(left: EventOrigin, right: EventOrigin): boolean {
       (right.kind === "agent" && left.task_id === right.task_id && left.provider_thread_id === right.provider_thread_id))
 }
 
+/** Scan segmented streamed text without materializing a joined string or a
+ * code-point array. Exported for the allocation fixture. */
+export function assistantCommonPrefix(
+  pieces: readonly string[],
+  canonical: string,
+): { commonPrefix: number; streamedLength: number; equal: boolean } {
+  let commonPrefix = 0
+  let streamedLength = 0
+  let matches = true
+  let streamedNext = Number.NaN
+  for (const piece of pieces) {
+    streamedLength += piece.length
+    if (!matches) continue
+    for (let position = 0; position < piece.length; position++) {
+      if (piece.charCodeAt(position) !== canonical.charCodeAt(commonPrefix)) {
+        streamedNext = piece.charCodeAt(position)
+        matches = false
+        break
+      }
+      commonPrefix++
+    }
+  }
+  if (matches && streamedLength === canonical.length)
+    return { commonPrefix, streamedLength, equal: true }
+
+  // A code-unit comparison can stop between a surrogate pair when two astral
+  // characters share their high surrogate. Rewind to the code-point boundary
+  // so slicing cannot leave an unpaired surrogate in the retained prefix.
+  const previous = canonical.charCodeAt(commonPrefix - 1)
+  if (
+    commonPrefix > 0 && previous >= 0xd800 && previous <= 0xdbff &&
+    (streamedNext >= 0xdc00 && streamedNext <= 0xdfff ||
+      canonical.charCodeAt(commonPrefix) >= 0xdc00 && canonical.charCodeAt(commonPrefix) <= 0xdfff)
+  ) commonPrefix--
+  return { commonPrefix, streamedLength, equal: false }
+}
+
 function reconcileAssistantField(
   blocks: Block[],
   indices: readonly number[],
@@ -529,19 +582,13 @@ function reconcileAssistantField(
     const block = blocks[index]
     return block?.kind === "assistant" ? block[field] : ""
   })
-  const streamed = pieces.join("")
-  if (streamed === canonical) return blocks
-
-  let commonPrefix = 0
-  const streamedChars = Array.from(streamed)
-  const canonicalChars = Array.from(canonical)
-  for (let position = 0; position < streamedChars.length; position++) {
-    if (streamedChars[position] !== canonicalChars[position]) break
-    commonPrefix += streamedChars[position]!.length
-  }
+  // Joining first and then expanding both strings with Array.from temporarily
+  // retained three additional message-sized allocations during settlement.
+  const { commonPrefix, streamedLength, equal } = assistantCommonPrefix(pieces, canonical)
+  if (equal) return blocks
 
   let targetPosition = field === "thinking" ? 0 : indices.length - 1
-  if (streamed.length > 0) {
+  if (streamedLength > 0) {
     let consumed = 0
     const found = pieces.findIndex((piece) => {
       const contains = commonPrefix < consumed + piece.length
@@ -550,7 +597,8 @@ function reconcileAssistantField(
     })
     if (found !== -1) targetPosition = found
   }
-  const consumedBefore = pieces.slice(0, targetPosition).reduce((total, piece) => total + piece.length, 0)
+  let consumedBefore = 0
+  for (let position = 0; position < targetPosition; position++) consumedBefore += pieces[position]!.length
   const keep = Math.min(Math.max(0, commonPrefix - consumedBefore), pieces[targetPosition]?.length ?? 0)
   const replacement = `${pieces[targetPosition]?.slice(0, keep) ?? ""}${canonical.slice(commonPrefix)}`
 

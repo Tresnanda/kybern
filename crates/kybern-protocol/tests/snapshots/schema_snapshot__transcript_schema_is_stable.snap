@@ -167,6 +167,10 @@ expression: schema_for!(TranscriptEntry)
           "description": "Settled result exists in the event log but was not inlined here.",
           "type": "boolean"
         },
+        "stream_omitted": {
+          "description": "Settled output-delta stream exists in the event log but was not\ninlined here. Fetch it through `threads.tool_output`.",
+          "type": "boolean"
+        },
         "is_error": {
           "type": "boolean"
         },

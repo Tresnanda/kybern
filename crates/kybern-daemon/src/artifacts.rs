@@ -48,8 +48,23 @@ pub async fn issue(state: &AppState, params: ArtifactReadParams) -> Result<Strin
         bail!("Too many previews are opening. Wait a moment and retry.");
     }
     let ticket = uuid::Uuid::new_v4().to_string();
-    entries.insert(ticket.clone(), (Instant::now(), file.content));
+    let created = Instant::now();
+    entries.insert(ticket.clone(), (created, file.content));
+    drop(entries);
+    let expiring = ticket.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        expire(&expiring, created);
+    });
     Ok(ticket)
+}
+
+fn expire(ticket: &str, created: Instant) {
+    if let Ok(mut entries) = previews().lock()
+        && entries.get(ticket).is_some_and(|(current, _)| *current == created)
+    {
+        entries.remove(ticket);
+    }
 }
 
 pub async fn serve(Path(ticket): Path<String>) -> Response<Body> {
@@ -97,5 +112,20 @@ mod tests {
         assert!(!policy.contains("allow-same-origin"));
         assert!(policy.contains("connect-src 'none'"));
         assert_eq!(serve(Path(ticket)).await.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn expiry_releases_only_the_matching_preview() {
+        let ticket = uuid::Uuid::new_v4().to_string();
+        let first = Instant::now();
+        previews().lock().unwrap().insert(ticket.clone(), (first, "large source".into()));
+        expire(&ticket, first);
+        assert!(!previews().lock().unwrap().contains_key(&ticket));
+
+        let newer = Instant::now();
+        previews().lock().unwrap().insert(ticket.clone(), (newer, "new source".into()));
+        expire(&ticket, first);
+        assert_eq!(previews().lock().unwrap().get(&ticket).unwrap().1, "new source");
+        previews().lock().unwrap().remove(&ticket);
     }
 }

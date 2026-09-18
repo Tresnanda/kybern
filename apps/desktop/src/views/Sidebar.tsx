@@ -61,7 +61,7 @@ import { cn } from "@/lib/utils"
 import { TextSwap } from "@/components/kybern/motion"
 import { primeMarquee } from "@/lib/kit/marquee"
 import type { Project, ProjectId, Thread, ThreadActivityState, ThreadId } from "@/protocol"
-import { selectAttentionItems } from "@/state/notifications"
+import { selectAttentionItems, threadAttentionKind } from "@/state/notifications"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
@@ -420,7 +420,7 @@ function CreateCoordinatorRow({ project }: { project: Project }) {
   )
 }
 
-function StatusGlyph({ status, activity }: { status: Thread["status"]; activity?: ThreadActivityState }) {
+function StatusGlyph({ status, activity, unread }: { status: Thread["status"]; activity?: ThreadActivityState; unread?: boolean }) {
   if (status === "awaiting-approval") return <span role="img" aria-label="Pending approval" className="size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90" />
   if (status === "running" || activity === "working") {
     return (
@@ -437,6 +437,7 @@ function StatusGlyph({ status, activity }: { status: Thread["status"]; activity?
       </span>
     )
   }
+  if (unread) return <span role="img" aria-label="Unread" className="size-1.5 shrink-0 rounded-full bg-[var(--color-text-accent)]" />
   return null
 }
 
@@ -444,6 +445,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
   const selected = useStore((s) => s.selected.kind === "thread" && s.selected.id === thread.id)
   const splitView = useStore((s) => s.splitView)
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
+  const unread = useStore((s) => threadAttentionKind(thread, s.notifications[thread.id]) === "done")
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [title, setTitle] = useState(thread.title)
@@ -460,7 +462,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
     if (next && next !== thread.title) updateThread(thread.id, { title: next }).catch((e) => toast.error("Unable to rename", { description: errorText(e) }))
     else setTitle(thread.title)
   }
-  const hasGlyph = thread.status !== "idle" || !!activity
+  const hasGlyph = thread.status !== "idle" || !!activity || unread
   const inSplit = !!splitView && !!findThreadPaneByThreadId(splitView.root, thread.id)
   const focusedPane = splitView ? resolveFocusedThreadPane(splitView) : null
   const canOpenRight =
@@ -552,7 +554,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
           <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
             {(hasGlyph || thread.pinned) && (
               <span className={cn("flex w-[15px] shrink-0 items-center justify-center leading-none text-muted-foreground/34", HOVER_HIDE_THREAD)}>
-                {hasGlyph ? <StatusGlyph status={thread.status} activity={activity} /> : <PinFilledIcon className="size-3 shrink-0" />}
+                {hasGlyph ? <StatusGlyph status={thread.status} activity={activity} unread={unread} /> : <PinFilledIcon className="size-3 shrink-0" />}
               </span>
             )}
             <div className="t-reveal pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex translate-x-1 items-center opacity-0 group-hover/thread-row:translate-x-0 group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:translate-x-0 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100">

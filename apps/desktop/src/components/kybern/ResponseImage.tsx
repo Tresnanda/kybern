@@ -1,12 +1,77 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react"
-import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
+import { toast } from "sonner"
+import { Dialog, DialogClose, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
 import { Button } from "@/components/kit/button"
+import { IconButton } from "@/components/kit/icon-button"
+import { IconSwap } from "@/components/kybern/motion"
+import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
+import { isTauri, platform, saveImageFile, writeImageClipboard } from "@/lib/tauri"
 import { fetchThreadImage } from "@/state/rpc"
 import { cn } from "@/lib/utils"
 
 type ImageError = { message: string; retryable: boolean }
+type ImageAction = "copy" | "download"
+
+function imageMime(value: string): string | null {
+  const direct = value.match(/^image\/(png|jpeg|gif|webp|avif)(?:[;,]|$)/i)?.[0]
+  if (direct) return direct.split(/[;,]/, 1)[0]!.toLowerCase()
+  const extension = value.match(/\.(png|jpe?g|gif|webp|avif)(?:[?#]|$)/i)?.[1]?.toLowerCase()
+  if (!extension) return null
+  return extension === "jpg" || extension === "jpeg" ? "image/jpeg" : `image/${extension}`
+}
+
+function imageDownloadName(label: string, source: string, mime: string): string {
+  const safeLabel = label.trim().replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "image"
+  if (/\.(png|jpe?g|gif|webp|avif)$/i.test(safeLabel)) return safeLabel
+  return `${safeLabel}.${mime.split("/")[1] === "jpeg" ? "jpg" : mime.split("/")[1] || imageMime(source)?.split("/")[1] || "png"}`
+}
+
+async function fetchImageBlob(source: string): Promise<Blob> {
+  const response = await fetch(source)
+  if (!response.ok) throw new Error(`Image request failed with ${response.status}`)
+  const blob = await response.blob()
+  const mime = imageMime(blob.type) ?? imageMime(source) ?? "image/png"
+  return imageMime(blob.type) === mime ? blob : new Blob([blob], { type: mime })
+}
+
+/** Clipboard image writes use PNG because Safari does not promise other image types. */
+async function fetchPng(source: string): Promise<Blob> {
+  const blob = await fetchImageBlob(source)
+  if (imageMime(blob.type) === "image/png") return blob
+
+  let objectUrl = ""
+  let drawable: ImageBitmap | HTMLImageElement | null = null
+  const loadImageElement = async (): Promise<HTMLImageElement> => {
+    objectUrl = URL.createObjectURL(blob)
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image()
+      image.onload = () => resolve(image)
+      image.onerror = () => reject(new Error("Image format cannot be converted to PNG"))
+      image.src = objectUrl
+    })
+  }
+  try {
+    if (typeof createImageBitmap === "function") {
+      try { drawable = await createImageBitmap(blob) } catch { drawable = await loadImageElement() }
+    } else {
+      drawable = await loadImageElement()
+    }
+    const canvas = document.createElement("canvas")
+    canvas.width = drawable.width
+    canvas.height = drawable.height
+    const context = canvas.getContext("2d")
+    if (!context) throw new Error("Image conversion is not available in this window.")
+    context.drawImage(drawable, 0, 0)
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((png) => png ? resolve(png) : reject(new Error("Image format cannot be converted to PNG")), "image/png")
+    })
+  } finally {
+    if (drawable && "close" in drawable) drawable.close()
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+  }
+}
 
 /** Local previews and originals share the authenticated thread boundary. */
 export function ResponseImage({ source, label = "Agent image", compact = false, thumbnail = false, linkLabel }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; linkLabel?: ReactNode }) {
@@ -30,6 +95,13 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const [original, setOriginal] = useState(direct)
   const [originalError, setOriginalError] = useState(initialError)
   const [originalRetry, setOriginalRetry] = useState(0)
+  const [imageAction, setImageAction] = useState<ImageAction | null>(null)
+  const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<number | null>(null)
+
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current)
+  }, [])
 
   useEffect(() => {
     if (isLink || !preview.current) return
@@ -67,12 +139,65 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   }, [source, threadId, open, originalRetry])
 
   const changeOpen = (next: boolean) => {
-    if (next) { setOriginal(direct); setOriginalError(initialError) }
+    if (next) {
+      setOriginal(direct)
+      setOriginalError(initialError)
+      setImageAction(null)
+      setCopied(false)
+    }
     setOpen(next)
   }
   const retryPreview = () => { setError(null); setLoaded(false); setUrl(direct); setRetry((n) => n + 1) }
   const retryOriginal = () => { setOriginalError(null); setOriginal(direct); setOriginalRetry((n) => n + 1) }
   const displayError = (): ImageError => ({ message: "Unable to display image. Check that the file is still available, then retry.", retryable: true })
+  const runImageAction = async (kind: ImageAction) => {
+    if (!original || imageAction) return
+    setImageAction(kind)
+    try {
+      if (kind === "copy") {
+        if (isTauri() && platform() === "macos") {
+          // The Tauri custom scheme does not consistently expose WebKit's
+          // image clipboard API. Keep the conversion native-independent, then
+          // send the PNG directly to AppKit without relying on activation.
+          const nativePng = await fetchPng(original)
+          await writeImageClipboard(new Uint8Array(await nativePng.arrayBuffer()))
+        } else {
+          if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+            throw new Error("Image copying is not available in this window.")
+          }
+          // ClipboardItem accepts a promise. Construct it and call write before
+          // awaiting anything so WebKit keeps the click's user activation.
+          const png = fetchPng(original)
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": png })])
+        }
+        setCopied(true)
+        if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current)
+        copiedTimer.current = window.setTimeout(() => {
+          copiedTimer.current = null
+          setCopied(false)
+        }, 1400)
+      } else {
+        const image = await fetchImageBlob(original)
+        const mime = imageMime(image.type) ?? imageMime(source) ?? "image/png"
+        const nativeSave = await saveImageFile(new Uint8Array(await image.arrayBuffer()), imageDownloadName(label, source, mime))
+        if (nativeSave !== null) return
+        const downloadUrl = URL.createObjectURL(image)
+        const link = document.createElement("a")
+        link.href = downloadUrl
+        link.download = imageDownloadName(label, source, mime)
+        document.body.append(link)
+        link.click()
+        link.remove()
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0)
+      }
+    } catch {
+      toast.error(kind === "copy" ? "Unable to copy image" : "Unable to download image", {
+        description: kind === "copy" ? "Use Download image instead, or check clipboard permissions." : "Check that the image is still available, then retry.",
+      })
+    } finally {
+      setImageAction(null)
+    }
+  }
   const status = (error: ImageError | null, retry: () => void, inline = false) => error
     ? <span role="status" className="flex flex-wrap items-center gap-3 rounded-lg bg-[var(--color-background-button-secondary)] p-3 text-sm">
       <span>{label}: {error.message}</span>
@@ -89,8 +214,39 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
         <img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
       </button>}
     <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogPopup finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
-        <DialogTitle className="pe-8 text-sm">{label}</DialogTitle>
+      <DialogPopup showCloseButton={false} finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <DialogTitle className="min-w-0 flex-1 truncate text-sm">{label}</DialogTitle>
+          <div className="flex shrink-0 items-center gap-1">
+          {original && !originalError && <>
+            <IconButton
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              label={copied ? "Image copied" : "Copy image"}
+              tooltip={copied ? "Image copied" : "Copy image"}
+              disabled={imageAction !== null}
+              onClick={() => void runImageAction("copy")}
+            >
+              <IconSwap className="size-3.5" active={copied ? "b" : "a"} a={<CopyIcon className="size-3.5" />} b={<CheckIcon className="size-3.5 text-success" />} />
+            </IconButton>
+            <IconButton
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              label="Download image"
+              tooltip="Download image"
+              disabled={imageAction !== null}
+              onClick={() => void runImageAction("download")}
+            >
+              <DownloadIcon className="size-3.5" />
+            </IconButton>
+          </>}
+            <DialogClose render={<IconButton label="Close" tooltip="Close" size="icon-sm" />}>
+              <XIcon className="size-3.5" />
+            </DialogClose>
+          </div>
+        </div>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>
         {originalError || !original ? status(originalError, retryOriginal) : <img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
       </DialogPopup>

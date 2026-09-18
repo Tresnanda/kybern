@@ -10,8 +10,13 @@ use anyhow::{Context, Result, anyhow};
 use kybern_client::{Client, Endpoint};
 use kybern_protocol::PROTOCOL_VERSION;
 use kybern_protocol::methods::{DaemonInfo, DaemonInfoMethod, DaemonShutdown, Empty};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG};
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSData;
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Manager, Runtime};
+use tauri_plugin_dialog::DialogExt;
 
 mod environments;
 mod notifications;
@@ -406,6 +411,102 @@ fn data_dir_path() -> Option<String> {
     data_dir().map(|p| p.display().to_string())
 }
 
+/// Match the native material to the visible CSS material. Tauri's built-in
+/// `set_effects(None)` does not remove vibrancy on macOS, so opaque mode used
+/// to retain an invisible full-window NSVisualEffectView for the process
+/// lifetime. Clear first to keep this idempotent across StrictMode remounts.
+#[tauri::command]
+fn set_window_vibrancy(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState, apply_vibrancy, clear_vibrancy};
+
+        clear_vibrancy(&window).map_err(|error| error.to_string())?;
+        if enabled {
+            apply_vibrancy(&window, NSVisualEffectMaterial::UnderWindowBackground, Some(NSVisualEffectState::Active), Some(0.0))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, enabled);
+    Ok(())
+}
+
+fn persist_image_file(path: &Path, data: &[u8]) -> Result<(), String> {
+    if path.as_os_str().is_empty() || path.file_name().is_none() {
+        return Err("Choose a file name first".into());
+    }
+    std::fs::write(path, data).map_err(|error| format!("write image file: {error}"))
+}
+
+fn raw_image_bytes(request: &tauri::ipc::Request<'_>) -> Result<Vec<u8>, String> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        tauri::ipc::InvokeBody::Json(_) => Err("Image payload must use binary IPC".into()),
+    }
+}
+
+fn header_text<'a>(headers: &'a tauri::http::HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn image_file_name(headers: &tauri::http::HeaderMap) -> String {
+    let candidate = header_text(headers, "x-kybern-file-name")
+        .and_then(|name| serde_json::from_str::<String>(name).ok())
+        .unwrap_or_else(|| "image.png".into());
+    let safe = candidate.replace(['/', '\\'], "-").chars().filter(|character| !character.is_control()).collect::<String>();
+    if safe.is_empty() { "image.png".into() } else { safe }
+}
+
+/// Open the native save dialog and persist the raw bytes selected by the user.
+/// The path never crosses the JS/Rust boundary, so arbitrary-path writes are
+/// not exposed as an invoke command.
+#[tauri::command]
+async fn save_image_file<R: Runtime>(window: tauri::Window<R>, request: tauri::ipc::Request<'_>) -> Result<bool, String> {
+    let data = raw_image_bytes(&request)?;
+    let name = image_file_name(request.headers());
+    let mut dialog = window.app_handle().dialog().file();
+    #[cfg(desktop)]
+    {
+        dialog = dialog.set_parent(&window);
+    }
+    let dialog = dialog.set_title("Save image").set_file_name(name).add_filter("Image", &["png", "jpg", "jpeg", "gif", "webp", "avif"]);
+    let path = tauri::async_runtime::spawn_blocking(move || dialog.blocking_save_file())
+        .await
+        .map_err(|error| format!("The save dialog failed: {error}"))?;
+    let Some(path) = path else { return Ok(false) };
+    let path = path.into_path().map_err(|error| format!("invalid save path: {error}"))?;
+    persist_image_file(&path, &data)?;
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn write_png_to_pasteboard(pasteboard: &NSPasteboard, data: &[u8]) -> Result<(), String> {
+    if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("Native image copying requires a PNG payload".into());
+    }
+    let image = NSData::with_bytes(data);
+    pasteboard.clearContents();
+    pasteboard
+        .setData_forType(Some(&image), unsafe { NSPasteboardTypePNG })
+        .then_some(())
+        .ok_or_else(|| "The system pasteboard rejected the image".into())
+}
+
+#[tauri::command]
+fn write_image_clipboard(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let data = raw_image_bytes(&request)?;
+    #[cfg(target_os = "macos")]
+    {
+        write_png_to_pasteboard(&NSPasteboard::generalPasteboard(), &data)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = data;
+        Err("Native image copying is not available on this platform".into())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -433,6 +534,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             endpoint,
             data_dir_path,
+            set_window_vibrancy,
+            save_image_file,
+            write_image_clipboard,
             notifications::notification_permission,
             notifications::send_notification,
             environments::environments_list,
@@ -463,11 +567,20 @@ fn pairing_qr(invitation: String) -> Result<String, String> {
 mod tests {
     use super::{
         DaemonStartupAnnouncement, EndpointInfo, STARTUP_ANNOUNCEMENT_TIMEOUT, StartingEndpoint, daemon_needs_restart,
-        endpoint_from_announcement, fresh_starting_endpoint, preferred_daemon_port, remember_daemon_port,
+        endpoint_from_announcement, fresh_starting_endpoint, persist_image_file, preferred_daemon_port, remember_daemon_port,
     };
     use kybern_protocol::PROTOCOL_VERSION;
     use kybern_protocol::methods::DaemonInfo;
     use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn native_image_file_name_preserves_unicode_without_path_components() {
+        let mut headers = tauri::http::HeaderMap::new();
+        headers.insert("x-kybern-file-name", r#""../Pratinjau \ud83d\ude00.png""#.parse().unwrap());
+        assert_eq!(super::image_file_name(&headers), "..-Pratinjau 😀.png");
+        headers.insert("x-kybern-file-name", "invalid JSON".parse().unwrap());
+        assert_eq!(super::image_file_name(&headers), "image.png");
+    }
 
     #[test]
     fn paired_port_survives_upgrade_and_clean_shutdown() {
@@ -570,5 +683,24 @@ mod tests {
             Some(StartingEndpoint { endpoint, announced_at: std::time::Instant::now() - STARTUP_ANNOUNCEMENT_TIMEOUT, child: None });
         assert!(fresh_starting_endpoint(&mut expired).unwrap().is_none());
         assert!(expired.is_none());
+    }
+
+    #[test]
+    fn native_image_writer_persists_selected_bytes() {
+        let root = std::env::temp_dir().join(format!("kybern-desktop-image-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("preview.png");
+        persist_image_file(&path, &[137, 80, 78, 71]).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), vec![137, 80, 78, 71]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_clipboard_writer_persists_png_on_private_pasteboard() {
+        let pasteboard = objc2_app_kit::NSPasteboard::pasteboardWithUniqueName();
+        let bytes = [137, 80, 78, 71, 13, 10, 26, 10];
+        super::write_png_to_pasteboard(&pasteboard, &bytes).unwrap();
+        assert_eq!(pasteboard.dataForType(unsafe { objc2_app_kit::NSPasteboardTypePNG }).unwrap().to_vec(), bytes);
     }
 }

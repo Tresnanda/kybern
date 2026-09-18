@@ -2,9 +2,11 @@
 // Synthetic state only: no daemon, private transcript or provider invocation.
 import { createRef } from "react"
 import { Composer, type ComposerHandle } from "../src/views/Composer"
+import { SplitThreads } from "../src/views/SplitThreads"
+import { createSplitView } from "../src/state/splitView"
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
-import { ThreadView } from "../src/views/Thread"
+import { ApprovalPanel, ConnectorApprovalPanel, ThreadView } from "../src/views/Thread"
 import { SidebarProvider } from "../src/components/kit/sidebar"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
@@ -88,11 +90,46 @@ function geometry(label: string) {
     check(bounds.bottom <= form.bottom + 1, `${label}: question actions fit`)
   }
 }
+function toolbarGeometry(label: string) {
+  const footer = document.querySelector<HTMLElement>("[data-chat-composer-footer]")
+  const surface = document.querySelector<HTMLElement>(".chat-composer-surface")
+  if (!footer || !surface) {
+    check(false, `${label}: split composer toolbar mounted`)
+    return
+  }
+  const footerBounds = footer.getBoundingClientRect()
+  const surfaceBounds = surface.getBoundingClientRect()
+  check(footer.scrollWidth <= footer.clientWidth + 1, `${label}: footer stays within its width`)
+  for (const control of footer.querySelectorAll<HTMLButtonElement>("button")) {
+    const bounds = control.getBoundingClientRect()
+    check(bounds.left >= surfaceBounds.left - 1 && bounds.right <= surfaceBounds.right + 1, `${label}: toolbar control stays inside composer`)
+    check(bounds.left >= footerBounds.left - 1 && bounds.right <= footerBounds.right + 1, `${label}: toolbar control stays inside footer`)
+    if (!control.disabled && bounds.width > 0) check(control.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)), `${label}: toolbar control is not clipped or covered`)
+  }
+  for (const ariaLabel of ["Change model and reasoning", "Queue follow-up", "Stop generation"]) {
+    check(footer.querySelector<HTMLButtonElement>(`button[aria-label="${ariaLabel}"]`), `${label}: ${ariaLabel} remains reachable`)
+  }
+  const stop = footer.querySelector<HTMLElement>('[aria-label="Stop generation"] span')
+  check(stop && getComputedStyle(stop).backgroundColor !== "rgba(0, 0, 0, 0)", `${label}: stop glyph stays visible on translucent surfaces`)
+}
 function render(width: number, height = 720) {
   flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: true, setTheme: () => {}, setTranslucent: () => {} }}><SidebarProvider><main id="fixture-pane" style={{ width, maxWidth: "100vw", height, maxHeight: "100dvh", marginInline: "auto", position: "relative", background: "var(--background)" }}><ThreadView threadId={thread.id} showSidebarControls={false} /></main></SidebarProvider></ThemeProviderContext>))
 }
 function button(text: string) { return [...document.querySelectorAll<HTMLButtonElement>("button")].find(el => el.textContent?.trim() === text)! }
 async function run() {
+  const choices: number[] = []
+  flushSync(() => view.render(<ApprovalPanel approval={approval} count={1} onChoose={choice => choices.push(choice)} />))
+  button("Approve once1").click()
+  button("Decline3").click()
+  document.querySelector<HTMLButtonElement>('[aria-label="More approval options"]')!.click()
+  await sleep(150)
+  const sessionAction = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes("Allow for this session"))
+  check(sessionAction, "Approval exposes session scope in More options")
+  sessionAction?.click()
+  check(JSON.stringify(choices) === "[1,3,2]", "Compact approval actions preserve decision values")
+  flushSync(() => view.render(<ConnectorApprovalPanel approval={approval} connector={{ connector: "Browser", app: "Safari", message: "Allow access?", subtitle: "", persist: ["session"] }} count={1} onChoose={choice => choices.push(choice)} />))
+  button("Allow once2").click()
+  check(choices.at(-1) === 2, "Connector Allow once must not grant session access")
   useStore.getState().set({ connection: { state: "open" }, projects: { project: { id: "project", name: "Project", path: "/project", is_git: false, worktrees_default: false, created_at: at, updated_at: at } }, threads: { [thread.id]: thread }, providers: [], selected: { kind: "thread", id: thread.id }, splitView: null, transcripts: { [thread.id]: { ...emptyThreadState(), loaded: true, thread } } })
   let samples = 0
   const composerRef = createRef<ComposerHandle>()
@@ -111,6 +148,29 @@ async function run() {
       }
     }
   }
+  for (const surfaceMode of ["single", "split"] as const) for (const width of [400, 320, 280]) {
+    flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: true, setTheme: () => {}, setTranslucent: () => {} }}><div style={{ width, maxWidth: "100vw" }}><Composer projectId="project" provider={thread.provider} providers={[]} mode="full-access" onModeChange={() => {}} onSend={async () => {}} onSteer={async () => {}} onStop={() => {}} model="fixture-model" effort="high" running surfaceMode={surfaceMode} /></div></ThemeProviderContext>))
+    await sleep(400)
+    toolbarGeometry(`${surfaceMode} toolbar/${width}`)
+  }
+  const secondThread = { ...thread, id: "second-thread" }
+  const split = createSplitView({ sourceThreadId: thread.id, threadId: secondThread.id, direction: "horizontal" })
+  split.root.ratio = .75
+  useStore.getState().set(state => ({ splitView: split, threads: { ...state.threads, [secondThread.id]: secondThread }, transcripts: { ...state.transcripts, [secondThread.id]: { ...emptyThreadState(), loaded: true, thread: secondThread } } }))
+  for (const width of [900, 650]) {
+    flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><SidebarProvider><div style={{ display: "flex", width, height: 720 }}><SplitThreads splitView={split} /></div></SidebarProvider></ThemeProviderContext>))
+    await sleep(400)
+    const node = document.querySelector<HTMLElement>('[data-split-direction]')!
+    check(node?.dataset.splitDirection === (width === 900 ? "horizontal" : "vertical"), `${width}: responsive split direction`)
+    check(node.scrollWidth <= node.clientWidth + 1, `${width}: split has no horizontal overflow`)
+    for (const pane of node.children) check(pane.getBoundingClientRect().width >= 319, `${width}: split pane minimum width`)
+    if (width === 900) {
+      node.querySelector<HTMLElement>('[role="separator"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
+      await frame()
+      for (const pane of node.children) check(pane.getBoundingClientRect().width >= 319, "Keyboard resizing preserves minimum width")
+    }
+  }
+  useStore.getState().set({ splitView: null })
   for (const variant of ["dark", "light"] as const) for (const width of [1000, 480, 320]) {
     setTheme(variant)
     render(width)
@@ -226,6 +286,11 @@ async function run() {
   render(Math.min(innerWidth, 900), innerHeight)
   update(__COMPOSER_STACK_MODE__)
   await sleep(400)
+  if (import.meta.env.VITE_COMPOSER_PREVIEW === "narrow") {
+    flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div style={{ width: 360, margin: "140px auto" }}><Composer projectId="project" provider={{ kind: "codex", instance: "default" }} providers={[]} mode="full-access" onModeChange={() => {}} onSend={async () => {}} onSteer={async () => {}} onStop={() => {}} model="GPT-6-Astra" effort="medium" running surfaceMode="split" /></div></ThemeProviderContext>))
+    await sleep(300)
+    toolbarGeometry("narrow preview")
+  }
   const post = (value: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(value))
   post({ pass: failures.length === 0, samples, failures })
 }

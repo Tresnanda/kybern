@@ -12,8 +12,10 @@
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (required, the updater key generated with
 # `pnpm tauri signer generate`) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty
-# when the key has none). macOS bundles are ad-hoc signed; there is no Apple
-# Developer ID or notarization.
+# when the key has none). Optional APPLE_CERTIFICATE (base64 p12),
+# APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY enable certificate
+# signing. APPLE_ID, APPLE_PASSWORD (app-specific) and APPLE_TEAM_ID enable
+# notarization. Without Apple credentials, macOS builds remain ad-hoc signed.
 name: Desktop
 
 on:
@@ -128,6 +130,12 @@ jobs:
         if: runner.os == 'macOS' && (github.event_name != 'push' || github.ref_type == 'tag')
         env:
           KYBERN_BUILD_TARGET: ${{ matrix.target }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
         run: scripts/bundle-macos.sh
       - name: Build (AppImage and deb)

@@ -2,7 +2,7 @@ export { activeRuntime } from "../src/state/rpc"
 import { useStore } from "../src/state/store"
 import type { Block } from "../src/state/transcript"
 export const calls: { cursor: number; distance: number; duration?: number }[] = []
-export const fixture = { all: [] as Block[], failNext: false }
+export const fixture = { all: [] as Block[], failNext: false, beforeReload: null as Promise<void> | null }
 export const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 export async function loadEarlier(id: string) {
   const state = useStore.getState().transcripts[id]!
@@ -11,6 +11,7 @@ export async function loadEarlier(id: string) {
   calls.push(record)
   const start = performance.now()
   useStore.getState().updateTranscript(id, current => ({ ...current, loadingEarlier: true }))
+  await fixture.beforeReload
   await new Promise(resolve => setTimeout(resolve, 250))
   record.duration = performance.now() - start
   if (fixture.failNext) {

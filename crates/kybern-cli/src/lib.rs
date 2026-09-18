@@ -589,7 +589,11 @@ pub async fn run() -> Result<()> {
             let sub = if detach {
                 None
             } else {
-                Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None }).await?)
+                Some(
+                    client
+                        .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None, include_tool_output: None })
+                        .await?,
+                )
             };
             let thread = client
                 .call::<ThreadsCreate>(ThreadsCreateParams {
@@ -615,7 +619,15 @@ pub async fn run() -> Result<()> {
             let sub = if detach {
                 None
             } else {
-                Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread_id), after_seq: None }).await?)
+                Some(
+                    client
+                        .call::<EventsSubscribe>(EventsSubscribeParams {
+                            thread_id: Some(thread_id),
+                            after_seq: None,
+                            include_tool_output: None,
+                        })
+                        .await?,
+                )
             };
             let r = client
                 .call::<ThreadsSend>(ThreadsSendParams {
@@ -698,17 +710,24 @@ pub async fn run() -> Result<()> {
                     ..Default::default()
                 })
                 .await?;
-            if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::transcript(&r) }
+            if json { print_json(&r)? } else { render::transcript(&r) }
         }
         Cmd::ToolOutput { thread, tool_call_id, start_seq, through_seq } => {
             let result = client
-                .call::<ThreadsToolOutput>(ThreadsToolOutputParams { thread_id: thread.parse()?, tool_call_id, start_seq, through_seq })
+                .call::<ThreadsToolOutput>(ThreadsToolOutputParams {
+                    thread_id: thread.parse()?,
+                    tool_call_id,
+                    start_seq,
+                    through_seq,
+                    include_tool_stream: None,
+                })
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            print_json(&result)?;
         }
         Cmd::Watch { thread, after } => {
             let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
-            let sub = client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after }).await?;
+            let sub =
+                client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after, include_tool_output: None }).await?;
             render::watch(&client, sub.subscription_id, json).await?;
         }
         Cmd::Release { thread } => {
@@ -822,7 +841,7 @@ pub async fn run() -> Result<()> {
                 })
                 .await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&d)?)
+                print_json(&d)?
             } else {
                 for f in &d.files {
                     println!("{:<10} +{:<5} -{:<5} {}", format!("{:?}", f.status).to_lowercase(), f.additions, f.deletions, f.path);
@@ -932,7 +951,7 @@ pub async fn run() -> Result<()> {
             ArtifactsCmd::Read { thread, path } => {
                 let result = client.call::<ArtifactRead>(ArtifactReadParams { thread_id: thread.parse()?, path }).await?;
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    print_json(&result)?;
                 } else {
                     print!("{}", result.content);
                 }
@@ -1027,7 +1046,7 @@ pub async fn run() -> Result<()> {
                 None => serde_json::Value::Null,
             };
             let v = client.call_raw(&method, params).await?;
-            println!("{}", serde_json::to_string_pretty(&v)?);
+            print_json(&v)?;
         }
     }
     Ok(())
@@ -1051,6 +1070,19 @@ fn join_prompt(parts: Vec<String>) -> Result<String> {
         return Err(anyhow!("prompt is empty"));
     }
     Ok(s)
+}
+
+/// Serialize large CLI results directly to stdout instead of retaining a
+/// second, fully formatted JSON string beside the decoded response.
+fn print_json(value: &impl serde::Serialize) -> Result<()> {
+    use std::io::Write;
+
+    let stdout = std::io::stdout();
+    let mut output = std::io::BufWriter::new(stdout.lock());
+    serde_json::to_writer_pretty(&mut output, value)?;
+    output.write_all(b"\n")?;
+    output.flush()?;
+    Ok(())
 }
 
 async fn resolve_project(client: &Client, key: &str, add_if_missing: bool) -> Result<ProjectId> {

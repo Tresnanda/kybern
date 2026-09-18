@@ -127,6 +127,21 @@ test("completion-only text after a tool opens a new sequence row", () => {
   )
 })
 
+test("canonical completion corrections preserve astral Unicode boundaries across segments", () => {
+  const state = fold([
+    start,
+    { kind: "assistant_text_delta", message_id: "m1", delta: "Prefix \ud83d", origin: ROOT },
+    { kind: "tool_call_started", call: readTool("unicode-boundary"), origin: ROOT },
+    { kind: "tool_call_completed", tool_call_id: "unicode-boundary", output: null, is_error: false },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "\ude00old", origin: ROOT },
+    { kind: "assistant_message_completed", message_id: "m1", text: "Prefix \ud83d\ude01new", thinking: null, origin: ROOT },
+  ])
+
+  const pieces = state.blocks.filter((block) => block.kind === "assistant").map((block) => block.text)
+  assert.equal(pieces.join(""), "Prefix \ud83d\ude01new")
+  assert.deepEqual(pieces, ["Prefix \ud83d\ude01new", ""])
+})
+
 test("an earlier separate message stays muted work; the final message is the answer", () => {
   const state = fold([
     start,
@@ -533,6 +548,24 @@ test("background process final answer replaces the provisional waiting answer", 
   assert.equal(groupTurns(state.blocks)[0].answer?.text, "Final result.")
 })
 
+test("a runtime task start explicitly reactivates a reusable completed agent", () => {
+  let state = fold([
+    { kind: "runtime_task_started", task: runtimeTask("agent") },
+    { kind: "runtime_task_completed", task: runtimeTask("agent", { status: "completed", completed_at: AT }) },
+    { kind: "runtime_task_updated", task: runtimeTask("agent") },
+  ])
+  assert.equal(state.blocks.find((block) => block.kind === "runtime_task").task.status, "completed")
+
+  state = applyEvent(state, {
+    seq: 4,
+    turn_id: T,
+    at: AT,
+    kind: "runtime_task_started",
+    task: runtimeTask("agent", { updated_at: "2026-09-03T00:00:01Z" }),
+  })
+  assert.equal(state.blocks.find((block) => block.kind === "runtime_task").task.status, "running")
+})
+
 
 test("native resumption removes the provisional answer until the scoped continuation settles", () => {
   const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/claude-process-resumed.json", import.meta.url), "utf8"))
@@ -639,4 +672,52 @@ test("distinct and transport-only completed tool streams remain available", () =
     state = applyEvent(state, ev(3, { kind: "tool_call_completed", tool_call_id: "tool", output, is_error: false }))
     assert.equal(state.blocks[0].stream, stream)
   }
+})
+
+
+test("compact live completions stay hydratable and preserve distinct streams and receipts", () => {
+  for (const stream of ["", "live details\n".repeat(10000), "agentId: helper send_message"]) {
+    let state = emptyThreadState()
+    const ev = (seq, payload) => ({ seq, thread_id: "t", turn_id: T, at: AT, ...payload })
+    state = applyEvent(state, ev(1, { kind: "tool_call_started", call: { id: "tool", name: "exec", input: {}, parent_id: null } }))
+    state = applyEvent(state, ev(2, { kind: "tool_call_output_delta", tool_call_id: "tool", delta: stream }))
+    state = applyEvent(state, ev(3, { kind: "tool_call_completed", tool_call_id: "tool", output: null, output_omitted: true, is_error: true }))
+    assert.equal(state.blocks[0].stream, stream)
+    assert.equal(state.blocks[0].output, null)
+    assert.equal(state.blocks[0].outputOmitted, true)
+    assert.equal(state.blocks[0].complete, true)
+    assert.equal(state.blocks[0].isError, true)
+  }
+})
+
+test("saved rows distinguish a lazily recoverable stream from canonical output", () => {
+  const state = seedFromGet({
+    thread: { last_seq: 9 },
+    transcript: [{
+      role: "tool_call", turn_id: T, seq: 7, origin: { kind: "root" },
+      call: { id: "tool", name: "exec", input: {} }, output: "canonical",
+      stream_omitted: true, is_error: false, complete: true, at: AT,
+    }],
+    pending_approvals: [],
+  })
+  assert.equal(state.blocks[0].output, "canonical")
+  assert.equal(state.blocks[0].outputOmitted, false)
+  assert.equal(state.blocks[0].stream, "")
+  assert.equal(state.blocks[0].streamOmitted, true)
+})
+
+test("an omitted settled stream ignores partial late deltas until exact hydration", () => {
+  let state = seedFromGet({
+    thread: { last_seq: 3 },
+    transcript: [{
+      role: "tool_call", turn_id: T, seq: 1, origin: { kind: "root" },
+      call: { id: "tool", name: "exec", input: {} }, output: null,
+      stream_omitted: true, is_error: false, complete: true, at: AT,
+    }],
+    pending_approvals: [],
+  })
+  state = applyEvent(state, { seq: 4, thread_id: "t", turn_id: T, at: AT, kind: "tool_call_output_delta", tool_call_id: "tool", delta: "partial suffix" })
+  assert.equal(state.blocks[0].stream, "")
+  assert.equal(state.blocks[0].streamOmitted, true)
+  assert.equal(state.lastSeq, 4)
 })

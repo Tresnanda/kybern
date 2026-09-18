@@ -682,6 +682,14 @@ fn should_register_subagent(
         && parent_id.is_some_and(|parent| Some(parent) == root_thread_id || known_subagents.contains_key(parent))
 }
 
+fn codex_subagent_turn_status(status: Option<&str>) -> RuntimeTaskStatus {
+    match status {
+        Some("interrupted") => RuntimeTaskStatus::Interrupted,
+        Some("failed") => RuntimeTaskStatus::Failed,
+        _ => RuntimeTaskStatus::Completed,
+    }
+}
+
 struct Handle(Arc<CodexSession>, #[allow(dead_code)] crate::ndjson::SessionLifetime);
 
 impl CodexSession {
@@ -1040,7 +1048,7 @@ impl CodexSession {
             "turn/started" => {
                 let turn_id = p.pointer("/turn/id").and_then(Value::as_str).map(str::to_string);
                 self.state.lock().await.subagents.insert(thread_id.to_string(), turn_id);
-                self.emit(DriverEvent::RuntimeTaskUpdated(DriverRuntimeTaskUpdate {
+                self.emit(DriverEvent::RuntimeTaskResumed(DriverRuntimeTaskUpdate {
                     id: thread_id.to_string(),
                     status: Some(RuntimeTaskStatus::Running),
                     detail: None,
@@ -1084,35 +1092,17 @@ impl CodexSession {
             }
             "turn/completed" => {
                 self.state.lock().await.subagents.insert(thread_id.to_string(), None);
-                let status = match p.pointer("/turn/status").and_then(Value::as_str) {
-                    Some("interrupted") => RuntimeTaskStatus::Interrupted,
-                    Some("failed") => RuntimeTaskStatus::Failed,
-                    _ => RuntimeTaskStatus::Waiting,
-                };
-                let terminal = !status.is_active();
-                self.emit(if terminal {
-                    DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate {
-                        id: thread_id.to_string(),
-                        status: Some(status),
-                        detail: p.pointer("/turn/error/message").and_then(Value::as_str).map(str::to_string),
-                        backgrounded: None,
-                        last_tool_name: None,
-                        usage: None,
-                        stats: None,
-                        capabilities: Some(RuntimeTaskCapabilities::default()),
-                    })
-                } else {
-                    DriverEvent::RuntimeTaskUpdated(DriverRuntimeTaskUpdate {
-                        id: thread_id.to_string(),
-                        status: Some(status),
-                        detail: None,
-                        backgrounded: None,
-                        last_tool_name: None,
-                        usage: None,
-                        stats: None,
-                        capabilities: Some(RuntimeTaskCapabilities::default()),
-                    })
-                })
+                let status = codex_subagent_turn_status(p.pointer("/turn/status").and_then(Value::as_str));
+                self.emit(DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate {
+                    id: thread_id.to_string(),
+                    status: Some(status),
+                    detail: p.pointer("/turn/error/message").and_then(Value::as_str).map(str::to_string),
+                    backgrounded: None,
+                    last_tool_name: None,
+                    usage: None,
+                    stats: None,
+                    capabilities: Some(RuntimeTaskCapabilities::default()),
+                }))
                 .await;
             }
             "thread/status/changed" => {
@@ -2220,8 +2210,8 @@ fi
     use std::collections::HashMap;
 
     use super::{
-        ChildNotificationRoute, child_notification_route, codex_agent_status, codex_background_process, input_items, installed_plugins,
-        process_stats_changed, should_register_subagent,
+        ChildNotificationRoute, child_notification_route, codex_agent_status, codex_background_process, codex_subagent_turn_status,
+        input_items, installed_plugins, process_stats_changed, should_register_subagent,
     };
     use kybern_protocol::{ContentPart, RuntimeTaskKind, RuntimeTaskStats, RuntimeTaskStatus, SkillScope, UserMessage};
     use serde_json::json;
@@ -2246,6 +2236,9 @@ fi
         assert_eq!(codex_agent_status("running"), RuntimeTaskStatus::Running);
         assert_eq!(codex_agent_status("completed"), RuntimeTaskStatus::Completed);
         assert_eq!(codex_agent_status("errored"), RuntimeTaskStatus::Failed);
+        assert_eq!(codex_subagent_turn_status(Some("completed")), RuntimeTaskStatus::Completed);
+        assert_eq!(codex_subagent_turn_status(Some("failed")), RuntimeTaskStatus::Failed);
+        assert_eq!(codex_subagent_turn_status(Some("interrupted")), RuntimeTaskStatus::Interrupted);
 
         let task = codex_background_process(
             "42",

@@ -23,18 +23,110 @@ fn is_root_task(task: &RuntimeTask, roots: &std::collections::HashSet<(ThreadId,
 /// for the specific call. The cached projection keeps a flag, not the bytes.
 pub const LARGE_TOOL_OUTPUT_BYTES: usize = 2048;
 
+fn json_string_bytes(value: &str) -> usize {
+    value.chars().fold(2usize, |size, character| {
+        size.saturating_add(match character {
+            '"' | '\\' | '\u{08}' | '\u{0c}' | '\n' | '\r' | '\t' => 2,
+            character if character <= '\u{1f}' => 6,
+            character => character.len_utf8(),
+        })
+    })
+}
+
 pub fn json_payload_bytes(value: &Value) -> usize {
     match value {
-        Value::Null | Value::Bool(_) => 4,
+        Value::Null => 4,
+        Value::Bool(value) => {
+            if *value {
+                4
+            } else {
+                5
+            }
+        }
         Value::Number(n) => n.to_string().len(),
-        Value::String(s) => s.len(),
-        Value::Array(items) => items.iter().map(json_payload_bytes).sum(),
-        Value::Object(map) => map.iter().map(|(key, child)| key.len() + json_payload_bytes(child)).sum(),
+        Value::String(s) => json_string_bytes(s),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .fold(2usize, |size, (index, item)| size.saturating_add(usize::from(index > 0)).saturating_add(json_payload_bytes(item))),
+        Value::Object(map) => map.iter().enumerate().fold(2usize, |size, (index, (key, child))| {
+            size.saturating_add(usize::from(index > 0))
+                .saturating_add(json_string_bytes(key))
+                .saturating_add(1)
+                .saturating_add(json_payload_bytes(child))
+        }),
     }
 }
 
+fn bounded_add(size: &mut usize, amount: usize, limit: usize) -> bool {
+    *size = size.saturating_add(amount);
+    *size > limit
+}
+
+fn json_string_exceeds(value: &str, size: &mut usize, limit: usize) -> bool {
+    if bounded_add(size, 2, limit) {
+        return true;
+    }
+    for character in value.chars() {
+        let bytes = match character {
+            '"' | '\\' | '\u{08}' | '\u{0c}' | '\n' | '\r' | '\t' => 2,
+            character if character <= '\u{1f}' => 6,
+            character => character.len_utf8(),
+        };
+        if bounded_add(size, bytes, limit) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Count only until the omission threshold is crossed. Live completions can
+/// contain tens of megabytes, so deciding to compact one must not scan the
+/// entire value when its prefix already proves it is over the limit.
+fn json_payload_exceeds(value: &Value, limit: usize) -> bool {
+    fn walk(value: &Value, size: &mut usize, limit: usize) -> bool {
+        match value {
+            Value::Null => bounded_add(size, 4, limit),
+            Value::Bool(value) => bounded_add(size, if *value { 4 } else { 5 }, limit),
+            Value::Number(value) => bounded_add(size, value.to_string().len(), limit),
+            Value::String(value) => json_string_exceeds(value, size, limit),
+            Value::Array(items) => {
+                if bounded_add(size, 1, limit) {
+                    return true;
+                }
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 && bounded_add(size, 1, limit) {
+                        return true;
+                    }
+                    if walk(item, size, limit) {
+                        return true;
+                    }
+                }
+                bounded_add(size, 1, limit)
+            }
+            Value::Object(map) => {
+                if bounded_add(size, 1, limit) {
+                    return true;
+                }
+                for (index, (key, child)) in map.iter().enumerate() {
+                    if index > 0 && bounded_add(size, 1, limit) {
+                        return true;
+                    }
+                    if json_string_exceeds(key, size, limit) || bounded_add(size, 1, limit) || walk(child, size, limit) {
+                        return true;
+                    }
+                }
+                bounded_add(size, 1, limit)
+            }
+        }
+    }
+
+    let mut size = 0;
+    walk(value, &mut size, limit)
+}
+
 pub fn should_omit_tool_output(output: &Value) -> bool {
-    json_payload_bytes(output) > LARGE_TOOL_OUTPUT_BYTES
+    json_payload_exceeds(output, LARGE_TOOL_OUTPUT_BYTES)
 }
 
 #[derive(Default)]
@@ -76,10 +168,9 @@ pub fn project_runtime_tasks(events: &[ThreadEvent]) -> Vec<RuntimeTask> {
     let roots = root_sessions(events);
     let mut tasks = std::collections::HashMap::<String, RuntimeTask>::new();
     for event in events {
-        let task = match &event.payload {
-            EventPayload::RuntimeTaskStarted { task }
-            | EventPayload::RuntimeTaskUpdated { task }
-            | EventPayload::RuntimeTaskCompleted { task } => task,
+        let (task, restarted) = match &event.payload {
+            EventPayload::RuntimeTaskStarted { task } => (task, true),
+            EventPayload::RuntimeTaskUpdated { task } | EventPayload::RuntimeTaskCompleted { task } => (task, false),
             _ => continue,
         };
         if is_root_task(task, &roots) {
@@ -108,7 +199,7 @@ pub fn project_runtime_tasks(events: &[ThreadEvent]) -> Vec<RuntimeTask> {
                 let tied_and_not_regressing = task.updated_seq == current.updated_seq
                     && task.updated_at == current.updated_at
                     && (current.status.is_active() || !task.status.is_active());
-                let terminal_regression = !current.status.is_active() && task.status.is_active();
+                let terminal_regression = !current.status.is_active() && task.status.is_active() && !restarted;
                 if !terminal_regression && (newer || tied_and_not_regressing) {
                     entry.insert(task);
                 }
@@ -373,12 +464,13 @@ fn apply_transcript_event(
                     call: call.clone(),
                     output: None,
                     output_omitted: false,
+                    stream_omitted: false,
                     is_error: false,
                     complete: false,
                     at: ev.at,
                 });
             }
-            EventPayload::ToolCallCompleted { tool_call_id, output, is_error } => {
+            EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted: _, is_error, .. } => {
                 if let Some(TranscriptEntry::ToolCall { output: o, output_omitted, is_error: e, complete, .. }) =
                     out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::ToolCall { call, .. } if &call.id == tool_call_id))
                 {
@@ -451,7 +543,8 @@ fn apply_transcript_event(
                     out.iter_mut().find(|entry| matches!(entry, TranscriptEntry::RuntimeTask { task, .. } if task.id == incoming.id))
                 {
                     incoming.started_seq = current.started_seq;
-                    if current.status.is_active() || !incoming.status.is_active() {
+                    let restarted = matches!(&ev.payload, EventPayload::RuntimeTaskStarted { .. });
+                    if current.status.is_active() || !incoming.status.is_active() || restarted {
                         *current = incoming;
                     }
                 } else {
@@ -841,6 +934,44 @@ mod tests {
     }
 
     #[test]
+    fn runtime_projection_reactivates_only_an_explicitly_restarted_agent() {
+        let running = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 0);
+        let completed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Completed, 1);
+        let delayed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 2);
+        let resumed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 3);
+        let failed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Failed, 4);
+        let events = vec![
+            event(1, running, |task| EventPayload::RuntimeTaskStarted { task }),
+            event(2, completed, |task| EventPayload::RuntimeTaskCompleted { task }),
+            event(3, delayed, |task| EventPayload::RuntimeTaskUpdated { task }),
+        ];
+        let settled = project_runtime_tasks(&events);
+        assert_eq!(settled[0].status, RuntimeTaskStatus::Completed);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &settled).active_agents, 0);
+
+        let mut reused = events;
+        reused.push(event(4, resumed, |task| EventPayload::RuntimeTaskStarted { task }));
+        let active = project_runtime_tasks(&reused);
+        assert_eq!(active[0].status, RuntimeTaskStatus::Running);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &active).active_agents, 1);
+
+        reused.push(event(5, failed, |task| EventPayload::RuntimeTaskCompleted { task }));
+        let failed = project_runtime_tasks(&reused);
+        assert_eq!(failed[0].status, RuntimeTaskStatus::Failed);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &failed).active_agents, 0);
+
+        reused.push(event(6, runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 5), |task| {
+            EventPayload::RuntimeTaskStarted { task }
+        }));
+        reused.push(event(7, runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Interrupted, 6), |task| {
+            EventPayload::RuntimeTaskCompleted { task }
+        }));
+        let interrupted = project_runtime_tasks(&reused);
+        assert_eq!(interrupted[0].status, RuntimeTaskStatus::Interrupted);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &interrupted).active_agents, 0);
+    }
+
+    #[test]
     fn assistant_text_interleaved_with_a_tool_keeps_ordered_segments() {
         let thread_id = Uuid::from_u128(1);
         let turn_id = Uuid::from_u128(2);
@@ -853,7 +984,16 @@ mod tests {
         let events = vec![
             ev(1, EventPayload::AssistantTextDelta { message_id, origin: EventOrigin::Root, delta: "Let me look. ".into() }),
             ev(2, EventPayload::ToolCallStarted { call: tool.clone(), origin: EventOrigin::Root }),
-            ev(3, EventPayload::ToolCallCompleted { tool_call_id: "call-1".into(), output: serde_json::Value::Null, is_error: false }),
+            ev(
+                3,
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: "call-1".into(),
+                    output: serde_json::Value::Null,
+                    output_omitted: false,
+                    stream_recoverable: false,
+                    is_error: false,
+                },
+            ),
             ev(4, EventPayload::AssistantTextDelta { message_id, origin: EventOrigin::Root, delta: "Here is the answer.".into() }),
             ev(
                 5,
@@ -894,7 +1034,16 @@ mod tests {
                     origin: EventOrigin::Root,
                 },
             ),
-            ev(3, EventPayload::ToolCallCompleted { tool_call_id: "call-1".into(), output: serde_json::Value::Null, is_error: false }),
+            ev(
+                3,
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: "call-1".into(),
+                    output: serde_json::Value::Null,
+                    output_omitted: false,
+                    stream_recoverable: false,
+                    is_error: false,
+                },
+            ),
             ev(
                 4,
                 EventPayload::AssistantMessageCompleted {
@@ -1033,7 +1182,16 @@ mod tests {
                     origin: EventOrigin::Root,
                 },
             ),
-            ev(3, EventPayload::ToolCallCompleted { tool_call_id: "small".into(), output: small.clone(), is_error: false }),
+            ev(
+                3,
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: "small".into(),
+                    output: small.clone(),
+                    output_omitted: false,
+                    stream_recoverable: false,
+                    is_error: false,
+                },
+            ),
             ev(
                 4,
                 EventPayload::ToolCallStarted {
@@ -1041,7 +1199,16 @@ mod tests {
                     origin: EventOrigin::Root,
                 },
             ),
-            ev(5, EventPayload::ToolCallCompleted { tool_call_id: "large".into(), output: large.clone(), is_error: false }),
+            ev(
+                5,
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: "large".into(),
+                    output: large.clone(),
+                    output_omitted: false,
+                    stream_recoverable: false,
+                    is_error: false,
+                },
+            ),
         ];
         let full = project_transcript(&events);
         assert!(
@@ -1060,6 +1227,23 @@ mod tests {
             })
             .collect();
         assert_eq!(tools, vec![("small", Some(small), false), ("large", None, true)]);
+    }
+
+    #[test]
+    fn json_payload_size_counts_structure_and_escaping() {
+        let structured = serde_json::Value::Array(vec![serde_json::Value::Array(Vec::new()); 1024]);
+        assert!(super::should_omit_tool_output(&structured));
+
+        let escaped = serde_json::json!({ "text\n": "\\\"\n".repeat(512) });
+        assert!(super::json_payload_bytes(&escaped) > escaped.to_string().len() - 1);
+        assert!(super::should_omit_tool_output(&escaped));
+
+        let at_limit = serde_json::Value::String("x".repeat(super::LARGE_TOOL_OUTPUT_BYTES - 2));
+        assert_eq!(super::json_payload_bytes(&at_limit), super::LARGE_TOOL_OUTPUT_BYTES);
+        assert!(!super::should_omit_tool_output(&at_limit));
+        let over_limit = serde_json::Value::String("x".repeat(super::LARGE_TOOL_OUTPUT_BYTES - 1));
+        assert_eq!(super::json_payload_bytes(&over_limit), super::LARGE_TOOL_OUTPUT_BYTES + 1);
+        assert!(super::should_omit_tool_output(&over_limit));
     }
 
     #[test]

@@ -50,7 +50,7 @@ async function railItem(index: number) {
   keyboardTarget.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }))
   await waitFor(() => !!nav.querySelector('[data-rail-index="0"]') && (document.activeElement as HTMLElement | null)?.dataset.railIndex === "0", "First rail item focused")
   await sleep(30)
-  if (index === 401) nav.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
+  if (index === 200) nav.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
   else if (index > 0) {
     const first = nav.querySelector<HTMLElement>('[data-rail-index="0"]')!
     // Move the independent rail to the requested region, then use its real button.
@@ -65,6 +65,11 @@ async function railItem(index: number) {
   await sleep(220)
   return button
 }
+async function heavyStart() {
+  await railItem(200)
+  turn("heavy")!.querySelector<HTMLElement>('[data-message-role="user"]')!.scrollIntoView({ block: "center" })
+  await sleep(220)
+}
 let nextBeforeSeq: number | null = 1
 function publish(next: Block[]) {
   blocks = next
@@ -78,7 +83,7 @@ async function run() {
   await railItem(0)
   check(visible(turn("turn-0")?.querySelector('[data-message-role="user"]') ?? null), "First message is visible")
   results.firstNavigation = true
-  await railItem(200)
+  await railItem(100)
   check(visible(turn("turn-100")?.querySelector('[data-message-role="user"]') ?? null), "Middle message is visible")
   results.middleNavigation = true
   const middle = turn("turn-100")!
@@ -97,11 +102,11 @@ async function run() {
   wrap.click()
   await sleep(30)
   check(middle.querySelector('[data-wrap="true"]'), "Wrap toggled")
-  await railItem(401)
+  await railItem(200)
   check(visible(turn("heavy")), "Last message is visible")
   check(!middle.isConnected, "Offscreen middle row is unmounted")
   results.lastNavigation = true
-  await railItem(200)
+  await railItem(100)
   check(turn("turn-100")?.querySelector('[data-wrap="true"]'), "Code wrap survives virtual unmount")
   results.wrapState = true
 
@@ -123,7 +128,7 @@ async function run() {
   check(!paragraph.isConnected, "Clearing selection releases offscreen rows")
   results.selectionRelease = true
 
-  await railItem(200)
+  await railItem(100)
   const focused = turn("turn-100")!.querySelector<HTMLButtonElement>('[aria-label="Disable line wrap"]')!
   focused.focus({ preventScroll: true })
   await sleep(30)
@@ -137,7 +142,7 @@ async function run() {
 
   await railItem(0)
   check(document.body.textContent?.includes("Scroll up for earlier messages"), "Earlier history control is available")
-  await railItem(200)
+  await railItem(100)
   const anchor = turn("turn-100")!
   const readingTop = anchor.getBoundingClientRect().top
   publish(blocks.map(block => block.id === "answer-heavy" && block.kind === "assistant" ? { ...block, text: block.text + " More final output.".repeat(10) } : block))
@@ -151,40 +156,40 @@ async function run() {
   check(Math.abs(turn("turn-100")!.getBoundingClientRect().top - readingTop) < 2, "Prepending history preserves the visible anchor")
   check(!document.body.textContent?.includes("Scroll up for earlier messages"), "Exhausted history removes the control")
   results.prepend = true
-  // Keep the original fixture indices for the remaining navigation checks.
+  // Restore the original prompt set for the remaining navigation checks.
   publish(blocks.slice(3))
   await sleep(150)
 
-  await railItem(400)
+  await heavyStart()
   flushSync(() => useStore.getState().toggleWork("heavy"))
   await sleep(100)
   const group = Array.from(turn("heavy")!.querySelectorAll<HTMLButtonElement>("button")).find(button => /Read 800/.test(button.textContent ?? ""))!
   check(group, "Grouped tool disclosure exists")
   group.click()
   await sleep(150)
-  await railItem(400)
+  await heavyStart()
   const findTool = (index: number) => Array.from(document.querySelectorAll<HTMLElement>("[data-work-entry-display-text]")).find(el => el.textContent?.endsWith(`file-${index}.ts`))?.closest<HTMLButtonElement>("button")
   await waitFor(() => !!findTool(0), "First tool is mounted")
   const firstTool = findTool(0)!
   firstTool.click()
   await sleep(50)
   check(firstTool.getAttribute("aria-expanded") === "true", "First tool expanded")
-  await railItem(401)
+  viewport().scrollTop = viewport().scrollHeight
   await waitFor(() => !!findTool(799), "Last tool can be reached")
   check(!firstTool.isConnected, "Offscreen tool is unmounted")
   const mountedTools = document.querySelectorAll("[data-work-entry-display-text]").length
   check(mountedTools < 100, "Expanded work remains bounded")
   results.mountedTools = mountedTools
-  await railItem(400)
+  await heavyStart()
   await waitFor(() => !!findTool(0), "First tool remounted")
   check(findTool(0)!.getAttribute("aria-expanded") === "true", "Tool expansion survives virtual unmount")
   results.toolState = true
   await railItem(0)
-  await railItem(400)
+  await heavyStart()
   check(Array.from(turn("heavy")!.querySelectorAll<HTMLButtonElement>("button")).find(button => /Read 800/.test(button.textContent ?? ""))?.getAttribute("aria-expanded") === "true", "Group expansion survives turn unmount")
   results.groupState = true
 
-  await railItem(200)
+  await railItem(100)
   document.getElementById("layout")!.style.width = "780px"
   await sleep(220)
   check(visible(turn("turn-100")), "Resize retains visible turn")
@@ -198,7 +203,7 @@ async function run() {
   results.threadSwitch = true
   flushSync(() => controls.thread("fixture"))
   await sleep(200)
-  await railItem(401)
+  await railItem(200)
   publish(blocks.map(block => block.id === "answer-heavy" && block.kind === "assistant" ? { ...block, text: block.text + "\n\n" + "New output. ".repeat(70) } : block))
   await sleep(350)
   check(viewport().scrollHeight - viewport().scrollTop - viewport().clientHeight < 60, "Following tracks new output after thread switch")

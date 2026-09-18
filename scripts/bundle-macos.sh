@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Build the desktop app with its bundled kybernd sidecar, sign the app ad hoc,
+# Build the desktop app with its bundled kybernd sidecar, preserve its signing identity,
 # and write a DMG.
 #
 # Usage: scripts/bundle-macos.sh
 #   SKIP_BUILD=1                reuse the last self-contained `pnpm tauri build`
 #   CARGO_TARGET_DIR            honoured if set
 #   KYBERN_BUILD_TARGET         optional aarch64-apple-darwin or x86_64-apple-darwin
+#   APPLE_SIGNING_IDENTITY      optional Apple certificate; Tauri signs inside-out
+#   APPLE_CERTIFICATE           optional base64 p12 for CI (plus its password)
 #   TAURI_SIGNING_PRIVATE_KEY   when set, also writes the signed updater
 #                               tarball (kybern-<v>-<arch>-apple-darwin.app.tar.gz
 #                               + .sig) that latest.json points at
@@ -73,9 +75,19 @@ rm -rf "$APP"
 mkdir -p "$DIST"
 cp -R "$SRC_APP" "$APP"
 
-# 3. Sign (ad hoc) --------------------------------------------------------------------
-echo "==> codesign (ad hoc)"
-codesign --force --deep --sign - "$APP"
+# 3. Preserve certificate signing; ad hoc remains available without membership.
+# Re-signing with '-' here used to discard Tauri's certificate and replace its
+# stable designated requirement with a build-specific hash, invalidating TCC grants.
+SIGNING_INFO="$(codesign --display --verbose=4 "$APP" 2>&1 || true)"
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && "${APPLE_SIGNING_IDENTITY}" != "-" ]] ||
+   [[ -n "${APPLE_CERTIFICATE:-}" ]] || [[ "$SIGNING_INFO" == *"Authority="* ]]; then
+  echo "==> preserving certificate signature"
+  node scripts/verify-macos-signing.mjs "$APP"
+else
+  echo "==> codesign (ad hoc; privacy grants may reset after updates)"
+  codesign --force --deep --sign - "$APP"
+  node scripts/verify-macos-signing.mjs "$APP" --allow-adhoc
+fi
 
 # 4. Updater tarball -------------------------------------------------------------------
 TARBALL="$DIST/kybern-$VERSION-$ARCH-apple-darwin.app.tar.gz"
@@ -94,7 +106,8 @@ rm -f "$DMG"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/kybern.app"
 ln -s /Applications "$STAGE/Applications"
-cat > "$STAGE/If macOS blocks kybern.txt" <<'NOTE'
+if ! xcrun stapler validate "$APP" >/dev/null 2>&1; then
+  cat > "$STAGE/If macOS blocks kybern.txt" <<'NOTE'
 kybern is not notarized by Apple, so macOS may block the first launch with
 "Apple could not verify kybern is free of malware".
 
@@ -104,10 +117,15 @@ To allow it once:
      and click "Open Anyway" next to "kybern was blocked to protect your Mac".
   3. Confirm with Open Anyway and your password or Touch ID.
 
-Updates installed by the app itself are never blocked. To skip the dialog
-entirely, install from the terminal instead:
+To install from the terminal instead:
   curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-mac-install.sh | sh
+
+Ad-hoc builds can lose privacy grants after an update. If screen recording
+stops working while Kybern is still listed as allowed, remove the old Kybern
+entry in Privacy & Security > Screen & System Audio Recording, add the updated
+app from Applications, and quit and reopen Kybern.
 NOTE
+fi
 hdiutil create -volname "kybern" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 echo "done: $DMG"

@@ -138,36 +138,41 @@ export function EnvironmentSwitcher() {
           <ComposerPickerMenuPopup
             align="start"
             side="bottom"
-            className="w-80 min-w-0"
+            className="environment-switcher-menu w-[min(19rem,calc(100vw-1.5rem))] min-w-0"
           >
             <MenuGroup>
               <MenuGroupLabel>Environments</MenuGroupLabel>
-              <MenuRadioGroup className="space-y-1" value={selectedId ?? ""} onValueChange={(id) => {
+              <MenuRadioGroup className="space-y-0.5" value={selectedId ?? ""} onValueChange={(id) => {
                 if (id !== selectedId) void switchEnvironment(id)
               }}>
-                {profiles.map((item) => (
-                  <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-lg pe-1 has-[[data-highlighted]]:bg-[var(--color-background-button-secondary-hover)]" role="presentation">
-                    <MenuRadioItem className="min-h-12 data-highlighted:bg-transparent" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
-                      if (item.id === selectedId && connection.state === "failed") void switchEnvironment(item.id)
-                    }}>
-                      {item.local ? <DeviceLaptopIcon className="-mx-0.5 size-4 shrink-0 opacity-80" /> : <GlobeIcon className="-mx-0.5 size-4 shrink-0 opacity-80" />}
-                      <span className="min-w-0 flex-1 text-start">
-                        <bdi className="block break-words whitespace-normal leading-snug">{item.name}</bdi>
-                        <span className="mt-0.5 block break-words whitespace-normal font-normal text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground">
-                          {item.id === selectedId ? statusLabel : item.local ? "On this Mac" : item.ssh ? "SSH connection" : "Remote environment"}
+                {profiles.map((item) => {
+                  const current = item.id === selectedId
+                  const detail = current ? statusLabel : item.local ? "On this Mac" : item.ssh ? "SSH connection" : "Remote environment"
+                  return (
+                    <div key={item.id} className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-lg pe-1 has-[[data-highlighted]]:bg-[var(--color-background-button-secondary-hover)]", current && "bg-[var(--color-background-button-secondary)]")} role="presentation">
+                      <MenuRadioItem className="environment-choice min-h-11 rounded-lg data-highlighted:bg-transparent" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
+                        if (current && connection.state === "failed") void switchEnvironment(item.id)
+                      }}>
+                        {item.local ? <DeviceLaptopIcon className="size-4 shrink-0 opacity-80" /> : <GlobeIcon className="size-4 shrink-0 opacity-80" />}
+                        <span className="min-w-0 flex-1 text-start">
+                          <bdi className="block break-words whitespace-normal leading-snug">{item.name}</bdi>
+                          <span className="environment-choice-status mt-0.5 flex min-w-0 items-center gap-1.5 break-words whitespace-normal font-normal leading-snug text-muted-foreground">
+                            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", current && connection.state === "open" ? "bg-emerald-500" : current && connection.state === "failed" ? "bg-destructive" : "bg-muted-foreground/40")} />
+                            <span className="min-w-0 break-words">{detail}</span>
+                          </span>
                         </span>
-                      </span>
-                    </MenuRadioItem>
-                    {isTauri() && <MenuItem
-                      aria-label={`Open ${item.name} in a new window`}
-                      title={`Open ${item.name} in a new window`}
-                      className="size-8 min-h-8 shrink-0 justify-center p-0 text-muted-foreground data-highlighted:bg-[var(--color-background-button-secondary)]"
-                      onClick={() => {
-                        void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
-                      }}
-                    ><WindowIcon className="size-4" /></MenuItem>}
-                  </div>
-                ))}
+                      </MenuRadioItem>
+                      {isTauri() && <MenuItem
+                        aria-label={`Open ${item.name} in a new window`}
+                        title={`Open ${item.name} in a new window`}
+                        className="size-8 min-h-8 shrink-0 justify-center rounded-lg p-0 text-muted-foreground data-highlighted:bg-[var(--color-background-button-secondary)]"
+                        onClick={() => {
+                          void openEnvironmentWindow(item.id).catch((error) => toast.error(errorText(error)))
+                        }}
+                      ><WindowIcon className="size-4" /></MenuItem>}
+                    </div>
+                  )
+                })}
               </MenuRadioGroup>
             </MenuGroup>
             <MenuSeparator />

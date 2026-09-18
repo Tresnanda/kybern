@@ -196,11 +196,11 @@ export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME = `${COMPOSER_PICKER_MENU_
 /** Same chrome as picker menus, for composer-attached tooltips. */
 export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME} font-normal text-[var(--color-text-foreground)]`;
 
-/** Opaque floating panel for the slash/mention command menu and @local browser.
- *  Picker border/radius/shadow, but a solid fill: the menu floats over the
- *  transcript, so frosted bg-popover/70 would let chat content bleed through. */
+/** Floating panel for the slash/mention command menu and @local browser.
+ *  It keeps the picker chrome but uses one direct blur layer in translucent
+ *  windows so the list stays readable without stacking a second frost layer. */
 export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
-  `relative overflow-hidden ${COMPOSER_PICKER_RADIUS_CLASS_NAME} border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+  `composer-command-menu-surface relative isolate overflow-hidden ${COMPOSER_PICKER_RADIUS_CLASS_NAME} border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 /** Opaque Environment panel card — same rationale as the command menu (overlays transcript).
  *  Docks alongside the composer, so it carries the shared raised-chrome border rather
@@ -293,7 +293,7 @@ export const COMPOSER_FOOTER_ICON_BUTTON_CLASS_NAME =
  *  centered kit icon (not a disc-filling SVG); flex centers it, `m-0` drops the
  *  Button's default `-mx-0.5`, and full opacity overrides the base svg cap. */
 export const COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME =
-  "flex size-8 items-center justify-center rounded-full p-0 sm:size-8 disabled:opacity-30 [&_svg]:m-0 [&_svg]:block [&_svg]:!opacity-100";
+  "flex size-8 items-center justify-center rounded-full p-0 text-[var(--color-background-elevated-primary-opaque)] sm:size-8 disabled:opacity-30 [&_svg]:m-0 [&_svg]:block [&_svg]:!opacity-100";
 
 /** Send arrow size: 20px in the 32px disc, prominent but not disc-filling. */
 export const COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME = "size-5";

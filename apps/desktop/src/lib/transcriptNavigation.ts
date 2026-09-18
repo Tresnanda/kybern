@@ -6,7 +6,7 @@ export interface TranscriptNavigationItem {
   description?: string
   ariaLabel: string
   turnIndex: number
-  role: "user" | "assistant"
+  role: "user"
 }
 
 function excerpt(source: string, limit: number): string {
@@ -17,8 +17,9 @@ function excerpt(source: string, limit: number): string {
   return prefix.slice(0, space > limit * .65 ? space : limit).trimEnd() + "…"
 }
 
-/** Navigation describes every message, including rows that are not mounted.
- * Stable prefixes keep rail props unchanged throughout a growing response. */
+/** Navigation describes every user prompt, including rows that are not mounted.
+ * The answer prefix remains secondary context for the prompt's preview. Stable
+ * prefixes keep rail props unchanged throughout a growing response. */
 export function createTranscriptNavigation() {
   const cache = new WeakMap<TurnGroup, { user: string; answer: string }>()
   let previous: TranscriptNavigationItem[] = []
@@ -44,16 +45,8 @@ export function createTranscriptNavigation() {
         turnIndex,
         role: "user",
       })
-      if (!group.running) next.push({
-        id: `${group.turnId || group.user?.id || turnIndex}:assistant`,
-        label: excerpt(text.answer, 56) || "Assistant response",
-        description: text.answer.length > 56 ? excerpt(text.answer.slice(56), 88) : undefined,
-        ariaLabel: "",
-        turnIndex,
-        role: "assistant",
-      })
     }
-    next.forEach((item, index) => { item.ariaLabel = `Go to ${item.role} message ${index + 1} of ${next.length}` })
+    next.forEach((item, index) => { item.ariaLabel = `Go to user prompt ${index + 1} of ${next.length}` })
     const unchanged = next.length === previous.length && next.every((item, index) => {
       const old = previous[index]!
       return item.id === old.id && item.label === old.label && item.description === old.description && item.turnIndex === old.turnIndex && item.ariaLabel === old.ariaLabel

@@ -20,7 +20,6 @@ import { Button } from "@/components/kit/button"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { IconButton } from "@/components/kit/icon-button"
-import { ComposerChoiceRow } from "@/components/kit/chat/ComposerChoiceRow"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { ComposerPanelStack, ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat/ComposerStackedPanel"
 import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/kit/chat/ComposerStackedPanelContent"
@@ -566,12 +565,7 @@ export function ApprovalPanel({ approval, count, onChoose }: { approval: Approva
         )}
       </div>
       {detail}
-      <div className="mt-2.5 space-y-0.5">
-        <ComposerChoiceRow shortcut={1} label={approval.tool_name === "ExitPlanMode" ? "Start implementing" : "Approve once"} description={approval.tool_name === "ExitPlanMode" ? "Continue with the proposed plan" : "Allow just this request"} tone="primary" onSelect={() => onChoose(1)} />
-        {approval.tool_name !== "ExitPlanMode" && <ComposerChoiceRow shortcut={2} label="Always allow this session" description="Don't ask again this session" onSelect={() => onChoose(2)} />}
-        <ComposerChoiceRow shortcut={3} label="Decline" description="Reject and let the agent continue" tone="destructive" onSelect={() => onChoose(3)} />
-        <ComposerChoiceRow shortcut={4} label="Cancel turn" description="Stop the current turn" onSelect={() => onChoose(4)} />
-      </div>
+      <ApprovalActions primaryLabel={approval.tool_name === "ExitPlanMode" ? "Start implementing" : "Approve once"} primaryShortcut={1} sessionShortcut={approval.tool_name === "ExitPlanMode" ? undefined : 2} onChoose={onChoose} />
     </ComposerStackedPanel>
   )
 }
@@ -596,14 +590,29 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
       <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground/65">
         {connector.subtitle || `${connector.connector} will see this app’s window and click and type in it. Watch what it does.`}
       </p>
-      <div className="mt-2.5 space-y-0.5">
-        {canPersist && <ComposerChoiceRow shortcut={1} label="Allow this session" description={connector.app ? `Don’t ask again for ${connector.app} in this thread` : "Don’t ask again in this thread"} tone="primary" onSelect={() => onChoose(1)} />}
-        <ComposerChoiceRow shortcut={canPersist ? 2 : 1} label="Allow once" description="Ask again before the next action" tone={canPersist ? "neutral" : "primary"} onSelect={() => onChoose(canPersist ? 2 : 1)} />
-        <ComposerChoiceRow shortcut={3} label="Don’t allow" description="Refuse and let the agent continue" tone="destructive" onSelect={() => onChoose(3)} />
-        <ComposerChoiceRow shortcut={4} label="Cancel turn" description="Stop the current turn" onSelect={() => onChoose(4)} />
-      </div>
+      <ApprovalActions primaryLabel="Allow once" primaryShortcut={canPersist ? 2 : 1} sessionShortcut={canPersist ? 1 : undefined} onChoose={onChoose} />
     </ComposerStackedPanel>
   )
+}
+
+/** Keep the common decision visible and less frequent scope/stop actions grouped. */
+function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, onChoose }: {
+  primaryLabel: string
+  primaryShortcut: number
+  sessionShortcut?: number
+  onChoose: (choice: number) => void
+}) {
+  return <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+    <Menu>
+      <MenuTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="More approval options"><EllipsisIcon /></Button>} />
+      <ComposerPickerMenuPopup align="start" side="top">
+        {sessionShortcut !== undefined && <MenuItem onClick={() => onChoose(sessionShortcut)}>Allow for this session<MenuShortcut>{sessionShortcut}</MenuShortcut></MenuItem>}
+        <MenuItem onClick={() => onChoose(4)}>Cancel turn<MenuShortcut>4</MenuShortcut></MenuItem>
+      </ComposerPickerMenuPopup>
+    </Menu>
+    <Button type="button" variant="chrome-outline" size="sm" onClick={() => onChoose(3)}>Decline<kbd className="text-[0.85em] opacity-60" aria-hidden="true">3</kbd></Button>
+    <Button type="button" size="sm" onClick={() => onChoose(primaryShortcut)}>{primaryLabel}<kbd className="text-[0.85em] opacity-60" aria-hidden="true">{primaryShortcut}</kbd></Button>
+  </div>
 }
 
 function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: ThreadId; splitPaneId?: PaneId; showSidebarControls: boolean }) {

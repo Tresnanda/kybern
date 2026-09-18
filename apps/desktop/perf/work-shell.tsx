@@ -13,10 +13,14 @@ import "../src/index.css"
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 const frame = () => new Promise<number>(resolve => requestAnimationFrame(resolve))
 const p95 = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length * .95)] ?? 0
+// Focused functional check for unattended windows whose rAF is suspended.
+// It intentionally emits no rendering-performance samples.
+const notificationsOnly = import.meta.env.VITE_NOTIFICATIONS_ONLY === "1"
 const at = "2026-09-01T12:00:00Z"
 const origin = { kind: "root" } as const
 const projects: Record<string, Project> = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`project-${i}`, { id: `project-${i}`, name: `Project ${i}`, path: "/project", is_git: false, worktrees_default: false, created_at: at, updated_at: at }]))
 const threads: Record<string, Thread> = Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`thread-${i}`, { id: `thread-${i}`, project_id: `project-${i % 20}`, title: `Thread ${i}`, provider: { kind: "omp", instance: "default" }, model: null, effort: null, permission_mode: "full-access", status: i === 0 ? "running" : "idle", cwd: "/project", worktree: null, provider_session_id: null, pinned: false, created_at: at, updated_at: at, last_seq: 0 }]))
+threads["thread-999"] = { ...threads["thread-999"]!, parent_thread_id: "thread-0" }
 const native = () => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench
 async function run() {
   document.documentElement.classList.add("dark")
@@ -29,7 +33,7 @@ async function run() {
   await sleep(500)
   let sequence = 0
   const samples = []
-  for (const baseline of [true, false, true, false]) {
+  for (const baseline of (notificationsOnly ? [] : [true, false, true, false])) {
     const commits: number[] = [], frames: number[] = []
     let chrome = 0
     const unsubscribe = useStore.subscribe((next, previous) => { if (next.threads !== previous.threads) chrome++ })
@@ -49,21 +53,59 @@ async function run() {
   const state = useStore.getState()
   state.receiveEvent({ kind: "thread_updated", seq: ++sequence, thread_id: "thread-0", turn_id: null, at, thread: { ...state.threads["thread-0"]!, title: "Updated immediately", status: "idle" } })
   await sleep(100)
+  flushSync(() => {
+    useStore.getState().pushNotification("thread-20", "done", sequence + 1, at)
+    useStore.getState().pushNotification("thread-21", "done", sequence + 2, at)
+    useStore.getState().pushNotification("thread-999", "done", sequence + 3, at)
+  })
+  const sidebarUnread = !!document.querySelector('[aria-label="Unread"]')
+  const bell = document.querySelector<HTMLButtonElement>('button[aria-label^="Show threads that need attention"]')!
+  const dot = bell.querySelector<HTMLElement>('[data-slot="notification-dot"]')!
+  const dotStyle = getComputedStyle(dot)
+  const dotHasNoOutline = dotStyle.boxShadow === "none" && dotStyle.outlineStyle === "none"
+  const openBellMenu = async () => {
+    const rect = bell.getBoundingClientRect()
+    bell.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: rect.right, clientY: rect.bottom }))
+    await sleep(50)
+  }
+  await openBellMenu()
+  const firstMenu = document.querySelector<HTMLElement>('[data-slot="context-menu-content"]')!
+  const firstMenuText = firstMenu.textContent ?? ""
+  const menuItems = Array.from(firstMenu.querySelectorAll<HTMLElement>('[data-slot="context-menu-item"]'))
+  const dismissCompleted = menuItems.find(item => item.textContent?.includes("Dismiss completed"))
+  dismissCompleted?.click()
+  await sleep(50)
+  const allDismissed = Object.keys(useStore.getState().notifications).length === 0
+  flushSync(() => {
+    useStore.getState().pushNotification("thread-20", "done", sequence + 4, at)
+    useStore.getState().pushNotification("thread-21", "done", sequence + 5, at)
+  })
+  await openBellMenu()
+  const bellMenu = {
+    dotHasNoOutline,
+    boundedActions: menuItems.length === 2,
+    hasFilterAction: firstMenuText.includes("Show notifications"),
+    hasDismissAction: firstMenuText.includes("Dismiss completed"),
+    allDismissed,
+  }
   const pass = samples.every(sample => sample.chrome === (sample.baseline ? 100 : 0)) && state.transcript("thread-0").lastSeq === sequence && document.body.textContent?.includes("Updated immediately") === true
   const activityCommits: number[] = []
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < (notificationsOnly ? 0 : 100); i++) {
     const start = performance.now()
     flushSync(() => useStore.getState().set(state => ({ threadActivity: { ...state.threadActivity, "thread-0": { thread_id: "thread-0", state: "working", active_agents: 1, active_processes: i + 1, active_monitors: 0 } } })))
     activityCommits.push(performance.now() - start)
     await frame()
   }
-  flushSync(() => useStore.getState().set({ collapsedProjects: { "project-0": true } }))
+  flushSync(() => useStore.getState().set({
+    collapsedProjects: { "project-0": true },
+    threadActivity: { ...useStore.getState().threadActivity, "thread-0": { thread_id: "thread-0", state: "working", active_agents: 1, active_processes: 1, active_monitors: 0 } },
+  }))
   const projectHeader = () => Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-sidebar="menu-button"]')).find(button => button.textContent?.trim() === "Project 0")
   const working = !!projectHeader()?.querySelector('[aria-label="Working"]')
   flushSync(() => useStore.getState().set({ threadActivity: { "thread-0": { thread_id: "thread-0", state: "monitoring", active_agents: 0, active_processes: 0, active_monitors: 1 } } }))
   const monitoring = !!projectHeader()?.querySelector('[aria-label="Monitoring"]')
   flushSync(() => useStore.getState().set({ threadActivity: {} }))
   const idle = !!projectHeader() && !projectHeader()?.querySelector('[aria-label="Working"], [aria-label="Monitoring"]')
-  native().postMessage(JSON.stringify({ threads: 1000, projects: 20, samples, activityCommitP95: p95(activityCommits), projectActivityTransitions: { working, monitoring, idle }, pass: pass && working && monitoring && idle }))
+  native().postMessage(JSON.stringify({ notificationsOnly, threads: 1000, projects: 20, samples, sidebarUnread, bellMenu, activityCommitP95: p95(activityCommits), projectActivityTransitions: { working, monitoring, idle }, pass: pass && sidebarUnread && Object.values(bellMenu).every(Boolean) && working && monitoring && idle }))
 }
 run().catch(error => native().postMessage(JSON.stringify({ pass: false, error: String(error) })))

@@ -788,6 +788,10 @@ pub enum TranscriptEntry {
         /// Settled result exists in the event log but was not inlined here.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         output_omitted: bool,
+        /// Settled output-delta stream exists in the event log but was not
+        /// inlined here. Fetch it through `threads.tool_output`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stream_omitted: bool,
         is_error: bool,
         complete: bool,
         at: DateTime<Utc>,

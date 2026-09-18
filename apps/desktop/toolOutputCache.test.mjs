@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { createToolOutputCache } from "./src/state/toolOutputCache.ts"
+import { createToolOutputCache, MAX_INACTIVE_OUTPUT_BYTES } from "./src/state/toolOutputCache.ts"
 
 const response = (output) => ({ output, is_error: false })
 const deferred = () => {
@@ -17,7 +17,7 @@ function fixture(reply) {
   const cache = createToolOutputCache({
     read(t, c) {
       const block = blocks.get(key(t, c))
-      return block && { seq: block.seq, turnId: block.turnId, omitted: block.outputOmitted }
+      return block && { seq: block.seq, turnId: block.turnId, omitted: block.outputOmitted, bytes: typeof block.output === "string" ? block.output.length * 2 : 0 }
     },
     load(t, c) {
       calls++
@@ -368,4 +368,58 @@ test("exact null, empty, and error-marked outputs are preserved", async () => {
     assert.equal(f.get("c").outputOmitted, false)
     assert.equal(f.get("c").isError, true)
   }
+})
+
+
+test("live completions join the same bounded cache without fetching or duplicating payloads", async () => {
+  const f = fixture()
+  for (let i = 0; i < 100; i++) {
+    f.add(`live${i}`, "t", { output: `exact live ${i}`, outputOmitted: false })
+    f.cache.track("t", `live${i}`)
+  }
+  assert.equal(f.calls, 0)
+  assert.equal([...f.blocks.values()].filter(b => !b.outputOmitted).length, 12)
+  assert.equal(f.get("live99").output, "exact live 99")
+  assert.equal(f.get("live0").outputOmitted, true)
+  const release = f.cache.retain("t", "live0")
+  await f.cache.hydrate("t", "live0")
+  assert.equal(f.get("live0").output, "exact:t:live0")
+  assert.equal(f.calls, 1)
+  release()
+})
+
+test("large inactive outputs obey a byte budget while shared mounted output stays exact", () => {
+  const f = fixture()
+  const output = "é".repeat(MAX_INACTIVE_OUTPUT_BYTES / 2 + 1)
+  f.add("visible", "t", { outputOmitted: false, output })
+  const first = f.cache.retain("t", "visible")
+  const second = f.cache.retain("t", "visible")
+  f.cache.track("t", "visible")
+  for (let i = 0; i < 20; i++) {
+    f.add(`large${i}`, "t", { outputOmitted: false, output: "x".repeat(1024 * 1024) })
+    f.cache.track("t", `large${i}`)
+  }
+  assert.strictEqual(f.get("visible").output, output)
+  assert.equal([...f.blocks.values()].filter(b => !b.outputOmitted).length, 5)
+  first(); first()
+  assert.strictEqual(f.get("visible").output, output)
+  second()
+  assert.equal(f.get("visible").outputOmitted, true)
+  assert.equal(f.calls, 0)
+})
+
+test("an evicted live replacement cannot accept an obsolete hydration response", async () => {
+  const pending = deferred(), f = fixture(() => pending.promise)
+  f.add("replaced")
+  const old = f.cache.hydrate("t", "replaced")
+  await Promise.resolve()
+  f.add("replaced", "t", { seq: 100, output: "live replacement", outputOmitted: false })
+  f.cache.track("t", "replaced")
+  for (let i = 0; i < 12; i++) {
+    f.add(`new${i}`, "t", { output: "new", outputOmitted: false })
+    f.cache.track("t", `new${i}`)
+  }
+  pending.resolve(response("obsolete")); await old
+  assert.equal(f.get("replaced").outputOmitted, true)
+  assert.equal(f.writes, 0)
 })

@@ -546,6 +546,8 @@ export type TranscriptEntry =
       output?: JsonValue;
       /** Settled result exists in the event log but was not inlined here. */
       output_omitted?: boolean;
+      /** Settled output deltas exist in the event log but were not inlined here. */
+      stream_omitted?: boolean;
       is_error: boolean;
       complete: boolean;
       at: DateTime;
@@ -682,6 +684,10 @@ export type EventPayload =
       kind: "tool_call_completed";
       tool_call_id: string;
       output: JsonValue;
+      /** Set when an opted-in event subscription defers a large result. */
+      output_omitted?: boolean;
+      /** This daemon can reconstruct the exact persisted output-delta stream. */
+      stream_recoverable?: boolean;
       is_error: boolean;
     }
   | { kind: "runtime_task_started"; task: RuntimeTask }
@@ -879,6 +885,8 @@ export interface ThreadsGetParams {
   through_seq?: EventSeq;
   /** When false, large settled tool results are omitted from the page. */
   include_tool_output?: boolean;
+  /** When true, completed output-delta streams are marked for exact lazy hydration. */
+  defer_tool_stream?: boolean;
 }
 
 export interface ThreadsToolOutputParams {
@@ -886,10 +894,16 @@ export interface ThreadsToolOutputParams {
   tool_call_id: string;
   start_seq?: EventSeq;
   through_seq?: EventSeq;
+  /** Include the exact persisted output-delta stream for this invocation. */
+  include_tool_stream?: boolean;
 }
 
 export interface ThreadsToolOutputResult {
   output: JsonValue;
+  /** Exact concatenation of persisted output deltas for this invocation. */
+  stream?: string;
+  /** Deltas exist but were not returned because stream hydration was not requested. */
+  stream_omitted?: boolean;
   is_error: boolean;
 }
 
@@ -1063,6 +1077,8 @@ export interface EventsSubscribeParams {
   thread_id?: ThreadId;
   /** Replay persisted events with `seq > after_seq` before going live. */
   after_seq?: EventSeq;
+  /** Include large completed tool outputs; omitted keeps legacy full events. */
+  include_tool_output?: boolean;
 }
 
 export interface EventsSubscribeResult {

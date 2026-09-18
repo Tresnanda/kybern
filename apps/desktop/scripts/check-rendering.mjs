@@ -7,17 +7,19 @@ import { spawn, spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 let daemon
 try {
-  if (fixture === "tool-leases") {
+  if (["tool-leases", "live-tool-memory"].includes(fixture)) {
     const repo = path.resolve(desktop, "../..")
-    const binary = path.join(process.env.CARGO_TARGET_DIR ?? path.join(repo, "target"), "release/kybernd")
+    const binary = process.env.KYBERN_PERF_DAEMON_BINARY ?? path.join(process.env.CARGO_TARGET_DIR ?? path.join(repo, "target"), "release/kybernd")
     const dataDir = path.join(scratch, "daemon")
     const initialize = spawnSync(binary, ["--data-dir", dataDir, "--print-token"], { stdio: "ignore" })
     if (initialize.error || initialize.status !== 0) throw new Error("Build the release daemon before the tool-leases fixture")
-    const seed = spawnSync("python3", [path.join(desktop, "scripts/seed-tool-leases.py"), dataDir], { encoding: "utf8" })
+    const seedArgs = [path.join(desktop, fixture === "live-tool-memory" ? "scripts/seed-live-tools.py" : "scripts/seed-tool-leases.py"), dataDir]
+    if (fixture === "live-tool-memory" && process.env.KYBERN_PERF_LIVE_HISTORY === "1") seedArgs.push("--history")
+    const seed = spawnSync("python3", seedArgs, { encoding: "utf8" })
     if (seed.error || seed.status !== 0) throw new Error("Could not seed scratch lease data")
     daemon = spawn(binary, ["--data-dir", dataDir, "--port", "0"], { stdio: "ignore" })
     const until = Date.now() + 10000
@@ -56,7 +58,17 @@ try {
     process.env.KYBERN_INTEGRATION_PREVIEW_URLS = JSON.stringify(urls)
   }
   const dist = path.join(scratch, "dist")
-  const build = spawnSync("pnpm", ["exec", "vite", "build", "--config", "perf/vite.config.ts", "--outDir", dist], { cwd: desktop, encoding: "utf8", env: { ...process.env, KYBERN_PERF_FIXTURE: fixture } })
+  const build = spawnSync("pnpm", ["exec", "vite", "build", "--config", "perf/vite.config.ts", "--outDir", dist], { cwd: desktop, encoding: "utf8", env: {
+    ...process.env,
+    KYBERN_PERF_FIXTURE: fixture,
+    VITE_LIVE_TOOLS_HISTORY: process.env.KYBERN_PERF_LIVE_HISTORY ?? "0",
+    VITE_LIVE_TOOLS_THREAD: process.env.KYBERN_PERF_LIVE_THREAD ?? "0",
+    VITE_LIVE_TOOLS_SHELL: process.env.KYBERN_PERF_LIVE_SHELL ?? "0",
+    VITE_LIVE_TOOLS_EMPTY_SIDEBAR: process.env.KYBERN_PERF_LIVE_EMPTY_SIDEBAR ?? "0",
+    VITE_LIVE_TOOLS_IMPORT_APP: process.env.KYBERN_PERF_LIVE_IMPORT_APP ?? "0",
+    VITE_LIVE_TOOLS_STACKED_CONTENT_CARD: process.env.KYBERN_PERF_LIVE_STACKED_CONTENT_CARD ?? "0",
+    VITE_EARLIER_STATUS_UNHOSTED: process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED ?? "0",
+  } })
   if (build.error) throw build.error
   if (build.status !== 0) throw new Error(build.stdout + build.stderr)
   const config = JSON.parse(readFileSync(path.join(desktop, "src-tauri/tauri.conf.json"), "utf8"))

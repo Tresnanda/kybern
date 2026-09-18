@@ -9,14 +9,18 @@ import {
 import {
   SPLIT_RATIO_MAX,
   SPLIT_RATIO_MIN,
+  SPLIT_PANE_MIN_WIDTH_PX,
+  SPLIT_SPLITTER_HIT_WIDTH_PX,
   canSplitPane,
   clampSplitRatio,
+  clampSplitRatioForWidth,
   closeSplitViewPane,
   collectThreadPanes,
   createSplitView,
   findThreadPaneByThreadId,
   reconcileSplitView,
   removeThreadPane,
+  shouldStackHorizontalSplit,
   splitThreadPane,
 } from "./src/state/splitView.ts"
 
@@ -143,6 +147,14 @@ test("split ratios remain in the usable quarter-to-three-quarter range", () => {
   assert.equal(clampSplitRatio(Number.NaN), 0.5)
 })
 
+test("narrow horizontal splits stack before either pane becomes unreadable", () => {
+  const stackThreshold =
+    SPLIT_PANE_MIN_WIDTH_PX * 2 + SPLIT_SPLITTER_HIT_WIDTH_PX
+  assert.equal(shouldStackHorizontalSplit(stackThreshold - 1), true)
+  assert.equal(shouldStackHorizontalSplit(stackThreshold), false)
+  assert.equal(shouldStackHorizontalSplit(Number.NaN), false)
+})
+
 test("thread drops choose intuitive edges and respect allowed directions", () => {
   const widePane = { left: 100, top: 100, width: 900, height: 500 }
   const anyDirection = () => true
@@ -180,4 +192,15 @@ test("thread dragging waits for deliberate pointer movement", () => {
   assert.equal(hasCrossedThreadDragThreshold(10, 10, 13, 13), false)
   assert.equal(hasCrossedThreadDragThreshold(10, 10, 16, 10), true)
   assert.equal(hasCrossedThreadDragThreshold(10, 10, 10, 3), true)
+})
+
+test("horizontal resizing reserves both minimum pane widths", () => {
+  for (const width of [656, 700, 1000, 2000]) {
+    for (const ratio of [0, .25, .5, .75, 1]) {
+      const actual = clampSplitRatioForWidth(ratio, width)
+      assert.ok(actual * width >= 320 - 0.001)
+      assert.ok((1 - actual) * width >= 320 - 0.001)
+    }
+  }
+  assert.equal(clampSplitRatioForWidth(.75, Infinity), .75)
 })

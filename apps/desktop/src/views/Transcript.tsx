@@ -218,7 +218,7 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     prompt: block ? runtimeActivityPrompt(block.call) : null,
     result: block ? runtimeActivityResult(block.output, block.stream) : null,
     resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
-    resultLoading: !!block?.outputOmitted,
+    resultLoading: !!block && (!!block.outputOmitted || !!block.streamOmitted),
     resultTool: block,
     failed: block?.isError || task?.status === "failed",
     entries,
@@ -263,7 +263,7 @@ export function Transcript({
     return retainToolOutput(threadId, activityToolCallId, activityToolSeq)
   }, [threadId, activityToolCallId, activityToolSeq])
   useEffect(() => {
-    if (connected && activityResult?.outputOmitted) void hydrateToolOutput(threadId, activityResult.call.id, activityResult.seq)
+    if (connected && (activityResult?.outputOmitted || activityResult?.streamOmitted)) void hydrateToolOutput(threadId, activityResult.call.id, activityResult.seq)
   }, [threadId, activityResult, connected])
   const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
     const selection: AgentActivitySelection = { ...target, threadId }
@@ -417,7 +417,7 @@ export function Transcript({
                   persistent status row would discard the reader's position when
                   older turns are inserted immediately after that row. */}
               {hasEarlier && (
-                <div className={cn(ROW, "py-2")}>
+                <div data-earlier-history-status className={cn(ROW, "chat-paint-host py-2")}>
                   <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
                     {earlier.error ? <>
                       <span>Unable to load earlier messages. {earlier.error}</span>
@@ -580,15 +580,27 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
   )
 }
 
+/** Generated images are visible answer content even while tool details stay
+ * closed. Own their lazy result for exactly as long as the turn is mounted. */
+function GeneratedImageOutputLease({ threadId, block }: { threadId: ThreadId; block: ToolBlock }) {
+  const connected = useStore((state) => state.connection.state === "open")
+  useEffect(() => retainToolOutput(threadId, block.call.id, block.seq), [threadId, block.call.id, block.seq])
+  useEffect(() => {
+    if (connected && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
+  }, [connected, threadId, block])
+  return null
+}
+
 const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
+  const imageTools = useMemo(() => group.work.filter((block): block is ToolBlock => block.kind === "tool" && block.origin.kind === "root" && isImageGenerationTool(block.call)), [group.work])
   const deliveredImages = useMemo(() => {
     if (group.running) return []
     const images = [
       ...group.images.map((image) => ({ source: image.source, label: "Agent image" })),
-      ...group.work.flatMap((block) => block.kind === "tool" && block.origin.kind === "root" && isImageGenerationTool(block.call) ? responseImages(block.output) : []),
+      ...imageTools.flatMap((block) => responseImages(block.output)),
     ]
     return [...new Map(images.map((image) => [image.source, image])).values()]
-  }, [group])
+  }, [group, imageTools])
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
@@ -630,9 +642,11 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
         <div className={cn(ROW, "pb-2")} data-timeline-row-kind="live-work">
           <WorkingHeader since={group.user?.at ?? ""} />
           {hasWork && (
-            <div className="chat-paint-host mt-1 space-y-0.5" data-timeline-row-kind="work">
+            <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
               {/* Every live event stays at its sequence position. Only the tail
-                  assistant segment streams; earlier prose never gets reparented. */}
+                  assistant segment streams; earlier prose never gets reparented.
+                  VirtualRows owns the bounded paint host for every item. This
+                  growing list must not become one tiled compositing layer. */}
               <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
@@ -695,6 +709,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           )}
 
           <div className="chat-paint-host group min-w-0 py-0.5">
+            {imageTools.map((block) => <GeneratedImageOutputLease key={block.id} threadId={threadId} block={block} />)}
             {deliveredImages.length > 0 && <div data-response-images className="chat-paint-host">{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
             {group.answer && (
               <div data-slot="message-content" className="chat-paint-host">
@@ -1299,7 +1314,7 @@ function ToolRow({
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
     const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted }
+    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1375,10 +1390,10 @@ function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface
     return retainToolOutput(threadId, block.call.id, block.seq)
   }, [threadId, block.call.id, block.seq])
   useEffect(() => {
-    if (connected && threadId && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
+    if (connected && threadId && (block.outputOmitted || block.streamOmitted)) void hydrateToolOutput(threadId, block.call.id, block.seq)
   }, [connected, threadId, block])
   const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
-  if (block.outputOmitted && !out.trim() && screenshots.length === 0) {
+  if ((block.outputOmitted || block.streamOmitted) && !out.trim() && screenshots.length === 0) {
     return <p className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
   }
   return (

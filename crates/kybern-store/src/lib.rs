@@ -11,7 +11,7 @@ pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHist
 pub use transcript_page::{transcript_page, transcript_page_ref};
 
 pub use projection::{
-    LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, project_pending_questions, project_provider_usage, project_runtime_tasks,
+    LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, json_payload_bytes, project_pending_questions, project_provider_usage, project_runtime_tasks,
     project_thread_activity, project_transcript, should_omit_tool_output,
 };
 
@@ -23,6 +23,14 @@ use chrono::{DateTime, Utc};
 use kybern_protocol::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use uuid::Uuid;
+
+/// Exact result for one tool invocation at a caller's snapshot boundary.
+pub struct SavedToolResult {
+    pub output: serde_json::Value,
+    pub is_error: bool,
+    pub stream: Option<String>,
+    pub stream_omitted: bool,
+}
 
 fn snake(value: impl serde::Serialize) -> Result<String> {
     Ok(serde_json::to_value(value)?.as_str().ok_or_else(|| anyhow::anyhow!("enum did not serialize as a string"))?.to_owned())
@@ -594,6 +602,57 @@ impl Store {
                 assignment.group_id,
                 EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() },
             )?;
+            // The structured terminal result is authoritative for the finished
+            // assignment. Older worker-to-recipient updates can remain queued
+            // behind a long coordinator turn and otherwise wake it one at a
+            // time after integration has already finished. Preserve every row
+            // for audit, but atomically consume only queued updates on this
+            // exact return route before enqueuing the terminal notification.
+            if let Some((_, _, terminal, _)) = notification {
+                let superseded = {
+                    let mut statement = tx.prepare(
+                        "SELECT payload FROM collaboration_messages
+                         WHERE assignment_id=?1 AND from_thread_id IS ?2 AND to_thread_id=?3
+                           AND state='queued' AND id<>?4
+                           AND json_extract(payload,'$.purpose')='result'
+                           AND EXISTS (SELECT 1 FROM queued_messages
+                             WHERE queued_messages.id=collaboration_messages.delivery_message_id
+                               AND queued_messages.pending=1)
+                         ORDER BY id",
+                    )?;
+                    statement
+                        .query_map(
+                            params![
+                                assignment.id.to_string(),
+                                terminal.from_thread_id.map(|id| id.to_string()),
+                                terminal.to_thread_id.to_string(),
+                                terminal.id.to_string()
+                            ],
+                            |row| row.get::<_, String>(0),
+                        )?
+                        .collect::<std::result::Result<Vec<_>, _>>()?
+                };
+                for payload in superseded {
+                    let mut message: CollaborationMessage = serde_json::from_str(&payload)?;
+                    message.state = CollaborationDeliveryState::Cancelled;
+                    message.updated_at = Utc::now();
+                    tx.execute(
+                        "UPDATE collaboration_messages SET state=?2,payload=?3 WHERE id=?1 AND state='queued'",
+                        params![message.id.to_string(), snake(message.state)?, serde_json::to_string(&message)?],
+                    )?;
+                    events.push(append_event_in_transaction(
+                        &tx,
+                        message.to_thread_id,
+                        None,
+                        EventPayload::MessageRemoved { message_id: message.id },
+                    )?);
+                    events.extend(append_collaboration_events_in_transaction(
+                        &tx,
+                        message.group_id,
+                        EventPayload::CollaborationMessageUpdated { message },
+                    )?);
+                }
+            }
             if let Some((notification_actor, notification_request, message, delivery_message_id)) = notification
                 && collaboration_tx_receipt(
                     &tx,
@@ -845,6 +904,40 @@ impl Store {
         self.with(|c| {
             let mut st = c.prepare("SELECT payload FROM collaboration_messages WHERE state IN ('persisted','queued') ORDER BY id")?;
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        })
+    }
+
+    /// Bounded agent inbox. Recipient scoping belongs inside the query so a
+    /// busy group's older messages to peers cannot consume this caller's page.
+    pub fn collaboration_pending_messages_for_thread(
+        &self,
+        group_id: GroupId,
+        to_thread_id: ThreadId,
+        limit: u32,
+    ) -> Result<Vec<CollaborationMessage>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT payload FROM collaboration_messages
+                 WHERE group_id=?1 AND to_thread_id=?2
+                   AND state IN ('persisted','queued','uncertain')
+                 ORDER BY json_extract(payload,'$.created_at'),id LIMIT ?3",
+            )?;
+            let rows = statement
+                .query_map(params![group_id.to_string(), to_thread_id.to_string(), limit.clamp(1, 100)], |row| row.get::<_, String>(0))?;
+            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        })
+    }
+
+    pub fn collaboration_queued_results(&self, group_id: GroupId, to_thread_id: ThreadId) -> Result<Vec<CollaborationMessage>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT payload FROM collaboration_messages
+                 WHERE group_id=?1 AND to_thread_id=?2 AND state='queued'
+                   AND json_extract(payload,'$.purpose')='result'
+                 ORDER BY id",
+            )?;
+            let rows = statement.query_map(params![group_id.to_string(), to_thread_id.to_string()], |row| row.get::<_, String>(0))?;
             rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
         })
     }
@@ -1484,6 +1577,33 @@ impl Store {
         })
     }
 
+    /// Read the turn count and, only for a single-turn thread, its first prompt
+    /// for title eligibility. Keep this independent of the full event log:
+    /// completed tool results can be megabytes each, and custom old threads do
+    /// not need their first prompt (which may contain an image) at all.
+    pub fn first_turn_message_and_count(&self, thread_id: ThreadId) -> Result<(Option<UserMessage>, i64)> {
+        self.with(|c| {
+            let thread_id = thread_id.to_string();
+            let count: i64 =
+                c.query_row("SELECT COUNT(*) FROM events WHERE thread_id = ?1 AND kind = 'turn_started'", [&thread_id], |row| row.get(0))?;
+            if count != 1 {
+                return Ok((None, count));
+            }
+            let payload: String = c.query_row(
+                "SELECT payload FROM events
+                 WHERE thread_id = ?1 AND kind = 'turn_started'
+                 ORDER BY seq LIMIT 1",
+                [&thread_id],
+                |row| row.get(0),
+            )?;
+            let first = match serde_json::from_str::<EventPayload>(&payload)? {
+                EventPayload::TurnStarted { message, .. } => Some(message),
+                _ => None,
+            };
+            Ok((first, count))
+        })
+    }
+
     /// Find the durable acceptance record for a client-supplied message id.
     pub fn turn_started_receipt(&self, message_id: MessageId) -> Result<Option<(ThreadId, TurnId, UserMessage)>> {
         self.with(|c| {
@@ -1676,6 +1796,40 @@ impl Store {
         })
     }
 
+    /// Replay batches for compact event subscriptions. Large settled tool
+    /// results remain borrowed as raw JSON while the row is decoded, so a
+    /// replay does not allocate a `serde_json::Value` for output that will be
+    /// replaced by the transport omission marker anyway.
+    pub fn events_after_bounded_compact(
+        &self,
+        thread_id: Option<ThreadId>,
+        after: EventSeq,
+        limit: u32,
+        max_bytes: usize,
+    ) -> Result<Vec<ThreadEvent>> {
+        self.with(|c| {
+            let sql = match thread_id {
+                Some(_) => {
+                    "SELECT seq,thread_id,turn_id,at,kind,payload FROM events WHERE seq > ?1 AND thread_id = ?2 ORDER BY seq LIMIT ?3"
+                }
+                None => "SELECT seq,thread_id,turn_id,at,kind,payload FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?3",
+            };
+            let mut st = c.prepare(sql)?;
+            let mut rows = st.query(params![after, thread_id.map(|id| id.to_string()).unwrap_or_default(), limit])?;
+            let mut events = Vec::new();
+            let mut bytes = 0usize;
+            while let Some(row) = rows.next()? {
+                let size = row.get_ref(5)?.as_str()?.len();
+                if !events.is_empty() && bytes.saturating_add(size) > max_bytes {
+                    break;
+                }
+                bytes = bytes.saturating_add(size);
+                events.push(row_to_compact_event(row)?);
+            }
+            Ok(events)
+        })
+    }
+
     pub fn events_for_thread(&self, thread_id: ThreadId) -> Result<Vec<ThreadEvent>> {
         self.events_for_thread_through(thread_id, i64::MAX)
     }
@@ -1765,6 +1919,83 @@ impl Store {
         })
     }
 
+    /// Mark completed tool rows whose exact invocation has persisted output
+    /// deltas. The projection intentionally does not concatenate those deltas;
+    /// clients can request them later through the sequence-bounded tool-output
+    /// RPC. The query uses the tool-start sequence and reused-ID barrier so a
+    /// later invocation cannot make an earlier row appear stream-hydratable.
+    pub fn mark_tool_streams_omitted_through(
+        &self,
+        thread_id: ThreadId,
+        entries: &mut [TranscriptEntry],
+        through_seq: EventSeq,
+    ) -> Result<()> {
+        let requested: std::collections::HashSet<(EventSeq, String)> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                TranscriptEntry::ToolCall { seq, call, complete: true, .. } => Some((*seq, call.id.clone())),
+                _ => None,
+            })
+            .collect();
+        let requested_ids: std::collections::HashSet<String> = requested.iter().map(|(_, call_id)| call_id.clone()).collect();
+        self.with(|c| {
+            // Scan the two small JSON identity fields once, instead of issuing
+            // one correlated query per transcript row. The active start map
+            // naturally handles provider call-ID reuse as the sequence grows.
+            let mut statement = c.prepare(
+                "SELECT seq, kind,
+                        CASE WHEN kind = 'tool_call_started'
+                             THEN json_extract(payload, '$.call.id')
+                             ELSE json_extract(payload, '$.tool_call_id') END
+                 FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2
+                   AND kind IN ('tool_call_started', 'tool_call_output_delta')
+                 ORDER BY seq",
+            )?;
+            let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
+            let mut active = std::collections::HashMap::<String, EventSeq>::new();
+            let mut streamed = std::collections::HashSet::<(EventSeq, String)>::new();
+            while let Some(row) = rows.next()? {
+                let seq: EventSeq = row.get(0)?;
+                let kind: String = row.get(1)?;
+                let Some(call_id) = row.get::<_, Option<String>>(2)? else { continue };
+                if kind == "tool_call_started" {
+                    if requested_ids.contains(&call_id) {
+                        active.insert(call_id, seq);
+                    }
+                } else if let Some(start) = active.get(&call_id) {
+                    let key = (*start, call_id);
+                    if requested.contains(&key) {
+                        streamed.insert(key);
+                    }
+                }
+            }
+            // Check completion existence through the expression index instead
+            // of scanning and JSON-parsing every completion payload. A settled
+            // result can be tens of megabytes, while this query only reads the
+            // indexed call ID and row sequence.
+            let mut completion = c.prepare_cached(TOOL_COMPLETION_EXISTS_AT_START_SQL)?;
+            let mut recoverable = std::collections::HashSet::<(EventSeq, String)>::new();
+            for (start, call_id) in streamed {
+                let exists: Option<i64> =
+                    completion.query_row(params![thread_id.to_string(), call_id, start, through_seq], |row| row.get(0)).optional()?;
+                if exists.is_some() {
+                    recoverable.insert((start, call_id));
+                }
+            }
+            for entry in entries {
+                let TranscriptEntry::ToolCall { seq, call, complete: true, stream_omitted, .. } = entry else { continue };
+                let key = (*seq, call.id.clone());
+                // A turn failure can mark an unfinished row complete with a
+                // synthetic null output. It has no durable result to hydrate,
+                // so only advertise a stream when the invocation also has a
+                // persisted completion event.
+                *stream_omitted = recoverable.contains(&key);
+            }
+            Ok(())
+        })
+    }
+
     /// Fetch the completion belonging to this exact start, at the requested
     /// snapshot. A reused provider call ID must never hydrate an older row with
     /// a newer invocation's result.
@@ -1775,6 +2006,22 @@ impl Store {
         start_seq: Option<EventSeq>,
         through_seq: EventSeq,
     ) -> Result<Option<(serde_json::Value, bool)>> {
+        Ok(self
+            .tool_call_result_through(thread_id, tool_call_id, start_seq, through_seq, false)?
+            .map(|result| (result.output, result.is_error)))
+    }
+
+    /// Fetch a settled tool result and, when requested, its exact persisted
+    /// output-delta stream. The stream is bounded by the requested snapshot,
+    /// and the same intervening-start guard protects reused provider IDs.
+    pub fn tool_call_result_through(
+        &self,
+        thread_id: ThreadId,
+        tool_call_id: &str,
+        start_seq: Option<EventSeq>,
+        through_seq: EventSeq,
+        include_stream: bool,
+    ) -> Result<Option<SavedToolResult>> {
         self.with(|c| {
             let start: Option<EventSeq> = c
                 .query_row(
@@ -1787,7 +2034,18 @@ impl Store {
                 .optional()?;
             let Some(start) = start else { return Ok(None) };
             let mut statement = c.prepare_cached(TOOL_OUTPUT_AT_START_SQL)?;
-            read_tool_output_at_start(&mut statement, thread_id, tool_call_id, start, through_seq)
+            let Some((_completion_seq, output, is_error)) =
+                read_tool_completion_at_start(&mut statement, thread_id, tool_call_id, start, through_seq)?
+            else {
+                return Ok(None);
+            };
+            // Deltas can arrive just after the completion row on providers
+            // that flush their stream asynchronously. Keep the caller's
+            // snapshot barrier so hydration matches the live projection.
+            let stream = read_tool_stream_at_start(c, thread_id, tool_call_id, start, through_seq, include_stream)?;
+            let stream_omitted = !include_stream && stream.is_some();
+            let stream = include_stream.then_some(stream).flatten();
+            Ok(Some(SavedToolResult { output, is_error, stream, stream_omitted }))
         })
     }
 
@@ -2184,8 +2442,20 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
 // Completion lookup uses the existing tool_completion_lookup index. The
 // intervening-start check ranges over the thread's sequence index, and prevents
 // crossing a reused call ID without adding a migration or a second read model.
+const TOOL_COMPLETION_EXISTS_AT_START_SQL: &str = "
+    SELECT 1 FROM events c
+    WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
+      AND json_extract(c.payload, '$.tool_call_id') = ?2
+      AND c.seq > ?3 AND c.seq <= ?4
+      AND EXISTS (SELECT 1 FROM events s WHERE s.seq = ?3 AND s.thread_id = ?1
+                  AND s.kind = 'tool_call_started' AND json_extract(s.payload, '$.call.id') = ?2)
+      AND NOT EXISTS (SELECT 1 FROM events n WHERE n.thread_id = ?1
+                      AND n.seq > ?3 AND n.seq <= c.seq AND n.kind = 'tool_call_started'
+                      AND json_extract(n.payload, '$.call.id') = ?2)
+    LIMIT 1";
+
 const TOOL_OUTPUT_AT_START_SQL: &str = "
-    SELECT c.payload FROM events c
+    SELECT c.seq, c.payload FROM events c
     WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
       AND json_extract(c.payload, '$.tool_call_id') = ?2
       AND c.seq > ?3 AND c.seq <= ?4
@@ -2196,6 +2466,23 @@ const TOOL_OUTPUT_AT_START_SQL: &str = "
                       AND json_extract(n.payload, '$.call.id') = ?2)
     ORDER BY c.seq DESC LIMIT 1";
 
+fn read_tool_completion_at_start(
+    statement: &mut rusqlite::Statement<'_>,
+    thread_id: ThreadId,
+    tool_call_id: &str,
+    start_seq: EventSeq,
+    through_seq: EventSeq,
+) -> Result<Option<(EventSeq, serde_json::Value, bool)>> {
+    let mut rows = statement.query(params![thread_id.to_string(), tool_call_id, start_seq, through_seq])?;
+    let Some(row) = rows.next()? else { return Ok(None) };
+    let seq = row.get(0)?;
+    let payload: EventPayload = serde_json::from_str(row.get_ref(1)?.as_str()?)?;
+    match payload {
+        EventPayload::ToolCallCompleted { output, is_error, .. } => Ok(Some((seq, output, is_error))),
+        _ => anyhow::bail!("invalid stored tool completion"),
+    }
+}
+
 fn read_tool_output_at_start(
     statement: &mut rusqlite::Statement<'_>,
     thread_id: ThreadId,
@@ -2203,13 +2490,57 @@ fn read_tool_output_at_start(
     start_seq: EventSeq,
     through_seq: EventSeq,
 ) -> Result<Option<(serde_json::Value, bool)>> {
-    let mut rows = statement.query(params![thread_id.to_string(), tool_call_id, start_seq, through_seq])?;
-    let Some(row) = rows.next()? else { return Ok(None) };
-    let payload: EventPayload = serde_json::from_str(row.get_ref(0)?.as_str()?)?;
-    match payload {
-        EventPayload::ToolCallCompleted { output, is_error, .. } => Ok(Some((output, is_error))),
-        _ => anyhow::bail!("invalid stored tool completion"),
+    Ok(read_tool_completion_at_start(statement, thread_id, tool_call_id, start_seq, through_seq)?
+        .map(|(_, output, is_error)| (output, is_error)))
+}
+
+fn read_tool_stream_at_start(
+    c: &Connection,
+    thread_id: ThreadId,
+    tool_call_id: &str,
+    start_seq: EventSeq,
+    through_seq: EventSeq,
+    include_stream: bool,
+) -> Result<Option<String>> {
+    let sql = if include_stream {
+        "SELECT json_extract(d.payload, '$.delta') FROM events d
+         WHERE d.thread_id = ?1 AND d.kind = 'tool_call_output_delta'
+           AND d.seq > ?2 AND d.seq <= ?3
+           AND json_extract(d.payload, '$.tool_call_id') = ?4
+           AND NOT EXISTS (
+             SELECT 1 FROM events s
+             WHERE s.thread_id = ?1 AND s.kind = 'tool_call_started'
+               AND s.seq > ?2 AND s.seq <= d.seq
+               AND json_extract(s.payload, '$.call.id') = ?4
+           )
+         ORDER BY d.seq"
+    } else {
+        "SELECT 1 FROM events d
+         WHERE d.thread_id = ?1 AND d.kind = 'tool_call_output_delta'
+           AND d.seq > ?2 AND d.seq <= ?3
+           AND json_extract(d.payload, '$.tool_call_id') = ?4
+           AND NOT EXISTS (
+             SELECT 1 FROM events s
+             WHERE s.thread_id = ?1 AND s.kind = 'tool_call_started'
+               AND s.seq > ?2 AND s.seq <= d.seq
+               AND json_extract(s.payload, '$.call.id') = ?4
+           )
+         LIMIT 1"
+    };
+    if !include_stream {
+        return Ok(c
+            .query_row(sql, params![thread_id.to_string(), start_seq, through_seq, tool_call_id], |row| row.get::<_, i64>(0))
+            .optional()?
+            .map(|_| String::new()));
     }
+    let mut statement = c.prepare_cached(sql)?;
+    let mut rows = statement.query(params![thread_id.to_string(), start_seq, through_seq, tool_call_id])?;
+    let mut stream = None;
+    while let Some(row) = rows.next()? {
+        let delta: String = row.get(0)?;
+        stream.get_or_insert_with(String::new).push_str(&delta);
+    }
+    Ok(stream)
 }
 
 fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
@@ -2221,6 +2552,50 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
         turn_id: turn.map(parse_uuid).transpose()?,
         at: parse_time(r.get::<_, String>(3)?)?,
         payload: serde_json::from_str(&payload).map_err(other)?,
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct BorrowedToolCompletion<'a> {
+    tool_call_id: String,
+    #[serde(borrow)]
+    output: &'a serde_json::value::RawValue,
+    #[serde(default)]
+    output_omitted: bool,
+    is_error: bool,
+}
+
+fn compact_or_decode_tool_completion(payload: &str) -> std::result::Result<EventPayload, serde_json::Error> {
+    let raw: BorrowedToolCompletion<'_> = serde_json::from_str(payload)?;
+    let output = if raw.output_omitted || raw.output.get().len() <= LARGE_TOOL_OUTPUT_BYTES {
+        serde_json::from_str(raw.output.get())?
+    } else {
+        serde_json::Value::Null
+    };
+    Ok(EventPayload::ToolCallCompleted {
+        tool_call_id: raw.tool_call_id,
+        output,
+        output_omitted: raw.output_omitted || raw.output.get().len() > LARGE_TOOL_OUTPUT_BYTES,
+        stream_recoverable: false,
+        is_error: raw.is_error,
+    })
+}
+
+fn row_to_compact_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
+    let kind: String = r.get(4)?;
+    let payload = r.get_ref(5)?.as_str()?;
+    let turn: Option<String> = r.get(2)?;
+    let payload = if kind == "tool_call_completed" {
+        compact_or_decode_tool_completion(payload).map_err(other)?
+    } else {
+        serde_json::from_str(payload).map_err(other)?
+    };
+    Ok(ThreadEvent {
+        seq: r.get(0)?,
+        thread_id: parse_uuid(r.get::<_, String>(1)?)?,
+        turn_id: turn.map(parse_uuid).transpose()?,
+        at: parse_time(r.get::<_, String>(3)?)?,
+        payload,
     })
 }
 
@@ -2634,12 +3009,25 @@ mod tests {
                 },
             )
             .unwrap();
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::ToolCallOutputDelta { tool_call_id: "big".into(), delta: "streamed output\n".repeat(4) },
+            )
+            .unwrap();
         let output = serde_json::json!("x".repeat(LARGE_TOOL_OUTPUT_BYTES + 8));
         store
             .event_append(
                 thread.id,
                 Some(turn),
-                EventPayload::ToolCallCompleted { tool_call_id: "big".into(), output: output.clone(), is_error: false },
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: "big".into(),
+                    output: output.clone(),
+                    output_omitted: false,
+                    stream_recoverable: false,
+                    is_error: false,
+                },
             )
             .unwrap();
         for index in 0..49 {
@@ -2658,7 +3046,13 @@ mod tests {
                 .event_append(
                     thread.id,
                     Some(turn),
-                    EventPayload::ToolCallCompleted { tool_call_id: id, output: output.clone(), is_error: false },
+                    EventPayload::ToolCallCompleted {
+                        tool_call_id: id,
+                        output: output.clone(),
+                        output_omitted: false,
+                        stream_recoverable: false,
+                        is_error: false,
+                    },
                 )
                 .unwrap();
         }
@@ -2668,9 +3062,25 @@ mod tests {
         let transcript_bytes = serde_json::to_vec(&transcript).unwrap().len();
         assert!(transcript_bytes * 10 < event_bytes, "cached projection {transcript_bytes} should drop the {event_bytes}-byte event log");
         eprintln!("tool-output-omit event_bytes={event_bytes} transcript_bytes={transcript_bytes}");
+        let compact_events = store.events_after_bounded_compact(Some(thread.id), 0, 500, 2 * 1024 * 1024).unwrap();
+        assert!(compact_events.iter().any(|event| matches!(
+            event.payload,
+            EventPayload::ToolCallCompleted { output: serde_json::Value::Null, output_omitted: true, .. }
+        )));
+        let full_events = store.events_after_bounded(Some(thread.id), 0, 500, 2 * 1024 * 1024).unwrap();
+        assert!(full_events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::ToolCallCompleted { output: candidate, output_omitted: false, .. } if candidate == &output
+        )));
         assert!(matches!(
             transcript.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { output: None, output_omitted: true, .. })
+        ));
+        let mut stream_marked = transcript.clone();
+        store.mark_tool_streams_omitted_through(thread.id, &mut stream_marked, i64::MAX).unwrap();
+        assert!(matches!(
+            stream_marked.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { stream_omitted: true, .. })
         ));
         let mut page = transcript.clone();
         store.hydrate_tool_outputs_through(thread.id, &mut page, i64::MAX).unwrap();
@@ -2691,14 +3101,17 @@ mod tool_output_allocation_tests {
     fn fixture() -> Store {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);",
+            "CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+             CREATE INDEX tool_completion_lookup ON events(thread_id, json_extract(payload, '$.tool_call_id'))
+               WHERE kind = 'tool_call_completed';",
         )
         .unwrap();
         Store { conn: Arc::new(Mutex::new(conn)) }
     }
 
     fn complete(store: &Store, thread: ThreadId, id: &str, output: serde_json::Value, is_error: bool) {
-        let payload = EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, is_error };
+        let payload =
+            EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, output_omitted: false, stream_recoverable: false, is_error };
         store.with(|c| {
             let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE thread_id=?1 AND kind='tool_call_started' AND json_extract(payload, '$.call.id')=?2)", params![thread.to_string(), id], |row| row.get(0))?;
             if !exists {
@@ -2718,6 +3131,131 @@ mod tool_output_allocation_tests {
             "at": "2026-09-17T00:00:00Z"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn interrupted_tool_stream_is_not_marked_recoverable_without_completion() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                seq INTEGER PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                turn_id TEXT,
+                at TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        let thread = ThreadId::nil();
+        let turn = TurnId::nil();
+        let at = "2026-09-17T00:00:00Z";
+        let append = |seq, payload: EventPayload| {
+            store
+                .with(|c| {
+                    c.execute(
+                        "INSERT INTO events(seq,thread_id,turn_id,at,kind,payload) VALUES (?1,?2,?3,?4,?5,?6)",
+                        params![seq, thread.to_string(), turn.to_string(), at, payload.kind(), serde_json::to_string(&payload)?],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        };
+        append(1, EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("run") });
+        append(
+            2,
+            EventPayload::ToolCallStarted {
+                call: ToolCall { id: "interrupted".into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+                origin: EventOrigin::Root,
+            },
+        );
+        append(3, EventPayload::ToolCallOutputDelta { tool_call_id: "interrupted".into(), delta: "partial output".into() });
+        append(4, EventPayload::TurnFailed { error: "interrupted".into() });
+
+        let events = store.events_for_thread_through(thread, 4).unwrap();
+        let stream: String = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::ToolCallOutputDelta { tool_call_id, delta } if tool_call_id == "interrupted" => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stream, "partial output");
+
+        // Projection marks an unfinished row complete with a synthetic null
+        // output when its turn fails. Without a durable completion event there
+        // is no threads.tool_output result that can hydrate the stream, so the
+        // snapshot must leave the persisted stream unmarked.
+        let mut snapshot = store.project_transcript_through(thread, 4).unwrap();
+        store.mark_tool_streams_omitted_through(thread, &mut snapshot, 4).unwrap();
+        assert!(matches!(
+            snapshot.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { complete: true, output: Some(serde_json::Value::Null), stream_omitted: false, .. })
+        ));
+    }
+
+    #[test]
+    fn completion_guard_uses_the_tool_id_expression_index() {
+        let store = fixture();
+        let plan = store
+            .with(|c| {
+                let mut statement = c.prepare(&format!("EXPLAIN QUERY PLAN {TOOL_COMPLETION_EXISTS_AT_START_SQL}"))?;
+                Ok(statement
+                    .query_map(params![ThreadId::nil().to_string(), "call", 1i64, 2i64], |row| row.get::<_, String>(3))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap();
+        assert!(plan.iter().any(|detail| detail.contains("tool_completion_lookup")), "query plan: {plan:?}");
+    }
+
+    #[test]
+    fn large_canonical_result_without_stream_does_not_need_completion_scan() {
+        let store = fixture();
+        let thread = ThreadId::nil();
+        complete(&store, thread, "canonical-only", serde_json::json!("x".repeat(2 * 1024 * 1024)), false);
+        let mut rows = vec![entry("canonical-only", true, false)];
+        store.mark_tool_streams_omitted_through(thread, &mut rows, i64::MAX).unwrap();
+        assert!(matches!(rows[0], TranscriptEntry::ToolCall { stream_omitted: false, .. }));
+    }
+
+    #[test]
+    fn first_turn_message_and_count_reads_only_title_metadata() {
+        let store = fixture();
+        let thread = ThreadId::nil();
+        let custom_thread = ThreadId::new_v4();
+        let first = EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("first prompt") };
+        store
+            .with(|c| {
+                c.execute(
+                    "INSERT INTO events(seq,thread_id,kind,payload) VALUES (?1,?2,?3,?4)",
+                    params![1, thread.to_string(), first.kind(), serde_json::to_string(&first)?],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let (message, count) = store.first_turn_message_and_count(thread).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(message.unwrap().plain_text(), "first prompt");
+
+        let second = EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("second prompt") };
+        store
+            .with(|c| {
+                for (seq, payload) in [
+                    (2, EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("custom first") }),
+                    (3, second),
+                ] {
+                    c.execute(
+                        "INSERT INTO events(seq,thread_id,kind,payload) VALUES (?1,?2,?3,?4)",
+                        params![seq, custom_thread.to_string(), payload.kind(), serde_json::to_string(&payload)?],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let (message, count) = store.first_turn_message_and_count(custom_thread).unwrap();
+        assert_eq!(count, 2);
+        assert!(message.is_none(), "custom multi-turn threads must not fetch their first prompt");
     }
 
     #[test]

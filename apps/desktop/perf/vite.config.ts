@@ -25,7 +25,21 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "usage" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "live-tool-memory" && process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED === "1" ? [{
+    name: "live-tool-memory-unhosted-earlier-status-control",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/Transcript.tsx")) return
+      return code.replace('className={cn(ROW, "chat-paint-host py-2")}', 'className={cn(ROW, "py-2")}')
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "chat-fixes" ? [{
+    name: "draft-asset-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/ComposerImageAttachment.tsx")) return
+      return code.replace('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "chat-fixes-assets.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "usage" ? [{
     name: "usage-fixture-transport",
     enforce: "pre",
     transform(code, id) {

@@ -7,6 +7,7 @@
 //          read-state layer over the events the app already receives.
 
 import type { Thread, ThreadId } from "@/protocol"
+import type { EnvironmentStore } from "./store"
 
 /** Why a thread is asking for attention. Ranked most-urgent first. */
 export type NotificationKind = "blocked" | "failed" | "done"
@@ -69,6 +70,10 @@ export function threadAttentionKind(thread: Thread, notification: ThreadNotifica
   if (thread.status === "archived") return null
   if (thread.status === "awaiting-approval") return "blocked"
   if (thread.status === "failed") return "failed"
+  // Kybern-managed child threads report their result back to the parent. Their
+  // successful completion is coordinator activity, not a second user-facing
+  // completion. Live failures and approval requests above still need attention.
+  if (thread.parent_thread_id) return null
   if (thread.status === "idle" && notification?.kind === "done") return "done"
   return null
 }
@@ -90,4 +95,61 @@ export function selectAttentionItems(state: {
   }
   items.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.thread.last_seq - a.thread.last_seq)
   return items
+}
+
+/**
+ * Clear unread state only after the selected thread is genuinely readable:
+ * the document is visible and the native window reports focus. The sequence
+ * captured before the async native lookup prevents a newer unseen completion
+ * from being consumed by an older focus probe.
+ */
+export function trackFocusedThreadReads(
+  store: EnvironmentStore,
+  focusedWindow: () => Promise<boolean>,
+): () => void {
+  if (typeof window === "undefined" || typeof document === "undefined") return () => {}
+  let stopped = false
+  let probe = 0
+  const documentHidden = () => document.visibilityState === "hidden"
+
+  const acknowledge = async () => {
+    const currentProbe = ++probe
+    if (documentHidden()) return
+    const before = store.getState()
+    if (before.selected.kind !== "thread") return
+    const threadId = before.selected.id
+    const unread = before.notifications[threadId]
+    if (!unread) return
+
+    let focused = document.hasFocus()
+    try { focused = await focusedWindow() } catch { /* Browser focus is the fallback. */ }
+    if (stopped || currentProbe !== probe || !focused || documentHidden()) return
+
+    const after = store.getState()
+    if (
+      after.selected.kind === "thread" &&
+      after.selected.id === threadId &&
+      after.notifications[threadId]?.seq === unread.seq
+    ) after.clearNotification(threadId)
+  }
+
+  const onForeground = () => { void acknowledge() }
+  const onBlur = () => { probe++ }
+  const unsubscribe = store.subscribe((next, previous) => {
+    if (next.selected !== previous.selected || next.notifications !== previous.notifications)
+      void acknowledge()
+  })
+  window.addEventListener("focus", onForeground)
+  window.addEventListener("blur", onBlur)
+  document.addEventListener("visibilitychange", onForeground)
+  void acknowledge()
+
+  return () => {
+    stopped = true
+    probe++
+    unsubscribe()
+    window.removeEventListener("focus", onForeground)
+    window.removeEventListener("blur", onBlur)
+    document.removeEventListener("visibilitychange", onForeground)
+  }
 }

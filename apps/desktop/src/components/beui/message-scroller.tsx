@@ -290,8 +290,9 @@ export function MessageScroller({
     const messages = Array.from(
       content.querySelectorAll<HTMLElement>('[data-slot="message"]'),
     );
+    const prompts = messages.filter((message) => message.dataset.from === "user");
     const targets = new Map<string, HTMLElement>();
-    const nextItems = messages.map((message, index) => {
+    const nextItems = prompts.map((message, index) => {
       let id = railIdRef.current.get(message);
       if (!id) {
         railIdCounterRef.current += 1;
@@ -299,20 +300,23 @@ export function MessageScroller({
         railIdRef.current.set(message, id);
       }
       targets.set(id, message);
-      const sender = message.dataset.from ?? "conversation";
-      const assistantResponse =
-        sender === "user"
-          ? messages
-              .slice(index + 1)
-              .find((candidate) => candidate.dataset.from === "assistant")
-          : undefined;
+      const messageIndex = messages.indexOf(message);
+      let assistantResponse: HTMLElement | undefined;
+      for (let following = messageIndex + 1; following < messages.length; following++) {
+        const candidate = messages[following]!;
+        if (candidate.dataset.from === "user") break;
+        if (candidate.dataset.from === "assistant") {
+          assistantResponse = candidate;
+          break;
+        }
+      }
       const preview = getMessagePreview(message, railTextCacheRef.current, assistantResponse);
 
       return {
         id,
         label: preview.label,
         description: preview.description,
-        ariaLabel: `Go to ${sender} message ${index + 1} of ${messages.length}`,
+        ariaLabel: `Go to user prompt ${index + 1} of ${prompts.length}`,
       };
     });
 
@@ -330,7 +334,7 @@ export function MessageScroller({
       return unchanged ? current : nextItems;
     });
     setRailOverflowing(
-      viewport.scrollHeight > viewport.clientHeight + 1 && messages.length > 1,
+      viewport.scrollHeight > viewport.clientHeight + 1 && prompts.length > 1,
     );
   }, [navigation, navigationModel]);
 

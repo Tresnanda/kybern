@@ -123,7 +123,7 @@ test("ordinary tool registration does not install coordinator guidance", async (
   assert.equal(await hook({ systemPrompt: "native" }), undefined);
 });
 
-test("explicit coordinator guidance is added once", async () => {
+test("coordinator system prefix stays stable while its history marker is added once", async () => {
   const withBridge = fakePi("supervised", [], { systemPrompt: "Use kybern_thread_send for durable routing." });
   const hook = withBridge.handlers.get("before_agent_start");
   assert.deepEqual(await hook({ systemPrompt: "native" }), {
@@ -134,7 +134,9 @@ test("explicit coordinator guidance is added once", async () => {
     },
     systemPrompt: "native\n\nUse kybern_thread_send for durable routing.",
   });
-  assert.equal(await hook({ systemPrompt: "native" }), undefined);
+  assert.deepEqual(await hook({ systemPrompt: "native" }), {
+    systemPrompt: "native\n\nUse kybern_thread_send for durable routing.",
+  });
 });
 
 test("saved coordinator sessions backfill only when the durable marker is absent", async () => {
@@ -148,7 +150,9 @@ test("saved coordinator sessions backfill only when the durable marker is absent
       getBranch: () => [{ type: "custom_message", customType: "kybern-coordinator-bootstrap-v1", content: "Coordinator role." }],
     },
   });
-  assert.equal(await bootstrappedCoordinator.handlers.get("before_agent_start")({ systemPrompt: "native" }), undefined);
+  assert.deepEqual(await bootstrappedCoordinator.handlers.get("before_agent_start")({ systemPrompt: "native" }), {
+    systemPrompt: "native\n\nCoordinator role.",
+  });
   await bootstrappedCoordinator.handlers.get("session_tree")({}, {
     sessionManager: {
       getBranch: () => [{ type: "custom_message", customType: "kybern-coordinator-bootstrap-v1", content: "stale role" }],

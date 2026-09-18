@@ -28,11 +28,38 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [the whole-app follow-up](daily-memory-followup-2026-09-18.md) for the
+842 → 434 MiB initial release-workload reduction and the further matched
+454 → 385 MiB peak reduction from removing the chat card's stacking context.
+It includes repeated-burst observations, paged-history paint boundaries,
+bounded settled streams, title metadata checks and hidden dock measurements.
+The 200–300 MB target is not a verified ceiling; repeated settled use also
+exceeded it.
+
+See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
+live/replayed result delivery, assistant-settlement allocation reduction,
+primary-source research, and the remaining 200–300 MB whole-app acceptance work.
+
+See [live tool result retention](live-tool-retention-2026-09-18.md) for the live
+completion path that previously bypassed lazy-result budgets, its byte/count
+limits and exact-content fixture, and the daemon/CLI retention follow-up.
+
+See [the whole-app live-result memory check](whole-app-ram-2026-09-18/REPORT.md)
+for the isolated release Tauri coalition pair, exact 64-result content check,
+WebKit allocator evidence, lifecycle review and the explicit distinction between
+an unchanged burst peak and lower settled allocated bytes.
+
 See [the consolidated memory review](memory-review-2026-09-17/REPORT.md) for
 snapshot-safe tool hydration, mounted result leases, borrowed daemon paging,
 matched release-daemon measurements, and the remaining whole-app and page-aware
 reconstruction gates. Run `tool-leases` with a release daemon to exercise real
 RPC hydration of 16 results shared across two native WebKit panes.
+
+See [native window material memory](native-window-material-memory-2026-09-18.md)
+for the opaque-mode Tauri fix. The native macOS effect view now exists only
+while translucent surfaces are enabled; the report records an exploratory
+production-CSP WebKit diagnostic, its concurrent-run limitation, and its
+substantial run-to-run variance. It is not accepted savings evidence.
 
 See [scroll tile accumulation](memory-tiles-2026-09-15.md) for the attribution of
 the remaining native peak to WebKit's scroll tiles, the paint-host layer rule,

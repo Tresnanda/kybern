@@ -3,12 +3,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
 const MAX_FILES: usize = 20_000;
+const MAX_INDEX_SLOTS: usize = 8;
 const INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
 const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".next", "dist", "build", ".venv", "venv", "__pycache__", ".cache"];
 
@@ -19,27 +20,76 @@ struct CachedIndex {
 
 type IndexSlot = Arc<tokio::sync::Mutex<Option<CachedIndex>>>;
 
-fn index_slots() -> &'static tokio::sync::Mutex<HashMap<PathBuf, IndexSlot>> {
-    static SLOTS: OnceLock<tokio::sync::Mutex<HashMap<PathBuf, IndexSlot>>> = OnceLock::new();
-    SLOTS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+struct SlotEntry {
+    last_used: Instant,
+    slot: IndexSlot,
 }
 
-/// Relative paths of files under `root`.
-pub async fn list(root: &Path) -> Result<Arc<Vec<String>>> {
-    let slot = {
-        let mut slots = index_slots().lock().await;
-        slots.entry(root.to_path_buf()).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None))).clone()
-    };
-    let mut cached = slot.lock().await;
-    if let Some(index) = cached.as_ref()
-        && index.loaded_at.elapsed() < INDEX_CACHE_TTL
-    {
-        return Ok(Arc::clone(&index.files));
+/// Short-lived file indexes shared by composer searches.
+///
+/// The path map and the cached indexes are both bounded. Each index also drops
+/// its file list after the TTL without needing another search to trigger
+/// cleanup, so a one-off search of a large repository does not set the
+/// daemon's idle memory floor.
+#[derive(Clone, Default)]
+pub struct FileIndexCache {
+    slots: Arc<tokio::sync::Mutex<HashMap<PathBuf, SlotEntry>>>,
+}
+
+impl FileIndexCache {
+    async fn slot(&self, root: &Path) -> IndexSlot {
+        let now = Instant::now();
+        let mut slots = self.slots.lock().await;
+        slots.retain(|_, entry| now.duration_since(entry.last_used) < INDEX_CACHE_TTL || Arc::strong_count(&entry.slot) > 1);
+        if let Some(entry) = slots.get_mut(root) {
+            entry.last_used = now;
+            return Arc::clone(&entry.slot);
+        }
+        if slots.len() >= MAX_INDEX_SLOTS
+            && let Some(oldest) = slots.iter().min_by_key(|(_, entry)| entry.last_used).map(|(path, _)| path.clone())
+        {
+            slots.remove(&oldest);
+        }
+        let slot = Arc::new(tokio::sync::Mutex::new(None));
+        slots.insert(root.to_path_buf(), SlotEntry { last_used: now, slot: Arc::clone(&slot) });
+        slot
     }
 
-    let files = Arc::new(list_uncached(root).await?);
-    *cached = Some(CachedIndex { loaded_at: Instant::now(), files: Arc::clone(&files) });
-    Ok(files)
+    /// Relative paths of files under `root`.
+    pub async fn list(&self, root: &Path) -> Result<Arc<Vec<String>>> {
+        let slot = self.slot(root).await;
+        let mut cached = slot.lock().await;
+        if let Some(index) = cached.as_ref()
+            && index.loaded_at.elapsed() < INDEX_CACHE_TTL
+        {
+            return Ok(Arc::clone(&index.files));
+        }
+
+        let files = Arc::new(list_uncached(root).await?);
+        let loaded_at = Instant::now();
+        *cached = Some(CachedIndex { loaded_at, files: Arc::clone(&files) });
+        drop(cached);
+
+        // Expire the payload even if this repository is never searched again.
+        // A later refresh changes `loaded_at`, so an older cleanup task cannot
+        // discard the newer index.
+        // Do not keep an LRU-evicted slot alive until the timer fires.
+        let expiring = Arc::downgrade(&slot);
+        tokio::spawn(async move {
+            tokio::time::sleep(INDEX_CACHE_TTL).await;
+            if let Some(slot) = expiring.upgrade() {
+                Self::expire(&slot, loaded_at).await;
+            }
+        });
+        Ok(files)
+    }
+
+    async fn expire(slot: &IndexSlot, loaded_at: Instant) {
+        let mut cached = slot.lock().await;
+        if cached.as_ref().is_some_and(|index| index.loaded_at == loaded_at) {
+            *cached = None;
+        }
+    }
 }
 
 async fn list_uncached(root: &Path) -> Result<Vec<String>> {
@@ -269,7 +319,7 @@ pub async fn browse_directories(path: Option<String>) -> anyhow::Result<kybern_p
 mod tests {
     use std::sync::Arc;
 
-    use super::rank;
+    use super::{CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, rank};
 
     #[test]
     fn ranks_file_name_matches_first() {
@@ -296,9 +346,60 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kybern-file-cache-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("one.txt"), "one").unwrap();
-        let first = super::list(&dir).await.unwrap();
-        let second = super::list(&dir).await.unwrap();
+        let cache = FileIndexCache::default();
+        let first = cache.list(&dir).await.unwrap();
+        let second = cache.list(&dir).await.unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bounds_project_file_index_slots() {
+        let cache = FileIndexCache::default();
+        for index in 0..MAX_INDEX_SLOTS + 3 {
+            cache.slot(std::path::Path::new(&format!("/project-{index}"))).await;
+        }
+        assert_eq!(cache.slots.lock().await.len(), MAX_INDEX_SLOTS);
+    }
+
+    #[tokio::test]
+    async fn expiry_timer_does_not_retain_an_evicted_slot() {
+        let root = std::env::temp_dir().join(format!("kybern-index-eviction-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("one.txt"), "one").unwrap();
+        let cache = FileIndexCache::default();
+        let files = cache.list(&root).await.unwrap();
+        let evicted = Arc::downgrade(&cache.slot(&root).await);
+        for index in 0..MAX_INDEX_SLOTS {
+            cache.slot(std::path::Path::new(&format!("/other-project-{index}"))).await;
+        }
+        assert!(evicted.upgrade().is_none(), "expiry task must not retain the evicted index");
+        assert_eq!(files.as_slice(), ["one.txt"], "active callers retain their shared result");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn keeps_an_in_flight_index_slot_past_the_ttl() {
+        let cache = FileIndexCache::default();
+        let root = std::path::Path::new("/slow-project");
+        let in_flight = cache.slot(root).await;
+        cache.slots.lock().await.get_mut(root).unwrap().last_used = std::time::Instant::now() - super::INDEX_CACHE_TTL;
+        let reused = cache.slot(root).await;
+        assert!(Arc::ptr_eq(&in_flight, &reused));
+    }
+
+    #[tokio::test]
+    async fn expiry_releases_only_the_matching_file_index() {
+        let cache = FileIndexCache::default();
+        let slot = cache.slot(std::path::Path::new("/project")).await;
+        let first_at = std::time::Instant::now();
+        *slot.lock().await = Some(CachedIndex { loaded_at: first_at, files: Arc::new(vec!["large/file.txt".into()]) });
+        FileIndexCache::expire(&slot, first_at).await;
+        assert!(slot.lock().await.is_none());
+
+        let newer_at = std::time::Instant::now();
+        *slot.lock().await = Some(CachedIndex { loaded_at: newer_at, files: Arc::new(vec!["new/file.txt".into()]) });
+        FileIndexCache::expire(&slot, first_at).await;
+        assert_eq!(slot.lock().await.as_ref().unwrap().files[0], "new/file.txt");
     }
 }

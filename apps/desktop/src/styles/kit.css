@@ -2890,6 +2890,15 @@ diffs-container {
   backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
 }
 
+/* The slash/mention/$ command list is a plain listbox rather than a menu
+   primitive, so give it the same material explicitly. Keep the blur on the
+   panel itself (and no ::before layer) so it owns exactly one backdrop. */
+.composer-command-menu-surface {
+  background: var(--app-composer-command-surface, var(--app-composer-picker-surface, var(--popover)));
+  -webkit-backdrop-filter: var(--app-composer-command-backdrop-filter, var(--app-composer-picker-backdrop-filter, none));
+  backdrop-filter: var(--app-composer-command-backdrop-filter, var(--app-composer-picker-backdrop-filter, none));
+}
+
 /* Density tokens per size modifier (--normal / --small). Width is opt-in below. */
 .composer-picker-menu--normal {
   --picker-menu-body-p: 0.25rem;
@@ -3034,6 +3043,41 @@ diffs-container {
   --picker-option-min-h: 0;
   --picker-option-px: 0.75rem;
   --picker-option-py: 0.5625rem;
+}
+
+/* Environment choices have two lines; action rows keep normal menu density. */
+.environment-switcher-menu {
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.25rem;
+  --picker-option-gap: 0.75rem;
+}
+
+.environment-switcher-menu .environment-choice > span {
+  gap: 0.75rem;
+}
+
+.environment-switcher-menu [data-slot="menu-item"] > svg {
+  margin-inline: 0;
+}
+
+.environment-choice-status {
+  font-size: max(11px, 0.82em);
+}
+
+/* A 12px check on a 24px grid otherwise looks hairline beside the device icons. */
+.environment-choice [data-slot="menu-radio-indicator"] > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  stroke-width: 2.75;
+}
+
+/* Sidebar rows keep the rounded fallback on older WebKit while taking the
+   smoother squircle path on engines that expose corner-shape. The active fill
+   and hover fill therefore share exactly the same edge geometry. */
+@supports (corner-shape: round) {
+  .sidebar-row-surface {
+    corner-shape: squircle;
+  }
 }
 
 .runtime-mode-menu-item {
