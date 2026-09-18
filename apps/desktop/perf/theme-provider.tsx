@@ -7,7 +7,7 @@ import { vibrancyCalls } from "./theme-provider-tauri"
 const bridge = (window as unknown as { webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }).webkit.messageHandlers.bench
 const report = (value: Record<string, unknown>) => bridge.postMessage(JSON.stringify(value))
 
-function Probe() {
+export function Probe() {
   const { translucent, setTranslucent } = useTheme()
   return <button type="button" onClick={() => setTranslucent(!translucent)}>{translucent ? "Disable full translucency" : "Enable full translucency"}</button>
 }
