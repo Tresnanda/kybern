@@ -34,6 +34,11 @@ interface VirtualRowsProps<T> {
   className?: string
   anchor?: "start" | "end"
   followEnd?: boolean
+  /** Promote each row to a compositing layer. Nested work lists stay true so a
+   *  tall opened group cannot tile. Turn-sized transcript groups pass false:
+   *  promoting a live turn past 1024 CSS px recreates the discarded
+   *  "promote the turn only" tiled layer (perf/memory-tiles-2026-09-15.md). */
+  paintHost?: boolean
 }
 
 export function VirtualRows<T>(props: VirtualRowsProps<T>) {
@@ -45,10 +50,10 @@ export function VirtualRows<T>(props: VirtualRowsProps<T>) {
  * one tall item (an opened tool group) would otherwise make the enclosing
  * work container a tiled layer that paints its siblings and accumulates
  * scroll tiles. Margins collapse through the wrapper, so spacing is unchanged. */
-function PlainRows<T>({ items, getKey, children }: VirtualRowsProps<T>) {
+function PlainRows<T>({ items, getKey, children, paintHost = true }: VirtualRowsProps<T>) {
   return <>{items.map((item, index) => {
     const key = getKey(item, index)
-    return <div key={key} className="chat-paint-host" data-virtual-key={key}><TranscriptStateScope name={key}>{children(item, index)}</TranscriptStateScope></div>
+    return <div key={key} className={paintHost ? "chat-paint-host" : undefined} data-virtual-key={key} data-virtual-paint={paintHost ? "host" : "flow"}><TranscriptStateScope name={key}>{children(item, index)}</TranscriptStateScope></div>
   })}</>
 }
 
@@ -62,6 +67,7 @@ function VirtualizedRows<T>({
   className,
   anchor,
   followEnd = true,
+  paintHost = true,
 }: VirtualRowsProps<T>) {
   const inherited = useContext(VirtualScrollContext)
   const viewport = providedViewport ?? inherited?.viewport
@@ -251,7 +257,7 @@ function VirtualizedRows<T>({
     container.current = element
   }, [])
 
-  if (!viewport) return <PlainRows items={items} getKey={getKey} estimateSize={estimateSize}>{children}</PlainRows>
+  if (!viewport) return <PlainRows items={items} getKey={getKey} estimateSize={estimateSize} paintHost={paintHost}>{children}</PlainRows>
   const rows = virtualizer.getVirtualItems()
   return (
     <div ref={setContainer} className={className} data-virtual-list={owner} style={{ position: "relative", width: "100%", display: "flow-root" }}>
@@ -271,16 +277,18 @@ function VirtualizedRows<T>({
             data-index={row.index}
             data-virtual-key={String(row.key)}
             data-virtual-owner={owner}
-            style={{ width: "100%", display: "flow-root", willChange: "transform", marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
+            data-virtual-paint={paintHost ? "host" : "flow"}
+            style={{ width: "100%", display: "flow-root", willChange: paintHost ? "transform" : undefined, marginTop: Math.max(0, row.start - (rows[index - 1]?.end ?? margin)) }}
           >
-            {/* Each mounted row is its own compositing layer (see .chat-paint-host
-                in kit.css): its backing store is bounded by the row, and the
-                scroller's tiled layer has nothing left to paint, so WebKit stops
-                accumulating scroll tiles. The outer paint boundary additionally
-                clips large history rows; its 8px bleed preserves focus rings,
-                negative icon margins and entry motion without changing row
-                measurements or gutters. */}
-            {providedViewport ? <div style={{ contain: items.length > 30 ? "paint" : undefined, margin: -8, padding: 8 }}>{content}</div> : content}
+            {/* Nested work rows stay compositing layers so a tall opened group
+                cannot tile (see .chat-paint-host). Turn-sized transcript groups
+                pass paintHost={false}: promoting a live turn past 1024 CSS px
+                recreates the discarded "promote the turn only" tiled layer.
+                Scroller-owned lists keep an 8px bleed for focus rings, negative
+                icon margins and entry motion without changing row measurements
+                or gutters. contain:paint stays off those turn wrappers so a
+                400-turn history's live row is not one huge compositing container. */}
+            {providedViewport ? <div style={{ contain: paintHost && items.length > 30 ? "paint" : undefined, margin: -8, padding: 8 }}>{content}</div> : content}
           </div>
         )
       })}

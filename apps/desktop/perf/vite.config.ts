@@ -39,6 +39,14 @@ export default mergeConfig(base, {
       if (!id.endsWith("/views/Transcript.tsx")) return
       return code.replace('className={cn(ROW, "chat-paint-host py-2")}', 'className={cn(ROW, "py-2")}')
     },
+  }] : process.env.KYBERN_PERF_FIXTURE === "live-tool-memory" && process.env.KYBERN_PERF_LIVE_TURN_LAYER === "1" ? [{
+    name: "live-tool-memory-turn-layer-control",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/Transcript.tsx")) return
+      if (!code.includes("paintHost={false}")) throw new Error("turn-layer control could not find paintHost={false}")
+      return code.replace("paintHost={false}", "paintHost={true}")
+    },
   }] : process.env.KYBERN_PERF_FIXTURE === "chat-fixes" ? [{
     name: "draft-asset-fixture-transport",
     enforce: "pre",

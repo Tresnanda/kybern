@@ -426,7 +426,7 @@ export function Transcript({
                   </div>
                 </div>
               )}
-              <VirtualRows items={groups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
+              <VirtualRows items={groups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following} paintHost={false}>
                 {(g, i) => <div data-turn-id={turnKey(g, i)}><Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} /></div>}
               </VirtualRows>
             </TranscriptStateRoot>
