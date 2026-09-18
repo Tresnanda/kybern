@@ -3196,17 +3196,29 @@ diffs-container {
    painted transcript row lives in its own small compositing layer instead:
    its backing store is bounded by the row, virtualization bounds the number
    of rows, and the scroller, turns and work lists paint nothing themselves.
-   Apply to the element that paints (message, header, work list, answer), not
-   to the scroller or a container that could grow beyond 1024px. See
-   perf/memory-tiles-2026-09-15.md. */
+   Apply to the element that paints (message, header, work list, answer,
+   diagram image), not to the scroller, a wrapping mermaid block, or a
+   container that could grow beyond 1024px. See
+   perf/memory-tiles-2026-09-15.md and perf/hosted-mermaid-2026-09-18.md. */
 .chat-paint-host {
   will-change: transform;
 }
 
 /* Transcript Markdown hosts each top-level block itself, so a long answer is
-   many small layers rather than one tall one. Code blocks taller than the
-   tiling threshold are split into line chunks (see lib/codeChunks.ts). */
-.chat-markdown--hosted > * {
+   many small layers rather than one tall one. Mermaid wraps a codeblock whose
+   source can exceed 1024 CSS px (chunks already host those lines) and a
+   preview image capped at 24rem. Do not also promote the wrapping
+   `.chat-mermaid`. Code blocks taller than the tiling threshold are split
+   into line chunks (see lib/codeChunks.ts). */
+.chat-markdown--hosted > *:not(.chat-mermaid) {
+  will-change: transform;
+}
+
+.chat-markdown--hosted > .chat-mermaid .chat-diagram-note {
+  will-change: transform;
+}
+
+.chat-markdown--hosted > .chat-mermaid .chat-diagram-canvas > img {
   will-change: transform;
 }
 
