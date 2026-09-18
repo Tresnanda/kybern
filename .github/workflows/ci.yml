@@ -74,7 +74,7 @@ jobs:
         working-directory: apps/desktop
         run: pnpm test
       - name: Release gate regression tests
-        run: node --test scripts/check-release-ci.test.mjs
+        run: node --test scripts/check-release-ci.test.mjs scripts/verify-macos-signing.test.mjs
       - name: lint
         working-directory: apps/desktop
         run: pnpm lint
