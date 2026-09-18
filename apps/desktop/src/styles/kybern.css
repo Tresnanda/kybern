@@ -352,13 +352,20 @@ html[data-full-translucency][data-window-material="translucent"] :is([data-slot=
   }
 }
 /* Opaque mode must also stop frosting the transcript under the composer.
-   Keep the elevated fill and borders without allocating a backdrop layer. */
+   Keep the elevated fill and borders without allocating a backdrop layer.
+   `content: none` is required: a positioned `::before` with z-index and a
+   specified `-webkit-backdrop-filter` (even `none`) still creates a stacking
+   context. Translucent mode keeps the one blur pseudo. */
 html[data-window-material="opaque"] {
   --app-composer-command-backdrop-filter: none !important;
   --composer-glass-surface: var(--popover) !important;
   --composer-glass-opacity: 100% !important;
   --composer-glass-stacked-opacity: 100% !important;
   --composer-glass-filter: none !important;
+}
+html[data-window-material="opaque"] .chat-composer-surface::before,
+html[data-window-material="opaque"] .chat-composer-stacked-top::before {
+  content: none;
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   html[data-window-material] {
@@ -367,6 +374,10 @@ html[data-window-material="opaque"] {
     --composer-glass-opacity: 100% !important;
     --composer-glass-stacked-opacity: 100% !important;
     --composer-glass-filter: none !important;
+  }
+  html[data-window-material] .chat-composer-surface::before,
+  html[data-window-material] .chat-composer-stacked-top::before {
+    content: none;
   }
 }
 

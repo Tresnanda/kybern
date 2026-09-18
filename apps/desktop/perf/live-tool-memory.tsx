@@ -22,9 +22,19 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const composerGlassLayer = import.meta.env.VITE_LIVE_TOOLS_COMPOSER_GLASS_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkComposerGlassLayer() {
+  const surfaces = [...document.querySelectorAll<HTMLElement>(".chat-composer-surface, .chat-composer-stacked-top")]
+  if (!fullShell) return
+  check(surfaces.length > 0, "Full-shell composer surface did not mount")
+  for (const surface of surfaces) {
+    const generated = getComputedStyle(surface, "::before").content !== "none"
+    check(generated === composerGlassLayer, `Opaque composer backdrop layer changed: ${getComputedStyle(surface, "::before").content}`)
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -38,12 +48,18 @@ async function mark(stage: string) {
 }
 async function run() {
   document.documentElement.classList.add("dark")
+  // Issue #37 acceptance is the opaque surface path. Set it before first paint
+  // so the composer omit rule applies even if ThemeProvider's effect lags.
+  document.documentElement.setAttribute("data-window-material", "opaque")
   if (fullThread) {
     localStorage.setItem("theme", "dark")
     localStorage.setItem("kybern.translucent", "false")
   }
   if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
     textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
+  if (composerGlassLayer) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: 'html[data-window-material="opaque"] .chat-composer-surface::before,html[data-window-material="opaque"] .chat-composer-stacked-top::before{content:""!important}',
   }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
@@ -124,6 +140,9 @@ async function run() {
       const bounds = viewport.getBoundingClientRect()
       check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar, importApp })}`)
       if (fullShell) check(Math.round(bounds.width) === window.innerWidth - 256 && Math.round(bounds.height) === window.innerHeight - 46, `Full shell viewport changed: ${JSON.stringify({ width: bounds.width, height: bounds.height, windowWidth: window.innerWidth, windowHeight: window.innerHeight })}`)
+      await until(() => document.documentElement.getAttribute("data-window-material") != null, "Window material was not applied")
+      document.documentElement.setAttribute("data-window-material", "opaque")
+      checkComposerGlassLayer()
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")

@@ -64,6 +64,7 @@ function geometry(label: string) {
       context.fillStyle = getComputedStyle(surface).backgroundColor
       context.fillRect(0, 0, 1, 1)
       check(context.getImageData(0, 0, 1, 1).data[3] === 255, `${label}: opaque fill`)
+      check(getComputedStyle(surface, "::before").content === "none", `${label}: no opaque backdrop layer`)
       check(getComputedStyle(surface, "::before").backdropFilter === "none", `${label}: no opaque backdrop blur`)
     }
   }
