@@ -4,7 +4,7 @@ import { createRef } from "react"
 import { Composer, type ComposerHandle } from "../src/views/Composer"
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
-import { ThreadView } from "../src/views/Thread"
+import { ApprovalPanel, ConnectorApprovalPanel, ThreadView } from "../src/views/Thread"
 import { SidebarProvider } from "../src/components/kit/sidebar"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
@@ -93,6 +93,19 @@ function render(width: number, height = 720) {
 }
 function button(text: string) { return [...document.querySelectorAll<HTMLButtonElement>("button")].find(el => el.textContent?.trim() === text)! }
 async function run() {
+  const choices: number[] = []
+  flushSync(() => view.render(<ApprovalPanel approval={approval} count={1} onChoose={choice => choices.push(choice)} />))
+  button("Approve once1").click()
+  button("Decline3").click()
+  document.querySelector<HTMLButtonElement>('[aria-label="More approval options"]')!.click()
+  await sleep(150)
+  const sessionAction = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes("Allow for this session"))
+  check(sessionAction, "Approval exposes session scope in More options")
+  sessionAction?.click()
+  check(JSON.stringify(choices) === "[1,3,2]", "Compact approval actions preserve decision values")
+  flushSync(() => view.render(<ConnectorApprovalPanel approval={approval} connector={{ connector: "Browser", app: "Safari", message: "Allow access?", subtitle: "", persist: ["session"] }} count={1} onChoose={choice => choices.push(choice)} />))
+  button("Allow once2").click()
+  check(choices.at(-1) === 2, "Connector Allow once must not grant session access")
   useStore.getState().set({ connection: { state: "open" }, projects: { project: { id: "project", name: "Project", path: "/project", is_git: false, worktrees_default: false, created_at: at, updated_at: at } }, threads: { [thread.id]: thread }, providers: [], selected: { kind: "thread", id: thread.id }, splitView: null, transcripts: { [thread.id]: { ...emptyThreadState(), loaded: true, thread } } })
   let samples = 0
   const composerRef = createRef<ComposerHandle>()

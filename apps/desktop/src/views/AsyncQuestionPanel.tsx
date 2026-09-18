@@ -1,7 +1,5 @@
 import { useId, useState } from "react"
-import { TextSwap } from "@/components/kybern/motion"
-import { Button } from "@/components/kit/button"
-import { ComposerStackedPanel } from "@/components/kit/chat/ComposerStackedPanel"
+import { QuestionSteps } from "./QuestionSteps"
 import type { AsyncQuestionRequest, ThreadId } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"
 
@@ -13,9 +11,10 @@ export function AsyncQuestionPanel({ threadId, request, count }: { threadId: Thr
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const ready = request.questions.every((_, index) => answers[index]?.trim())
-  return <ComposerStackedPanel className="question-panel t-panel-enter overflow-hidden">
-    <form className="question-panel-form" aria-label="Answer agent questions" aria-busy={busy} onSubmit={async (event) => {
-      event.preventDefault()
+  return <QuestionSteps count={count} busy={busy} error={error}
+    hint="The agent keeps working while you answer."
+    questions={request.questions.map((question, index) => ({ id: String(index), title: question.title, answers: answers[index]?.trim() ? [answers[index]!] : [] }))}
+    onSend={async () => {
       if (busy || !ready) return
       setBusy(true)
       setError("")
@@ -23,14 +22,10 @@ export function AsyncQuestionPanel({ threadId, request, count }: { threadId: Thr
         await rpc().call("threads.answer", { thread_id: threadId, request_id: request.id, answers: request.questions.map((_, index) => answers[index]!.trim()) })
       } catch (error) { setError(errorText(error)) }
       finally { setBusy(false) }
-    }}>
-      <div className="question-panel-header">
-        <h2>{request.questions.length === 1 ? "Question" : "Questions"}</h2>
-        {count > 1 && <span className="question-panel-count">{count} requests</span>}
-      </div>
-      <fieldset disabled={busy} className="question-panel-body">
-        {request.questions.map((question, index) => <fieldset key={index} className="question-panel-question">
-          <legend className="question-panel-title">{request.questions.length > 1 && <span className="question-panel-number">{index + 1}. </span>}{question.title}</legend>
+    }} renderQuestion={index => {
+      const question = request.questions[index]!
+      return <fieldset className="question-panel-question">
+          <legend className="question-panel-title">{question.title}</legend>
           {question.options.map((option, optionIndex) => <label key={optionIndex} className="question-panel-option">
             <input type="radio" name={`${id}:${index}`} checked={!custom[index] && answers[index] === option} className="question-panel-choice" onChange={() => {
               setAnswers((previous) => ({ ...previous, [index]: option }))
@@ -42,13 +37,6 @@ export function AsyncQuestionPanel({ threadId, request, count }: { threadId: Thr
             setAnswers((previous) => ({ ...previous, [index]: event.target.value }))
             setCustom((previous) => ({ ...previous, [index]: true }))
           }} /></label>
-        </fieldset>)}
-      </fieldset>
-      {error && <p role="alert" className="question-panel-error">{error}</p>}
-      <div className="question-panel-footer">
-        <p className="question-panel-hint">The agent keeps working while you answer.</p>
-        <Button type="submit" size="sm" disabled={busy || !ready}><TextSwap text={busy ? "Sending…" : request.questions.length > 1 ? "Send answers" : "Send answer"} /></Button>
-      </div>
-    </form>
-  </ComposerStackedPanel>
+        </fieldset>
+    }} />
 }

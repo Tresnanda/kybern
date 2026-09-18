@@ -534,6 +534,14 @@ html[data-window-material="opaque"] {
 .question-panel-form-blocking { max-height: min(32rem, 65dvh); }
 .question-panel-header h2 { font-size: inherit; font-weight: 400; }
 .question-panel-count { font-size: var(--app-font-size-ui-sm, 11px); }
+.question-step-heading { display: flex; align-items: center; gap: 0.5rem; color: var(--foreground); }
+.question-step-heading:focus { outline: none; }
+.question-panel-count { font-variant-numeric: tabular-nums; text-align: end; }
+.question-review-list { list-style: none; padding: 0; margin: 0; }
+.question-review-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; padding-block: 0.625rem; }
+.question-review-item + .question-review-item { margin-block-start: 0.5rem; }
+.question-review-title { color: var(--muted-foreground); overflow-wrap: anywhere; }
+.question-review-answer { margin-block-start: 0.25rem; color: var(--foreground); white-space: pre-wrap; overflow-wrap: anywhere; }
 .question-panel-body {
   min-width: 0;
   min-height: 0;

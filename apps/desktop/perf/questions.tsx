@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { AsyncQuestionPanel } from "../src/views/AsyncQuestionPanel"
 import { UserInputPanel } from "../src/views/UserInputPanel"
+import { ComposerPanelStack } from "../src/components/kit/chat/ComposerStackedPanel"
 import { ComposerColumnFrame } from "../src/components/kit/chat/ComposerColumnFrame"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
 import type { ApprovalRequest, AsyncQuestionRequest } from "../src/protocol"
@@ -30,7 +31,9 @@ function render(mode: "async" | "blocking", questions = request, width = 720, in
   flushSync(() => view.render(<main style={{ padding: 24, minHeight: "100vh", background: "var(--background)" }}>
     <div id="frame" style={{ width, maxWidth: "100%", marginInline: "auto" }}>
       <ComposerColumnFrame>
+        <ComposerPanelStack closed>
         {mode === "async" ? <AsyncQuestionPanel key={revision} threadId="thread-1" request={questions} count={1} /> : <UserInputPanel key={revision} approval={input} count={1} />}
+        </ComposerPanelStack>
       </ComposerColumnFrame>
     </div>
   </main>))
@@ -69,11 +72,14 @@ async function run() {
   field().focus()
   check(document.activeElement === field(), "Answer cannot receive keyboard focus")
   check(sent.length === 0, "Typing submitted an answer")
+  click(submit())
+  check(sent.length === 0 && !!document.querySelector(".question-review-list"), "Review sent without confirmation")
+  check(document.querySelector(".question-review-answer")?.textContent === answer, "Review changed the answer")
   transport.fail = true
   click(submit())
-  check(submit().disabled && field().matches(":disabled"), "Sending does not disable edits")
+  check(submit().disabled && document.querySelector("fieldset")!.disabled, "Sending does not disable edits")
   await waitForSend()
-  check(!!document.querySelector('[role="alert"]') && field().value === answer && !submit().disabled, "Failed send lost the draft or prevented retry")
+  check(!!document.querySelector('[role="alert"]') && document.querySelector(".question-review-answer")?.textContent === answer && !submit().disabled, "Failed send lost the draft or prevented retry")
   transport.fail = false
   click(submit())
   await waitForSend()
@@ -84,7 +90,8 @@ async function run() {
       render("async", { id: "many", questions: Array.from({ length: 3 }, (_, index) => ({ title: `${index + 1}. ${title}`, options: ["A long option that wraps naturally when the question panel is narrow", "Another option"] })) }, width)
       fits()
       const body = document.querySelector<HTMLElement>(".question-panel-body")!
-      check(body.scrollHeight > body.clientHeight, "Long requests are not bounded")
+      check(document.querySelectorAll(".question-panel-question").length === 1, "Multiple questions render as a long list")
+      check(body.clientHeight <= window.innerHeight * 0.5, "Question content is not bounded")
       body.scrollTop = body.scrollHeight
       fits()
       root.dir = "rtl"
@@ -104,6 +111,7 @@ async function run() {
   type(field(), "Investigate everything\nStart with scrolling")
   check(!document.querySelector<HTMLInputElement>('input[type="radio"]')!.checked, "Blocking custom answer leaves an option selected")
   click(submit())
+  click(submit())
   await waitForSend()
   check(JSON.stringify(sent.at(-1)).includes("Investigate everything"), "Blocking answer payload is missing")
   render("blocking", request, 360, { ...approval, input: { questions: [{ id: "scope", question: "What should be checked?", multiple: true, options: ["Scrolling", "Streaming"] }] } })
@@ -111,10 +119,33 @@ async function run() {
   type(field(), "Menus too")
   check(document.querySelectorAll('input[type="checkbox"]:checked').length === 2, "Extra answer cleared multiple choices")
   click(submit())
+  click(submit())
   await waitForSend()
   check(JSON.stringify(sent.at(-1)).includes('["Scrolling","Streaming","Menus too"]'), "Multiple choices and extra answer changed")
   render("blocking", request, 320, { ...approval, input: { questions: [{ id: "secret", question: "Enter the secret", isSecret: true }] } })
   check(!!document.querySelector('input[type="password"]') && !document.querySelector("textarea"), "Secret answer was exposed")
+  type(document.querySelector<HTMLInputElement>('input[type="password"]')!, "keep-this-secret")
+  click(submit())
+  check(!document.body.textContent?.includes("keep-this-secret") && document.body.textContent?.includes("Hidden answer"), "Review exposed a secret")
+  const beforeWizard = sent.length
+  render("async", { id: "wizard", questions: [{ title: "Choose a scope", options: ["Small", "Large"] }, { title: "Add a constraint", options: [] }] }, 320)
+  click(document.querySelector<HTMLInputElement>('input[type="radio"]')!)
+  click(submit())
+  check(document.body.textContent?.includes("Question 2 of 2") && submit().disabled, "Wizard did not advance or accepted an empty answer")
+  type(field(), "Preserve keyboard support")
+  click([...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Previous"))!)
+  check(document.querySelector<HTMLInputElement>('input[type="radio"]')!.checked, "Previous lost a choice")
+  click(submit())
+  check(field().value === "Preserve keyboard support", "Next lost a draft")
+  click(submit())
+  check(sent.length === beforeWizard && document.querySelectorAll(".question-review-item").length === 2, "Review skipped or submitted answers")
+  click(document.querySelector<HTMLButtonElement>('[aria-label="Edit answer 1"]')!)
+  type(field(), "Custom scope")
+  click(submit())
+  click(submit())
+  click(submit())
+  await waitForSend()
+  check(JSON.stringify(sent.at(-1)).includes('["Custom scope","Preserve keyboard support"]'), "Edited review payload changed")
   render("async", request, 720)
   root.style.setProperty("--app-font-size-ui", "20px")
   root.style.setProperty("--app-font-size-ui-lg", "22px")
@@ -128,9 +159,16 @@ async function run() {
     render("blocking", request, 360)
     click(document.querySelector<HTMLInputElement>('input[type="radio"]')!)
   }
-  await sleep(250)
+  if (import.meta.env.VITE_QUESTION_PREVIEW === "review") {
+    render("async", { id: "review-preview", questions: [{ title: "Where should we start?", options: ["Reduce memory usage", "Polish the interface"] }, { title: "What should stay the same?", options: [] }] }, 560)
+    click(document.querySelector<HTMLInputElement>('input[type="radio"]')!)
+    click(submit())
+    type(field(), "Keep the typography, readable glass surfaces, and keyboard shortcuts.")
+    click(submit())
+  }
+  await sleep(600)
   const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }
-  native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, checks: "multiline, system font, focus, explicit send, busy, retry, payloads, secret, dark/light, 280–920px, RTL, text resizing, bounded scrolling" }))
+  native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, checks: "multiline, system font, focus, explicit send, busy, retry, payloads, secret, dark/light, 280–920px, RTL, text resizing, one question per step, previous/next, review/edit, masked review, bounded scrolling" }))
 }
 run().catch((error) => {
   const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }

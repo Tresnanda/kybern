@@ -7,6 +7,8 @@ import { openExternal } from "@/lib/tauri"
 import type { ApprovalRequest } from "@/protocol"
 import { errorText, respondApproval } from "@/state/rpc"
 
+import { QuestionSteps } from "./QuestionSteps"
+
 const FIELD = "w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-background-control-opaque)] px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
 export function UserInputPanel({ approval, count }: { approval: ApprovalRequest; count: number }) {
@@ -42,9 +44,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
   const onSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     try {
-      if (questions.length) {
-        void submit(questionResponse(approval, questions.map((q) => custom[q.id]?.trim() ? [...(q.multiple ? selected[q.id] ?? [] : []), custom[q.id]!.trim()] : selected[q.id] ?? [])))
-      } else if (elicitation) {
+      if (elicitation) {
         const data = new FormData(event.currentTarget)
         const content: Record<string, unknown> = {}
         for (const [key, raw] of Object.entries(properties)) {
@@ -63,16 +63,19 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
     } catch (error) { setError(errorText(error)) }
   }
 
-  return <ComposerStackedPanel className="question-panel t-panel-enter overflow-hidden">
-    <form onSubmit={onSubmit} className="question-panel-form question-panel-form-blocking" aria-label="Answer agent request" aria-busy={busy}>
-      <div className="question-panel-header">
-        <h2>{questions.length ? questions.length > 1 ? "Questions" : "Question" : "Input needed"}</h2>
-        {count > 1 && <span className="question-panel-count">{count} requests</span>}
-      </div>
-      <fieldset disabled={busy} className="question-panel-body">
-        {!questions.length && <p className="question-panel-title">{approval.summary}</p>}
-        {questions.map((q, index) => <fieldset key={q.id} className="question-panel-question">
-          <legend className="question-panel-title">{questions.length > 1 && `${index + 1}. `}{q.title}</legend>
+  if (questions.length) return <QuestionSteps blocking count={count} busy={busy} error={error}
+    hint="The agent is waiting for your answer."
+    questions={questions.map(q => ({ id: q.id, title: q.title, secret: q.secret,
+      answers: custom[q.id]?.trim() ? [...(q.multiple ? selected[q.id] ?? [] : []), custom[q.id]!.trim()] : selected[q.id] ?? [] }))}
+    onDecline={() => void submit()}
+    onSend={() => {
+      try {
+        void submit(questionResponse(approval, questions.map(q => custom[q.id]?.trim() ? [...(q.multiple ? selected[q.id] ?? [] : []), custom[q.id]!.trim()] : selected[q.id] ?? [])))
+      } catch (error) { setError(errorText(error)) }
+    }} renderQuestion={index => {
+      const q = questions[index]!
+      return <fieldset key={q.id} className="question-panel-question">
+          <legend className="question-panel-title">{q.title}</legend>
           {q.multiple && <p className="text-xs text-muted-foreground">Select all that apply.</p>}
           {q.options.map((option) => <label key={option.label} className="question-panel-option">
             <input type={q.multiple ? "checkbox" : "radio"} name={`${id}:${q.id}`} checked={(selected[q.id] ?? []).includes(option.label)} className="question-panel-choice" onChange={() => {
@@ -88,7 +91,17 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
             setCustom((previous) => ({ ...previous, [q.id]: event.target.value }))
             if (!q.multiple) setSelected((previous) => ({ ...previous, [q.id]: [] }))
           }} />}</label>}
-        </fieldset>)}
+        </fieldset>
+    }} />
+
+  return <ComposerStackedPanel className="question-panel t-panel-enter overflow-hidden">
+    <form onSubmit={onSubmit} className="question-panel-form question-panel-form-blocking" aria-label="Answer agent request" aria-busy={busy}>
+      <div className="question-panel-header">
+        <h2>Input needed</h2>
+        {count > 1 && <span className="question-panel-count">{count} requests</span>}
+      </div>
+      <fieldset disabled={busy} className="question-panel-body">
+        <p className="question-panel-title">{approval.summary}</p>
         {approval.tool_name === "ui_select" && <label className="block space-y-2"><span>Choose an option</span><select className={FIELD} required value={value} onChange={(event) => setValue(event.target.value)}><option value="" disabled>Select…</option>{array(input.options).map((option) => <option key={String(option)}>{String(option)}</option>)}</select></label>}
         {approval.tool_name === "ui_confirm" && <p className="leading-relaxed">{string(input.message)}</p>}
         {(approval.tool_name === "ui_input" || approval.tool_name === "ui_editor") && <label className="block space-y-2"><span>Answer</span>{approval.tool_name === "ui_editor" ? <textarea className={FIELD} rows={6} value={value} onChange={(event) => setValue(event.target.value)} /> : <input className={FIELD} placeholder={string(input.placeholder)} value={value} onChange={(event) => setValue(event.target.value)} />}</label>}
@@ -97,10 +110,9 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
       </fieldset>
       {error && <p role="alert" className="question-panel-error">{error}</p>}
       <div className="question-panel-footer">
-        {!!questions.length && <p className="question-panel-hint">The agent is waiting for your answer.</p>}
         <div className="question-panel-actions">
           <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void submit()}>Decline</Button>
-          {approval.tool_name === "ui_confirm" ? <><Button type="button" variant="chrome-outline" size="sm" disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button><Button type="button" size="sm" disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button></> : <Button type="submit" size="sm" disabled={busy || (isUrl && !urlOpened)}><TextSwap text={busy ? "Sending…" : questions.length > 1 ? "Send answers" : questions.length ? "Send answer" : "Submit"} /></Button>}
+          {approval.tool_name === "ui_confirm" ? <><Button type="button" variant="chrome-outline" size="sm" disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button><Button type="button" size="sm" disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button></> : <Button type="submit" size="sm" disabled={busy || (isUrl && !urlOpened)}><TextSwap text={busy ? "Sending…" : "Submit"} /></Button>}
         </div>
       </div>
     </form>
