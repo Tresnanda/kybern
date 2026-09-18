@@ -1,18 +1,23 @@
 import { retainedSize } from "@/lib/retainedSize"
 import type { Store, AppState } from "./store"
-import { collectSplitThreadIds } from "./splitView"
+import { collectOpenThreadIds } from "./splitView"
 import { compactThreadState } from "./transcript"
+import { windowHoldsTranscript } from "./windowSurfaceState"
 
 export const INACTIVE_CACHE_BYTES = 16 * 1024 * 1024
 
 /** Active panes are pinned; only reconstructible inactive data is evicted.
- * Pending approvals/questions, drafts, queues and terminal ownership survive. */
+ * Pending approvals/questions, drafts, queues and terminal ownership survive.
+ * A hidden (occluded/minimized) window does not pin its selected thread. */
 export function createRetentionPolicy(limit = INACTIVE_CACHE_BYTES) {
   const touched = new Map<string, number>()
   let clock = 0
   return (state: Store, previous: Store): Partial<AppState> | null => {
-    const visible = new Set(collectSplitThreadIds(state.splitView))
-    if (state.selected.kind === "thread") visible.add(state.selected.id)
+    const visible = new Set(
+      windowHoldsTranscript()
+        ? collectOpenThreadIds(state.splitView, state.selected.kind === "thread" ? state.selected.id : null)
+        : [],
+    )
     const candidates: { key: string; id: string; kind: "transcript" | "diff"; bytes: number; at: number }[] = []
     const keys = new Set<string>()
     for (const [id, transcript] of Object.entries(state.transcripts)) {

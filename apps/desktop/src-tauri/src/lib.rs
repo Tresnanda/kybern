@@ -23,6 +23,7 @@ mod notifications;
 mod remote;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+mod window_surface;
 
 static ENDPOINT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static STARTING_ENDPOINT: tokio::sync::Mutex<Option<StartingEndpoint>> = tokio::sync::Mutex::const_new(None);
@@ -528,6 +529,7 @@ pub fn run() {
                 }
                 #[cfg(target_os = "macos")]
                 traffic_lights::install(&w);
+                window_surface::install(&w);
             }
             Ok(())
         })
@@ -548,6 +550,7 @@ pub fn run() {
             remote::remote_bootstrap,
             remote::remote_ssh_hosts,
             pairing_qr,
+            window_surface::window_surface,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

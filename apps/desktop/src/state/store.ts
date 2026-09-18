@@ -24,6 +24,7 @@ import type {
 
 import { applyEvent, applyBackgroundEvent, compactThreadState, emptyThreadState, type ThreadState } from "./transcript"
 import { createRetentionPolicy } from "./retention"
+import { windowHoldsTranscript } from "./windowSurfaceState"
 import { advanceSequence } from "./bootstrap"
 import {
   persistWorkspace,
@@ -33,6 +34,7 @@ import {
 import {
   canSplitPane,
   closeSplitViewPane,
+  collectOpenThreadIds as collectOpenThreadIdsFromSplit,
   collectSplitThreadIds,
   createSplitView,
   findThreadPane,
@@ -687,9 +689,18 @@ export const selectRecentThreads = (s: AppState): Thread[] =>
 export const selectSelectedThread = (s: AppState): Thread | null =>
   s.selected.kind === "thread" ? (s.threads[s.selected.id] ?? null) : null
 
-export const isThreadVisible = (s: AppState, threadId: ThreadId): boolean =>
+/** Threads shown in this window's panes, ignoring whether the window is on screen. */
+export function collectOpenThreadIds(s: Pick<AppState, "selected" | "splitView">): ThreadId[] {
+  return collectOpenThreadIdsFromSplit(s.splitView, s.selected.kind === "thread" ? s.selected.id : null)
+}
+
+export const isThreadOpen = (s: AppState, threadId: ThreadId): boolean =>
   (s.selected.kind === "thread" && s.selected.id === threadId) ||
   collectSplitThreadIds(s.splitView).includes(threadId)
+
+/** Open in this window and the window still holds transcript DOM/heap. */
+export const isThreadVisible = (s: AppState, threadId: ThreadId): boolean =>
+  windowHoldsTranscript() && isThreadOpen(s, threadId)
 
 /** The one thread the user is actively interacting with. Other split panes are
  * mounted and visible, but must still accumulate unread completion state. */
