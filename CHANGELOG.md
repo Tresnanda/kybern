@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.4
+
+<!-- kybern-release-title: Unified settings chrome, steady window controls -->
+<!-- kybern-release-summary: Settings share the thread sidebar's chrome and the macOS window controls stay aligned with the toolbar. -->
+
+- Settings share the thread's chrome: the same sidebar width and drag handle, row density, icon set, and a flush content surface instead of an inset card.
+- The macOS traffic lights stay centered on the toolbar instead of drifting upward after the window finishes opening.
+- The sidebar gains a notification center; the bell reflects live status and filters the sidebar instead of opening a popover.
+- Composer picker rows are single-line, and the send button, edit glyph, and top chrome use refreshed Hugeicons.
+
 ## 0.4.3
 
 <!-- kybern-release-title: Less retained work, steadier history -->
