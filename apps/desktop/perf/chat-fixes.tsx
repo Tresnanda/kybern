@@ -6,6 +6,7 @@ import { EnvironmentSwitcher } from "../src/views/EnvironmentSwitcher"
 import { ResponseImage } from "../src/components/kybern/ResponseImage"
 import { SidebarProvider } from "../src/components/kit/sidebar"
 import { SidebarLeadingControls } from "../src/views/chrome"
+import { assets } from "./chat-fixes-assets"
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { applyEvent, emptyThreadState } from "../src/state/transcript"
@@ -149,11 +150,43 @@ async function run() {
     flushSync(() => view.render(<div className="p-6"><Composer key={variant} draftKey="image" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} /></div>))
     await sleep(200)
     await openPreview(document.querySelector<HTMLButtonElement>('[aria-label="Preview Screenshot.png"]')!, url)
+    // Switching threads destroys local blob URLs; the durable asset ID restores
+    // the thumbnail without retaining an image payload in every saved draft.
+    check(!useStore.getState().composerDrafts.image!.attachments[0]!.preview, "Draft retained a transient blob URL")
+    flushSync(() => view.render(<Composer key={`${variant}-other`} draftKey="other" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
+    URL.revokeObjectURL(url)
+    const reads = assets.reads
+    flushSync(() => view.render(<Composer key={`${variant}-restored`} draftKey="image" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
+    await waitFor(() => document.querySelector<HTMLImageElement>('[aria-label="Preview Screenshot.png"] img')?.complete, "Returning to the draft lost its image thumbnail")
+    check(assets.reads === reads + 1, "Draft preview fetched repeatedly")
+    const restored = document.querySelector<HTMLImageElement>('[aria-label="Preview Screenshot.png"] img')!.src
+    check(restored !== url, "Draft reused a revoked preview URL")
+    await openPreview(document.querySelector<HTMLButtonElement>('[aria-label="Preview Screenshot.png"]')!, restored)
     document.querySelector<HTMLButtonElement>('[aria-label="Remove Screenshot.png"]')!.click()
     await sleep(100)
     check(!document.querySelector('[aria-label="Preview Screenshot.png"]'), "Preview interfered with removing an attachment")
-    URL.revokeObjectURL(url)
+    let released = false
+    try { await fetch(restored) } catch { released = true }
+    check(released, "Removing the restored attachment retained its blob")
   }
+
+  const savedAttachment = { id: "upload", name: "Restored.png", media_type: "image/png", size: 68 }
+  useStore.getState().set(state => ({ composerDrafts: { ...state.composerDrafts, recovery: { text: "", attachments: [savedAttachment], mentions: [], skills: [] } } }))
+  assets.fail = true
+  flushSync(() => view.render(<Composer key="retry-asset" draftKey="recovery" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
+  await waitFor(() => document.querySelector('[aria-label="Retry preview Restored.png"]'), "Failed preview cannot be retried")
+  assets.fail = false
+  document.querySelector<HTMLButtonElement>('[aria-label="Retry preview Restored.png"]')!.click()
+  await waitFor(() => document.querySelector<HTMLImageElement>('[aria-label="Preview Restored.png"] img')?.complete, "Retry did not restore the image")
+  assets.delay = 120
+  const pendingReads = assets.reads
+  const abortedReads = assets.aborted
+  flushSync(() => view.render(<Composer key="pending-asset" draftKey="recovery" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
+  await waitFor(() => assets.reads > pendingReads, "Preview did not start loading")
+  flushSync(() => view.render(<Composer key="away-asset" draftKey="other" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
+  await waitFor(() => assets.aborted === abortedReads + 1, "Leaving a draft did not cancel the pending preview")
+  check(!document.querySelector('[aria-label="Preview Restored.png"]'), "A late preview leaked into another thread")
+  assets.delay = 0
 
   // Show native-only menu actions without starting a production shell.
   const openedWindows: string[] = []
@@ -241,7 +274,15 @@ async function run() {
       await sleep(250)
     }
   }
-  return { pass: true, imagePreviews: 6, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }
+  if (import.meta.env.VITE_CHAT_PREVIEW === "image") {
+    theme("dark")
+    const image = URL.createObjectURL(await (await fetch("/release-background.png")).blob())
+    flushSync(() => view.render(<div className="p-6"><ResponseImage source={image} label="Image.png" thumbnail /></div>))
+    await sleep(200)
+    document.querySelector<HTMLButtonElement>('[aria-label="Preview Image.png"]')!.click()
+    await sleep(350)
+  }
+  return { pass: true, imagePreviews: 6, restoredDraftThumbnails: true, previewRetry: true, previewCleanup: true, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }
 }
 const report = (result: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(result))
 run().then(report).catch((error) => report({ pass: false, error: String(error), stack: error.stack }))

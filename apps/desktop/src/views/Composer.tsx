@@ -1,4 +1,4 @@
-import { ResponseImage } from "@/components/kybern/ResponseImage"
+import { ComposerImageAttachment } from "@/components/kybern/ComposerImageAttachment"
 import { ProviderUsageIndicator } from "@/components/kybern/ProviderUsageIndicator"
 import type { ProviderUsage } from "@/protocol"
 // Composer: frosted 1.2rem squircle
@@ -823,9 +823,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             {(attachments.length > 0 || uploading > 0) && (
               <div className="-mx-1.5 -mt-1 mb-2 flex flex-wrap items-start gap-1.5">
                 {attachments.map((a) =>
-                  a.preview ? (
+                  a.media_type.startsWith("image/") ? (
                     <div key={a.id} className="t-pop group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
-                        <ResponseImage source={a.preview} label={a.name} thumbnail />
+                        <ComposerImageAttachment id={a.id} name={a.name} preview={a.preview} />
                       <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </div>
                   ) : (

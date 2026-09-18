@@ -947,6 +947,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     return response.blob()
   }
 
+  async function fetchAssetImage(assetId: string, signal: AbortSignal): Promise<Blob> {
+    if (disposed) throw new Error("Environment disconnected")
+    const response = await fetch(`${httpBase}/assets/${encodeURIComponent(assetId)}`, { headers: { authorization: `Bearer ${token}` }, signal })
+    if (!response.ok) throw new Error("Unable to load the attachment preview. Try again.")
+    return response.blob()
+  }
+
   function disconnect() {
     disposed = true
     stopReadTracking()
@@ -995,6 +1002,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     removeProject,
     uploadFile,
     fetchThreadImage,
+    fetchAssetImage,
     artifactPreviewUrl,
     subscribeCollaboration,
   }
@@ -1080,3 +1088,4 @@ export function errorText(e: unknown): string {
 reloadOnHotUpdate(import.meta.hot)
 
 export const fetchThreadImage: EnvironmentRuntime["fetchThreadImage"] = (...args) => activeRuntime().fetchThreadImage(...args)
+export const fetchAssetImage: EnvironmentRuntime["fetchAssetImage"] = (...args) => activeRuntime().fetchAssetImage(...args)
