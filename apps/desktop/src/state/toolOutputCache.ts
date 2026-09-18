@@ -43,6 +43,11 @@ interface ToolOutputCacheOptions<Output> {
 // Mounted content is not an eviction candidate: evicting it causes a refetch loop.
 const MAX_INACTIVE_OUTPUTS = 12
 export const MAX_INACTIVE_OUTPUT_BYTES = 8 * 1024 * 1024
+/** Reconstructible open payloads above this stay out of the inactive LRU. */
+export const OVERSIZED_OUTPUT_BYTES = 256 * 1024
+export function toolOutputIsOversized(bytes: number): boolean {
+  return bytes > OVERSIZED_OUTPUT_BYTES
+}
 // Leave room in the daemon's 16-request lane for subscriptions and interaction.
 const MAX_CONCURRENT_LOADS = 4
 
@@ -100,6 +105,11 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
   }
 
   function evict(): void {
+    for (const [key, identity] of [...hydrated]) {
+      if (consumers.has(key) || !toolOutputIsOversized(identity.bytes)) continue
+      hydrated.delete(key)
+      options.omit(identity)
+    }
     let inactive = 0, bytes = 0
     for (const [key, entry] of hydrated) if (!consumers.has(key)) { inactive++; bytes += entry.bytes }
     for (const [key, identity] of hydrated) {
@@ -145,6 +155,24 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
         touch(key)
         evict()
       }
+    }
+  }
+
+  /** Omit a reconstructible payload that no consumer currently displays. */
+  function drop(threadId: string, toolCallId: string, seq?: number): void {
+    if (disposed) return
+    const current = options.read(threadId, toolCallId, seq)
+    const key = keyFor(threadId, toolCallId, seq ?? current?.seq)
+    if ((consumers.get(key) ?? 0) > 0) return
+    const identity = hydrated.get(key)
+    hydrated.delete(key)
+    if (identity) options.omit(identity)
+    else if (current && !current.omitted) {
+      options.omit({
+        threadId, toolCallId, seq: current.seq, turnId: current.turnId,
+        throughSeq: current.throughSeq, revision: current.revision,
+        outputOmitted: current.outputOmitted, streamOmitted: current.streamOmitted,
+      })
     }
   }
 
@@ -212,5 +240,5 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
     consumers.clear()
   }
 
-  return { hydrate, retain, track, invalidatePending, dispose }
+  return { hydrate, retain, drop, track, invalidatePending, dispose }
 }

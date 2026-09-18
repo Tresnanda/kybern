@@ -72,6 +72,8 @@ import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, Thread
 import { activeRuntime, errorText, hydrateToolOutput, retainToolOutput, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
+import { retainedSize } from "@/lib/retainedSize"
+import { toolOutputIsOversized } from "@/state/toolOutputCache"
 
 const TEXT = getChatTranscriptTextStyle()
 const CHAT_FONT: CSSProperties = { fontSize: TEXT.fontSize }
@@ -1385,19 +1387,49 @@ function ToolRow({
 function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface: ToolSurface | null; screenshots: string[] }) {
   const threadId = useContext(ImageThreadContext)
   const connected = useStore((state) => state.connection.state === "open")
+  const [host, setHost] = useState<HTMLElement | null>(null)
+  const holdOffscreen = useRef(false)
+  const payloadBytes = (block.outputOmitted ? 0 : retainedSize(block.output)) + (block.streamOmitted ? 0 : block.stream.length * 2)
+  const oversized = toolOutputIsOversized(payloadBytes)
+  const [visible, setVisible] = useState(true)
+  const [selected, setSelected] = useState(false)
+  useEffect(() => {
+    if (!host) return
+    const observer = new IntersectionObserver(([entry]) => setVisible(!!entry?.isIntersecting), { rootMargin: "300px" })
+    observer.observe(host)
+    return () => observer.disconnect()
+  }, [host])
+  useEffect(() => {
+    if (!host) return
+    const sync = () => {
+      const selection = document.getSelection()
+      setSelected(!!(selection && !selection.isCollapsed && host.contains(selection.anchorNode)))
+    }
+    document.addEventListener("selectionchange", sync)
+    return () => document.removeEventListener("selectionchange", sync)
+  }, [host])
   useEffect(() => {
     if (!threadId) return
+    // After the first offscreen omit, skipped hydration must persist: the omitted
+    // stub reports 0 bytes and would otherwise look small enough to refetch.
+    if ((oversized || holdOffscreen.current) && !visible && !selected) {
+      holdOffscreen.current = true
+      return
+    }
+    holdOffscreen.current = false
     return retainToolOutput(threadId, block.call.id, block.seq)
-  }, [threadId, block.call.id, block.seq])
+  }, [threadId, block.call.id, block.seq, oversized, visible, selected])
   useEffect(() => {
-    if (connected && threadId && (block.outputOmitted || block.streamOmitted)) void hydrateToolOutput(threadId, block.call.id, block.seq)
-  }, [connected, threadId, block])
+    if (connected && threadId && (block.outputOmitted || block.streamOmitted) && !(holdOffscreen.current && !visible && !selected)) {
+      void hydrateToolOutput(threadId, block.call.id, block.seq)
+    }
+  }, [connected, threadId, block, visible, selected])
   const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
   if ((block.outputOmitted || block.streamOmitted) && !out.trim() && screenshots.length === 0) {
-    return <p className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
+    return <p ref={setHost} className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
   }
   return (
-    <>
+    <div ref={setHost}>
       {screenshots.length > 0 && (
         <div className={cn("flex flex-wrap gap-2", out.trim() && "pb-2")}>
           {screenshots.map((source, index) => (
@@ -1413,7 +1445,7 @@ function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface
       >
         {out}
       </pre>}
-    </>
+    </div>
   )
 }
 

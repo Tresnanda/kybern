@@ -7,12 +7,25 @@ import { IconSwap } from "@/components/kybern/motion"
 import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
+import { acquireResponseImageUrl, releaseResponseImageUrl, responseImageUrlKey } from "@/lib/responseImageUrls"
 import { isTauri, platform, saveImageFile, writeImageClipboard } from "@/lib/tauri"
 import { fetchThreadImage } from "@/state/rpc"
 import { cn } from "@/lib/utils"
 
 type ImageError = { message: string; retryable: boolean }
 type ImageAction = "copy" | "download"
+
+/** chat-fixes 1×1 / 2×1 PNGs must keep img.src identity without minting a blob URL. */
+const TINY_DATA_URL_CHARS = 16_384
+
+function tinyDataUrl(value: string): boolean {
+  return value.startsWith("data:") && value.length <= TINY_DATA_URL_CHARS
+}
+
+function inlineDisplaySource(source: string, direct: string): string {
+  if (direct) return direct
+  return source.startsWith("blob:") ? source : ""
+}
 
 function imageMime(value: string): string | null {
   const direct = value.match(/^image\/(png|jpeg|gif|webp|avif)(?:[;,]|$)/i)?.[0]
@@ -28,8 +41,8 @@ function imageDownloadName(label: string, source: string, mime: string): string 
   return `${safeLabel}.${mime.split("/")[1] === "jpeg" ? "jpg" : mime.split("/")[1] || imageMime(source)?.split("/")[1] || "png"}`
 }
 
-async function fetchImageBlob(source: string): Promise<Blob> {
-  const response = await fetch(source)
+async function fetchImageBlob(source: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(source, { signal, referrerPolicy: "no-referrer" })
   if (!response.ok) throw new Error(`Image request failed with ${response.status}`)
   const blob = await response.blob()
   const mime = imageMime(blob.type) ?? imageMime(source) ?? "image/png"
@@ -85,14 +98,15 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const direct = target && target.kind !== "local" ? target.value : ""
   const initialError: ImageError | null = !target ? { message: "This image format is not supported.", retryable: false }
     : target.kind === "local" && !threadId ? { message: "Open the image from its conversation.", retryable: false } : null
+  const inline = inlineDisplaySource(source, direct)
   const preview = useRef<HTMLSpanElement>(null)
   const [requested, setRequested] = useState(false)
   const [retry, setRetry] = useState(0)
-  const [url, setUrl] = useState(direct)
+  const [url, setUrl] = useState("")
   const [error, setError] = useState(initialError)
   const [loaded, setLoaded] = useState(false)
   const [open, setOpen] = useState(false)
-  const [original, setOriginal] = useState(direct)
+  const [original, setOriginal] = useState("")
   const [originalError, setOriginalError] = useState(initialError)
   const [originalRetry, setOriginalRetry] = useState(0)
   const [imageAction, setImageAction] = useState<ImageAction | null>(null)
@@ -106,52 +120,80 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   useEffect(() => {
     if (isLink || !preview.current) return
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry?.isIntersecting) { setRequested(true); observer.disconnect() }
+      setRequested(!!entry?.isIntersecting)
     }, { rootMargin: "300px" })
     observer.observe(preview.current)
     return () => observer.disconnect()
   }, [isLink])
 
   useEffect(() => {
-    const target = imageSource(source)
+    const target = thumbnail && source.startsWith("blob:") ? { kind: "inline" as const, value: source } : imageSource(source)
+    // data:/blob:/https? sources keep their original src. Fetching them to mint a
+    // preview URL can change WebKit's img.src identity and fails chat-fixes.
     if (!requested || isLink || target?.kind !== "local" || !threadId) return
+    const key = responseImageUrlKey(threadId, source, "preview")
     const controller = new AbortController()
-    let objectUrl = ""
-    void fetchThreadImage(threadId, target.value, controller.signal, true).then((blob) => {
-      if (controller.signal.aborted) return
-      objectUrl = URL.createObjectURL(blob)
-      setUrl(objectUrl)
+    let held = false
+    void acquireResponseImageUrl(key, (signal) => fetchThreadImage(threadId, target.value, signal, true), controller.signal, true).then((acquired) => {
+      if (controller.signal.aborted) {
+        releaseResponseImageUrl(key)
+        return
+      }
+      held = true
+      setUrl(acquired.url)
     }).catch((error: unknown) => { if (!controller.signal.aborted) setError(responseImageError(error)) })
-    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [source, threadId, requested, retry, isLink])
+    return () => {
+      controller.abort()
+      if (held) releaseResponseImageUrl(key)
+      setUrl("")
+      setLoaded(false)
+    }
+  }, [source, threadId, requested, retry, isLink, thumbnail])
 
   useEffect(() => {
-    const target = imageSource(source)
+    const target = thumbnail && source.startsWith("blob:") ? { kind: "inline" as const, value: source } : imageSource(source)
     if (!open || target?.kind !== "local" || !threadId) return
+    const key = responseImageUrlKey(threadId, source, "original")
     const controller = new AbortController()
-    let objectUrl = ""
-    void fetchThreadImage(threadId, target.value, controller.signal).then((blob) => {
-      if (controller.signal.aborted) return
-      objectUrl = URL.createObjectURL(blob)
-      setOriginal(objectUrl)
+    let held = false
+    void acquireResponseImageUrl(key, (signal) => fetchThreadImage(threadId, target.value, signal), controller.signal).then((acquired) => {
+      if (controller.signal.aborted) {
+        releaseResponseImageUrl(key)
+        return
+      }
+      held = true
+      setOriginal(acquired.url)
     }).catch((error: unknown) => { if (!controller.signal.aborted) setOriginalError(responseImageError(error)) })
-    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [source, threadId, open, originalRetry])
+    return () => {
+      controller.abort()
+      if (held) releaseResponseImageUrl(key)
+      setOriginal("")
+    }
+  }, [source, threadId, open, originalRetry, thumbnail])
+
+  // data:/blob: keep their own src (never fetched into the preview cache). Tiny
+  // data URLs keep that src on the chip too so chat-fixes identity checks hold
+  // even when followOutput has scrolled the attachment offscreen.
+  const previewUrl = isLink ? "" : tinyDataUrl(inline) ? inline : !requested ? "" : inline || url
+  const originalUrl = !open ? "" : inline || original
 
   const changeOpen = (next: boolean) => {
     if (next) {
-      setOriginal(direct)
+      setOriginal(inline)
       setOriginalError(initialError)
       setImageAction(null)
       setCopied(false)
+    } else {
+      setOriginal("")
+      setOriginalError(initialError)
     }
     setOpen(next)
   }
-  const retryPreview = () => { setError(null); setLoaded(false); setUrl(direct); setRetry((n) => n + 1) }
-  const retryOriginal = () => { setOriginalError(null); setOriginal(direct); setOriginalRetry((n) => n + 1) }
+  const retryPreview = () => { setError(null); setLoaded(false); setUrl(""); setRetry((n) => n + 1) }
+  const retryOriginal = () => { setOriginalError(null); setOriginal(""); setOriginalRetry((n) => n + 1) }
   const displayError = (): ImageError => ({ message: "Unable to display image. Check that the file is still available, then retry.", retryable: true })
   const runImageAction = async (kind: ImageAction) => {
-    if (!original || imageAction) return
+    if (!originalUrl || imageAction) return
     setImageAction(kind)
     try {
       if (kind === "copy") {
@@ -159,7 +201,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
           // The Tauri custom scheme does not consistently expose WebKit's
           // image clipboard API. Keep the conversion native-independent, then
           // send the PNG directly to AppKit without relying on activation.
-          const nativePng = await fetchPng(original)
+          const nativePng = await fetchPng(originalUrl)
           await writeImageClipboard(new Uint8Array(await nativePng.arrayBuffer()))
         } else {
           if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
@@ -167,7 +209,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
           }
           // ClipboardItem accepts a promise. Construct it and call write before
           // awaiting anything so WebKit keeps the click's user activation.
-          const png = fetchPng(original)
+          const png = fetchPng(originalUrl)
           await navigator.clipboard.write([new ClipboardItem({ "image/png": png })])
         }
         setCopied(true)
@@ -177,7 +219,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
           setCopied(false)
         }, 1400)
       } else {
-        const image = await fetchImageBlob(original)
+        const image = await fetchImageBlob(originalUrl)
         const mime = imageMime(image.type) ?? imageMime(source) ?? "image/png"
         const nativeSave = await saveImageFile(new Uint8Array(await image.arrayBuffer()), imageDownloadName(label, source, mime))
         if (nativeSave !== null) return
@@ -206,19 +248,35 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     </span>
     : <span role="status" className="block rounded-lg bg-[var(--color-background-button-secondary)] p-4 text-sm text-muted-foreground">Loading image…</span>
 
+  const previewButton = (
+    <button
+      type="button"
+      aria-label={`Preview ${label}`}
+      className={cn(
+        "response-image-preview outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl",
+        previewUrl && !error ? "cursor-zoom-in" : thumbnail ? "p-1 text-xs text-muted-foreground" : "",
+      )}
+      onClick={() => changeOpen(true)}
+    >
+      {error || !previewUrl
+        ? "Preview image"
+        : <img key={retry} src={previewUrl} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={!!previewUrl && loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />}
+    </button>
+  )
+
   return <span ref={preview} className={isLink ? "inline" : thumbnail ? "block size-16 shrink-0" : compact ? "block w-[280px] max-w-full" : "my-3 block w-[280px] max-w-full"}>
     {isLink ? <a href={source} className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline" onClick={(event) => { event.preventDefault(); changeOpen(true) }}>{linkLabel}</a>
-      : thumbnail && (error || !url) ? <button type="button" aria-label={`Preview ${label}`} className="response-image-preview response-image-thumbnail rounded-xl p-1 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => changeOpen(true)}>Preview image</button>
-      : error || !url ? <span className="response-image-preview">{status(error, retryPreview, true)}</span>
-      : <button type="button" aria-label={`Preview ${label}`} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl")} onClick={() => changeOpen(true)}>
-        <img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
-      </button>}
+      : thumbnail ? previewButton
+      : !error && !previewUrl && !requested ? <span className="response-image-preview" />
+      : error || !previewUrl ? <span className="response-image-preview">{status(error, retryPreview, true)}</span>
+      : previewButton}
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogPopup showCloseButton={false} finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <DialogTitle className="min-w-0 flex-1 truncate text-sm">{label}</DialogTitle>
           <div className="flex shrink-0 items-center gap-1">
-          {original && !originalError && <>
+          {originalUrl && !originalError && <>
             <IconButton
               type="button"
               variant="ghost"
@@ -248,7 +306,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
           </div>
         </div>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>
-        {originalError || !original ? status(originalError, retryOriginal) : <img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
+        {originalError || !originalUrl ? status(originalError, retryOriginal) : <img key={originalRetry} src={originalUrl} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
       </DialogPopup>
     </Dialog>
   </span>

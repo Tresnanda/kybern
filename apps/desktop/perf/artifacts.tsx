@@ -10,6 +10,10 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const view = createRoot(document.getElementById("root")!)
 function render(text: string) { flushSync(() => view.render(<ThemeProviderContext value={{ theme: document.documentElement.classList.contains("dark") ? "dark" : "light", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><ImageThreadContext value="thread-1"><Markdown text={text} /></ImageThreadContext></ThemeProviderContext>)) }
 function check(condition: unknown, message: string) { if (!condition) throw new Error(message) }
+const liveUrls = new Set<string>()
+const createURL = URL.createObjectURL.bind(URL), revokeURL = URL.revokeObjectURL.bind(URL)
+URL.createObjectURL = (blob) => { const url = createURL(blob); liveUrls.add(url); return url }
+URL.revokeObjectURL = (url) => { liveUrls.delete(url); revokeURL(url) }
 async function waitFor(condition: () => unknown, message: string) {
   const deadline = performance.now() + 5000
   while (!condition()) {
@@ -88,6 +92,18 @@ async function run() {
   root.style.marginTop = "0"
   await waitFor(() => fetched.includes("artifacts/sized-offscreen.png"), "Image did not load on approach")
   check(fetched.includes("artifacts/sized-offscreen.png"), "Image did not load on approach")
+  // fetchThreadImage records the path before the 120ms sized-blob delay and
+  // createObjectURL. Wait for the owned preview URL, not the fetch bookkeeping.
+  await waitFor(() => liveUrls.size > 0 && root.querySelector(".response-image-preview img"), "Visible preview created no object URL")
+  const loadedOffscreen = liveUrls.size
+  check(loadedOffscreen > 0, "Visible preview created no object URL")
+  root.style.marginTop = "3000px"
+  await waitFor(() => liveUrls.size < loadedOffscreen && !root.querySelector("img"), "Leaving the viewport did not release the preview URL")
+  check(!root.querySelector("img"), "Offscreen preview kept a decoded image")
+  root.style.marginTop = "0"
+  await waitFor(() => root.querySelector("img"), "Reopening a released preview failed")
+  await Promise.all(Array.from(root.querySelectorAll<HTMLImageElement>("img"), (image) => image.decode()))
+  check(root.querySelector("img")?.complete === true, "Reopened preview did not decode")
   flushSync(() => view.render(<ImageThreadContext value="thread-1"><div className="flex flex-wrap gap-2">{["portrait", "landscape"].map((shape) => <ResponseImage key={shape} compact source={`artifacts/sized-gallery-${shape}.png`} />)}</div></ImageThreadContext>))
   await waitFor(() => root.querySelectorAll(".response-image-preview").length === 2, "Gallery placeholders did not mount")
   const galleryHeight = root.getBoundingClientRect().height
@@ -104,6 +120,9 @@ async function run() {
   root.scrollTop = root.scrollHeight
   await waitFor(() => fetched.includes("artifacts/sized-many-39.png"), "Last image in a long response is unreachable")
   check(fetched.includes("artifacts/sized-many-39.png"), "Last image in a long response is unreachable")
+  await sleep(200)
+  check(root.querySelectorAll("img").length <= 12, `Long image response kept ${root.querySelectorAll("img").length} decoded previews`)
+  check(liveUrls.size <= 12, `Long image response kept ${liveUrls.size} live object URLs`)
   root.scrollTop = 0
   root.style.height = ""
   root.style.overflowY = ""
