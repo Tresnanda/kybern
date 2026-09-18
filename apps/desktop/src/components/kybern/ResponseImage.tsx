@@ -6,6 +6,7 @@ import { IconButton } from "@/components/kit/icon-button"
 import { IconSwap } from "@/components/kybern/motion"
 import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
+import { fitImageBlob, inlineImageBlob, previewNeedsFit, PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH } from "@/lib/previewImageFit"
 import { imageSource, responseImageError } from "@/lib/responseImages"
 import { isTauri, platform, saveImageFile, writeImageClipboard } from "@/lib/tauri"
 import { fetchThreadImage } from "@/state/rpc"
@@ -86,9 +87,10 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const initialError: ImageError | null = !target ? { message: "This image format is not supported.", retryable: false }
     : target.kind === "local" && !threadId ? { message: "Open the image from its conversation.", retryable: false } : null
   const preview = useRef<HTMLSpanElement>(null)
+  const fitInline = !thumbnail && !isLink && previewNeedsFit(direct)
   const [requested, setRequested] = useState(false)
   const [retry, setRetry] = useState(0)
-  const [url, setUrl] = useState(direct)
+  const [url, setUrl] = useState(fitInline ? "" : direct)
   const [error, setError] = useState(initialError)
   const [loaded, setLoaded] = useState(false)
   const [open, setOpen] = useState(false)
@@ -126,6 +128,33 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   }, [source, threadId, requested, retry, isLink])
 
   useEffect(() => {
+    if (!requested || thumbnail || isLink || !previewNeedsFit(direct)) return
+    const controller = new AbortController()
+    let objectUrl = ""
+    void (async () => {
+      const blob = await inlineImageBlob(direct, controller.signal)
+      if (controller.signal.aborted) return
+      const fitted = await fitImageBlob(blob, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT, controller.signal)
+      if (controller.signal.aborted) return
+      if (fitted === blob) {
+        setUrl(direct)
+        return
+      }
+      objectUrl = URL.createObjectURL(fitted)
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(objectUrl)
+        objectUrl = ""
+        return
+      }
+      setUrl(objectUrl)
+    })().catch((error: unknown) => { if (!controller.signal.aborted) setError(responseImageError(error)) })
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [requested, thumbnail, isLink, direct, retry])
+
+  useEffect(() => {
     const target = imageSource(source)
     if (!open || target?.kind !== "local" || !threadId) return
     const controller = new AbortController()
@@ -147,7 +176,12 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     }
     setOpen(next)
   }
-  const retryPreview = () => { setError(null); setLoaded(false); setUrl(direct); setRetry((n) => n + 1) }
+  const retryPreview = () => {
+    setError(null)
+    setLoaded(false)
+    setUrl(fitInline ? "" : direct)
+    setRetry((n) => n + 1)
+  }
   const retryOriginal = () => { setOriginalError(null); setOriginal(direct); setOriginalRetry((n) => n + 1) }
   const displayError = (): ImageError => ({ message: "Unable to display image. Check that the file is still available, then retry.", retryable: true })
   const runImageAction = async (kind: ImageAction) => {
