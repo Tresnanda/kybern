@@ -4,6 +4,7 @@ import { Transcript } from "../src/views/Transcript"
 import { useStore } from "../src/state/store"
 import { emptyThreadState, type Block } from "../src/state/transcript"
 import { ThemeProviderContext } from "../src/components/theme-context"
+import { toolResultCopyText } from "../src/lib/toolResultText"
 import "../src/index.css"
 
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }
@@ -39,14 +40,27 @@ async function run() {
   await sleep(350)
   const pre = document.querySelector("pre")!
   const output = (blocks[0] as Extract<Block, { kind: "tool" }>).output
-  check(pre?.textContent === stringify(output, null, 2), "Expanded result retains exact JSON")
   check(serializations === 1, "Only the opened result is formatted")
+  const exact = stringify(output, null, 2)
+  check(pre?.getAttribute("data-tool-result-chars") === String(exact.length), "Expanded result lost its source length")
+  check(pre.hasAttribute("data-tool-result-virtual"), "Opened oversized result did not virtualize")
+  check((pre.textContent?.length ?? 0) < exact.length, "Opened result still mounted the full string")
+  check(!pre.classList.contains("chat-paint-host") && !pre.querySelector(".chat-paint-host"), "Result scroller promoted paint hosts")
+  check(pre.textContent?.includes('"memoryFixture": 0'), "Opened result lost its prefix")
   const range = document.createRange()
   range.selectNodeContents(pre)
   document.getSelection()!.removeAllRanges()
   document.getSelection()!.addRange(range)
-  check(document.getSelection()!.toString() === pre.textContent, "Full result remains selectable")
+  const selected = document.getSelection()!.toString()
+  check(selected.length > 0, "Mounted result remains selectable")
+  check(toolResultCopyText(exact, pre.textContent ?? "", selected) === exact, "Copy truncated the result")
   document.getSelection()!.removeAllRanges()
+  for (let attempt = 0; attempt < 8; attempt++) {
+    pre.scrollTop = pre.scrollHeight
+    await sleep(50)
+    if (pre.textContent?.includes("Result 0-5999") || pre.textContent?.includes('"line": 5999')) break
+  }
+  check(pre.textContent?.includes("Result 0-5999") || pre.textContent?.includes('"line": 5999'), "Last lines unreachable")
   await mark("tool-expanded")
   buttons[0]!.click()
   await sleep(400)
