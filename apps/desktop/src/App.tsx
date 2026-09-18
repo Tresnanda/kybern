@@ -91,6 +91,19 @@ function Workspace() {
   const dock = useDockWidth(dockContainerRef)
   const dockWidth = dock.width
   const sidebar = useResize({ initial: 256, min: 208, max: 480, side: "left", storageKey: "kybern.sidebar.width" })
+  const dockRef = useRef<HTMLElement>(null)
+  const overlayOpen = dock.overlay && rightOpen && !connecting
+  useEffect(() => {
+    if (!overlayOpen) return
+    const panel = dockRef.current
+    const previous = workspaceFocus.current
+    panel?.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus({ preventScroll: true })
+    return () => {
+      if (!useStore.getState().rightOpen && previous?.isConnected && (document.activeElement === document.body || panel?.contains(document.activeElement))) {
+        requestAnimationFrame(() => { if (previous.isConnected && !previous.closest('[inert]')) previous.focus({ preventScroll: true }) })
+      }
+    }
+  }, [overlayOpen])
 
   return (
     <SidebarProvider
@@ -127,7 +140,7 @@ function Workspace() {
             className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card relative z-[15] overflow-hidden"
           >
             <div ref={dockContainerRef} className="relative flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
-              <main data-workspace-chat className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+              <main data-workspace-chat inert={overlayOpen} aria-hidden={overlayOpen || undefined} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <ConnectionBanner />
                 {connecting ? <Welcome /> : splitView ? (
                   <SplitThreads splitView={splitView} />
@@ -149,6 +162,7 @@ function Workspace() {
               <AnimatePresence initial={false}>
                 {rightOpen && !connecting && (
                   <motion.aside
+                    ref={dockRef}
                     data-workspace-dock
                     data-overlay={dock.overlay || undefined}
                     key="dock"

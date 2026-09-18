@@ -13,6 +13,7 @@ import {
   SPLIT_SPLITTER_HIT_WIDTH_PX,
   canSplitPane,
   clampSplitRatio,
+  clampSplitRatioForWidth,
   closeSplitViewPane,
   collectThreadPanes,
   createSplitView,
@@ -191,4 +192,15 @@ test("thread dragging waits for deliberate pointer movement", () => {
   assert.equal(hasCrossedThreadDragThreshold(10, 10, 13, 13), false)
   assert.equal(hasCrossedThreadDragThreshold(10, 10, 16, 10), true)
   assert.equal(hasCrossedThreadDragThreshold(10, 10, 10, 3), true)
+})
+
+test("horizontal resizing reserves both minimum pane widths", () => {
+  for (const width of [656, 700, 1000, 2000]) {
+    for (const ratio of [0, .25, .5, .75, 1]) {
+      const actual = clampSplitRatioForWidth(ratio, width)
+      assert.ok(actual * width >= 320 - 0.001)
+      assert.ok((1 - actual) * width >= 320 - 0.001)
+    }
+  }
+  assert.equal(clampSplitRatioForWidth(.75, Infinity), .75)
 })

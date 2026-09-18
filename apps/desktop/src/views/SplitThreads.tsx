@@ -25,7 +25,7 @@ import {
   SPLIT_RATIO_MIN,
   SPLIT_PANE_MIN_WIDTH_PX,
   canSplitPane,
-  clampSplitRatio,
+  clampSplitRatioForWidth,
   collectSplitThreadIds,
   collectThreadPanes,
   shouldStackHorizontalSplit,
@@ -124,6 +124,9 @@ function SplitNodeRenderer({
     horizontal &&
     !shouldStackHorizontalSplit(containerWidth ?? Number.POSITIVE_INFINITY)
 
+  const availableWidth = isHorizontal ? containerWidth ?? Infinity : Infinity
+  const effectiveRatio = clampSplitRatioForWidth(node.ratio, availableWidth)
+
   useLayoutEffect(() => {
     const container = containerRef.current
     if (!container || typeof ResizeObserver === "undefined") return
@@ -140,19 +143,19 @@ function SplitNodeRenderer({
   }, [])
 
   useEffect(() => {
-    latestRatio.current = node.ratio
+    latestRatio.current = effectiveRatio
     if (!dragging && firstRef.current)
-      firstRef.current.style.flexBasis = `${node.ratio * 100}%`
-  }, [dragging, node.ratio])
+      firstRef.current.style.flexBasis = `${effectiveRatio * 100}%`
+  }, [dragging, effectiveRatio])
 
   const commitRatio = useCallback(
     (ratio: number) => {
-      latestRatio.current = clampSplitRatio(ratio)
+      latestRatio.current = clampSplitRatioForWidth(ratio, availableWidth)
       if (firstRef.current)
         firstRef.current.style.flexBasis = `${latestRatio.current * 100}%`
       onSetRatio(node.id, latestRatio.current)
     },
-    [node.id, onSetRatio]
+    [node.id, onSetRatio, availableWidth]
   )
 
   const startResize = (event: ReactPointerEvent) => {
@@ -185,8 +188,8 @@ function SplitNodeRenderer({
     }
     const move = (moveEvent: PointerEvent) => {
       const position = isHorizontal ? moveEvent.clientX : moveEvent.clientY
-      pendingRatio = clampSplitRatio(
-        startRatio + (position - startPosition) / size
+      pendingRatio = clampSplitRatioForWidth(
+        startRatio + (position - startPosition) / size, isHorizontal ? size : Infinity
       )
       if (!frame) frame = requestAnimationFrame(apply)
     }
@@ -239,7 +242,7 @@ function SplitNodeRenderer({
       className={cn(
         "flex min-h-0 min-w-0 flex-1",
         isHorizontal
-          ? "flex-row overflow-x-auto overflow-y-hidden"
+          ? "flex-row overflow-hidden"
           : "flex-col overflow-hidden"
       )}
     >
@@ -252,7 +255,7 @@ function SplitNodeRenderer({
             : "min-w-0 shrink border-b border-[color:var(--app-surface-divider)]"
         )}
         style={{
-          flexBasis: `${node.ratio * 100}%`,
+          flexBasis: `${effectiveRatio * 100}%`,
           flexGrow: 0,
           ...(isHorizontal ? { minWidth: SPLIT_PANE_MIN_WIDTH_PX } : {}),
         }}
@@ -272,7 +275,7 @@ function SplitNodeRenderer({
               ? "Resize thread panes horizontally"
               : "Resize thread panes vertically"
           }
-          valueNow={Math.round(node.ratio * 100)}
+          valueNow={Math.round(effectiveRatio * 100)}
           dragging={dragging}
           onPointerDown={startResize}
           onKeyDown={resizeWithKeyboard}

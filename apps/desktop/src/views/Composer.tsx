@@ -902,14 +902,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               className={cn(
                 "@container",
                 COMPOSER_FOOTER_ROW_CLASS_NAME,
-                surfaceMode === "split" ? "min-w-0 flex-nowrap gap-1" : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+                "min-w-0 flex-nowrap gap-1.5 sm:gap-1",
               )}
             >
               <div
                 data-chat-composer-leading
                 className={cn(
                   "flex min-w-0 items-center gap-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-                  surfaceMode === "split" ? "shrink-0 overflow-visible" : "flex-1 overflow-x-auto sm:min-w-max sm:overflow-visible",
+                  "shrink-0 overflow-visible",
                 )}
               >
                 <input
@@ -989,7 +989,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
               <div
                 data-chat-composer-actions="right"
-                className={cn("flex items-center gap-1", surfaceMode === "split" ? "min-w-0 flex-1 justify-end overflow-hidden" : "shrink-0")}
+                className="flex min-w-0 flex-1 items-center justify-end gap-1"
               >
                 {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
@@ -1010,7 +1010,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                   "disabled:opacity-100",
                                   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
                                   COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
-                                  surfaceMode === "split" && "max-w-full !shrink overflow-hidden px-2 sm:px-2",
+                                  "max-w-full !shrink overflow-hidden px-2 sm:px-2",
                                 )}
                               />
                             }
@@ -1021,14 +1021,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           <ProviderMark kind={provider.kind} size={14} className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100" />
                           <span className={cn(
                             "min-w-0 truncate leading-none text-[var(--color-text-foreground)]",
-                            surfaceMode === "split" && "@max-[360px]:hidden",
+                            "@max-[360px]:hidden",
                           )}>{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
                           {modelLabel && effortLabel && (
                             <span
                               className={cn(
                                 "shrink-0 capitalize leading-none",
                                 COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-                                surfaceMode === "split" && "@max-[620px]:hidden",
+                                "@max-[620px]:hidden",
                               )}
                             >
                               {effortLabel}
@@ -1118,7 +1118,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       variant="subtle"
                       size="chip"
                       className={cn(
-                        surfaceMode === "split" && "@max-[360px]:gap-0 @max-[360px]:px-1.5",
+                        "@max-[360px]:gap-0 @max-[360px]:px-1.5",
                       )}
                       aria-label={sending ? "Sending follow-up" : steering ? "Steer now" : "Queue follow-up"}
                       disabled={!canSend}
@@ -1126,11 +1126,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       onClick={() => void submit()}
                     >
                       {sending ? (
-                        <Spinner size={12} className="hidden @max-[360px]:inline-flex" />
+                        <Spinner size={12} className={cn("hidden", "@max-[360px]:inline-flex")} />
                       ) : (
-                        <ClockIcon className="hidden size-3.5 shrink-0 @max-[360px]:inline-flex" aria-hidden />
+                        <ClockIcon className={cn("hidden size-3.5 shrink-0", "@max-[360px]:inline-flex")} aria-hidden />
                       )}
-                      <span className={cn(surfaceMode === "split" && "@max-[360px]:sr-only")}>
+                      <span className={cn("@max-[360px]:sr-only")}>
                         {sending ? "Sending…" : steering ? "Steer now" : "Queue"}
                       </span>
                     </Button>

@@ -295,6 +295,8 @@ async function run() {
     check(chat?.getBoundingClientRect().width >= 319, `${width}: dock squeezed the chat below minimum width`)
     check(dock?.getBoundingClientRect().width >= 415, `${width}: dock lost its usable width`)
     check((dock.dataset.overlay === "true") === (width === 900), `${width}: incorrect responsive dock mode`)
+    check(chat.inert === (width === 900), `${width}: covered chat remains interactive`)
+    if (width === 900) check(dock.contains(document.activeElement), "Opening the overlay did not move focus into the panel")
   }
   document.querySelector<HTMLButtonElement>('[aria-label="Collapse panel"]')!.click()
   await waitFor(() => !document.querySelector('[data-workspace-dock]'), "Responsive dock cannot be closed")
