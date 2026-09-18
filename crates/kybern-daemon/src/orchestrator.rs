@@ -1037,13 +1037,22 @@ impl Orchestrator {
             if !group.policy.allowed_providers.is_empty() && !group.policy.allowed_providers.contains(&child.provider.kind) {
                 return Err(anyhow!("provider is not allowed by the group policy"));
             }
-            let project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+            let mut project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
             let configured_model =
                 self.inner.settings.get().providers.get(&child.provider.kind).and_then(|provider| provider.model.clone());
             let selected_model = child.model.as_deref().or(configured_model.as_deref());
             self.validate_provider_selection(project.id, &child.provider, selected_model, child.effort.as_deref()).await?;
             if params.kind.mutates_workspace() && !project.is_git {
-                return Err(anyhow!("editing and integration workers require a Git project so Kybern can isolate their changes"));
+                // `is_git` is computed once at registration. If the user ran `git init`
+                // after opening the folder, re-probe the filesystem before refusing, and
+                // persist the corrected flag so later spawns and worktree creation see it.
+                if project_path_is_git(&project.path) {
+                    project.is_git = true;
+                    project.updated_at = Utc::now();
+                    self.inner.store.project_update(&project)?;
+                } else {
+                    return Err(anyhow!("editing and integration workers require a Git project so Kybern can isolate their changes"));
+                }
             }
             if project.is_git && child.base_revision.as_deref().is_none_or(str::is_empty) {
                 let source_cwd = match actor_thread {
@@ -2470,6 +2479,14 @@ fn truncate_utf8(text: &mut String, max_bytes: usize) {
     text.truncate(end);
 }
 
+/// Live filesystem probe for a project's git status, mirroring the check
+/// `add_project` uses at registration. The cached `Project.is_git` is computed
+/// only once, so callers that gate git-only behavior (edit/integration spawns,
+/// child worktrees) re-probe through this to pick up a later `git init`.
+fn project_path_is_git(project_path: &str) -> bool {
+    std::path::Path::new(project_path).join(".git").exists()
+}
+
 async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<String> {
     let output = tokio::process::Command::new("git")
         .args(["-C", project_path, "rev-parse", "--verify", &format!("{revision}^{{commit}}")])
@@ -3154,14 +3171,23 @@ impl Orchestrator {
             return Err(anyhow!("{} is not a directory", p.display()));
         }
         let path = p.to_string_lossy().to_string();
-        if let Some(existing) = self.inner.store.project_by_path(&path)? {
+        if let Some(mut existing) = self.inner.store.project_by_path(&path)? {
+            // Self-heal a stale cached flag: the folder may have gained (or lost) a
+            // repo since it was first registered. Re-probe and persist any change so
+            // edit/integration spawns are not permanently blocked after a `git init`.
+            let live = project_path_is_git(&existing.path);
+            if live != existing.is_git {
+                existing.is_git = live;
+                existing.updated_at = Utc::now();
+                self.inner.store.project_update(&existing)?;
+            }
             return Ok(existing);
         }
         let now = Utc::now();
         let project = Project {
             id: Uuid::now_v7(),
             name: name.unwrap_or_else(|| p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.clone())),
-            is_git: p.join(".git").exists(),
+            is_git: project_path_is_git(&path),
             path,
             worktrees_default: None,
             created_at: now,
@@ -3260,14 +3286,22 @@ impl Orchestrator {
     }
 
     async fn create_thread_with_id(&self, params: methods::ThreadsCreateParams, id: ThreadId) -> Result<Thread> {
-        let project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+        let mut project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
         let settings = self.inner.settings.get();
         let configured_model = settings.providers.get(&params.provider.kind).and_then(|provider| provider.model.clone());
         let selected_model = params.model.as_deref().or(configured_model.as_deref());
         self.validate_provider_selection(project.id, &params.provider, selected_model, params.effort.as_deref()).await?;
         let use_worktree = params.use_worktree.or(project.worktrees_default).unwrap_or(settings.worktrees_default);
         if use_worktree && !project.is_git {
-            return Err(anyhow!("project is not a git repository; cannot create a worktree"));
+            // Re-probe a stale cached flag before refusing (see `project_path_is_git`);
+            // a folder `git init`-ed after registration must still support worktrees.
+            if project_path_is_git(&project.path) {
+                project.is_git = true;
+                project.updated_at = Utc::now();
+                self.inner.store.project_update(&project)?;
+            } else {
+                return Err(anyhow!("project is not a git repository; cannot create a worktree"));
+            }
         }
         let now = Utc::now();
         let base_branch = params.base_branch.clone().map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
@@ -5672,6 +5706,38 @@ mod tests {
         assert_eq!(background.kind, RuntimeTaskKind::Process);
         assert!(background.backgrounded);
         assert!(!background.capabilities.stop);
+    }
+
+    #[tokio::test]
+    async fn add_project_self_heals_is_git_after_a_later_git_init() {
+        let root = std::env::temp_dir().join(format!("kybern-isgit-test-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = Paths::resolve(Some(root.join(".kyb"))).unwrap();
+        let settings = SettingsStore::load(&paths.settings).unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
+        let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
+
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let path = workspace.to_string_lossy().into_owned();
+
+        // Registered before `git init`: the cached flag is false.
+        let first = orchestrator.add_project(path.clone(), None).unwrap();
+        assert!(!first.is_git, "fixture folder has no .git yet");
+
+        // The user runs `git init` afterwards.
+        std::fs::create_dir_all(workspace.join(".git")).unwrap();
+
+        // Re-adding the same path re-probes, flips the flag, and persists it, so
+        // edit/integration spawns are no longer permanently blocked (issue #26).
+        let healed = orchestrator.add_project(path.clone(), None).unwrap();
+        assert_eq!(healed.id, first.id, "same project record, not a duplicate");
+        assert!(healed.is_git, "cached is_git self-heals to true");
+        let stored = store.project_get(first.id).unwrap().unwrap();
+        assert!(stored.is_git, "corrected flag is persisted to the store");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -27,6 +27,7 @@ import {
   COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
   COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
   COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME,
+  COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
@@ -754,8 +755,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                             : item.type === "command"
                               ? titleCase(item.command.name)
                               : item.type === "plugin"
-                                ? `@${item.skill.display_name ?? item.skill.name}`
-                                : `$${item.skill.name}`
+                                ? item.skill.display_name ?? titleCase(item.skill.name)
+                                : item.skill.display_name ?? titleCase(item.skill.name)
                         const description = item.type === "thread" ? item.snippet : item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
                         return (
                           <Fragment key={item.id}>
@@ -774,7 +775,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               onClick={() => pick(i)}
                               className={cn("w-full", COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME, active && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME)}
                             >
-                              <span className={cn("flex size-4 shrink-0 items-center justify-center", active ? "text-foreground/80" : "text-muted-foreground/70")}>
+                              <span className={cn("flex size-4 shrink-0 items-center justify-center [&_[stroke]]:[stroke-width:2]", active ? "text-foreground" : "text-foreground/85")}>
                                 {item.type === "thread" ? (
                                   <MessageCircleIcon className="size-4" />
                                 ) : item.type === "file" ? (
@@ -787,19 +788,24 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                   item.command.icon ?? <TerminalIcon className="size-4" />
                                 )}
                               </span>
-                              <div className="flex min-w-0 flex-1 items-center gap-3">
-                                <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5 overflow-hidden">
-                                  <span className="max-w-full truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/90">{title}</span>
-                                  {description && <span className="w-full min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">{description}</span>}
-                                </div>
+                              <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                                {/* One line, Codex-style: the name in crisp full-strength ink at a
+                                    regular weight, its description inline in muted ink. Hierarchy is
+                                    carried by colour, not by a heavier title weight. */}
+                                <span className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+                                  <span className="max-w-[60%] shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground">{title}</span>
+                                  {description && description !== title && (
+                                    <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/70">{description}</span>
+                                  )}
+                                </span>
                                 {item.type === "thread" ? (
-                                  <span className="max-w-[42%] shrink truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{projects[item.thread.project_id]?.name ?? "Project"}</span>
+                                  <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{projects[item.thread.project_id]?.name ?? "Project"}</span>
                                 ) : item.type === "file" ? (
-                                  <span className="max-w-[42%] shrink truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
+                                  <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
                                 ) : item.type === "command" ? (
-                                  <span className="shrink-0 text-end font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">/{item.command.name}</span>
+                                  <span className="shrink-0 text-end font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/40">/{item.command.name}</span>
                                 ) : (
-                                  <span className="shrink-0 px-1 py-0.5 text-[length:var(--app-font-size-ui-2xs,10px)] font-medium text-muted-foreground/70">
+                                  <span className="shrink-0 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/55">
                                     {skillSourceLabel(item.skill.scope)}
                                   </span>
                                 )}
@@ -1161,8 +1167,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       }
                     >
                       <IconSwap
+                        className="size-full"
                         active={sending ? "b" : "a"}
-                        a={<ComposerSendArrowIcon className="size-5 shrink-0 translate-y-px" />}
+                        a={<ComposerSendArrowIcon className={COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME} />}
                         b={
                           <svg width={12} height={12} viewBox="0 0 14 14" className="animate-spin" aria-hidden>
                             <circle cx={7} cy={7} r={5.5} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="20 12" fill="none" />
@@ -1227,7 +1234,10 @@ function RemoveButton({ name, onClick }: { name: string; onClick: () => void }) 
 }
 
 function titleCase(s: string): string {
-  return s.replace(/(^|[-_ ])(\w)/g, (_m, sep: string, c: string) => `${sep === "-" || sep === "_" ? " " : sep}${c.toUpperCase()}`)
+  return s
+    .replace(/[-_]+/g, " ")
+    .replace(/\s*:\s*/g, ": ")
+    .replace(/(^|[\s:])(\w)/g, (_m, sep: string, c: string) => `${sep}${c.toUpperCase()}`)
 }
 
 function parentPath(p: string): string {

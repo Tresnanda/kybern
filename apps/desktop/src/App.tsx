@@ -172,7 +172,7 @@ function Workspace() {
           animate={{ opacity: 1, transform: "translateX(0px)" }}
           exit={{ opacity: 0, transform: "translateX(8px)" }}
           transition={{ duration: reducedMotion || keyboardNavigation ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}>
-          <ErrorBoundary label="settings"><SettingsScreen /></ErrorBoundary>
+          <ErrorBoundary label="settings"><SettingsScreen sidebarResize={{ onPointerDown: sidebar.onPointerDown, dragging: sidebar.dragging }} /></ErrorBoundary>
         </motion.div>}
       </AnimatePresence>
 

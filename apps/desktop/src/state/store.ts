@@ -49,6 +49,12 @@ import {
   type SplitSide,
   type SplitView,
 } from "./splitView"
+import {
+  persistThreadNotifications,
+  readThreadNotifications,
+  type NotificationKind,
+  type ThreadNotification,
+} from "./notifications"
 
 export type Connection =
   | { state: "connecting" }
@@ -99,6 +105,9 @@ export interface AppState {
   runtimeTasks: Record<ThreadId, RuntimeTask[]>
   /** Compact active counts used by the sidebar before a thread is opened. */
   threadActivity: Record<ThreadId, ThreadActivitySummary>
+  /** Threads that need attention (finished, failed, or waiting on you) and have
+   *  not been opened since. Backs the sidebar notification bell. */
+  notifications: Record<ThreadId, ThreadNotification>
   /** `threadId:turnId` → diff, filled lazily for "Edited N files" cards and the changes panel. */
   diffs: Record<string, Diff>
   /** Shared git status snapshots so the dock and Environment panel do not duplicate `git`/`gh` work. */
@@ -111,6 +120,8 @@ export interface AppState {
   /** Persisted recursive pane tree for showing up to four chat threads together. */
   splitView: SplitView | null
   sidebarOpen: boolean
+  /** When on, the sidebar shows only threads that need attention (bell filter). */
+  notificationFilter: boolean
   rightOpen: boolean
   rightTabs: RightTab[]
   rightTab: RightTab | null
@@ -161,6 +172,12 @@ export interface AppActions {
   selectThread: (id: ThreadId) => void
   selectDraft: (projectId: ProjectId, purpose?: "thread" | "coordinator") => void
   selectPulls: () => void
+  /** Record that a thread needs attention (bell). Ignored while it is on screen. */
+  pushNotification: (threadId: ThreadId, kind: NotificationKind, seq: number, at: string) => void
+  /** Clear a thread's notification (it has been opened / acknowledged). */
+  clearNotification: (threadId: ThreadId) => void
+  /** Clear every notification (the "Mark all read" action). */
+  clearAllNotifications: () => void
   splitFocusedPane: (
     direction: SplitDirection,
     threadId?: ThreadId,
@@ -188,6 +205,15 @@ export type Store = AppState & AppActions
 
 export type EnvironmentStore = UseBoundStore<StoreApi<Store>>
 
+/** Remove a thread's notification, persisting the change. `{}` when there was none. */
+function clearNotificationPatch(state: AppState, threadId: ThreadId): { notifications?: Record<ThreadId, ThreadNotification> } {
+  if (!(threadId in state.notifications)) return {}
+  const notifications = { ...state.notifications }
+  delete notifications[threadId]
+  persistThreadNotifications(notifications, state.environmentId)
+  return { notifications }
+}
+
 export function createEnvironmentStore(
   environmentId: string
 ): EnvironmentStore {
@@ -205,11 +231,13 @@ export function createEnvironmentStore(
     transcripts: {},
     runtimeTasks: {},
     threadActivity: {},
+    notifications: readThreadNotifications(environmentId),
     diffs: {},
     gitStatuses: {},
     selected: { kind: "none" },
     splitView: readPersistedSplitView(environmentId),
     sidebarOpen: true,
+    notificationFilter: false,
     rightOpen: false,
     rightTabs: [],
     rightTab: null,
@@ -279,12 +307,14 @@ export function createEnvironmentStore(
       }),
     selectThread: (id) =>
       set((state) => {
+        // Opening a thread acknowledges its notification.
+        const cleared = clearNotificationPatch(state, id)
         const splitView = state.splitView
-        if (!splitView) return { selected: { kind: "thread", id } }
+        if (!splitView) return { selected: { kind: "thread", id }, ...cleared }
 
         const existing = findThreadPaneByThreadId(splitView.root, id)
         const target = existing ?? resolveFocusedThreadPane(splitView)
-        if (!target) return { selected: { kind: "thread", id } }
+        if (!target) return { selected: { kind: "thread", id }, ...cleared }
         const root = existing
           ? splitView.root
           : replacePaneThread(splitView.root, target.id, id)
@@ -293,7 +323,22 @@ export function createEnvironmentStore(
           focusedPaneId: target.id,
         }
         persistSplitView(next)
-        return { selected: { kind: "thread", id }, splitView: next }
+        return { selected: { kind: "thread", id }, splitView: next, ...cleared }
+      }),
+    pushNotification: (threadId, kind, seq, at) =>
+      set((state) => {
+        const existing = state.notifications[threadId]
+        // Keep the earliest unseen trigger's timestamp but honour the latest kind.
+        const notifications = { ...state.notifications, [threadId]: { kind, seq, at: existing?.at ?? at } }
+        persistThreadNotifications(notifications, state.environmentId)
+        return { notifications }
+      }),
+    clearNotification: (threadId) => set((state) => clearNotificationPatch(state, threadId)),
+    clearAllNotifications: () =>
+      set((state) => {
+        if (Object.keys(state.notifications).length === 0) return {}
+        persistThreadNotifications({}, state.environmentId)
+        return { notifications: {} }
       }),
     selectDraft: (projectId, purpose) => {
       persistSplitView(null)

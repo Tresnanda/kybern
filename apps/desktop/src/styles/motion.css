@@ -244,7 +244,7 @@
    so the swap reads as one glyph morphing rather than two overlapping. */
 .t-icon-swap {
   position: relative;
-  display: inline-grid;
+  display: grid;
   place-items: center;
 }
 .t-icon-swap > * {

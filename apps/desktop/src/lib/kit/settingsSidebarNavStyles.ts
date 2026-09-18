@@ -24,8 +24,12 @@ export const SETTINGS_SIDEBAR_ITEM_CLASS_NAME = SIDEBAR_HEADER_ROW_CLASS_NAME;
 
 export const SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME = SIDEBAR_HEADER_LABEL_CLASS_NAME;
 
-/** Inner glyph size; tone is set at each call site to `text-inherit` so the glyph tracks the row text. */
-export const SETTINGS_SIDEBAR_ICON_CLASS_NAME = "size-4";
+/** Inner glyph size — same 14px as thread-sidebar primary actions (New thread, etc.). */
+export const SETTINGS_SIDEBAR_ICON_CLASS_NAME = "size-3.5";
+
+/** 16px leading slot the glyph sits in, matching PrimaryAction in the thread sidebar. */
+export const SETTINGS_SIDEBAR_ICON_SLOT_CLASS_NAME =
+  "settings-nav-icon relative inline-flex size-4 shrink-0 items-center justify-center";
 
 /**
  * Idle nav rows rest at the same foreground as primary sidebar item rows (thread/project

@@ -39,6 +39,7 @@ import {
   Layout01Icon as HiRows3,
   CheckListIcon as HiListCheck,
   Task01Icon as HiListTodo,
+  Notification03Icon as HiBell,
   Loading03Icon as HiLoader,
   ArrowExpand01Icon as HiMaximize,
   ArrowShrink01Icon as HiMinimize,
@@ -82,7 +83,6 @@ import {
   Copy01Icon as HcCopy,
   Link01Icon as HcLink,
   GitCompareIcon as HcDiff,
-  Note01Icon as HcNotes,
   Clock01Icon as HcClock,
   SourceCodeIcon as HcCode,
   FolderLibraryIcon as HcFolders,
@@ -116,7 +116,7 @@ import {
   SidebarRightIcon as HcPanelRight,
   AppWindowMacIcon as HcWindow,
   SidebarLeft01Icon as HcLayoutSidebar,
-  PencilIcon as HcPencil,
+  Edit03Icon as HcPencil,
   PinIcon as HcPin,
   PauseIcon as HcPause,
   PlayIcon as HcPlay,
@@ -141,7 +141,13 @@ export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
 // carry enough optical weight next to the app's medium/semibold text instead of
 // reading as hairlines. HugeiconsIcon renders a real <svg>, so kit `[&_svg]` sizing
 // rules apply. Keep FileEntryIcon/FolderClosed/kit sidebar in step with this value.
-const HUGEICON_STROKE_WIDTH = 2.5;
+// better-ui rule: an icon carries the optical weight of the text beside it —
+// ~1.5px stroke next to regular (400) UI text, ~2px next to semibold. Kit glyphs
+// render at 14–20px, so a 24²-viewBox stroke of 2.25 lands a 16px icon at exactly
+// 1.5px on screen (1.5 × 16/24) and a 20px icon at 1.9px — one weight for the set,
+// matched to the regular/medium label text it sits beside. Dense families (folders)
+// still opt into a lighter stroke via the hugeIcon() override.
+const HUGEICON_STROKE_WIDTH = 2.25;
 
 function hugeIcon(icon: IconSvgElement, strokeWidth: number = HUGEICON_STROKE_WIDTH): LucideIcon {
   return hugeGlyph(icon, strokeWidth);
@@ -167,7 +173,14 @@ export const PanelCollapseIcon: LucideIcon = hugeIcon(HiMinimize);
 export const BackToParentIcon: LucideIcon = hugeIcon(HiUndo);
 export const WorkflowIcon: LucideIcon = hugeIcon(HcAgents);
 export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
-export const ComposerSendArrowIcon: LucideIcon = hugeIcon(HiArrowUp);
+/**
+ * Round send control. Use the kit's own arrow glyph (centered in its 24² box)
+ * rendered small inside the 32px disc and centered by the composer's flex — no
+ * bespoke viewBox. A dedicated 2.0 stroke matches the rest of the set's optical
+ * weight: at 20px it renders ~1.67px, the same as a 2.5 stroke on the 16px
+ * sidebar glyphs — where the old hand-drawn 32² chevron rendered a heavy 2.5px.
+ */
+export const ComposerSendArrowIcon: LucideIcon = hugeIcon(HiArrowUp, 2.0);
 export const HandoffIcon: LucideIcon = hugeIcon(HcHandoff);
 export const SkillCubeIcon: LucideIcon = hugeIcon(HcSkill);
 export const NewThreadIcon: LucideIcon = hugeIcon(HcCompose);
@@ -213,7 +226,9 @@ export const DiffIcon = hugeIcon(HcDiff);
 export const DownloadIcon = hugeIcon(HiDownload);
 // The clock doubles as the automation glyph everywhere it appears (meta chip,
 // Automations nav, slash command, created card, environment section).
-export const BellIcon: LucideIcon = hugeIcon(HcNotes);
+// Real bell for notifications (the Activity/notification button and the
+// Notifications settings tab). Previously mis-pointed at a notes glyph.
+export const BellIcon: LucideIcon = hugeIcon(HiBell);
 export const ClockIcon = hugeIcon(HcClock);
 export const EllipsisIcon = hugeIcon(HiDots);
 export const ExternalLinkIcon = hugeIcon(HiExternalLink);
@@ -296,6 +311,8 @@ export const PanelLeftIcon = hugeIcon(HcPanelLeft);
 export const PanelRightCloseIcon = hugeIcon(HcPanelRight);
 export const WindowIcon: LucideIcon = hugeIcon(HcWindow);
 export const LayoutSidebarIcon: LucideIcon = hugeIcon(HcLayoutSidebar);
+// Canonical edit glyph. Renders Hugeicons `Edit03Icon` (a pencil-on-line mark);
+// the export keeps the `PencilIcon` name so every edit/rename call site is unchanged.
 export const PencilIcon: LucideIcon = hugeIcon(HcPencil);
 export const PinIcon: LucideIcon = hugeIcon(HcPin);
 // Solid pin from the same glyph — used wherever a pin reflects "pinned" status.

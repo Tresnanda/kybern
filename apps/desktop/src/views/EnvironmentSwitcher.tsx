@@ -123,7 +123,7 @@ export function EnvironmentSwitcher() {
             {switching ? (
               <Spinner size={14} />
             ) : (
-              profile?.local ? <DeviceLaptopIcon className="size-3.5 shrink-0" /> : <GlobeIcon className="size-3.5 shrink-0" />
+              profile?.local ? <DeviceLaptopIcon className="size-3.5 shrink-0 text-foreground" /> : <GlobeIcon className="size-3.5 shrink-0 text-foreground" />
             )}
             <span className="min-w-0 flex-1 truncate text-foreground">
               {profile?.name ?? "Connecting"}

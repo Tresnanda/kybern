@@ -35,6 +35,7 @@ import {
 } from "@/protocol"
 
 import { applyEvent, compactThreadState, seedFromGet, prependThreadHistory } from "./transcript"
+import type { NotificationKind } from "./notifications"
 import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
@@ -511,8 +512,6 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     // Historical replay updates the transcript without replaying old alerts.
     if (Date.parse(ev.at) < notificationsStartedAt || ev.seq <= (announced.get(ev.thread_id) ?? 0)) return
     announced.set(ev.thread_id, ev.seq)
-    const st = useStore.getState()
-    if (!st.settings?.notifications) return
     let focused = document.hasFocus()
     try { focused = await isWindowFocused() } catch { /* Browser focus is the fallback. */ }
     // Focus lookup crosses the native bridge. Recheck current task state:
@@ -521,14 +520,25 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const current = useStore.getState()
     const viewing = isThreadVisible(current, ev.thread_id)
     if (focused && viewing) return
-    if (ev.kind === "turn_completed" && ev.stop_reason === "completed") {
+    const kind: NotificationKind | null =
+      ev.kind === "turn_failed" ? "failed"
+      : ev.kind === "approval_requested" || ev.kind === "user_input_requested" ? "blocked"
+      : ev.kind === "turn_completed" && ev.stop_reason === "completed" ? "done"
+      : null
+    if (kind === "done") {
       if (completedTurns.get(ev.thread_id) === ev.turn_id) return
       if (current.runtimeTasks[ev.thread_id]?.some((task) =>
         task.origin_turn_id === ev.turn_id &&
         (task.status === "running" || task.status === "waiting" || task.status === "pending"),
       )) return
       if (ev.turn_id) completedTurns.set(ev.thread_id, ev.turn_id)
+      // Record the finished-unread thread for the bell filter. Failed and
+      // waiting-on-you threads are derived from live status, so only "done"
+      // (a turn that finished while you were away) is persisted here.
+      current.pushNotification(ev.thread_id, "done", ev.seq, ev.at)
     }
+    if (!kind) return
+    if (!current.settings?.notifications) return
     const title = current.threads[ev.thread_id]?.title || "Thread"
     const body = ev.kind === "user_input_requested" ? "Needs your input"
       : ev.kind === "approval_requested" ? `Needs approval: ${ev.approval.summary}`
