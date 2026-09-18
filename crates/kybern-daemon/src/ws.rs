@@ -82,6 +82,32 @@ struct BorrowedEventNotification<'a> {
     event: &'a ThreadEvent,
 }
 
+/// Build the small event sent to clients that opt into lazy tool outputs.
+/// Constructing a fresh `ThreadEvent` here intentionally copies only scalar
+/// metadata and the call id. Cloning the original `Value` before serialization
+/// would briefly retain a second copy of a large result, defeating the point
+/// of compact delivery.
+fn compact_tool_completion(event: &ThreadEvent) -> Option<ThreadEvent> {
+    let EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted, is_error } = &event.payload else {
+        return None;
+    };
+    if *output_omitted || !kybern_store::should_omit_tool_output(output) {
+        return None;
+    }
+    Some(ThreadEvent {
+        seq: event.seq,
+        thread_id: event.thread_id,
+        turn_id: event.turn_id,
+        at: event.at,
+        payload: EventPayload::ToolCallCompleted {
+            tool_call_id: tool_call_id.clone(),
+            output: Value::Null,
+            output_omitted: true,
+            is_error: *is_error,
+        },
+    })
+}
+
 impl Outbox {
     async fn notify(&self, method: &'static str, params: impl serde::Serialize) -> Result<(), ()> {
         self.send(TypedNotification { jsonrpc: JsonRpcVersion, method, params }).await
@@ -119,6 +145,8 @@ struct Subscription {
     thread_id: Option<ThreadId>,
     /// Live events at or below this seq were covered by replay and are skipped.
     floor_seq: EventSeq,
+    /// Whether completed tool outputs should be included in the wire event.
+    include_tool_output: bool,
 }
 
 pub struct ConnectionCtx {
@@ -133,9 +161,9 @@ pub struct ConnectionCtx {
 }
 
 impl ConnectionCtx {
-    pub async fn subscribe(&self, thread_id: Option<ThreadId>, head_seq: EventSeq) -> SubscriptionId {
+    pub async fn subscribe(&self, thread_id: Option<ThreadId>, head_seq: EventSeq, include_tool_output: bool) -> SubscriptionId {
         let id = Uuid::now_v7();
-        self.subs.lock().await.insert(id, Subscription { thread_id, floor_seq: head_seq });
+        self.subs.lock().await.insert(id, Subscription { thread_id, floor_seq: head_seq, include_tool_output });
         id
     }
 
@@ -170,13 +198,14 @@ impl ConnectionCtx {
                 .await;
             return;
         }
-        let subscription_id = self.subscribe(params.thread_id, head_seq).await;
+        let include_tool_output = params.include_tool_output.unwrap_or(true);
+        let subscription_id = self.subscribe(params.thread_id, head_seq, include_tool_output).await;
         let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq, replay_ready: true }).unwrap();
         if self.out.send(ServerFrame::Response(RpcResponse::ok(request_id, result))).await.is_err() {
             return;
         }
         if let Some(after) = params.after_seq
-            && self.replay(state, subscription_id, params.thread_id, after, head_seq).await.is_err()
+            && self.replay(state, subscription_id, params.thread_id, after, head_seq, include_tool_output).await.is_err()
         {
             let _ =
                 self.out.send(ServerFrame::Notification(RpcNotification::new("events.lagged", serde_json::json!({ "dropped": 0 })))).await;
@@ -256,6 +285,7 @@ impl ConnectionCtx {
         thread_id: Option<ThreadId>,
         after: EventSeq,
         head: EventSeq,
+        include_tool_output: bool,
     ) -> anyhow::Result<()> {
         let mut cursor = after;
         while cursor < head {
@@ -269,25 +299,33 @@ impl ConnectionCtx {
                     return Ok(());
                 }
                 cursor = ev.seq;
-                self.send_event(subscription_id, &ev).await;
+                self.send_event(subscription_id, &ev, include_tool_output).await;
             }
         }
         Ok(())
     }
 
-    async fn send_event(&self, subscription_id: SubscriptionId, event: &ThreadEvent) {
+    async fn send_event(&self, subscription_id: SubscriptionId, event: &ThreadEvent, include_tool_output: bool) {
+        if !include_tool_output && let Some(compact) = compact_tool_completion(event) {
+            let params = BorrowedEventNotification { subscription_id, event: &compact };
+            let _ = self.out.notify(EVENT_NOTIFICATION, params).await;
+            return;
+        }
         let params = BorrowedEventNotification { subscription_id, event };
         let _ = self.out.notify(EVENT_NOTIFICATION, params).await;
     }
 
     async fn deliver_live(&self, ev: &ThreadEvent) {
         let _delivery = self.delivery.lock().await;
-        let targets: Vec<SubscriptionId> = {
+        let targets: Vec<(SubscriptionId, bool)> = {
             let subs = self.subs.lock().await;
-            subs.iter().filter(|(_, s)| s.thread_id.is_none_or(|t| t == ev.thread_id) && ev.seq > s.floor_seq).map(|(id, _)| *id).collect()
+            subs.iter()
+                .filter(|(_, s)| s.thread_id.is_none_or(|t| t == ev.thread_id) && ev.seq > s.floor_seq)
+                .map(|(id, s)| (*id, s.include_tool_output))
+                .collect()
         };
-        for id in targets {
-            self.send_event(id, ev).await;
+        for (id, include_tool_output) in targets {
+            self.send_event(id, ev, include_tool_output).await;
         }
     }
 }
@@ -478,7 +516,7 @@ mod typed_notification_memory_tests {
             thread_id: ThreadId::nil(),
             turn_id: Some(TurnId::nil()),
             at: "2026-09-17T00:00:00Z".parse().unwrap(),
-            payload: EventPayload::ToolCallCompleted { tool_call_id: "a:b\n\0é".into(), output, is_error: false },
+            payload: EventPayload::ToolCallCompleted { tool_call_id: "a:b\n\0é".into(), output, output_omitted: false, is_error: false },
         }
     }
 
@@ -507,6 +545,25 @@ mod typed_notification_memory_tests {
                 assert!(matches!(serde_json::from_str::<ServerFrame>(&wire).unwrap(), ServerFrame::Notification(_)));
             }
         }
+    }
+
+    #[test]
+    fn compact_subscription_event_replaces_only_large_completion_payload() {
+        let original = event(serde_json::json!({ "long": "x".repeat(kybern_store::LARGE_TOOL_OUTPUT_BYTES + 1) }));
+        let compact = compact_tool_completion(&original).expect("large completion should be compacted");
+        let EventPayload::ToolCallCompleted { output, output_omitted, tool_call_id, is_error } = &compact.payload else {
+            panic!("expected tool completion")
+        };
+        assert_eq!(tool_call_id, "a:b\n\0é");
+        assert_eq!(output, &Value::Null);
+        assert!(*output_omitted);
+        assert!(!is_error);
+        assert!(serde_json::to_string(&compact).unwrap().len() < 512);
+
+        let small = event(serde_json::json!("ok"));
+        assert!(compact_tool_completion(&small).is_none());
+        let full_wire = serde_json::to_value(&small.payload).unwrap();
+        assert!(full_wire.get("output_omitted").is_none(), "legacy full wire stays unchanged");
     }
 
     #[test]

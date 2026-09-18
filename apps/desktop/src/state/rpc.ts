@@ -177,7 +177,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         })
       }
     })
-    client.subscribeEvents({}, onEvent, (_headSeq, replay) => {
+    client.subscribeEvents({ include_tool_output: false }, onEvent, (_headSeq, replay) => {
       const generation = ++hydrationGeneration
       if (replay.resumed && replay.supported) {
         canReuseSnapshots = false

@@ -673,3 +673,19 @@ test("distinct and transport-only completed tool streams remain available", () =
     assert.equal(state.blocks[0].stream, stream)
   }
 })
+
+
+test("compact live completions stay hydratable and preserve distinct streams and receipts", () => {
+  for (const stream of ["", "live details\n".repeat(10000), "agentId: helper send_message"]) {
+    let state = emptyThreadState()
+    const ev = (seq, payload) => ({ seq, thread_id: "t", turn_id: T, at: AT, ...payload })
+    state = applyEvent(state, ev(1, { kind: "tool_call_started", call: { id: "tool", name: "exec", input: {}, parent_id: null } }))
+    state = applyEvent(state, ev(2, { kind: "tool_call_output_delta", tool_call_id: "tool", delta: stream }))
+    state = applyEvent(state, ev(3, { kind: "tool_call_completed", tool_call_id: "tool", output: null, output_omitted: true, is_error: true }))
+    assert.equal(state.blocks[0].stream, stream)
+    assert.equal(state.blocks[0].output, null)
+    assert.equal(state.blocks[0].outputOmitted, true)
+    assert.equal(state.blocks[0].complete, true)
+    assert.equal(state.blocks[0].isError, true)
+  }
+})

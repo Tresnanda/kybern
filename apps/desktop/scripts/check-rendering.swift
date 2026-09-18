@@ -32,6 +32,11 @@ final class Bench: NSObject, WKScriptMessageHandler {
  var web: WKWebView!
  func run() {
   let config = WKWebViewConfiguration()
+  // Opt-in for unattended active-workload comparisons. Keep the production
+  // scheduling policy for visibility/idle tests and for the application itself.
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_KEEP_ACTIVE"] == "1" {
+   if #available(macOS 14.0, *) { config.preferences.inactiveSchedulingPolicy = .none }
+  }
   config.websiteDataStore = .nonPersistent()
   config.userContentController.add(self, name: "bench")
   config.setURLSchemeHandler(Assets(), forURLScheme: "tauri")
@@ -45,6 +50,10 @@ final class Bench: NSObject, WKScriptMessageHandler {
   if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1" || ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" { print("Debug window id: \(window.windowNumber)"); fflush(stdout) }
   window.contentView = web
   window.orderFront(nil)
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_FOREGROUND"] == "1" {
+   window.makeKeyAndOrderFront(nil)
+   app.activate(ignoringOtherApps: true)
+  }
   let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
   let history = Int(ProcessInfo.processInfo.environment["KYBERN_PERF_HISTORY"] ?? "400") ?? 400
   var query = "?history=\(history)"

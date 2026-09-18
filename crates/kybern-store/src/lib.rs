@@ -11,7 +11,7 @@ pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHist
 pub use transcript_page::{transcript_page, transcript_page_ref};
 
 pub use projection::{
-    LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, project_pending_questions, project_provider_usage, project_runtime_tasks,
+    LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, json_payload_bytes, project_pending_questions, project_provider_usage, project_runtime_tasks,
     project_thread_activity, project_transcript, should_omit_tool_output,
 };
 
@@ -2724,7 +2724,12 @@ mod tests {
             .event_append(
                 thread.id,
                 Some(turn),
-                EventPayload::ToolCallCompleted { tool_call_id: "big".into(), output: output.clone(), is_error: false },
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: "big".into(),
+                    output: output.clone(),
+                    output_omitted: false,
+                    is_error: false,
+                },
             )
             .unwrap();
         for index in 0..49 {
@@ -2743,7 +2748,7 @@ mod tests {
                 .event_append(
                     thread.id,
                     Some(turn),
-                    EventPayload::ToolCallCompleted { tool_call_id: id, output: output.clone(), is_error: false },
+                    EventPayload::ToolCallCompleted { tool_call_id: id, output: output.clone(), output_omitted: false, is_error: false },
                 )
                 .unwrap();
         }
@@ -2783,7 +2788,7 @@ mod tool_output_allocation_tests {
     }
 
     fn complete(store: &Store, thread: ThreadId, id: &str, output: serde_json::Value, is_error: bool) {
-        let payload = EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, is_error };
+        let payload = EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, output_omitted: false, is_error };
         store.with(|c| {
             let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE thread_id=?1 AND kind='tool_call_started' AND json_extract(payload, '$.call.id')=?2)", params![thread.to_string(), id], |row| row.get(0))?;
             if !exists {

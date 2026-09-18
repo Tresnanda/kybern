@@ -521,6 +521,10 @@ expression: schema_for!(ThreadEvent)
           "type": "string"
         },
         "output": true,
+        "output_omitted": {
+          "description": "Transport-only marker used by opt-in compact event subscriptions.\nPersisted events always leave this false; clients fetch the exact\nresult through `threads.tool_output` when it is true.",
+          "type": "boolean"
+        },
         "is_error": {
           "type": "boolean"
         },

@@ -5193,7 +5193,12 @@ impl Orchestrator {
                 self.emit(
                     thread_id,
                     turn_id,
-                    EventPayload::ToolCallCompleted { tool_call_id: tool_call_id.clone(), output: output.clone(), is_error },
+                    EventPayload::ToolCallCompleted {
+                        tool_call_id: tool_call_id.clone(),
+                        output: output.clone(),
+                        output_omitted: false,
+                        is_error,
+                    },
                 )?;
                 let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
                 if matches!(provider, ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Cursor) {
@@ -7868,7 +7873,10 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = Client::connect(&endpoint).await.unwrap();
         client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, ..Default::default() }).await.unwrap();
-        client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None }).await.unwrap();
+        client
+            .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None, include_tool_output: None })
+            .await
+            .unwrap();
         client.call::<DaemonActivityMethod>(Empty {}).await.unwrap();
         server.abort();
 

@@ -1489,6 +1489,11 @@ pub struct EventsSubscribeParams {
     /// Replay persisted events with `seq > after_seq` before going live. Omit for live only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_seq: Option<EventSeq>,
+    /// Include completed tool output in replay and live notifications. Omit or
+    /// set true for the legacy full event stream; false sends large results as
+    /// an explicit `output_omitted` marker that can be fetched by call id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_tool_output: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EventsSubscribeResult {

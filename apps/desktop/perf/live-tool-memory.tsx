@@ -4,12 +4,14 @@ import { Transcript } from "../src/views/Transcript"
 import { useStore, activateEnvironmentStore } from "../src/state/store"
 import { createEnvironmentRuntime, setEnvironmentRuntime } from "../src/state/rpc"
 import { ThemeProviderContext } from "../src/components/theme-context"
+import { EVENT_NOTIFICATION, type EventNotification, type EventsSubscribeParams } from "../src/protocol"
 import { retainedSize } from "../src/lib/retainedSize"
 import "../src/index.css"
 
 declare const __TOOL_LEASE_ENDPOINT__: { url: string; token: string; http_base: string; environmentId: string }
 const threadId = "20000000-0000-4000-8000-000000000001"
 const baseline = import.meta.env.VITE_LIVE_TOOLS_BASELINE === "1"
+const fullEvents = baseline || import.meta.env.VITE_LIVE_TOOLS_FULL_EVENTS === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -30,16 +32,28 @@ async function run() {
   setEnvironmentRuntime(runtime)
   useStore.getState().set({ selected: { kind: "thread", id: threadId } })
   runtime.connect(__TOOL_LEASE_ENDPOINT__)
+  // Install before the asynchronous socket handshake. Both modes use the same
+  // production runtime and binary; only this fixture's subscription differs.
+  const client = runtime.rpc(), call = client.call.bind(client)
+  let calls = 0, deliveredOutputChars = 0, omittedCompletions = 0
+  const watchdog = setTimeout(() => w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ stage: "live-diagnostic", tools: tools().length, complete: tools().filter(b => b.complete).length, status: useStore.getState().threads[threadId]?.status, deliveredOutputChars, omittedCompletions, visibility: document.visibilityState })), 20000)
+  client.call = ((method, params) => {
+    if (method === "threads.tool_output") calls++
+    if (method === "events.subscribe" && fullEvents)
+      return call(method, { ...(params as EventsSubscribeParams), include_tool_output: true })
+    return call(method, params)
+  }) as typeof client.call
+  const unobserve = client.onNotification(EVENT_NOTIFICATION, (params) => {
+    const { event } = params as EventNotification
+    if (event.thread_id !== threadId || event.kind !== "tool_call_completed") return
+    const payload = event.output && typeof event.output === "object" && !Array.isArray(event.output) ? event.output.content : event.output
+    if (typeof payload === "string") deliveredOutputChars += payload.length
+    if (event.output_omitted) omittedCompletions++
+  })
   const root = createRoot(document.getElementById("root")!)
-  let calls = 0
   try {
     await until(() => useStore.getState().connection.state === "open", "Scratch connection did not open")
     await runtime.loadThread(threadId)
-    const client = runtime.rpc(), call = client.call.bind(client)
-    client.call = ((method, params) => {
-      if (method === "threads.tool_output") calls++
-      return call(method, params)
-    }) as typeof client.call
     const render = (panes: number) => flushSync(() => root.render(
       <ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
         <div className="flex h-screen">{Array.from({ length: panes }, (_, pane) => <div key={pane} data-pane={pane} className="flex min-w-0 flex-1 flex-col"><Transcript threadId={threadId} bottomInset={0} /></div>)}</div>
@@ -52,6 +66,8 @@ async function run() {
     const bytes = tools().reduce((total, block) => total + retainedSize(block.output), 0)
     check(calls === 0, "Closed live output was unnecessarily fetched")
     if (!baseline) check(bytes <= 8 * 1024 * 1024, `Closed live payloads exceed budget: ${bytes}`)
+    if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     await mark("live-results-closed")
     // Directly mount two independent consumers of the same omitted early row;
     // the existing Transcript view owns its real leases and hydration effects.
@@ -79,8 +95,10 @@ async function run() {
     await until(() => !document.querySelector("pre"), "Closed live result stayed mounted")
     await sleep(3000)
     await mark("live-post-workload-idle")
-    w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, baseline, closedRetainedBytes: bytes, liveResults: 64, hydrationCalls: calls, exactSharedOutput: true }))
+    w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, baseline, fullEvents, deliveredOutputChars, omittedCompletions, closedRetainedBytes: bytes, liveResults: 64, hydrationCalls: calls, exactSharedOutput: true }))
   } finally {
+    clearTimeout(watchdog)
+    unobserve()
     flushSync(() => root.unmount())
     runtime.disconnect(); setEnvironmentRuntime(null)
   }

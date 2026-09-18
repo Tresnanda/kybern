@@ -580,15 +580,27 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
   )
 }
 
+/** Generated images are visible answer content even while tool details stay
+ * closed. Own their lazy result for exactly as long as the turn is mounted. */
+function GeneratedImageOutputLease({ threadId, block }: { threadId: ThreadId; block: ToolBlock }) {
+  const connected = useStore((state) => state.connection.state === "open")
+  useEffect(() => retainToolOutput(threadId, block.call.id, block.seq), [threadId, block.call.id, block.seq])
+  useEffect(() => {
+    if (connected && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
+  }, [connected, threadId, block])
+  return null
+}
+
 const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
+  const imageTools = useMemo(() => group.work.filter((block): block is ToolBlock => block.kind === "tool" && block.origin.kind === "root" && isImageGenerationTool(block.call)), [group.work])
   const deliveredImages = useMemo(() => {
     if (group.running) return []
     const images = [
       ...group.images.map((image) => ({ source: image.source, label: "Agent image" })),
-      ...group.work.flatMap((block) => block.kind === "tool" && block.origin.kind === "root" && isImageGenerationTool(block.call) ? responseImages(block.output) : []),
+      ...imageTools.flatMap((block) => responseImages(block.output)),
     ]
     return [...new Map(images.map((image) => [image.source, image])).values()]
-  }, [group])
+  }, [group, imageTools])
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
   const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
@@ -695,6 +707,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
           )}
 
           <div className="chat-paint-host group min-w-0 py-0.5">
+            {imageTools.map((block) => <GeneratedImageOutputLease key={block.id} threadId={threadId} block={block} />)}
             {deliveredImages.length > 0 && <div data-response-images className="chat-paint-host">{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
             {group.answer && (
               <div data-slot="message-content" className="chat-paint-host">

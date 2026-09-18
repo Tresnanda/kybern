@@ -124,6 +124,11 @@ pub enum EventPayload {
     ToolCallCompleted {
         tool_call_id: String,
         output: Value,
+        /// Transport-only marker used by opt-in compact event subscriptions.
+        /// Persisted events always leave this false; clients fetch the exact
+        /// result through `threads.tool_output` when it is true.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        output_omitted: bool,
         is_error: bool,
     },
     /// A provider-owned subagent, process, or monitor became visible.
@@ -279,6 +284,7 @@ mod kind_tests {
             EventPayload::ToolCallCompleted {
                 tool_call_id: "a:b".into(),
                 output: serde_json::json!({ "nested": [null, true, "x".repeat(1024 * 1024)] }),
+                output_omitted: false,
                 is_error: false,
             },
             EventPayload::AssistantTextDelta { message_id: MessageId::nil(), origin: Default::default(), delta: "é".into() },
@@ -301,5 +307,17 @@ mod kind_tests {
             let restored: EventPayload = serde_json::from_value(wire).unwrap();
             assert_eq!(restored.kind(), tag);
         }
+    }
+
+    #[test]
+    fn legacy_tool_completion_defaults_to_full_output() {
+        let payload: EventPayload = serde_json::from_value(serde_json::json!({
+            "kind": "tool_call_completed",
+            "tool_call_id": "legacy",
+            "output": "ok",
+            "is_error": false,
+        }))
+        .unwrap();
+        assert!(matches!(payload, EventPayload::ToolCallCompleted { output_omitted: false, .. }));
     }
 }

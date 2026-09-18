@@ -10,6 +10,7 @@ import { SidebarLeadingControls } from "../src/views/chrome"
 import { assets } from "./chat-fixes-assets"
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
+import { setEnvironmentRuntime, type EnvironmentRuntime } from "../src/state/rpc"
 import { applyEvent, emptyThreadState } from "../src/state/transcript"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
@@ -99,7 +100,40 @@ async function runNativeImages() {
 }
 async function run() {
   if (nativeImage) return runNativeImages()
-  for (const variant of ["light", "dark"] as const) {
+  const generatedOutputs = new Map<string, unknown>()
+  let generatedHydrationCalls = 0
+  let generatedLeases = 0
+  let generatedReleases = 0
+  const runtime = {
+    async hydrateToolOutput(threadId: string, toolCallId: string) {
+      if (toolCallId !== "generate") return
+      generatedHydrationCalls++
+      const output = generatedOutputs.get(toolCallId)
+      check(output, "Generated image hydration has no fixture output")
+      useStore.getState().updateTranscript(threadId, (transcript) => {
+        const index = transcript.blocks.findIndex((block) => block.kind === "tool" && block.call.id === toolCallId)
+        const block = transcript.blocks[index]
+        check(block?.kind === "tool", "Generated image tool disappeared before hydration")
+        const blocks = transcript.blocks.slice()
+        blocks[index] = { ...block, output, outputOmitted: false }
+        return { ...transcript, blocks }
+      })
+    },
+    retainToolOutput(_threadId: string, toolCallId: string) {
+      if (toolCallId !== "generate") return () => {}
+      generatedLeases++
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        generatedLeases--
+        generatedReleases++
+      }
+    },
+    async loadDiff() {},
+  } as unknown as EnvironmentRuntime
+  setEnvironmentRuntime(runtime)
+  for (const [variantIndex, variant] of (["light", "dark"] as const).entries()) {
     theme(variant)
     let state = { ...emptyThreadState(), loaded: true }
     let seq = 0
@@ -107,7 +141,7 @@ async function run() {
       state = applyEvent(state, { ...payload, seq: ++seq, thread_id: "fixture", turn_id: "turn", at: "2026-09-07T00:00:00Z" } as ThreadEvent)
       flushSync(() => useStore.getState().set({ transcripts: { fixture: state } }))
     }
-    useStore.getState().set({ connection: { state: "closed" }, expandedWork: {} })
+    useStore.getState().set({ connection: { state: "open" }, expandedWork: {} })
     publish({ kind: "turn_started", message_id: "user", message: { parts: [{ type: "text", text: "First line\nSecond line" }, { type: "image", media_type: "image/png", data: png }] } })
     publish({ kind: "assistant_message_completed", message_id: "narration", origin: { kind: "root" }, text: "Inspecting the image.", thinking: null })
     publish({ kind: "image_received", id: "native-image", origin: { kind: "root" }, source })
@@ -130,12 +164,20 @@ async function run() {
     const generatedCanvas = document.createElement("canvas")
     generatedCanvas.width = 2; generatedCanvas.height = 1
     const generatedSource = generatedCanvas.toDataURL("image/png")
+    const generatedOutput = { type: "imageGeneration", result: generatedSource.split(",")[1], outputFormat: "png" }
+    generatedOutputs.set("generate", generatedOutput)
     publish({ kind: "tool_call_started", call: { id: "generate", name: "imageGeneration", input: {}, parent_id: null }, origin: { kind: "root" } })
-    publish({ kind: "tool_call_completed", tool_call_id: "generate", output: { type: "imageGeneration", result: generatedSource.split(",")[1], outputFormat: "png" }, is_error: false })
+    publish({ kind: "tool_call_completed", tool_call_id: "generate", output: null, output_omitted: true, is_error: false })
     check(!document.querySelector('[data-response-images]'), "Generated image became a final response during the loop")
     publish({ kind: "assistant_message_completed", message_id: "final", origin: { kind: "root" }, text: "The final answer.", thinking: null })
     publish({ kind: "turn_completed", stop_reason: "completed", usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0 }, duration_ms: 1000, cost_usd: null, terminal_message_id: "final" })
-    await sleep(300)
+    await waitFor(() => [...document.querySelectorAll<HTMLImageElement>('[data-response-images] img')].some((image) => image.src === generatedSource && image.complete), "Omitted generated image did not hydrate into the final gallery")
+    const generatedImage = [...document.querySelectorAll<HTMLImageElement>('[data-response-images] img')].find((image) => image.src === generatedSource)!
+    await generatedImage.decode()
+    check(generatedImage.naturalWidth === 2, "Hydrated generated image content did not decode")
+    check(generatedHydrationCalls === variantIndex + 1, "Generated image hydration fetched more than once")
+    check(generatedLeases === 1, "Generated image output has no mounted lease")
+    check([...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].some((button) => button.textContent?.includes("Worked for") && button.getAttribute("aria-expanded") === "false"), "Generated image required opening its tool disclosure")
     check(document.querySelectorAll('.response-image-preview').length === 3, "Tool images were promoted into the final answer")
     check(document.querySelectorAll('[data-response-images] img').length === 2, "Generated image deliverable was hidden with tool screenshots")
     const worked = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Worked for"))!
@@ -155,6 +197,7 @@ async function run() {
     useStore.getState().set({ connection: { state: "open" }, composerDrafts: { image: { text: "Draft", attachments: [{ id: "upload", name: "Screenshot.png", media_type: "image/png", size: blob.size, preview: url }], mentions: [], skills: [] } } })
     flushSync(() => view.render(<div className="p-6"><Composer key={variant} draftKey="image" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} /></div>))
     await sleep(200)
+    check(generatedLeases === 0 && generatedReleases === variantIndex + 1, "Unmounting the transcript retained the generated image output lease")
     await openPreview(document.querySelector<HTMLButtonElement>('[aria-label="Preview Screenshot.png"]')!, url)
     // Switching threads destroys local blob URLs; the durable asset ID restores
     // the thumbnail without retaining an image payload in every saved draft.
@@ -175,6 +218,7 @@ async function run() {
     try { await fetch(restored) } catch { released = true }
     check(released, "Removing the restored attachment retained its blob")
   }
+  setEnvironmentRuntime(null)
 
   const savedAttachment = { id: "upload", name: "Restored.png", media_type: "image/png", size: 68 }
   useStore.getState().set(state => ({ composerDrafts: { ...state.composerDrafts, recovery: { text: "", attachments: [savedAttachment], mentions: [], skills: [] } } }))
@@ -330,7 +374,7 @@ async function run() {
     document.querySelector<HTMLButtonElement>('[aria-label="Switch environment"]')!.click()
     await sleep(350)
   }
-  return { pass: true, imagePreviews: 6, restoredDraftThumbnails: true, previewRetry: true, previewCleanup: true, workspaceMinimumWidth: true, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }
+  return { pass: true, imagePreviews: 6, restoredDraftThumbnails: true, previewRetry: true, previewCleanup: true, generatedImageHydration: true, generatedHydrationCalls, generatedLeaseReleases: generatedReleases, workspaceMinimumWidth: true, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }
 }
 const report = (result: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(result))
 run().then(report).catch((error) => report({ pass: false, error: String(error), stack: error.stack }))

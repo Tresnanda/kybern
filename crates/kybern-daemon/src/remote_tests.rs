@@ -3,7 +3,7 @@ use axum::{Router, routing::get};
 use futures::{SinkExt, StreamExt};
 use kybern_client::{Client, Endpoint};
 use kybern_protocol::{methods::*, *};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
@@ -168,6 +168,104 @@ async fn subscription_ack_precedes_all_replayed_events() {
         let frame: serde_json::Value = serde_json::from_str(&message).unwrap();
         assert_eq!(frame["params"]["subscription_id"], subscription);
         assert_eq!(frame["params"]["event"]["seq"], seq);
+    }
+}
+
+#[tokio::test]
+async fn compact_event_subscription_defers_large_tool_output_to_exact_rpc() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let turn = Uuid::now_v7();
+    let tool_call_id = "compact:é😀";
+    let start = host
+        .state
+        .store
+        .event_append(
+            thread.id,
+            Some(turn),
+            EventPayload::ToolCallStarted {
+                call: ToolCall { id: tool_call_id.into(), name: "Read".into(), input: json!({}), parent_id: None },
+                origin: EventOrigin::Root,
+            },
+        )
+        .unwrap();
+    let output = json!({ "stdout": "exact é😀\n".repeat(1000) });
+    let completion = host
+        .state
+        .store
+        .event_append(
+            thread.id,
+            Some(turn),
+            EventPayload::ToolCallCompleted {
+                tool_call_id: tool_call_id.into(),
+                output: output.clone(),
+                output_omitted: false,
+                is_error: true,
+            },
+        )
+        .unwrap();
+
+    let compact = host.client().await;
+    compact
+        .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: Some(0), include_tool_output: Some(false) })
+        .await
+        .unwrap();
+    let compact_event = {
+        let mut notifications = compact.notifications.lock().await;
+        loop {
+            let notification = notifications.next().await.expect("compact replay notification");
+            if notification.method != EVENT_NOTIFICATION {
+                continue;
+            }
+            let event: EventNotification = serde_json::from_value(notification.params).unwrap();
+            if event.event.seq == completion.seq {
+                break event.event;
+            }
+        }
+    };
+    match compact_event.payload {
+        EventPayload::ToolCallCompleted { output: received, output_omitted, is_error, .. } => {
+            assert_eq!(received, Value::Null);
+            assert!(output_omitted);
+            assert!(is_error);
+        }
+        other => panic!("unexpected compact payload: {other:?}"),
+    }
+    let exact = compact
+        .call::<ThreadsToolOutput>(ThreadsToolOutputParams {
+            thread_id: thread.id,
+            tool_call_id: tool_call_id.into(),
+            start_seq: Some(start.seq),
+            through_seq: Some(completion.seq),
+        })
+        .await
+        .unwrap();
+    assert_eq!(exact.output, output);
+    assert!(exact.is_error);
+
+    let full = host.client().await;
+    full.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: Some(0), include_tool_output: None })
+        .await
+        .unwrap();
+    let full_event = {
+        let mut notifications = full.notifications.lock().await;
+        loop {
+            let notification = notifications.next().await.expect("full replay notification");
+            if notification.method != EVENT_NOTIFICATION {
+                continue;
+            }
+            let event: EventNotification = serde_json::from_value(notification.params).unwrap();
+            if event.event.seq == completion.seq {
+                break event.event;
+            }
+        }
+    };
+    match full_event.payload {
+        EventPayload::ToolCallCompleted { output: received, output_omitted, .. } => {
+            assert_eq!(received, output);
+            assert!(!output_omitted);
+        }
+        other => panic!("unexpected full payload: {other:?}"),
     }
 }
 
@@ -569,6 +667,7 @@ async fn artifacts_paginate_receipts_and_confine_isolated_previews() {
                     EventPayload::ToolCallCompleted {
                         tool_call_id: id,
                         output: json!({"url":"https://claude.ai/public/artifacts/example"}),
+                        output_omitted: false,
                         is_error: index == 1,
                     },
                 )
@@ -584,6 +683,7 @@ async fn artifacts_paginate_receipts_and_confine_isolated_previews() {
             EventPayload::ToolCallCompleted {
                 tool_call_id: "artifact-1".into(),
                 output: json!({"url":"https://claude.ai/public/artifacts/example"}),
+                output_omitted: false,
                 is_error: true,
             },
         )
@@ -825,12 +925,28 @@ async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rp
     };
     let first = append(start()).seq;
     let a = json!({"stdout": "first é😀\n".repeat(1000)});
-    let barrier = append(EventPayload::ToolCallCompleted { tool_call_id: "reused:é😀".into(), output: a.clone(), is_error: true }).seq;
+    let barrier = append(EventPayload::ToolCallCompleted {
+        tool_call_id: "reused:é😀".into(),
+        output: a.clone(),
+        output_omitted: false,
+        is_error: true,
+    })
+    .seq;
     let corrected = json!({"stdout": "corrected é😀\n".repeat(1000)});
-    append(EventPayload::ToolCallCompleted { tool_call_id: "reused:é😀".into(), output: corrected.clone(), is_error: false });
+    append(EventPayload::ToolCallCompleted {
+        tool_call_id: "reused:é😀".into(),
+        output: corrected.clone(),
+        output_omitted: false,
+        is_error: false,
+    });
     let second = append(start()).seq;
     let b = json!({"stdout": "second é😀\n".repeat(1000)});
-    append(EventPayload::ToolCallCompleted { tool_call_id: "reused:é😀".into(), output: b.clone(), is_error: false });
+    append(EventPayload::ToolCallCompleted {
+        tool_call_id: "reused:é😀".into(),
+        output: b.clone(),
+        output_omitted: false,
+        is_error: false,
+    });
     let client = host.client().await;
     let params = ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(60), through_seq: Some(barrier), ..Default::default() };
     let historical = client.call::<ThreadsGet>(params.clone()).await.unwrap();

@@ -298,7 +298,7 @@ impl History {
         if !self.tools.remove(id) {
             return;
         }
-        self.push(at, EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, is_error });
+        self.push(at, EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, output_omitted: false, is_error });
     }
 
     fn notice(&mut self, at: DateTime<Utc>, text: String) {

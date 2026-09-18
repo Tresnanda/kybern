@@ -589,7 +589,11 @@ pub async fn run() -> Result<()> {
             let sub = if detach {
                 None
             } else {
-                Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None }).await?)
+                Some(
+                    client
+                        .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None, include_tool_output: None })
+                        .await?,
+                )
             };
             let thread = client
                 .call::<ThreadsCreate>(ThreadsCreateParams {
@@ -615,7 +619,15 @@ pub async fn run() -> Result<()> {
             let sub = if detach {
                 None
             } else {
-                Some(client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread_id), after_seq: None }).await?)
+                Some(
+                    client
+                        .call::<EventsSubscribe>(EventsSubscribeParams {
+                            thread_id: Some(thread_id),
+                            after_seq: None,
+                            include_tool_output: None,
+                        })
+                        .await?,
+                )
             };
             let r = client
                 .call::<ThreadsSend>(ThreadsSendParams {
@@ -708,7 +720,8 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Watch { thread, after } => {
             let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
-            let sub = client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after }).await?;
+            let sub =
+                client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after, include_tool_output: None }).await?;
             render::watch(&client, sub.subscription_id, json).await?;
         }
         Cmd::Release { thread } => {

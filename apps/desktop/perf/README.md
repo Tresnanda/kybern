@@ -28,6 +28,10 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
+live/replayed result delivery, assistant-settlement allocation reduction,
+primary-source research, and the remaining 200–300 MB whole-app acceptance work.
+
 See [live tool result retention](live-tool-retention-2026-09-18.md) for the live
 completion path that previously bypassed lazy-result budgets, its byte/count
 limits and exact-content fixture, and the daemon/CLI retention follow-up.
