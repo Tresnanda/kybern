@@ -28,6 +28,11 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [the whole-app follow-up](daily-memory-followup-2026-09-18.md) for the
+842 → 434 MiB release-workload peak, 283 MiB settled observation, paged-history
+paint boundary, bounded settled streams, metadata-only title checks and hidden
+dock layer measurements. The burst remains above the 200–300 MB target.
+
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,
 primary-source research, and the remaining 200–300 MB whole-app acceptance work.
