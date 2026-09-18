@@ -46,6 +46,9 @@ async function openPreview(button: HTMLButtonElement, expected: string) {
   check(image?.src === expected, "Preview lost the original image")
   check(dialog?.querySelector('button[aria-label="Copy image"]'), "Preview has no copy image control")
   check(dialog?.querySelector('button[aria-label="Download image"]'), "Preview has no download image control")
+  for (const action of dialog!.querySelectorAll<HTMLButtonElement>('[aria-label="Copy image"], [aria-label="Download image"]')) {
+    check(!action.textContent?.trim(), "Image action still includes a visible text label")
+  }
   await image.decode()
   check(image.naturalWidth > 0, "Preview did not decode")
   const close = dialog!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
@@ -248,6 +251,16 @@ async function run() {
     const bounds = rows.map((row) => row.getBoundingClientRect())
     check(Math.abs(bounds[0].height - bounds[1].height) < 1, "Environment rows have uneven heights")
     for (const row of rows) check(row.scrollWidth <= row.clientWidth + 1, "Environment row clips its content")
+    for (const row of rows) {
+      const label = row.querySelector("bdi")!
+      const icon = row.querySelector("svg")!
+      const status = row.querySelector<HTMLElement>(".environment-choice-status")!
+      check(label.getBoundingClientRect().left - icon.getBoundingClientRect().right >= 11, "Environment icon crowds its label")
+      check(parseFloat(getComputedStyle(status).fontSize) < parseFloat(getComputedStyle(label).fontSize), "Connection status has no type hierarchy")
+      const dot = status.firstElementChild!.getBoundingClientRect(), text = status.lastElementChild!.getBoundingClientRect()
+      check(Math.abs(dot.y + dot.height / 2 - text.y - text.height / 2) < 1, "Connection dot is not centered on its status label")
+    }
+    check(parseFloat(getComputedStyle(rows[0].querySelector('[data-slot="menu-radio-indicator"] svg')!).strokeWidth) >= 2.5, "Selection check is too thin")
     const windowAction = document.querySelector<HTMLElement>('[aria-label="Open Os-kdi in a new window"]')!
     check(windowAction && rows[1].parentElement === windowAction.parentElement, "New window action is not in its environment row")
     check(!document.querySelector('[data-slot="menu-sub-trigger"]'), "Separate new window submenu remains")
@@ -267,11 +280,11 @@ async function run() {
     await sleep(250)
     const saved = useEnvironments.getState().profiles
     useEnvironments.setState({ profiles: saved.map((profile) => ({ ...profile, name: profile.name + " long-environment-name".repeat(3) })) })
-    document.documentElement.style.zoom = "1.5"
+    document.documentElement.style.zoom = "2"
     document.documentElement.dir = "rtl"
     await sleep(200)
     for (const row of document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
-      check(row.scrollWidth <= row.clientWidth + 1, "Long environment name clips at 150% zoom in RTL")
+      check(row.scrollWidth <= row.clientWidth + 1, "Long environment name clips at 200% zoom in RTL")
     }
     document.documentElement.style.zoom = ""
     document.documentElement.dir = "ltr"
@@ -306,6 +319,13 @@ async function run() {
     flushSync(() => view.render(<div className="p-6"><ResponseImage source={image} label="Image.png" thumbnail /></div>))
     await sleep(200)
     document.querySelector<HTMLButtonElement>('[aria-label="Preview Image.png"]')!.click()
+    await sleep(350)
+  }
+  if (import.meta.env.VITE_CHAT_PREVIEW === "environment") {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke: async () => {} }, configurable: true })
+    theme("dark")
+    flushSync(() => view.render(<div style={{ width: 240, margin: "100px auto" }}><EnvironmentSwitcher /></div>))
+    document.querySelector<HTMLButtonElement>('[aria-label="Switch environment"]')!.click()
     await sleep(350)
   }
   return { pass: true, imagePreviews: 6, restoredDraftThumbnails: true, previewRetry: true, previewCleanup: true, workspaceMinimumWidth: true, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }

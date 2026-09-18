@@ -264,7 +264,7 @@ function MenuRadioItem({
         <>
           <span className="col-start-1 min-w-0">{children}</span>
           <div className="col-start-2 flex shrink-0 items-center justify-end gap-0.5">
-            <MenuPrimitive.RadioItemIndicator className="shrink-0 data-unchecked:hidden">
+            <MenuPrimitive.RadioItemIndicator data-slot="menu-radio-indicator" className="shrink-0 data-unchecked:hidden">
               <svg
                 className="size-3"
                 fill="none"
@@ -286,7 +286,7 @@ function MenuRadioItem({
       ) : (
         <span className="flex w-full min-w-0 items-center gap-2">
           {children}
-          <MenuPrimitive.RadioItemIndicator className="ml-auto shrink-0">
+          <MenuPrimitive.RadioItemIndicator data-slot="menu-radio-indicator" className="ml-auto shrink-0">
             <svg
               className="size-3"
               fill="none"

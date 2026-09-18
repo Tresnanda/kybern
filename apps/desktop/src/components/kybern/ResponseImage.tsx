@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
 import { Button } from "@/components/kit/button"
+import { IconButton } from "@/components/kit/icon-button"
 import { IconSwap } from "@/components/kybern/motion"
 import { CheckIcon, CopyIcon, DownloadIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
@@ -217,30 +218,28 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
         <div className="flex min-w-0 items-center justify-between gap-3 pe-8">
           <DialogTitle className="min-w-0 flex-1 truncate text-sm">{label}</DialogTitle>
           {original && !originalError && <div className="flex shrink-0 items-center gap-1">
-            <Button
+            <IconButton
               type="button"
               variant="ghost"
-              size="sm"
-              aria-label={copied ? "Image copied" : "Copy image"}
-              title={copied ? "Image copied" : "Copy image"}
+              size="icon-sm"
+              label={copied ? "Image copied" : "Copy image"}
+              tooltip={copied ? "Image copied" : "Copy image"}
               disabled={imageAction !== null}
               onClick={() => void runImageAction("copy")}
             >
               <IconSwap className="size-3.5" active={copied ? "b" : "a"} a={<CopyIcon className="size-3.5" />} b={<CheckIcon className="size-3.5 text-success" />} />
-              <span>{copied ? "Copied" : "Copy"}</span>
-            </Button>
-            <Button
+            </IconButton>
+            <IconButton
               type="button"
               variant="ghost"
-              size="sm"
-              aria-label="Download image"
-              title="Download image"
+              size="icon-sm"
+              label="Download image"
+              tooltip="Download image"
               disabled={imageAction !== null}
               onClick={() => void runImageAction("download")}
             >
               <DownloadIcon className="size-3.5" />
-              <span>Download</span>
-            </Button>
+            </IconButton>
           </div>}
         </div>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>

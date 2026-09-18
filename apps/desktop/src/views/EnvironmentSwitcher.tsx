@@ -150,13 +150,13 @@ export function EnvironmentSwitcher() {
                   const detail = current ? statusLabel : item.local ? "On this Mac" : item.ssh ? "SSH connection" : "Remote environment"
                   return (
                     <div key={item.id} className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-lg pe-1 has-[[data-highlighted]]:bg-[var(--color-background-button-secondary-hover)]", current && "bg-[var(--color-background-button-secondary)]")} role="presentation">
-                      <MenuRadioItem className="min-h-11 rounded-lg data-highlighted:bg-transparent" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
+                      <MenuRadioItem className="environment-choice min-h-11 rounded-lg data-highlighted:bg-transparent" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
                         if (current && connection.state === "failed") void switchEnvironment(item.id)
                       }}>
-                        {item.local ? <DeviceLaptopIcon className="-mx-0.5 size-4 shrink-0 opacity-80" /> : <GlobeIcon className="-mx-0.5 size-4 shrink-0 opacity-80" />}
+                        {item.local ? <DeviceLaptopIcon className="size-4 shrink-0 opacity-80" /> : <GlobeIcon className="size-4 shrink-0 opacity-80" />}
                         <span className="min-w-0 flex-1 text-start">
                           <bdi className="block break-words whitespace-normal leading-snug">{item.name}</bdi>
-                          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 break-words whitespace-normal font-normal text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground">
+                          <span className="environment-choice-status mt-0.5 flex min-w-0 items-center gap-1.5 break-words whitespace-normal font-normal leading-snug text-muted-foreground">
                             <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", current && connection.state === "open" ? "bg-emerald-500" : current && connection.state === "failed" ? "bg-destructive" : "bg-muted-foreground/40")} />
                             <span className="min-w-0 break-words">{detail}</span>
                           </span>
