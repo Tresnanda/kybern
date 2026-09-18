@@ -20,6 +20,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
+| Hidden environment card | A second WebContent process kept git/diff/notes rows in the floating environment card while occluded or minimized, including when the card was already faded for an unfocused window. | Unmount the reconstructible body while the window is occluded/minimized/page-hidden; keep the wrapper. Blur is not discard. Verify two-window `vmmap` on macOS. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
@@ -74,6 +75,10 @@ See [long-chat and renderer memory reductions](memory-reductions-2026-09-14.md)
 for bounded refreshes, cleanup while following, stable interaction pins, deferred
 result formatting, and inactive terminal graphics release. Run `history-retention`
 at 1100px/480px plus `tool-memory` and `terminal-memory` for those paths.
+
+See [hidden-window environment card release](hidden-window-environment-2026-09-18.md)
+for occlusion-gated unmount of the reconstructible environment card body (not blur).
+Linux cannot run the two-window macOS `vmmap` check.
 
 See [profile and diagram UI polish](renderer-ui-polish-2026-09-14.md) for explicit
 profile controls, responsive grouping, diagram expansion, and motion/focus checks.
@@ -169,6 +174,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Saved-session picker, search, pagination, keyboard navigation | `node scripts/check-rendering.mjs sessions` |
 | Earlier-history prefetch, retry, prepend anchoring | `node scripts/check-rendering.mjs history` |
 | Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |
+| Occluded or minimized window with the environment card | Two-window `vmmap` on macOS 27 plus environment-card remount; do not treat blur as compact permission. See `hidden-window-environment-2026-09-18.md`. |
 
 For indicator changes, also run the matrix appearance/visibility comparison
 below. The native runner builds fixtures separately at `tauri://localhost`
