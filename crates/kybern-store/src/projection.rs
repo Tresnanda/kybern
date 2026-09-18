@@ -76,10 +76,9 @@ pub fn project_runtime_tasks(events: &[ThreadEvent]) -> Vec<RuntimeTask> {
     let roots = root_sessions(events);
     let mut tasks = std::collections::HashMap::<String, RuntimeTask>::new();
     for event in events {
-        let task = match &event.payload {
-            EventPayload::RuntimeTaskStarted { task }
-            | EventPayload::RuntimeTaskUpdated { task }
-            | EventPayload::RuntimeTaskCompleted { task } => task,
+        let (task, restarted) = match &event.payload {
+            EventPayload::RuntimeTaskStarted { task } => (task, true),
+            EventPayload::RuntimeTaskUpdated { task } | EventPayload::RuntimeTaskCompleted { task } => (task, false),
             _ => continue,
         };
         if is_root_task(task, &roots) {
@@ -108,7 +107,7 @@ pub fn project_runtime_tasks(events: &[ThreadEvent]) -> Vec<RuntimeTask> {
                 let tied_and_not_regressing = task.updated_seq == current.updated_seq
                     && task.updated_at == current.updated_at
                     && (current.status.is_active() || !task.status.is_active());
-                let terminal_regression = !current.status.is_active() && task.status.is_active();
+                let terminal_regression = !current.status.is_active() && task.status.is_active() && !restarted;
                 if !terminal_regression && (newer || tied_and_not_regressing) {
                     entry.insert(task);
                 }
@@ -451,7 +450,8 @@ fn apply_transcript_event(
                     out.iter_mut().find(|entry| matches!(entry, TranscriptEntry::RuntimeTask { task, .. } if task.id == incoming.id))
                 {
                     incoming.started_seq = current.started_seq;
-                    if current.status.is_active() || !incoming.status.is_active() {
+                    let restarted = matches!(&ev.payload, EventPayload::RuntimeTaskStarted { .. });
+                    if current.status.is_active() || !incoming.status.is_active() || restarted {
                         *current = incoming;
                     }
                 } else {
@@ -838,6 +838,44 @@ mod tests {
         assert_eq!(summary.active_agents, 0);
         assert_eq!(summary.active_processes, 1);
         assert_eq!(summary.active_monitors, 1);
+    }
+
+    #[test]
+    fn runtime_projection_reactivates_only_an_explicitly_restarted_agent() {
+        let running = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 0);
+        let completed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Completed, 1);
+        let delayed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 2);
+        let resumed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 3);
+        let failed = runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Failed, 4);
+        let events = vec![
+            event(1, running, |task| EventPayload::RuntimeTaskStarted { task }),
+            event(2, completed, |task| EventPayload::RuntimeTaskCompleted { task }),
+            event(3, delayed, |task| EventPayload::RuntimeTaskUpdated { task }),
+        ];
+        let settled = project_runtime_tasks(&events);
+        assert_eq!(settled[0].status, RuntimeTaskStatus::Completed);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &settled).active_agents, 0);
+
+        let mut reused = events;
+        reused.push(event(4, resumed, |task| EventPayload::RuntimeTaskStarted { task }));
+        let active = project_runtime_tasks(&reused);
+        assert_eq!(active[0].status, RuntimeTaskStatus::Running);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &active).active_agents, 1);
+
+        reused.push(event(5, failed, |task| EventPayload::RuntimeTaskCompleted { task }));
+        let failed = project_runtime_tasks(&reused);
+        assert_eq!(failed[0].status, RuntimeTaskStatus::Failed);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &failed).active_agents, 0);
+
+        reused.push(event(6, runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 5), |task| {
+            EventPayload::RuntimeTaskStarted { task }
+        }));
+        reused.push(event(7, runtime_task("agent", RuntimeTaskKind::Agent, RuntimeTaskStatus::Interrupted, 6), |task| {
+            EventPayload::RuntimeTaskCompleted { task }
+        }));
+        let interrupted = project_runtime_tasks(&reused);
+        assert_eq!(interrupted[0].status, RuntimeTaskStatus::Interrupted);
+        assert_eq!(project_thread_activity(Uuid::from_u128(1), &interrupted).active_agents, 0);
     }
 
     #[test]

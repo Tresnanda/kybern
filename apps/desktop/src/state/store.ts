@@ -797,7 +797,9 @@ export function mergeRuntimeTasks(
       (isRuntimeTaskActive(previous) || !isRuntimeTaskActive(task))
     const terminalRegression =
       !!previous && !isRuntimeTaskActive(previous) && isRuntimeTaskActive(task)
-    if (!terminalRegression && (newer || tiedAndNotRegressing))
+    const explicitReactivation =
+      terminalRegression && newerBySequence && task.completed_at == null
+    if ((!terminalRegression || explicitReactivation) && (newer || tiedAndNotRegressing))
       merged.set(task.id, task)
   }
   return sortRuntimeTasks([...merged.values()])

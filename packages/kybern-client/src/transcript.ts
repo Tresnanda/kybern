@@ -360,7 +360,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         : ev.task.started_seq || ev.seq
       const task = { ...ev.task, started_seq: startedSeq, updated_seq: ev.seq }
       if (current?.kind === "runtime_task") {
-        if (isActiveRuntimeStatus(current.task.status) || !isActiveRuntimeStatus(task.status)) {
+        if (isActiveRuntimeStatus(current.task.status) || !isActiveRuntimeStatus(task.status) || ev.kind === "runtime_task_started") {
           blocks = replaceAt(blocks, idx, { ...current, task })
         }
       } else {

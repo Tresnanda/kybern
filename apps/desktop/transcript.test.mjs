@@ -533,6 +533,24 @@ test("background process final answer replaces the provisional waiting answer", 
   assert.equal(groupTurns(state.blocks)[0].answer?.text, "Final result.")
 })
 
+test("a runtime task start explicitly reactivates a reusable completed agent", () => {
+  let state = fold([
+    { kind: "runtime_task_started", task: runtimeTask("agent") },
+    { kind: "runtime_task_completed", task: runtimeTask("agent", { status: "completed", completed_at: AT }) },
+    { kind: "runtime_task_updated", task: runtimeTask("agent") },
+  ])
+  assert.equal(state.blocks.find((block) => block.kind === "runtime_task").task.status, "completed")
+
+  state = applyEvent(state, {
+    seq: 4,
+    turn_id: T,
+    at: AT,
+    kind: "runtime_task_started",
+    task: runtimeTask("agent", { updated_at: "2026-09-03T00:00:01Z" }),
+  })
+  assert.equal(state.blocks.find((block) => block.kind === "runtime_task").task.status, "running")
+})
+
 
 test("native resumption removes the provisional answer until the scoped continuation settles", () => {
   const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/claude-process-resumed.json", import.meta.url), "utf8"))

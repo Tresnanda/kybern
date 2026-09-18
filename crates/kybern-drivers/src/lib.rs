@@ -298,6 +298,10 @@ pub enum DriverEvent {
         is_error: bool,
     },
     RuntimeTaskStarted(DriverRuntimeTask),
+    /// A provider-stable task began another unit of work after previously
+    /// reaching a terminal state. Unlike a late progress update, this may
+    /// deliberately reactivate the existing runtime-task row.
+    RuntimeTaskResumed(DriverRuntimeTaskUpdate),
     RuntimeTaskUpdated(DriverRuntimeTaskUpdate),
     RuntimeTaskCompleted(DriverRuntimeTaskUpdate),
     /// The provider is blocked waiting for `respond_permission`.

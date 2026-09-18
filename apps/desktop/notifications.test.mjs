@@ -45,11 +45,44 @@ globalThis.document = { ...eventSurface, visibilityState: "visible", hasFocus: (
 globalThis.alerts = []
 globalThis.nativeAlerts = []
 globalThis.focusProbe = () => false
-const { createEnvironmentStore } = await import("./src/state/store.ts")
+const { createEnvironmentStore, mergeRuntimeTasks, summarizeRuntimeTasks } = await import("./src/state/store.ts")
 const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
 const { threadAttentionKind } = await import("./src/state/notifications.ts")
 const { createSplitView } = await import("./src/state/splitView.ts")
 const tick = () => new Promise((resolve) => setImmediate(resolve))
+
+test("completed reusable agents leave the working count and can start again", () => {
+  const task = (status, seq, completedAt = null) => ({
+    id: "agent",
+    status,
+    thread_id: "t",
+    origin_turn_id: "turn",
+    kind: "agent",
+    title: "Subagent",
+    backgrounded: true,
+    started_seq: 1,
+    updated_seq: seq,
+    started_at: "2026-09-18T00:00:00Z",
+    updated_at: `2026-09-18T00:00:0${seq}Z`,
+    completed_at: completedAt,
+    capabilities: {},
+    stats: {},
+  })
+  const completed = mergeRuntimeTasks([task("running", 1)], [task("completed", 2, "2026-09-18T00:00:02Z")])
+  assert.deepEqual(summarizeRuntimeTasks("t", completed), {
+    thread_id: "t",
+    state: undefined,
+    active_agents: 0,
+    active_processes: 0,
+    active_monitors: 0,
+  })
+
+  const stale = mergeRuntimeTasks(completed, [task("running", 1)])
+  assert.equal(stale[0].status, "completed")
+  const resumed = mergeRuntimeTasks(completed, [task("running", 3)])
+  assert.equal(resumed[0].status, "running")
+  assert.equal(summarizeRuntimeTasks("t", resumed).active_agents, 1)
+})
 
 test("completion alerts wait for background waves, recheck native focus races, and deduplicate resumed turns", async () => {
   const store = createEnvironmentStore("notifications")

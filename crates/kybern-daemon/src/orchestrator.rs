@@ -2663,6 +2663,13 @@ struct LiveSession {
     app_tool_permits: Arc<Semaphore>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeTaskUpdateKind {
+    Progress,
+    Resume,
+    Complete,
+}
+
 /// Idle expiry includes suspend time, which `Instant` does not count on macOS.
 /// Keep both clocks so moving the wall clock backward cannot extend a session
 /// beyond its normal awake-time limit. A forward clock change can expire an
@@ -4069,7 +4076,7 @@ impl Orchestrator {
             thread_id,
             &live,
             DriverRuntimeTaskUpdate::status(task.id.clone(), RuntimeTaskStatus::Stopping),
-            false,
+            RuntimeTaskUpdateKind::Progress,
         )
         .await?
         .ok_or_else(|| anyhow!("task not found"))
@@ -4112,7 +4119,7 @@ impl Orchestrator {
                 stats: None,
                 capabilities: Some(RuntimeTaskCapabilities { stop: task.capabilities.stop, background: false }),
             },
-            false,
+            RuntimeTaskUpdateKind::Progress,
         )
         .await?
         .ok_or_else(|| anyhow!("task not found"))
@@ -4753,20 +4760,22 @@ impl Orchestrator {
         thread_id: ThreadId,
         live: &Arc<LiveSession>,
         update: DriverRuntimeTaskUpdate,
-        completed: bool,
+        kind: RuntimeTaskUpdateKind,
     ) -> Result<Option<RuntimeTask>> {
         let mut tasks = live.tasks.lock().await;
         let Some(task) = tasks.get_mut(&update.id) else {
             tracing::debug!(thread_id = %thread_id, task_id = %update.id, "provider updated an unknown runtime task");
             return Ok(None);
         };
+        let completed = kind == RuntimeTaskUpdateKind::Complete;
+        let resumed = kind == RuntimeTaskUpdateKind::Resume;
         let next_status = match (update.status, completed) {
             (Some(status), true) if status.is_active() => RuntimeTaskStatus::Completed,
             (Some(status), _) => status,
             (None, true) => RuntimeTaskStatus::Completed,
             (None, false) => task.status,
         };
-        if task.status.is_active() || !next_status.is_active() {
+        if resumed || task.status.is_active() || !next_status.is_active() {
             task.status = next_status;
         }
         if let Some(detail) = update.detail {
@@ -4788,13 +4797,17 @@ impl Orchestrator {
             task.capabilities = capabilities;
         }
         task.updated_at = Utc::now();
-        if completed || !task.status.is_active() {
+        if resumed {
+            task.completed_at = None;
+        } else if completed || !task.status.is_active() {
             task.completed_at = Some(task.updated_at);
             task.capabilities = RuntimeTaskCapabilities::default();
         }
         let task = task.clone();
         drop(tasks);
-        let payload = if completed || !task.status.is_active() {
+        let payload = if resumed {
+            EventPayload::RuntimeTaskStarted { task: task.clone() }
+        } else if completed || !task.status.is_active() {
             EventPayload::RuntimeTaskCompleted { task: task.clone() }
         } else {
             EventPayload::RuntimeTaskUpdated { task: task.clone() }
@@ -4807,7 +4820,7 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
-        if completed || !task.status.is_active() {
+        if !resumed && (completed || !task.status.is_active()) {
             self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
         }
         Ok(Some(task))
@@ -4841,7 +4854,7 @@ impl Orchestrator {
                         stats: None,
                         capabilities: None,
                     },
-                    true,
+                    RuntimeTaskUpdateKind::Complete,
                 )
                 .await;
         }
@@ -5164,7 +5177,7 @@ impl Orchestrator {
                                 stats: None,
                                 capabilities: None,
                             },
-                            false,
+                            RuntimeTaskUpdateKind::Progress,
                         )
                         .await?;
                 }
@@ -5209,7 +5222,7 @@ impl Orchestrator {
                                     stats: None,
                                     capabilities: None,
                                 },
-                                true,
+                                RuntimeTaskUpdateKind::Complete,
                             )
                             .await?;
                     }
@@ -5218,11 +5231,14 @@ impl Orchestrator {
             DriverEvent::RuntimeTaskStarted(task) => {
                 self.persist_runtime_task_start(thread_id, live, turn_id, task).await?;
             }
+            DriverEvent::RuntimeTaskResumed(update) => {
+                let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Resume).await?;
+            }
             DriverEvent::RuntimeTaskUpdated(update) => {
-                let _ = self.apply_runtime_task_update(thread_id, live, update, false).await?;
+                let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Progress).await?;
             }
             DriverEvent::RuntimeTaskCompleted(update) => {
-                let _ = self.apply_runtime_task_update(thread_id, live, update, true).await?;
+                let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await?;
             }
             DriverEvent::PermissionRequest { request_id, tool_call_id, tool_name, input, summary, suggestions } => {
                 let Some(turn_id) = turn_id else {
@@ -7252,6 +7268,70 @@ mod tests {
         fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::ResponseStarted).await.unwrap();
         fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
         assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().len(), count, "retired output cannot reopen the turn");
+    }
+
+    #[tokio::test]
+    async fn explicit_runtime_task_resume_reactivates_a_completed_agent() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
+        live.turn_ready.notified().await;
+        let task = DriverRuntimeTask {
+            id: "agent-1".into(),
+            kind: RuntimeTaskKind::Agent,
+            status: RuntimeTaskStatus::Running,
+            title: "Subagent".into(),
+            detail: None,
+            provider_type: Some("sub_agent".into()),
+            parent_id: None,
+            tool_call_id: None,
+            provider_thread_id: Some("agent-1".into()),
+            model: None,
+            effort: None,
+            backgrounded: true,
+            last_tool_name: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities { stop: true, background: false },
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status("agent-1", RuntimeTaskStatus::Completed)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fixture.store.runtime_tasks_for_thread(thread.id).unwrap()[0].status, RuntimeTaskStatus::Completed);
+
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::RuntimeTaskResumed(DriverRuntimeTaskUpdate {
+                    id: "agent-1".into(),
+                    status: Some(RuntimeTaskStatus::Running),
+                    detail: None,
+                    backgrounded: None,
+                    last_tool_name: None,
+                    usage: None,
+                    stats: None,
+                    capabilities: Some(RuntimeTaskCapabilities { stop: true, background: false }),
+                }),
+            )
+            .await
+            .unwrap();
+        let resumed = fixture.store.runtime_tasks_for_thread(thread.id).unwrap();
+        assert_eq!(resumed[0].status, RuntimeTaskStatus::Running);
+        assert!(resumed[0].completed_at.is_none());
+        assert!(matches!(
+            fixture.store.events_for_thread(thread.id).unwrap().last().unwrap().payload,
+            EventPayload::RuntimeTaskStarted { .. }
+        ));
     }
 
     #[tokio::test]
