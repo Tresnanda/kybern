@@ -82,6 +82,10 @@ jobs:
         id: frontend-build
         working-directory: apps/desktop
         run: pnpm build
+      - name: Native WebKit theme provider lifecycle
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        working-directory: apps/desktop
+        run: node scripts/check-rendering.mjs theme-provider
       - name: Native WebKit window materials
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
