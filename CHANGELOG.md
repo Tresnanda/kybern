@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.8
+
+<!-- kybern-release-title: Quieter helpers, reliable follow-ups -->
+<!-- kybern-release-summary: Helper threads stay out of notifications, and follow-up assignments wait until the helper is ready. -->
+
+- Keep helper completions, failures, approvals, and questions out of the notification bell, unread dots, toasts, and system alerts. Details and approval controls remain available inside the helper thread and Work panel.
+- Queue follow-up assignments while a helper is busy, and separate queued, working, and attention counts in the Work panel.
+- Restore macOS release packaging when optional Apple certificate settings are empty. This release includes the fixes from the unpublished 0.4.7 build.
+
 ## 0.4.7
 
 <!-- kybern-release-title: Quieter helpers, reliable follow-ups -->

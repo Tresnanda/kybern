@@ -46,6 +46,16 @@ else
 fi
 DMG="$DIST/kybern-$VERSION-$ARCH-apple-darwin.dmg"
 
+# GitHub supplies missing secrets as empty environment variables. Tauri treats
+# a present APPLE_CERTIFICATE as an import request, even when it is empty.
+# Preserve configured values (including an intentionally empty p12 password),
+# but omit absent credentials so certificate-free builds use ad-hoc signing.
+for signing_var in APPLE_CERTIFICATE APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+  if [[ -z "${!signing_var:-}" ]]; then
+    unset "$signing_var"
+  fi
+done
+
 # 1. Build ---------------------------------------------------------------------
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   echo "==> pnpm tauri build with kybernd sidecar (apps/desktop)"
