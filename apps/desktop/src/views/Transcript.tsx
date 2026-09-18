@@ -708,11 +708,14 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             </div>
           )}
 
-          <div className="chat-paint-host group min-w-0 py-0.5">
+          {/* Hosted markdown children, images, and meta already paint. Promoting
+              this wrapper (or the inner message-content) makes a whole answer
+              one tiled layer past 1024 CSS px. Same rule as work-list containers. */}
+          <div data-answer-host className="group min-w-0 py-0.5">
             {imageTools.map((block) => <GeneratedImageOutputLease key={block.id} threadId={threadId} block={block} />)}
             {deliveredImages.length > 0 && <div data-response-images className="chat-paint-host">{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
             {group.answer && (
-              <div data-slot="message-content" className="chat-paint-host">
+              <div data-slot="message-content">
                 <Markdown text={group.answer.text} className="chat-markdown--hosted" style={TEXT} />
               </div>
             )}
