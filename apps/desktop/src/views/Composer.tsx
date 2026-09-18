@@ -775,7 +775,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               onClick={() => pick(i)}
                               className={cn("w-full", COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME, active && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME)}
                             >
-                              <span className={cn("flex size-4 shrink-0 items-center justify-center", active ? "text-foreground/80" : "text-muted-foreground/70")}>
+                              <span className={cn("flex size-4 shrink-0 items-center justify-center [&_[stroke]]:[stroke-width:2]", active ? "text-foreground" : "text-foreground/85")}>
                                 {item.type === "thread" ? (
                                   <MessageCircleIcon className="size-4" />
                                 ) : item.type === "file" ? (
@@ -789,9 +789,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 )}
                               </span>
                               <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                                {/* One line, Codex-style: bold name, then its description inline in muted ink. */}
+                                {/* One line, Codex-style: the name in crisp full-strength ink at a
+                                    regular weight, its description inline in muted ink. Hierarchy is
+                                    carried by colour, not by a heavier title weight. */}
                                 <span className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
-                                  <span className="max-w-[60%] shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/90">{title}</span>
+                                  <span className="max-w-[60%] shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground">{title}</span>
                                   {description && description !== title && (
                                     <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/70">{description}</span>
                                   )}
