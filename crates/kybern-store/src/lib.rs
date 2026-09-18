@@ -900,6 +900,27 @@ impl Store {
         })
     }
 
+    /// Bounded agent inbox. Recipient scoping belongs inside the query so a
+    /// busy group's older messages to peers cannot consume this caller's page.
+    pub fn collaboration_pending_messages_for_thread(
+        &self,
+        group_id: GroupId,
+        to_thread_id: ThreadId,
+        limit: u32,
+    ) -> Result<Vec<CollaborationMessage>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT payload FROM collaboration_messages
+                 WHERE group_id=?1 AND to_thread_id=?2
+                   AND state IN ('persisted','queued','uncertain')
+                 ORDER BY json_extract(payload,'$.created_at'),id LIMIT ?3",
+            )?;
+            let rows = statement
+                .query_map(params![group_id.to_string(), to_thread_id.to_string(), limit.clamp(1, 100)], |row| row.get::<_, String>(0))?;
+            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        })
+    }
+
     pub fn collaboration_queued_results(&self, group_id: GroupId, to_thread_id: ThreadId) -> Result<Vec<CollaborationMessage>> {
         self.with(|c| {
             let mut statement = c.prepare(

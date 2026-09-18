@@ -2192,6 +2192,10 @@ impl Orchestrator {
                             return Err(anyhow!("unknown collaboration read fields"));
                         }
                         let mut detail = self.collaboration_group_detail(group_id)?;
+                        // The UI projection is group-wide, but an agent inbox must
+                        // filter by recipient before applying its bound. Otherwise
+                        // old updates to peers can crowd out this caller's new work.
+                        detail.pending_messages = self.inner.store.collaboration_pending_messages_for_thread(group_id, thread_id, 100)?;
                         let mut value = serde_json::to_value(&detail)?;
                         let caller_assignment = self.inner.store.collaboration_active_assignment_for_thread(thread_id)?;
                         value.as_object_mut().expect("detail serializes as object").insert(
@@ -6424,13 +6428,13 @@ mod tests {
                     .unwrap();
                 assert_eq!(result["pending_messages"].as_array().unwrap().len(), 100);
                 assert!(fixture.store.queue_is_pending(messages[0].id).unwrap(), "other recipient");
-                for message in &messages[1..100] {
+                for message in &messages[1..=100] {
                     assert!(!fixture.store.queue_is_pending(message.id).unwrap(), "{provider:?}, coordinator={coordinator}");
                     let stored = fixture.store.collaboration_message_get(message.id).unwrap().unwrap();
                     assert_eq!(stored.state, CollaborationDeliveryState::Submitted);
                     assert!(stored.delivery_turn_id.is_some());
                 }
-                assert!(fixture.store.queue_is_pending(messages[100].id).unwrap(), "outside snapshot");
+                assert!(fixture.store.queue_is_pending(messages[101].id).unwrap(), "outside snapshot");
             }
         }
     }
@@ -6585,6 +6589,133 @@ mod tests {
             fixture.store.queue_is_pending(fresh_result.id).unwrap(),
             "an unseen follow-up result is not represented by an older report"
         );
+    }
+
+    #[tokio::test]
+    async fn collaboration_read_scopes_recipient_before_bounding_and_consumes_own_result() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let group = fixture
+            .orchestrator
+            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
+                operation_id: Uuid::now_v7(),
+                project_id: thread.project_id,
+                coordinator_thread_id: thread.id,
+                objective: "Read a structured assignment result".into(),
+                success_criteria: vec![],
+                coordinator_mode: Some(CoordinatorMode::Ordinary),
+                policy: None,
+            })
+            .unwrap();
+        let worker = fixture.thread(ThreadStatus::Idle);
+        fixture
+            .store
+            .collaboration_member_put(&GroupMember {
+                group_id: group.id,
+                thread_id: worker.id,
+                role: GroupMemberRole::Worker,
+                active: true,
+                joined_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        let now = chrono::Utc::now();
+        let assignment = CollaborationAssignment {
+            id: Uuid::now_v7(),
+            group_id: group.id,
+            parent_assignment_id: None,
+            owner_thread_id: Some(worker.id),
+            requested_child: None,
+            created_by_thread_id: Some(thread.id),
+            title: "Finished work".into(),
+            instructions: "Return one durable result".into(),
+            kind: AssignmentKind::Research,
+            status: AssignmentStatus::Completed,
+            dispatch_message_id: None,
+            base_revision: None,
+            depth: 0,
+            result: Some(AssignmentResult {
+                outcome: AssignmentOutcome::Success,
+                summary: "The structured result surfaced".into(),
+                changes: Vec::new(),
+                checks: Vec::new(),
+                artifacts: Vec::new(),
+                unresolved: Vec::new(),
+                completed_at: now,
+            }),
+            uncertainty: None,
+            revision: 2,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_assignment_put(&assignment).unwrap();
+
+        let mut peer_progress = Vec::new();
+        for index in 0..101 {
+            let message = CollaborationMessage {
+                id: Uuid::now_v7(),
+                operation_id: Uuid::now_v7(),
+                group_id: group.id,
+                assignment_id: None,
+                from_thread_id: Some(worker.id),
+                to_thread_id: worker.id,
+                external_recipient: false,
+                purpose: CollaborationMessagePurpose::Progress,
+                reply_to: None,
+                body: format!("old peer progress {index}"),
+                state: CollaborationDeliveryState::Persisted,
+                delivery_turn_id: None,
+                wakeup_count: 0,
+                created_at: now,
+                updated_at: now,
+            };
+            fixture.store.collaboration_message_put(&message, None).unwrap();
+            peer_progress.push(message);
+        }
+        let result_notification = CollaborationMessage {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            group_id: group.id,
+            assignment_id: Some(assignment.id),
+            from_thread_id: Some(worker.id),
+            to_thread_id: thread.id,
+            external_recipient: false,
+            purpose: CollaborationMessagePurpose::Result,
+            reply_to: None,
+            body: "Assignment finished".into(),
+            state: CollaborationDeliveryState::Queued,
+            delivery_turn_id: None,
+            wakeup_count: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        fixture.store.collaboration_message_put(&result_notification, Some(result_notification.id)).unwrap();
+        fixture.store.collaboration_message_queue(&result_notification).unwrap();
+
+        let (live, _) = fixture.active_app_tool_session(&thread).await;
+        let value = fixture
+            .orchestrator
+            .execute_native_app_tool_call(
+                thread.id,
+                live.session_instance_id,
+                "read-structured-result",
+                "kybern_collaboration_read",
+                json!({}),
+            )
+            .await
+            .unwrap();
+        let inbox = value["pending_messages"].as_array().unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0]["id"], result_notification.id.to_string());
+        assert_eq!(inbox[0]["state"], "submitted");
+        assert_eq!(value["assignments"][0]["result"]["summary"], "The structured result surfaced");
+        assert!(!fixture.store.queue_is_pending(result_notification.id).unwrap(), "surfaced structured result consumes its wakeup");
+        for message in peer_progress {
+            assert_eq!(
+                fixture.store.collaboration_message_get(message.id).unwrap().unwrap().state,
+                CollaborationDeliveryState::Persisted,
+                "another recipient's inbox remains untouched"
+            );
+        }
     }
 
     #[test]
