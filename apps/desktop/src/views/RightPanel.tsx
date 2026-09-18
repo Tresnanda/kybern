@@ -1,7 +1,9 @@
 import { ArtifactsPane } from "./Artifacts"
 // Right dock: a 46px tab strip of surface chips, a
-// collapse control, and chosen panes kept mounted until closed. The Changes pane
-// combines the Environment card rows with the diff file list.
+// collapse control, and chosen panes kept mounted until closed while the window
+// is on screen. Occluded or minimized windows drop reconstructible pane bodies
+// (explorer, diffs, artifacts, activity, collaboration); the terminal pane stays.
+// The Changes pane combines the Environment card rows with the diff file list.
 
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -14,8 +16,10 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { FileDiffCard } from "@/components/kybern/DiffView"
+import { dockPaneBodyMounts } from "@/lib/dockWindowHold"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { plural } from "@/lib/format"
+import { useDockWindowHold } from "@/lib/useDockWindowHold"
 import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, UsersIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -60,6 +64,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const activeTasks = useStore((s) => (threadId ? (s.runtimeTasks[threadId] ?? []).filter(isRuntimeTaskActive).length : 0))
   const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(`${tab}:${tabs.join(",")}`)
   const headerRef = useRef<HTMLDivElement>(null)
+  const windowHeld = useDockWindowHold()
   const closeTab = (id: RightTab) => {
     set((state) => {
       const remaining = state.rightTabs.filter((item) => item !== id)
@@ -120,32 +125,42 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1" data-dock-held={windowHeld ? "" : undefined}>
         {tabs.length === 0 ? (
           <div className="flex h-full items-center justify-center p-6 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">Add a panel with +.</div>
         ) : !threadId ? (
           <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its activity, changes, and terminal.</div>
         ) : (
           <>
-            {tabs.includes("collaboration") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "collaboration" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "collaboration"} aria-hidden={tab !== "collaboration"}>
+            {tabs.includes("collaboration") && <DockPane id="collaboration" tab={tab} workspaceActive={workspaceActive} held={windowHeld}>
               <CollaborationPane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />
-            </div>}
-            {tabs.includes("activity") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "activity"} aria-hidden={tab !== "activity"}>
+            </DockPane>}
+            {tabs.includes("activity") && <DockPane id="activity" tab={tab} workspaceActive={workspaceActive} held={windowHeld}>
               <ActivityPane key={threadId} threadId={threadId} visible={workspaceActive && tab === "activity"} />
-            </div>}
-            {tabs.includes("changes") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "changes" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "changes"} aria-hidden={tab !== "changes"}>
+            </DockPane>}
+            {tabs.includes("changes") && <DockPane id="changes" tab={tab} workspaceActive={workspaceActive} held={windowHeld}>
               <Changes key={threadId} threadId={threadId} active={workspaceActive && tab === "changes"} />
-            </div>}
-            {tabs.includes("explorer") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "explorer" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "explorer"} aria-hidden={tab !== "explorer"}>
+            </DockPane>}
+            {tabs.includes("explorer") && <DockPane id="explorer" tab={tab} workspaceActive={workspaceActive} held={windowHeld}>
               {projectId && <ExplorerPane projectId={projectId} active={workspaceActive && tab === "explorer"} />}
-            </div>}
-            {tabs.includes("artifacts") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "artifacts" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "artifacts"} aria-hidden={tab !== "artifacts"}><ArtifactsPane key={threadId} threadId={threadId} active={workspaceActive && tab === "artifacts"} /></div>}
-            {tabs.includes("terminal") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "terminal"} aria-hidden={tab !== "terminal"}>
+            </DockPane>}
+            {tabs.includes("artifacts") && <DockPane id="artifacts" tab={tab} workspaceActive={workspaceActive} held={windowHeld}>
+              <ArtifactsPane key={threadId} threadId={threadId} active={workspaceActive && tab === "artifacts"} />
+            </DockPane>}
+            {tabs.includes("terminal") && <DockPane id="terminal" tab={tab} workspaceActive={workspaceActive} held={windowHeld}>
               <TerminalWorkspace threadId={threadId} active={workspaceActive && tab === "terminal"} />
-            </div>}
+            </DockPane>}
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+function DockPane({ id, tab, workspaceActive, held, children }: { id: RightTab; tab: RightTab | null; workspaceActive: boolean; held: boolean; children: React.ReactNode }) {
+  return (
+    <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === id ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === id} aria-hidden={tab !== id}>
+      {dockPaneBodyMounts(id, held) ? children : null}
     </div>
   )
 }
