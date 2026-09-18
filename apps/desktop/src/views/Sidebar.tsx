@@ -60,7 +60,8 @@ import { activeEnvironment } from "@/state/environments"
 import { cn } from "@/lib/utils"
 import { TextSwap } from "@/components/kybern/motion"
 import { primeMarquee } from "@/lib/kit/marquee"
-import type { Project, Thread, ThreadActivityState } from "@/protocol"
+import type { Project, ProjectId, Thread, ThreadActivityState, ThreadId } from "@/protocol"
+import { selectAttentionItems } from "@/state/notifications"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
@@ -90,6 +91,24 @@ export function ThreadSidebar() {
   const mac = platform() === "macos"
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
   const connection = useStore((s) => s.connection)
+  const threads = useStore((s) => s.threads)
+  const notifications = useStore((s) => s.notifications)
+  const notificationFilter = useStore((s) => s.notificationFilter)
+  // Bell filter: restrict the list to threads that need attention and the
+  // projects that contain them.
+  const attentionIds = useMemo(() => {
+    if (!notificationFilter) return null
+    return new Set<ThreadId>(selectAttentionItems({ threads, notifications }).map((item) => item.thread.id))
+  }, [notificationFilter, threads, notifications])
+  const visibleProjects = useMemo(() => {
+    if (!attentionIds) return projectList
+    const withAttention = new Set<ProjectId>()
+    for (const id of attentionIds) {
+      const thread = threads[id]
+      if (thread) withAttention.add(thread.project_id)
+    }
+    return projectList.filter((p) => withAttention.has(p.id))
+  }, [attentionIds, projectList, threads])
 
   const onAddProject = async () => {
     if (connection.state !== "open") { toast("Connect to this environment before adding a project"); return }
@@ -169,12 +188,14 @@ export function ThreadSidebar() {
                 <SidebarIconButton icon={AddPlusIcon} label="Add project" size="md" tooltip="Add project" onClick={onAddProject} />
               </div>
             </div>
-            {projectList.length === 0 ? (
+            {attentionIds && attentionIds.size === 0 ? (
+              <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">You're all caught up. No threads need attention.</div>
+            ) : projectList.length === 0 ? (
               <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">No projects yet. Add a folder to see its threads here.</div>
             ) : (
               <SidebarMenu className="gap-3">
-                {projectList.map((p) => (
-                  <ProjectItem key={p.id} project={p} />
+                {visibleProjects.map((p) => (
+                  <ProjectItem key={p.id} project={p} filterThreadIds={attentionIds ?? undefined} />
                 ))}
               </SidebarMenu>
             )}
@@ -255,9 +276,10 @@ function PrimaryAction({ icon, label, shortcut, onClick, active }: { icon: React
   )
 }
 
-function ProjectItem({ project }: { project: Project }) {
+function ProjectItem({ project, filterThreadIds }: { project: Project; filterThreadIds?: Set<ThreadId> }) {
   const selectThreads = useMemo(() => createProjectThreadsSelector(project.id), [project.id])
   const threads = useStore(useShallow(selectThreads))
+  const filtering = !!filterThreadIds
   const collapsed = useStore((s) => !!s.collapsedProjects[project.id])
   const toggle = useStore((s) => s.toggleProject)
   const selected = useStore((s) => s.selected)
@@ -268,7 +290,8 @@ function ProjectItem({ project }: { project: Project }) {
     return undefined
   })
   const [showAll, setShowAll] = useState(false)
-  const open = !collapsed
+  // While the bell filter is on, force the project open and skip the row cap.
+  const open = filtering ? true : !collapsed
   const isDraftHere = selected.kind === "draft" && selected.draft.projectId === project.id
   const running = threads.some((t) => t.status === "running")
   const waiting = threads.some((t) => t.status === "awaiting-approval")
@@ -282,10 +305,14 @@ function ProjectItem({ project }: { project: Project }) {
   })
   const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({})
   const orderedRows = useMemo(() => {
+    if (filterThreadIds) {
+      const filtered = threads.filter((thread) => filterThreadIds.has(thread.id))
+      return collaborationThreadRows(filtered, expandedThreads, selected.kind === "thread" ? selected.id : undefined)
+    }
     const ordered = coordinator ? [coordinator, ...threads.filter(thread => thread.id !== coordinator.id)] : threads
     return collaborationThreadRows(ordered, expandedThreads, selected.kind === "thread" ? selected.id : undefined)
-  }, [coordinator, threads, expandedThreads, selected])
-  const visible = showAll ? orderedRows : orderedRows.slice(0, MAX_PROJECT_THREADS)
+  }, [filterThreadIds, coordinator, threads, expandedThreads, selected])
+  const visible = showAll || filtering ? orderedRows : orderedRows.slice(0, MAX_PROJECT_THREADS)
 
   return (
     <SidebarMenuItem className="rounded-md">
@@ -350,11 +377,11 @@ function ProjectItem({ project }: { project: Project }) {
         <div className={cn(disclosureShellClassName(open), "pt-0.5")}>
           <div className="min-h-0 overflow-hidden">
             <ul className={cn("mx-0 my-0 flex w-full min-w-0 translate-x-0 flex-col border-l-0 px-0 py-0", SIDEBAR_NESTED_LIST_GAP_CLASS_NAME, disclosureContentClassName(open))}>
-              {!coordinator && <CreateCoordinatorRow project={project} />}
+              {!coordinator && !filtering && <CreateCoordinatorRow project={project} />}
               {visible.map(({ thread, depth, childCount, open: childrenOpen }) => (
                 <ThreadRow key={thread.id} thread={thread} depth={depth} childCount={childCount} childrenOpen={childrenOpen} onToggleChildren={() => setExpandedThreads(value => ({ ...value, [thread.id]: !childrenOpen }))} />
               ))}
-              {orderedRows.length > MAX_PROJECT_THREADS && (
+              {!filtering && orderedRows.length > MAX_PROJECT_THREADS && (
                 <li>
                   <button
                     type="button"

@@ -120,6 +120,8 @@ export interface AppState {
   /** Persisted recursive pane tree for showing up to four chat threads together. */
   splitView: SplitView | null
   sidebarOpen: boolean
+  /** When on, the sidebar shows only threads that need attention (bell filter). */
+  notificationFilter: boolean
   rightOpen: boolean
   rightTabs: RightTab[]
   rightTab: RightTab | null
@@ -235,6 +237,7 @@ export function createEnvironmentStore(
     selected: { kind: "none" },
     splitView: readPersistedSplitView(environmentId),
     sidebarOpen: true,
+    notificationFilter: false,
     rightOpen: false,
     rightTabs: [],
     rightTab: null,
