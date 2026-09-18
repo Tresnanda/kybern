@@ -21,6 +21,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
 | Hidden environment windows | A second WebContent process kept a full transcript DOM/heap while occluded or minimized. Unfocused but visible windows must not drop that state. | Compact reconstructible transcript state only when occluded/minimized/page-hidden; restore reading position, drafts, attachments, queued prompts, approvals/questions, and terminal ownership. Verify two-window `vmmap` on macOS. |
+| Visible-thread turn diffs | Completed turns auto-loaded `threads.diff` summaries that retention never evicted while the thread stayed open. | Keep 16 newest per-turn diffs per visible thread plus the whole-thread `:all` card; reconstruct on remount. Native A/B: `KYBERN_PERF_LIVE_UNBOUND_TURN_DIFFS=1`. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 | Oversized open tool results | A visible open `ToolResult` `<pre className="max-h-72 overflow-auto">` mounted the full string with no row virtualization. | Virtualize offscreen lines in that scroller; keep on-screen text and clipboard copy exact. No paint hosts on the result scroller. |
 
@@ -58,6 +59,11 @@ See [open tool-result text](open-tool-result-text-2026-09-18.md) for a visible
 open `ToolResult` scroller that previously mounted the full string. Offscreen
 lines unmount; copy of the mounted scroller still yields the original text.
 This Linux environment cannot run native WebKit `tool-memory`.
+
+See [visible-thread turn diffs](visible-turn-diffs-2026-09-18.md) for the
+per-turn `threads.diff` summaries that retention skipped while a thread stayed
+open, the 16-entry reconstructible budget, and the native A/B control
+(`KYBERN_PERF_LIVE_UNBOUND_TURN_DIFFS`).
 
 See [the whole-app live-result memory check](whole-app-ram-2026-09-18/REPORT.md)
 for the isolated release Tauri coalition pair, exact 64-result content check,
