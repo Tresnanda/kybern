@@ -83,6 +83,7 @@ export function ResponseImage({ source, label = "Agent image", compact = false, 
 function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }: { source: string; label: string; threadId: string | null; compact: boolean; thumbnail: boolean; linkLabel?: ReactNode }) {
   const target = thumbnail && source.startsWith("blob:") ? { kind: "inline" as const, value: source } : imageSource(source)
   const isLink = linkLabel !== undefined
+  const direct = target && target.kind !== "local" ? target.value : ""
   const initialError: ImageError | null = !target ? { message: "This image format is not supported.", retryable: false }
     : target.kind === "local" && !threadId ? { message: "Open the image from its conversation.", retryable: false } : null
   const preview = useRef<HTMLSpanElement>(null)
@@ -106,12 +107,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   useEffect(() => {
     if (isLink || !preview.current) return
     const observer = new IntersectionObserver(([entry]) => {
-      const next = !!entry?.isIntersecting
-      setRequested(next)
-      if (!next) {
-        setUrl("")
-        setLoaded(false)
-      }
+      setRequested(!!entry?.isIntersecting)
     }, { rootMargin: "300px" })
     observer.observe(preview.current)
     return () => observer.disconnect()
@@ -119,15 +115,13 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
 
   useEffect(() => {
     const target = thumbnail && source.startsWith("blob:") ? { kind: "inline" as const, value: source } : imageSource(source)
-    if (!requested || isLink || !target || target.kind === "remote") return
-    if (target.kind === "local" && !threadId) return
+    // data:/blob:/https? sources keep their original src. Fetching them to mint a
+    // preview URL can change WebKit's img.src identity and fails chat-fixes.
+    if (!requested || isLink || target?.kind !== "local" || !threadId) return
     const key = responseImageUrlKey(threadId, source, "preview")
     const controller = new AbortController()
     let held = false
-    const load = (signal: AbortSignal) => target.kind === "local"
-      ? fetchThreadImage(threadId!, target.value, signal, true)
-      : fetchImageBlob(target.value, signal)
-    void acquireResponseImageUrl(key, load, controller.signal, true, target.kind === "inline" ? target.value : undefined).then((acquired) => {
+    void acquireResponseImageUrl(key, (signal) => fetchThreadImage(threadId, target.value, signal, true), controller.signal, true).then((acquired) => {
       if (controller.signal.aborted) {
         releaseResponseImageUrl(key)
         return
@@ -164,8 +158,9 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     }
   }, [source, threadId, open, originalRetry, thumbnail])
 
-  const previewUrl = !requested || isLink ? "" : target?.kind === "remote" ? target.value : url
-  const originalUrl = !open || !target ? "" : target.kind === "local" ? original : target.value
+  const presenting = requested || open
+  const previewUrl = !presenting || isLink ? "" : direct || url
+  const originalUrl = !open ? "" : direct || original
 
   const changeOpen = (next: boolean) => {
     if (next) {

@@ -12,10 +12,11 @@ This change adds a refcounted image URL cache (`src/lib/responseImageUrls.ts`)
 with its own idle compressed-blob budget (8 MiB / 12 entries). Live consumers
 share one object URL; the last release revokes it and parks the blob. Cancelling
 the last waiter aborts the shared fetch; a remaining waiter keeps it. Reopening
-uses the parked blob instead of fetching again. Previews that already fit keep
-the original `data:` / `blob:` source so generated-image `img.src` identity is
-unchanged; resized previews become owned object URLs. Remote `https?` images are
-not fetched (CORS); their `<img>` unmounts when offscreen.
+uses the parked blob instead of fetching again. `data:` / `blob:` / remote
+`https?` sources keep their original `src` (attached-image and generated-image
+dialogs). They are not fetched into the preview cache; their `<img>` still
+unmounts when offscreen so decoded frames drop. Local thread images use owned
+object URLs. Remote images are not fetched (CORS).
 
 `ToolResult` leases oversized reconstructible payloads only while the result is
 visible (300px rootMargin) or the current selection is inside it. Once omitted
@@ -48,8 +49,10 @@ node scripts/check-rendering.mjs tool-leases
 
 `artifacts` now also asserts that leaving the viewport releases the preview
 object URL and unmounts the decoded `<img>`, that reopening decodes again, and
-that a long image list keeps ≤12 live `<img>` / object URLs. `chat-fixes` still
-requires generated-image `img.src ===` the original data URL.
+that a long image list keeps ≤12 live `<img>` / object URLs. The object-URL
+assertion waits for `createObjectURL` after `fetchThreadImage` records the path
+(sized previews delay 120ms before the blob). `chat-fixes` still requires
+attached-image and generated-image `img.src ===` the original data or blob URL.
 
 ## Measurement gap
 

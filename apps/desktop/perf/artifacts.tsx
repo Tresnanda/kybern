@@ -92,10 +92,13 @@ async function run() {
   root.style.marginTop = "0"
   await waitFor(() => fetched.includes("artifacts/sized-offscreen.png"), "Image did not load on approach")
   check(fetched.includes("artifacts/sized-offscreen.png"), "Image did not load on approach")
+  // fetchThreadImage records the path before the 120ms sized-blob delay and
+  // createObjectURL. Wait for the owned preview URL, not the fetch bookkeeping.
+  await waitFor(() => liveUrls.size > 0 && root.querySelector(".response-image-preview img"), "Visible preview created no object URL")
   const loadedOffscreen = liveUrls.size
   check(loadedOffscreen > 0, "Visible preview created no object URL")
   root.style.marginTop = "3000px"
-  await waitFor(() => liveUrls.size < loadedOffscreen, "Leaving the viewport did not release the preview URL")
+  await waitFor(() => liveUrls.size < loadedOffscreen && !root.querySelector("img"), "Leaving the viewport did not release the preview URL")
   check(!root.querySelector("img"), "Offscreen preview kept a decoded image")
   root.style.marginTop = "0"
   await waitFor(() => root.querySelector("img"), "Reopening a released preview failed")
