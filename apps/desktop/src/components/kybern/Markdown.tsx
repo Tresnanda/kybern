@@ -9,6 +9,7 @@ import { toJsxRuntime } from "hast-util-to-jsx-runtime"
 import { jsx, jsxs } from "react/jsx-runtime"
 import { createMarkdownParser, sameMarkdownNode, type MarkdownBlock, type ParsedMarkdown } from "@/lib/markdownParser"
 import { cachedMarkdown, cacheMarkdown, nextMarkdownConsumer, parseMarkdown, releaseMarkdown } from "@/lib/markdown"
+import { chunkProseText, markdownHostsProse } from "@/lib/proseChunks"
 
 import { ChatFileLink } from "./ChatFileLink"
 import { cn } from "@/lib/utils"
@@ -36,21 +37,55 @@ function mapText(children: ReactNode, transform: (text: string, key: number) => 
 }
 
 type TextTransform = (text: string, key: number) => ReactNode
+type ProseTag = "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+
+const MarkdownLiveContext = createContext(false)
+const MarkdownStateContext = createContext("markdown")
+const MarkdownHostedContext = createContext(false)
+
+function renderProseChunks(children: ReactNode): ReactNode {
+  if (typeof children === "string") {
+    const chunks = chunkProseText(children)
+    if (!chunks) return <span className="chat-prose-chunk">{children}</span>
+    return chunks.map((chunk, i) => <span key={i} className="chat-prose-chunk">{chunk}</span>)
+  }
+  if (Array.isArray(children) && children.length > 0 && children.every((child) => typeof child === "string")) {
+    return renderProseChunks(children.join(""))
+  }
+  if (children == null || children === false) return children
+  return <span className="chat-prose-chunk">{children}</span>
+}
+
+function proseTag(Tag: ProseTag, transform?: TextTransform) {
+  return function Prose({ children }: { children?: ReactNode }) {
+    const hosted = useContext(MarkdownHostedContext)
+    const content = transform ? mapText(children, transform) : children
+    // Only `.chat-markdown--hosted` wraps in `.chat-prose-chunk`. User and
+    // other unhosted markdown keep a Text `p.firstChild` so native chat-fixes
+    // can Range.setEnd character offsets on preserved newlines.
+    return <Tag>{hosted ? renderProseChunks(content) : content}</Tag>
+  }
+}
 
 /** Element overrides that run every text run through `transform` (streaming words, inline tokens). */
 function textComponents(transform: TextTransform) {
-  const wrap = (Tag: "p" | "li" | "strong" | "em" | "h1" | "h2" | "h3") =>
+  const wrap = (Tag: "li" | "strong" | "em") =>
     function Text({ children }: { children?: ReactNode }) {
       return <Tag>{mapText(children, transform)}</Tag>
     }
-  return { p: wrap("p"), li: wrap("li"), strong: wrap("strong"), em: wrap("em"), h1: wrap("h1"), h2: wrap("h2"), h3: wrap("h3") }
+  return {
+    p: proseTag("p", transform),
+    li: wrap("li"),
+    strong: wrap("strong"),
+    em: wrap("em"),
+    h1: proseTag("h1", transform),
+    h2: proseTag("h2", transform),
+    h3: proseTag("h3", transform),
+  }
 }
 
 const streamTransform: TextTransform = (text, key) => <StreamWords key={key} text={text} />
 const LIVE_TEXT_COMPONENTS = textComponents(streamTransform)
-
-const MarkdownLiveContext = createContext(false)
-const MarkdownStateContext = createContext("markdown")
 
 function MarkdownCode({ children, node }: { children?: ReactNode; node?: { position?: { start: { offset?: number } } } }) {
   const live = useContext(MarkdownLiveContext)
@@ -65,15 +100,26 @@ function MarkdownCode({ children, node }: { children?: ReactNode; node?: { posit
     : <CodeBlock code={code} lang={lang} live={live} stateKey={key} />
 }
 
+const PROSE_COMPONENTS: import("react-markdown").Components = {
+  p: proseTag("p"),
+  h1: proseTag("h1"),
+  h2: proseTag("h2"),
+  h3: proseTag("h3"),
+  h4: proseTag("h4"),
+  h5: proseTag("h5"),
+  h6: proseTag("h6"),
+}
+
 // Stable component types preserve code-block state and highlighting across deltas.
 const BASE_COMPONENTS: import("react-markdown").Components = {
+  ...PROSE_COMPONENTS,
   img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
   a: ({ href, children }) => href && localImageLink(href) ? <ResponseImage source={href} label={extractText(children) || "Image preview"} linkLabel={children} /> : <ChatFileLink href={href}>{children}</ChatFileLink>,
   pre: MarkdownCode,
   table: ({ children }) => <div className="chat-markdown-table" role="region" aria-label="Table" tabIndex={0}><table>{children}</table></div>,
 }
 
-const LIVE_COMPONENTS = { ...LIVE_TEXT_COMPONENTS, ...BASE_COMPONENTS }
+const LIVE_COMPONENTS = { ...BASE_COMPONENTS, ...LIVE_TEXT_COMPONENTS }
 const ParsedBlock = memo(function ParsedBlock({ block, components, live }: { block: MarkdownBlock; components: import("react-markdown").Components; live: boolean }) {
   return <MarkdownLiveContext value={live}>{toJsxRuntime({ type: "root", children: [block.node] }, {
     Fragment, jsx, jsxs, components, ignoreInvalidStyle: true, passKeys: true, passNode: true,
@@ -156,18 +202,20 @@ export const Markdown = memo(function Markdown({
     [tokens],
   )
   const parsed = useParsedMarkdown(text, live)
-  const components = useMemo(() => tokenComponents ? { ...tokenComponents, ...BASE_COMPONENTS } : BASE_COMPONENTS, [tokenComponents])
+  const components = useMemo(() => tokenComponents ? { ...BASE_COMPONENTS, ...tokenComponents } : BASE_COMPONENTS, [tokenComponents])
   return (
     <div
       className={cn("chat-markdown selectable w-full min-w-0 text-sm leading-relaxed text-foreground", variant === "user" && "chat-markdown--user", className)}
       style={style}
     >
-      <MarkdownStateContext value={variant}>
-        {parsed ? parsed.blocks.map((block, index) => {
-          const active = live && index === parsed.blocks.length - 1
-          return <ParsedBlock key={block.key} block={block} live={active} components={active ? LIVE_COMPONENTS : components} />
-        }) : <div className="whitespace-pre-wrap break-words">{text}</div>}
-      </MarkdownStateContext>
+      <MarkdownHostedContext value={markdownHostsProse(className)}>
+        <MarkdownStateContext value={variant}>
+          {parsed ? parsed.blocks.map((block, index) => {
+            const active = live && index === parsed.blocks.length - 1
+            return <ParsedBlock key={block.key} block={block} live={active} components={active ? LIVE_COMPONENTS : components} />
+          }) : <div className="whitespace-pre-wrap break-words">{text}</div>}
+        </MarkdownStateContext>
+      </MarkdownHostedContext>
     </div>
   )
 })

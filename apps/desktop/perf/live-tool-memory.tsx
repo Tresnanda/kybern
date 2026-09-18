@@ -22,9 +22,25 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const paragraphLayer = import.meta.env.VITE_LIVE_TOOLS_PARAGRAPH_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkParagraphLayer() {
+  const hosted = [...document.querySelectorAll<HTMLElement>(".chat-markdown--hosted")]
+  const wrappers = hosted.flatMap((root) => [...root.querySelectorAll<HTMLElement>(":scope > p, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6")])
+  for (const wrapper of wrappers) {
+    check(getComputedStyle(wrapper).willChange.includes("transform") === paragraphLayer, `Hosted markdown paragraph paint host changed: ${getComputedStyle(wrapper).willChange}`)
+  }
+  for (const root of hosted) {
+    for (const chunk of root.querySelectorAll<HTMLElement>(".chat-prose-chunk")) {
+      check(getComputedStyle(chunk).willChange.includes("transform") !== paragraphLayer, `Hosted markdown prose chunk paint host changed: ${getComputedStyle(chunk).willChange}`)
+    }
+    for (const rule of root.querySelectorAll<HTMLElement>(":scope > hr")) {
+      check(getComputedStyle(rule).willChange.includes("transform"), "Hosted markdown hr lost its paint host")
+    }
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -44,6 +60,9 @@ async function run() {
   }
   if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
     textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
+  if (paragraphLayer) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: ".chat-markdown--hosted>p,.chat-markdown--hosted>h1,.chat-markdown--hosted>h2,.chat-markdown--hosted>h3,.chat-markdown--hosted>h4,.chat-markdown--hosted>h5,.chat-markdown--hosted>h6{will-change:transform!important}.chat-markdown--hosted .chat-prose-chunk{will-change:auto!important}",
   }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
@@ -124,6 +143,7 @@ async function run() {
       const bounds = viewport.getBoundingClientRect()
       check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar, importApp })}`)
       if (fullShell) check(Math.round(bounds.width) === window.innerWidth - 256 && Math.round(bounds.height) === window.innerHeight - 46, `Full shell viewport changed: ${JSON.stringify({ width: bounds.width, height: bounds.height, windowWidth: window.innerWidth, windowHeight: window.innerHeight })}`)
+      checkParagraphLayer()
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
@@ -142,6 +162,7 @@ async function run() {
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    checkParagraphLayer()
     await mark("live-results-closed")
     if (seededHistory) {
       const first = liveTools()[0]!
