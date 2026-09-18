@@ -21,6 +21,26 @@ export function composerStackedMounts(held: boolean): boolean {
   return !held
 }
 
+/** The composer input stays mounted while held. Drafts persist in the store
+ * without attachment preview blob URLs; those live only on the input. */
+export function composerInputMounts(held: boolean): boolean {
+  void held
+  return true
+}
+
+/** Persistable attachment records omit preview blob URLs. */
+export function composerDraftAttachmentsForStore(
+  attachments: ReadonlyArray<{
+    id: string
+    name: string
+    media_type: string
+    size: number
+    preview?: string
+  }>,
+) {
+  return attachments.map(({ id, name, media_type, size }) => ({ id, name, media_type, size }))
+}
+
 export function createComposerWindowHold(options?: {
   delayMs?: number
   isHidden?: () => boolean

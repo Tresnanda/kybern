@@ -4,6 +4,8 @@ import test from "node:test"
 const {
   createComposerWindowHold,
   composerStackedMounts,
+  composerInputMounts,
+  composerDraftAttachmentsForStore,
   COMPOSER_WINDOW_HOLD_DELAY_MS,
 } = await import("./src/lib/composerWindowHold.ts")
 
@@ -49,4 +51,35 @@ test("the hold delay leaves brief occlusion (Mission Control) alone", () => {
 test("held windows drop stacked panels and keep the composer input mounted", () => {
   assert.equal(composerStackedMounts(false), true)
   assert.equal(composerStackedMounts(true), false)
+  assert.equal(composerInputMounts(false), true)
+  assert.equal(composerInputMounts(true), true)
+})
+
+test("showing the window remounts stacked panels from store while the input never unmounts", () => {
+  let hidden = true
+  const hold = createComposerWindowHold({ delayMs: 50, isHidden: () => hidden })
+  const mounts = []
+  hold.subscribe((held) => mounts.push({
+    stacked: composerStackedMounts(held),
+    input: composerInputMounts(held),
+  }))
+  hold.sync()
+  hold.flush()
+  assert.deepEqual(mounts.at(-1), { stacked: false, input: true })
+  hidden = false
+  hold.sync()
+  assert.deepEqual(mounts.at(-1), { stacked: true, input: true })
+  hold.dispose()
+})
+
+test("persisted drafts drop attachment preview blobs so unmounting the input would lose them", () => {
+  const stored = composerDraftAttachmentsForStore([
+    { id: "asset", name: "shot.png", media_type: "image/png", size: 48, preview: "blob:preview" },
+    { id: "note", name: "note.md", media_type: "text/markdown", size: 12 },
+  ])
+  assert.deepEqual(stored, [
+    { id: "asset", name: "shot.png", media_type: "image/png", size: 48 },
+    { id: "note", name: "note.md", media_type: "text/markdown", size: 12 },
+  ])
+  assert.equal("preview" in stored[0], false)
 })

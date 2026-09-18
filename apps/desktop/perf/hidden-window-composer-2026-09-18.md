@@ -18,4 +18,4 @@ Linux cannot reproduce the Apple M1 two-window `vmmap` numbers. Verify on macOS 
 
 ## Tests here
 
-`apps/desktop/composerWindowHold.test.mjs` covers blur vs occlusion, the delay, and that stacked panels unmount only while held.
+`apps/desktop/composerWindowHold.test.mjs` covers blur vs occlusion, the delay, that stacked panels unmount only while held, that the composer input stays mounted, that showing the window remounts stacked panels, and that persisted drafts omit attachment preview blobs.
