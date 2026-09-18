@@ -438,6 +438,58 @@ async fn response_images_require_auth_and_stay_on_the_owning_host() {
 }
 
 #[tokio::test]
+async fn remote_image_previews_require_preview_and_reject_private_urls() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let http = reqwest::Client::new();
+    let url = format!("{}/threads/{}/image", host.url, thread.id);
+    assert_eq!(
+        http.get(&url).query(&[("url", "https://example.com/a.png"), ("preview", "true")]).send().await.unwrap().status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("url", "https://example.com/a.png")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("url", "http://127.0.0.1/a.png"), ("preview", "true")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("url", "http://[::1]/a.png"), ("preview", "true")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("path", "a.png"), ("url", "https://example.com/a.png"), ("preview", "true")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
 async fn harness_updates_wait_for_turns_and_block_new_sends_during_installation() {
     let host = Host::start().await;
     let mut thread = host.thread();

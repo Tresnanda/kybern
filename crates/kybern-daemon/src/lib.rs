@@ -17,6 +17,7 @@ mod maintenance;
 mod native_tools_mcp;
 mod orchestrator;
 mod power;
+mod remote_preview;
 #[cfg(test)]
 mod remote_tests;
 mod rpc;
