@@ -233,14 +233,29 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     </span>
     : <span role="status" className="block rounded-lg bg-[var(--color-background-button-secondary)] p-4 text-sm text-muted-foreground">Loading image…</span>
 
+  const previewButton = (
+    <button
+      type="button"
+      aria-label={`Preview ${label}`}
+      className={cn(
+        "response-image-preview outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl",
+        previewUrl && !error ? "cursor-zoom-in" : thumbnail ? "p-1 text-xs text-muted-foreground" : "",
+      )}
+      onClick={() => changeOpen(true)}
+    >
+      {error || !previewUrl
+        ? "Preview image"
+        : <img key={retry} src={previewUrl} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={!!previewUrl && loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />}
+    </button>
+  )
+
   return <span ref={preview} className={isLink ? "inline" : thumbnail ? "block size-16 shrink-0" : compact ? "block w-[280px] max-w-full" : "my-3 block w-[280px] max-w-full"}>
     {isLink ? <a href={source} className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline" onClick={(event) => { event.preventDefault(); changeOpen(true) }}>{linkLabel}</a>
-      : thumbnail && (error || !previewUrl) ? <button type="button" aria-label={`Preview ${label}`} className="response-image-preview response-image-thumbnail rounded-xl p-1 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => changeOpen(true)}>Preview image</button>
+      : thumbnail ? previewButton
       : !error && !previewUrl && !requested ? <span className="response-image-preview" />
       : error || !previewUrl ? <span className="response-image-preview">{status(error, retryPreview, true)}</span>
-      : <button type="button" aria-label={`Preview ${label}`} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl")} onClick={() => changeOpen(true)}>
-        <img key={retry} src={previewUrl} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={!!previewUrl && loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
-      </button>}
+      : previewButton}
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogPopup showCloseButton={false} finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
         <div className="flex min-w-0 items-center justify-between gap-3">
