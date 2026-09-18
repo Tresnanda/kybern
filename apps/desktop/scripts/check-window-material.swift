@@ -95,6 +95,7 @@ final class MaterialCheck: NSObject, WKNavigationDelegate, WKScriptMessageHandle
             for (const el of elements.filter(el => el.matches('article'))) {
               if (!glass && alpha(el) < 0.99) throw new Error(name + ': ' + el.textContent + ' must be opaque, alpha ' + alpha(el));
               if (filter(el) !== 'none') throw new Error(name + ': duplicate composer blur');
+              if (!glass && getComputedStyle(el, '::before').content !== 'none') throw new Error(name + ': leftover opaque composer backdrop layer');
             }
             // Older WebKit reports `none` for backdrop-filter on pseudo-elements,
             // even for a literal blur declaration. Verify rendered stripes instead.
