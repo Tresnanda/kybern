@@ -24,15 +24,17 @@ export const SIDEBAR_ROW_HOVER_CLASS_NAME =
 export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
   "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)] hover:bg-[var(--sidebar-accent-active)] hover:text-[var(--sidebar-accent-foreground)]";
 
-export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
-
 /**
- * Resting foreground for primary sidebar item labels and their accompanying
- * leading/pin icons (inactive thread name, project/folder name, folder + pin
- * glyphs). Sits just below the full-foreground active row so resting items read
- * clearly without competing with the selected thread.
+ * One resting primary ink for every sidebar item — quick-action rows (New
+ * thread, Usage…), project/folder names, and inactive thread names — and their
+ * leading icons, which inherit it. Sits just below the full-foreground active
+ * row so resting items read clearly without competing with the selected thread.
+ * Previously split arbitrarily between 89% (actions) and 95% (labels); those are
+ * one tier, so they share one value. Hierarchy is: active 100% → resting 95% →
+ * section/muted 58% (`SIDEBAR_SECTION_LABEL_CLASS_NAME`).
  */
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
+export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME;
 
 /** Section label ("Threads"/"Pinned" and settings "App"/"Appearance"). */
 export const SIDEBAR_SECTION_LABEL_CLASS_NAME =

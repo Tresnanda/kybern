@@ -141,7 +141,13 @@ export type LucideIcon = FC<SVGProps<SVGSVGElement>>;
 // carry enough optical weight next to the app's medium/semibold text instead of
 // reading as hairlines. HugeiconsIcon renders a real <svg>, so kit `[&_svg]` sizing
 // rules apply. Keep FileEntryIcon/FolderClosed/kit sidebar in step with this value.
-const HUGEICON_STROKE_WIDTH = 2.5;
+// better-ui rule: an icon carries the optical weight of the text beside it —
+// ~1.5px stroke next to regular (400) UI text, ~2px next to semibold. Kit glyphs
+// render at 14–20px, so a 24²-viewBox stroke of 2.25 lands a 16px icon at exactly
+// 1.5px on screen (1.5 × 16/24) and a 20px icon at 1.9px — one weight for the set,
+// matched to the regular/medium label text it sits beside. Dense families (folders)
+// still opt into a lighter stroke via the hugeIcon() override.
+const HUGEICON_STROKE_WIDTH = 2.25;
 
 function hugeIcon(icon: IconSvgElement, strokeWidth: number = HUGEICON_STROKE_WIDTH): LucideIcon {
   return hugeGlyph(icon, strokeWidth);
@@ -168,32 +174,13 @@ export const BackToParentIcon: LucideIcon = hugeIcon(HiUndo);
 export const WorkflowIcon: LucideIcon = hugeIcon(HcAgents);
 export const SteerIcon: LucideIcon = hugeIcon(HcSteer);
 /**
- * Round send control. The disc is 32px; this SVG uses a matching 32² viewBox
- * so 1 user unit = 1 CSS pixel. A 24² Hugeicons/viewBox glyph shrink-wraps
- * inside the circle (peak on the midline, large empty cap above). Draw the
- * chevron so the gap above the peak equals the gap below the legs.
+ * Round send control. Use the kit's own arrow glyph (centered in its 24² box)
+ * rendered small inside the 32px disc and centered by the composer's flex — no
+ * bespoke viewBox. A dedicated 2.0 stroke matches the rest of the set's optical
+ * weight: at 20px it renders ~1.67px, the same as a 2.5 stroke on the 16px
+ * sidebar glyphs — where the old hand-drawn 32² chevron rendered a heavy 2.5px.
  */
-export const ComposerSendArrowIcon: LucideIcon = ({ className, ...props }) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 32 32"
-    width={32}
-    height={32}
-    fill="none"
-    aria-hidden
-    className={cn("pointer-events-none block size-full overflow-visible", className)}
-    {...props}
-  >
-    {/* Stroke 2.5: outer peak ≈ 11, outer legs ≈ 21, pad 11 = pad 11 on a 32 disc. */}
-    <path
-      d="M9.5 20.25L16 11.75L22.5 20.25"
-      stroke="currentColor"
-      strokeWidth={HUGEICON_STROKE_WIDTH}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
+export const ComposerSendArrowIcon: LucideIcon = hugeIcon(HiArrowUp, 2.0);
 export const HandoffIcon: LucideIcon = hugeIcon(HcHandoff);
 export const SkillCubeIcon: LucideIcon = hugeIcon(HcSkill);
 export const NewThreadIcon: LucideIcon = hugeIcon(HcCompose);
