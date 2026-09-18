@@ -3218,6 +3218,7 @@ diffs-container {
 
 .chat-markdown--hosted .chat-prose-chunk {
   display: block;
+  white-space: pre-wrap;
   will-change: transform;
 }
 

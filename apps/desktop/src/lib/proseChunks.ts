@@ -7,6 +7,11 @@
 
 export const PROSE_CHUNK_CHARS = 1600
 
+/** Prose chunks are a compositing wrap. Only hosted assistant markdown uses them. */
+export function markdownHostsProse(className?: string): boolean {
+  return /\bchat-markdown--hosted\b/.test(className ?? "")
+}
+
 /** Split plain prose so each piece stays under the tiling height at typical chat widths. Short strings are unchanged. */
 export function chunkProseText(text: string, maxChars = PROSE_CHUNK_CHARS): string[] | null {
   if (text.length <= maxChars) return null

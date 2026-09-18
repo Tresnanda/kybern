@@ -24,11 +24,13 @@ paragraph is the matching sample.
 ## Change
 
 Hosted markdown skips top-level `p`/`h1`–`h6`/`hr`. Paragraph and heading
-text is wrapped in `.chat-prose-chunk` layers; strings past 1600 characters
-split on whitespace so each chunk stays under the tiling height at typical
-chat widths. `hr` remains a small leaf host. Chunks concatenate to the source.
-User markdown (`variant="user"`) is not chunked: it is not hosted, and native
-`chat-fixes` selects `p.firstChild` as a text node for preserved newlines.
+text is wrapped in `.chat-prose-chunk` layers **only** when `className`
+includes `chat-markdown--hosted`; strings past 1600 characters split on
+whitespace so each chunk stays under the tiling height at typical chat
+widths. Hosted chunks use `white-space: pre-wrap` and concatenate to the
+source. `hr` remains a small leaf host. User markdown (`variant="user"`) and
+other unhosted markdown are not wrapped, so `p.firstChild` stays a Text node
+for native `chat-fixes` preserved-newline selection.
 
 ## Measurement
 

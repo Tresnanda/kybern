@@ -9,7 +9,7 @@ import { toJsxRuntime } from "hast-util-to-jsx-runtime"
 import { jsx, jsxs } from "react/jsx-runtime"
 import { createMarkdownParser, sameMarkdownNode, type MarkdownBlock, type ParsedMarkdown } from "@/lib/markdownParser"
 import { cachedMarkdown, cacheMarkdown, nextMarkdownConsumer, parseMarkdown, releaseMarkdown } from "@/lib/markdown"
-import { chunkProseText } from "@/lib/proseChunks"
+import { chunkProseText, markdownHostsProse } from "@/lib/proseChunks"
 
 import { ChatFileLink } from "./ChatFileLink"
 import { cn } from "@/lib/utils"
@@ -41,6 +41,7 @@ type ProseTag = "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
 
 const MarkdownLiveContext = createContext(false)
 const MarkdownStateContext = createContext("markdown")
+const MarkdownHostedContext = createContext(false)
 
 function renderProseChunks(children: ReactNode): ReactNode {
   if (typeof children === "string") {
@@ -57,12 +58,12 @@ function renderProseChunks(children: ReactNode): ReactNode {
 
 function proseTag(Tag: ProseTag, transform?: TextTransform) {
   return function Prose({ children }: { children?: ReactNode }) {
-    const stateKey = useContext(MarkdownStateContext)
+    const hosted = useContext(MarkdownHostedContext)
     const content = transform ? mapText(children, transform) : children
-    // User markdown is not `.chat-markdown--hosted`. Extra chunk spans would
-    // still change `p.firstChild` from a text node into an element, which
-    // breaks preserved-newline selection in native chat-fixes.
-    return <Tag>{stateKey === "user" ? content : renderProseChunks(content)}</Tag>
+    // Only `.chat-markdown--hosted` wraps in `.chat-prose-chunk`. User and
+    // other unhosted markdown keep a Text `p.firstChild` so native chat-fixes
+    // can Range.setEnd character offsets on preserved newlines.
+    return <Tag>{hosted ? renderProseChunks(content) : content}</Tag>
   }
 }
 
@@ -207,12 +208,14 @@ export const Markdown = memo(function Markdown({
       className={cn("chat-markdown selectable w-full min-w-0 text-sm leading-relaxed text-foreground", variant === "user" && "chat-markdown--user", className)}
       style={style}
     >
-      <MarkdownStateContext value={variant}>
-        {parsed ? parsed.blocks.map((block, index) => {
-          const active = live && index === parsed.blocks.length - 1
-          return <ParsedBlock key={block.key} block={block} live={active} components={active ? LIVE_COMPONENTS : components} />
-        }) : <div className="whitespace-pre-wrap break-words">{text}</div>}
-      </MarkdownStateContext>
+      <MarkdownHostedContext value={markdownHostsProse(className)}>
+        <MarkdownStateContext value={variant}>
+          {parsed ? parsed.blocks.map((block, index) => {
+            const active = live && index === parsed.blocks.length - 1
+            return <ParsedBlock key={block.key} block={block} live={active} components={active ? LIVE_COMPONENTS : components} />
+          }) : <div className="whitespace-pre-wrap break-words">{text}</div>}
+        </MarkdownStateContext>
+      </MarkdownHostedContext>
     </div>
   )
 })

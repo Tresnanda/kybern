@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { chunkProseText } from "./src/lib/proseChunks.ts"
+import { chunkProseText, markdownHostsProse } from "./src/lib/proseChunks.ts"
 
 test("short prose is returned unchanged", () => {
   assert.equal(chunkProseText("a short paragraph", 1600), null)
@@ -20,4 +20,12 @@ test("a token longer than the budget is hard-split", () => {
   const chunks = chunkProseText(text, 1600)
   assert.deepEqual(chunks, ["a".repeat(1600), "a".repeat(1600), "a".repeat(300)])
   assert.equal(chunks.join(""), text)
+})
+
+test("only hosted markdown class names wrap prose chunks", () => {
+  assert.equal(markdownHostsProse(), false)
+  assert.equal(markdownHostsProse("chat-markdown--user"), false)
+  assert.equal(markdownHostsProse("chat-markdown"), false)
+  assert.equal(markdownHostsProse("chat-markdown--hosted"), true)
+  assert.equal(markdownHostsProse("chat-markdown--hosted [&_*]:text-muted-foreground"), true)
 })
