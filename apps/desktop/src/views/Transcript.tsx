@@ -39,6 +39,7 @@ import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtim
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel, type MessageScrollerController } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
+import { ToolResultText } from "@/components/kybern/ToolResultText"
 import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
@@ -1492,14 +1493,13 @@ function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface
           ))}
         </div>
       )}
-      {out.trim() && <pre
+      {out.trim() && <ToolResultText
+        text={out}
         className={cn(
           "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
           block.isError ? "text-destructive/90" : "text-foreground/92",
         )}
-      >
-        {out}
-      </pre>}
+      />}
     </>
   )
 }

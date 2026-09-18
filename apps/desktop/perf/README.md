@@ -21,6 +21,8 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
 | Hidden environment windows | A second WebContent process kept a full transcript DOM/heap while occluded or minimized. Unfocused but visible windows must not drop that state. | Compact reconstructible transcript state only when occluded/minimized/page-hidden; restore reading position, drafts, attachments, queued prompts, approvals/questions, and terminal ownership. Verify two-window `vmmap` on macOS. |
+| Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
+| Oversized open tool results | A visible open `ToolResult` `<pre className="max-h-72 overflow-auto">` mounted the full string with no row virtualization. | Virtualize offscreen lines in that scroller; keep on-screen text and clipboard copy exact. No paint hosts on the result scroller. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
 and motion cadence. Inspect the existing modules before tuning them; justify a
@@ -47,6 +49,11 @@ primary-source research, and the remaining 200–300 MB whole-app acceptance wor
 See [live tool result retention](live-tool-retention-2026-09-18.md) for the live
 completion path that previously bypassed lazy-result budgets, its byte/count
 limits and exact-content fixture, and the daemon/CLI retention follow-up.
+
+See [open tool-result text](open-tool-result-text-2026-09-18.md) for a visible
+open `ToolResult` scroller that previously mounted the full string. Offscreen
+lines unmount; copy of the mounted scroller still yields the original text.
+This Linux environment cannot run native WebKit `tool-memory`.
 
 See [the whole-app live-result memory check](whole-app-ram-2026-09-18/REPORT.md)
 for the isolated release Tauri coalition pair, exact 64-result content check,
@@ -167,6 +174,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
 | Combined composer panels, shared seams, constrained pane height | `node scripts/check-rendering.mjs composer-stack` |
 | Attached-image controls, user line breaks, environment menu | `node scripts/check-rendering.mjs chat-fixes` |
+| Deferred tool output, open oversized result text | `node scripts/check-rendering.mjs tool-memory` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
 | Provider catalogs, sign-in terminals, native artifact preview and publication controls | `node scripts/check-rendering.mjs integrations` |
 | Activity task sorting, retained history, hidden timers | `node scripts/check-rendering.mjs activity` |
