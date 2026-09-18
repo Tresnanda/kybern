@@ -28,6 +28,10 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [live tool result retention](live-tool-retention-2026-09-18.md) for the live
+completion path that previously bypassed lazy-result budgets, its byte/count
+limits and exact-content fixture, and the daemon/CLI retention follow-up.
+
 See [the consolidated memory review](memory-review-2026-09-17/REPORT.md) for
 snapshot-safe tool hydration, mounted result leases, borrowed daemon paging,
 matched release-daemon measurements, and the remaining whole-app and page-aware

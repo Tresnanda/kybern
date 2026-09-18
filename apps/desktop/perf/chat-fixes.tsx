@@ -4,6 +4,8 @@ import { Composer } from "../src/views/Composer"
 import { Transcript } from "../src/views/Transcript"
 import { EnvironmentSwitcher } from "../src/views/EnvironmentSwitcher"
 import { ResponseImage } from "../src/components/kybern/ResponseImage"
+import { SidebarProvider } from "../src/components/kit/sidebar"
+import { SidebarLeadingControls } from "../src/views/chrome"
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { applyEvent, emptyThreadState } from "../src/state/transcript"
@@ -60,7 +62,12 @@ async function nativeImageCopy(source: string, label: string) {
   const copy = document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Copy image"]')!
   const bridge = window as unknown as { __nativeImageContinue: (passed: boolean) => void }
   const completed = new Promise<void>((resolve, reject) => {
-    bridge.__nativeImageContinue = (passed) => passed ? resolve() : reject(new Error(`${label} was not written as PNG`))
+    const timeout = window.setTimeout(() => reject(new Error(`${label} did not reach the native clipboard bridge`)), 5000)
+    bridge.__nativeImageContinue = (passed) => {
+      window.clearTimeout(timeout)
+      if (passed) resolve()
+      else reject(new Error(`${label} was not written as PNG`))
+    }
   })
   copy.click()
   await completed
@@ -156,6 +163,31 @@ async function run() {
       openedWindows.push(args.id)
     },
   }, configurable: true })
+  flushSync(() => view.render(<SidebarProvider defaultOpen><SidebarLeadingControls /></SidebarProvider>))
+  const headerToggle = document.querySelector<HTMLButtonElement>('[aria-label="Toggle thread sidebar"]')!
+  const historyButton = document.querySelector<HTMLButtonElement>('[aria-label="Back"]')!
+  check(headerToggle && historyButton, "Expanded header has no history controls")
+  const header = headerToggle.closest<HTMLElement>('[data-tauri-drag-region="false"]')!
+  const headerWidth = header.getBoundingClientRect().width
+  historyButton.focus()
+  headerToggle.click()
+  await sleep(30)
+  check(!document.contains(historyButton) || !!historyButton.closest("[inert]"), "Hidden history action remains interactive")
+  await sleep(350)
+  const newThread = document.querySelector<HTMLButtonElement>('[aria-label="New thread"]')!
+  check(newThread && !newThread.closest('[inert], [aria-hidden="true"]') && newThread.tabIndex === 0, "Collapsed header has no accessible new-thread action")
+  newThread.focus()
+  check(document.activeElement === newThread, "New-thread action cannot receive keyboard focus")
+  const selected = useStore.getState().selected
+  const projects = useStore.getState().projects
+  useStore.getState().set({ selected: { kind: "none" }, projects: { header: { id: "header", name: "Header fixture", path: "/fixture", is_git: false, created_at: "2026-09-18T00:00:00Z", updated_at: "2026-09-18T00:00:00Z" } } })
+  newThread.click()
+  check(useStore.getState().selected.kind === "draft", "New-thread action did not open a draft")
+  useStore.getState().set({ selected, projects })
+  check(Math.abs(header.getBoundingClientRect().width - headerWidth) < 1, "Header controls shifted during the crossfade")
+  headerToggle.click()
+  await sleep(350)
+  check(document.querySelector<HTMLButtonElement>('[aria-label="Back"]')?.tabIndex === 0 && !document.querySelector('[aria-label="New thread"]'), "History controls did not return after expansion")
   useEnvironments.setState({ selectedId: "local", switching: false, profiles: [
     { id: "local", name: "This Mac", local: true, hostname: null, environment_id: "local", url: null },
     { id: "remote", name: "Os-kdi", local: false, hostname: "os-kdi", environment_id: "remote", url: "ws://example.test" },
@@ -209,7 +241,7 @@ async function run() {
       await sleep(250)
     }
   }
-  return { pass: true, imagePreviews: 6, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true }
+  return { pass: true, imagePreviews: 6, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }
 }
 const report = (result: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(result))
 run().then(report).catch((error) => report({ pass: false, error: String(error), stack: error.stack }))

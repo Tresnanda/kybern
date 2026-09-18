@@ -154,7 +154,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
           active={open ? "a" : "b"}
           className="h-7 w-14 shrink-0"
           a={
-            <div className="flex size-full items-center" aria-hidden={!open}>
+            <div className="flex size-full items-center" aria-hidden={!open} inert={!open}>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -192,7 +192,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
             </div>
           }
           b={
-            <div className="flex size-full items-center justify-center" aria-hidden={open}>
+            <div className="flex size-full items-center justify-center" aria-hidden={open} inert={open}>
               <Tooltip>
                 <TooltipTrigger
                   render={

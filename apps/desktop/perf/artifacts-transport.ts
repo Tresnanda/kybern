@@ -1,3 +1,5 @@
+export { isTauri, saveImageFile, writeImageClipboard } from "../src/lib/tauri"
+
 export const external: string[] = []
 export const fetched: string[] = []
 export const requests: { path: string; preview: boolean }[] = []

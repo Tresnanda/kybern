@@ -67,7 +67,7 @@ async function fetchPng(source: string): Promise<Blob> {
       canvas.toBlob((png) => png ? resolve(png) : reject(new Error("Image format cannot be converted to PNG")), "image/png")
     })
   } finally {
-    if ("close" in (drawable ?? {}) && typeof drawable.close === "function") drawable.close()
+    if (drawable && "close" in drawable) drawable.close()
     if (objectUrl) URL.revokeObjectURL(objectUrl)
   }
 }

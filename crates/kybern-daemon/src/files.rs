@@ -73,9 +73,13 @@ impl FileIndexCache {
         // Expire the payload even if this repository is never searched again.
         // A later refresh changes `loaded_at`, so an older cleanup task cannot
         // discard the newer index.
+        // Do not keep an LRU-evicted slot alive until the timer fires.
+        let expiring = Arc::downgrade(&slot);
         tokio::spawn(async move {
             tokio::time::sleep(INDEX_CACHE_TTL).await;
-            Self::expire(&slot, loaded_at).await;
+            if let Some(slot) = expiring.upgrade() {
+                Self::expire(&slot, loaded_at).await;
+            }
         });
         Ok(files)
     }
@@ -356,6 +360,22 @@ mod tests {
             cache.slot(std::path::Path::new(&format!("/project-{index}"))).await;
         }
         assert_eq!(cache.slots.lock().await.len(), MAX_INDEX_SLOTS);
+    }
+
+    #[tokio::test]
+    async fn expiry_timer_does_not_retain_an_evicted_slot() {
+        let root = std::env::temp_dir().join(format!("kybern-index-eviction-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("one.txt"), "one").unwrap();
+        let cache = FileIndexCache::default();
+        let files = cache.list(&root).await.unwrap();
+        let evicted = Arc::downgrade(&cache.slot(&root).await);
+        for index in 0..MAX_INDEX_SLOTS {
+            cache.slot(std::path::Path::new(&format!("/other-project-{index}"))).await;
+        }
+        assert!(evicted.upgrade().is_none(), "expiry task must not retain the evicted index");
+        assert_eq!(files.as_slice(), ["one.txt"], "active callers retain their shared result");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
