@@ -20,6 +20,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
+| Hidden environment composer stacks | A second WebContent process kept queued prompts, approvals, questions, and landing-tray DOM while occluded or minimized. Unfocused but visible windows must not drop those panels. | Unmount reconstructible `above` stacked panels while the window is occluded/minimized/page-hidden; keep the composer input so drafts and attachment previews survive. Blur is not discard. Verify two-window `vmmap` on macOS. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
@@ -74,6 +75,10 @@ See [long-chat and renderer memory reductions](memory-reductions-2026-09-14.md)
 for bounded refreshes, cleanup while following, stable interaction pins, deferred
 result formatting, and inactive terminal graphics release. Run `history-retention`
 at 1100px/480px plus `tool-memory` and `terminal-memory` for those paths.
+
+See [hidden-window composer stacked-panel release](hidden-window-composer-2026-09-18.md)
+for occlusion-gated unmount of queued/approval/question rails (not blur). The
+composer input stays mounted. Linux cannot run the two-window macOS `vmmap` check.
 
 See [profile and diagram UI polish](renderer-ui-polish-2026-09-14.md) for explicit
 profile controls, responsive grouping, diagram expansion, and motion/focus checks.
@@ -169,6 +174,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Saved-session picker, search, pagination, keyboard navigation | `node scripts/check-rendering.mjs sessions` |
 | Earlier-history prefetch, retry, prepend anchoring | `node scripts/check-rendering.mjs history` |
 | Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |
+| Occluded or minimized window with queued prompts or an approval | Two-window `vmmap` on macOS 27 plus stacked-panel remount; do not treat blur as compact permission. See `hidden-window-composer-2026-09-18.md`. |
 
 For indicator changes, also run the matrix appearance/visibility comparison
 below. The native runner builds fixtures separately at `tauri://localhost`

@@ -5,7 +5,8 @@ import type { ProviderUsage } from "@/protocol"
 // surface, 12px system-ui editor, footer with the + menu, permission-mode
 // picker (Full access in orange), model/effort picker and the ink send circle.
 // Stacked panels (queued follow-ups, approval card, empty-landing tray) render
-// through `above`, inside the same column frame.
+// through `above`, inside the same column frame. Occluded or minimized windows
+// drop those panels; the input stays so drafts and attachment previews survive.
 
 import { Fragment, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -46,6 +47,8 @@ import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
 import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
   HandRaisedIcon, ShieldCheckIcon, ShieldIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
+import { composerStackedMounts } from "@/lib/composerWindowHold"
+import { useComposerWindowHold } from "@/lib/useComposerWindowHold"
 import { IconSwap } from "@/components/kybern/motion"
 import { InlineToken } from "@/components/kybern/InlineToken"
 import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, Thread, UserMessage } from "@/protocol"
@@ -288,6 +291,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const fileInput = useRef<HTMLInputElement>(null)
   const menuList = useRef<HTMLDivElement>(null)
   const previewUrls = useRef(new Set<string>())
+  const windowHeld = useComposerWindowHold()
 
   useLayoutEffect(() => {
     const key = props.draftKey
@@ -717,7 +721,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   return (
     <ComposerColumnFrame className={cn(className, surfaceMode === "split" && "split-chat-composer")}>
-      <div className="composer-above">{above}</div>
+      <div className="composer-above" data-composer-stacked-held={windowHeld ? "" : undefined}>
+        {composerStackedMounts(windowHeld) ? above : null}
+      </div>
       <div
         className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, menuOpen && "overflow-visible", hideInput && "hidden")}
         onDragOver={(e) => {
