@@ -9,6 +9,8 @@ import {
 import {
   SPLIT_RATIO_MAX,
   SPLIT_RATIO_MIN,
+  SPLIT_PANE_MIN_WIDTH_PX,
+  SPLIT_SPLITTER_HIT_WIDTH_PX,
   canSplitPane,
   clampSplitRatio,
   closeSplitViewPane,
@@ -17,6 +19,7 @@ import {
   findThreadPaneByThreadId,
   reconcileSplitView,
   removeThreadPane,
+  shouldStackHorizontalSplit,
   splitThreadPane,
 } from "./src/state/splitView.ts"
 
@@ -141,6 +144,14 @@ test("split ratios remain in the usable quarter-to-three-quarter range", () => {
   assert.equal(clampSplitRatio(-1), SPLIT_RATIO_MIN)
   assert.equal(clampSplitRatio(2), SPLIT_RATIO_MAX)
   assert.equal(clampSplitRatio(Number.NaN), 0.5)
+})
+
+test("narrow horizontal splits stack before either pane becomes unreadable", () => {
+  const stackThreshold =
+    SPLIT_PANE_MIN_WIDTH_PX * 2 + SPLIT_SPLITTER_HIT_WIDTH_PX
+  assert.equal(shouldStackHorizontalSplit(stackThreshold - 1), true)
+  assert.equal(shouldStackHorizontalSplit(stackThreshold), false)
+  assert.equal(shouldStackHorizontalSplit(Number.NaN), false)
 })
 
 test("thread drops choose intuitive edges and respect allowed directions", () => {

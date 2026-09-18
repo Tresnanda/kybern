@@ -88,6 +88,25 @@ function geometry(label: string) {
     check(bounds.bottom <= form.bottom + 1, `${label}: question actions fit`)
   }
 }
+function toolbarGeometry(label: string) {
+  const footer = document.querySelector<HTMLElement>("[data-chat-composer-footer]")
+  const surface = document.querySelector<HTMLElement>(".chat-composer-surface")
+  if (!footer || !surface) {
+    check(false, `${label}: split composer toolbar mounted`)
+    return
+  }
+  const footerBounds = footer.getBoundingClientRect()
+  const surfaceBounds = surface.getBoundingClientRect()
+  check(footer.scrollWidth <= footer.clientWidth + 1, `${label}: footer stays within its width`)
+  for (const control of footer.querySelectorAll<HTMLButtonElement>("button")) {
+    const bounds = control.getBoundingClientRect()
+    check(bounds.left >= surfaceBounds.left - 1 && bounds.right <= surfaceBounds.right + 1, `${label}: toolbar control stays inside composer`)
+    check(bounds.left >= footerBounds.left - 1 && bounds.right <= footerBounds.right + 1, `${label}: toolbar control stays inside footer`)
+  }
+  for (const ariaLabel of ["Change model and reasoning", "Queue follow-up", "Stop generation"]) {
+    check(footer.querySelector<HTMLButtonElement>(`button[aria-label="${ariaLabel}"]`), `${label}: ${ariaLabel} remains reachable`)
+  }
+}
 function render(width: number, height = 720) {
   flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: true, setTheme: () => {}, setTranslucent: () => {} }}><SidebarProvider><main id="fixture-pane" style={{ width, maxWidth: "100vw", height, maxHeight: "100dvh", marginInline: "auto", position: "relative", background: "var(--background)" }}><ThreadView threadId={thread.id} showSidebarControls={false} /></main></SidebarProvider></ThemeProviderContext>))
 }
@@ -123,6 +142,11 @@ async function run() {
         check(Math.abs(bounds.left - composer.left) < 1 && Math.abs(bounds.right - composer.right) < 1, `${width}/${prefix}: menu matches composer edges`)
       }
     }
+  }
+  for (const width of [320, 280]) {
+    flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: true, setTheme: () => {}, setTranslucent: () => {} }}><div style={{ width, maxWidth: "100vw" }}><Composer projectId="project" provider={thread.provider} providers={[]} mode="full-access" onModeChange={() => {}} onSend={async () => {}} onSteer={async () => {}} onStop={() => {}} model="fixture-model" effort="high" running surfaceMode="split" /></div></ThemeProviderContext>))
+    await sleep(400)
+    toolbarGeometry(`split toolbar/${width}`)
   }
   for (const variant of ["dark", "light"] as const) for (const width of [1000, 480, 320]) {
     setTheme(variant)

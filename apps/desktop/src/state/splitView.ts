@@ -34,6 +34,19 @@ export const SPLIT_RATIO_MIN = 0.25
 export const SPLIT_RATIO_MAX = 0.75
 export const SPLIT_RATIO_DEFAULT = 0.5
 
+// Keep transcript rows and composer controls readable before a horizontal split
+// becomes a one-letter column. Below two pane widths plus the resize affordance,
+// stack the split vertically so a narrow window remains usable.
+export const SPLIT_PANE_MIN_WIDTH_PX = 280
+export const SPLIT_SPLITTER_HIT_WIDTH_PX = 16
+
+export function shouldStackHorizontalSplit(width: number): boolean {
+  return (
+    Number.isFinite(width) &&
+    width < SPLIT_PANE_MIN_WIDTH_PX * 2 + SPLIT_SPLITTER_HIT_WIDTH_PX
+  )
+}
+
 const SPLIT_VIEW_STORAGE_KEY = "kybern.split-view.v1"
 const SPLIT_VIEW_STORAGE_VERSION = 1
 

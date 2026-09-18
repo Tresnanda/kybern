@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -22,10 +23,12 @@ import {
   SPLIT_RATIO_DEFAULT,
   SPLIT_RATIO_MAX,
   SPLIT_RATIO_MIN,
+  SPLIT_PANE_MIN_WIDTH_PX,
   canSplitPane,
   clampSplitRatio,
   collectSplitThreadIds,
   collectThreadPanes,
+  shouldStackHorizontalSplit,
   type Pane,
   type PaneId,
   type SplitNode,
@@ -115,7 +118,26 @@ function SplitNodeRenderer({
   const firstRef = useRef<HTMLDivElement>(null)
   const latestRatio = useRef(node.ratio)
   const [dragging, setDragging] = useState(false)
+  const [containerWidth, setContainerWidth] = useState<number | null>(null)
   const horizontal = node.direction === "horizontal"
+  const isHorizontal =
+    horizontal &&
+    !shouldStackHorizontalSplit(containerWidth ?? Number.POSITIVE_INFINITY)
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container || typeof ResizeObserver === "undefined") return
+
+    const updateWidth = () => {
+      const width = Math.round(container.getBoundingClientRect().width)
+      setContainerWidth((current) => (current === width ? current : width))
+    }
+
+    updateWidth()
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     latestRatio.current = node.ratio
@@ -140,12 +162,12 @@ function SplitNodeRenderer({
     event.preventDefault()
 
     const rect = container.getBoundingClientRect()
-    const size = horizontal ? rect.width : rect.height
+    const size = isHorizontal ? rect.width : rect.height
     if (size <= 0) return
 
     const handle = event.currentTarget as HTMLElement
     const pointerId = event.pointerId
-    const startPosition = horizontal ? event.clientX : event.clientY
+    const startPosition = isHorizontal ? event.clientX : event.clientY
     const startRatio = latestRatio.current
     const previousCursor = document.body.style.cursor
     const previousUserSelect = document.body.style.userSelect
@@ -162,7 +184,7 @@ function SplitNodeRenderer({
       )
     }
     const move = (moveEvent: PointerEvent) => {
-      const position = horizontal ? moveEvent.clientX : moveEvent.clientY
+      const position = isHorizontal ? moveEvent.clientX : moveEvent.clientY
       pendingRatio = clampSplitRatio(
         startRatio + (position - startPosition) / size
       )
@@ -188,7 +210,7 @@ function SplitNodeRenderer({
     handle.addEventListener("pointermove", move)
     handle.addEventListener("pointerup", finish)
     handle.addEventListener("pointercancel", finish)
-    document.body.style.cursor = horizontal ? "col-resize" : "row-resize"
+    document.body.style.cursor = isHorizontal ? "col-resize" : "row-resize"
     document.body.style.userSelect = "none"
     setDragging(true)
   }
@@ -197,13 +219,13 @@ function SplitNodeRenderer({
     let ratio: number | null = null
     if (event.key === "Home") ratio = SPLIT_RATIO_MIN
     if (event.key === "End") ratio = SPLIT_RATIO_MAX
-    if (horizontal && event.key === "ArrowLeft")
+    if (isHorizontal && event.key === "ArrowLeft")
       ratio = latestRatio.current - 0.05
-    if (horizontal && event.key === "ArrowRight")
+    if (isHorizontal && event.key === "ArrowRight")
       ratio = latestRatio.current + 0.05
-    if (!horizontal && event.key === "ArrowUp")
+    if (!isHorizontal && event.key === "ArrowUp")
       ratio = latestRatio.current - 0.05
-    if (!horizontal && event.key === "ArrowDown")
+    if (!isHorizontal && event.key === "ArrowDown")
       ratio = latestRatio.current + 0.05
     if (ratio === null) return
     event.preventDefault()
@@ -213,21 +235,27 @@ function SplitNodeRenderer({
   return (
     <div
       ref={containerRef}
-      data-split-direction={node.direction}
+      data-split-direction={isHorizontal ? "horizontal" : "vertical"}
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 overflow-hidden",
-        horizontal ? "flex-row" : "flex-col"
+        "flex min-h-0 min-w-0 flex-1",
+        isHorizontal
+          ? "flex-row overflow-x-auto overflow-y-hidden"
+          : "flex-col overflow-hidden"
       )}
     >
       <div
         ref={firstRef}
         className={cn(
-          "relative flex min-h-0 min-w-0 shrink overflow-hidden",
-          horizontal
-            ? "border-r border-[color:var(--app-surface-divider)]"
-            : "border-b border-[color:var(--app-surface-divider)]"
+          "relative flex min-h-0 overflow-hidden",
+          isHorizontal
+            ? "min-w-0 shrink border-r border-[color:var(--app-surface-divider)]"
+            : "min-w-0 shrink border-b border-[color:var(--app-surface-divider)]"
         )}
-        style={{ flexBasis: `${node.ratio * 100}%`, flexGrow: 0 }}
+        style={{
+          flexBasis: `${node.ratio * 100}%`,
+          flexGrow: 0,
+          ...(isHorizontal ? { minWidth: SPLIT_PANE_MIN_WIDTH_PX } : {}),
+        }}
       >
         <PaneRenderer
           pane={node.first}
@@ -238,9 +266,9 @@ function SplitNodeRenderer({
           onSetRatio={onSetRatio}
         />
         <ResizeHandle
-          edge={horizontal ? "right" : "bottom"}
+          edge={isHorizontal ? "right" : "bottom"}
           label={
-            horizontal
+            isHorizontal
               ? "Resize thread panes horizontally"
               : "Resize thread panes vertically"
           }
@@ -251,7 +279,10 @@ function SplitNodeRenderer({
           onReset={() => commitRatio(SPLIT_RATIO_DEFAULT)}
         />
       </div>
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
+        style={isHorizontal ? { minWidth: SPLIT_PANE_MIN_WIDTH_PX } : undefined}
+      >
         <PaneRenderer
           pane={node.second}
           splitView={splitView}

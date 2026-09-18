@@ -43,7 +43,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { buildStructuredTextParts, structuredSegments } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
-import { ChevronDownIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
+import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
   HandRaisedIcon, ShieldCheckIcon, ShieldIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
@@ -989,7 +989,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
               <div
                 data-chat-composer-actions="right"
-                className={cn("flex items-center gap-1", surfaceMode === "split" ? "min-w-0 flex-1 justify-end" : "shrink-0")}
+                className={cn("flex items-center gap-1", surfaceMode === "split" ? "min-w-0 flex-1 justify-end overflow-hidden" : "shrink-0")}
               >
                 {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
@@ -1010,7 +1010,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                   "disabled:opacity-100",
                                   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
                                   COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
-                                  surfaceMode === "split" && "max-w-full shrink overflow-hidden px-2 sm:px-2",
+                                  surfaceMode === "split" && "max-w-full !shrink overflow-hidden px-2 sm:px-2",
                                 )}
                               />
                             }
@@ -1019,7 +1019,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       >
                         <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
                           <ProviderMark kind={provider.kind} size={14} className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100" />
-                          <span className="min-w-0 truncate leading-none text-[var(--color-text-foreground)]">{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
+                          <span className={cn(
+                            "min-w-0 truncate leading-none text-[var(--color-text-foreground)]",
+                            surfaceMode === "split" && "@max-[360px]:hidden",
+                          )}>{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
                           {modelLabel && effortLabel && (
                             <span
                               className={cn(
@@ -1110,9 +1113,26 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 )}
 
                 {running && (
-                  <div className="flex items-center gap-0.5">
-                    <Button variant="subtle" size="chip" disabled={!canSend} title={steering ? `${mod}+Enter to steer` : "Enter to queue"} onClick={() => void submit()}>
-                      {sending ? "Sending…" : steering ? "Steer now" : "Queue"}
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                      variant="subtle"
+                      size="chip"
+                      className={cn(
+                        surfaceMode === "split" && "@max-[360px]:gap-0 @max-[360px]:px-1.5",
+                      )}
+                      aria-label={sending ? "Sending follow-up" : steering ? "Steer now" : "Queue follow-up"}
+                      disabled={!canSend}
+                      title={steering ? `${mod}+Enter to steer` : "Enter to queue"}
+                      onClick={() => void submit()}
+                    >
+                      {sending ? (
+                        <Spinner size={12} className="hidden @max-[360px]:inline-flex" />
+                      ) : (
+                        <ClockIcon className="hidden size-3.5 shrink-0 @max-[360px]:inline-flex" aria-hidden />
+                      )}
+                      <span className={cn(surfaceMode === "split" && "@max-[360px]:sr-only")}>
+                        {sending ? "Sending…" : steering ? "Steer now" : "Queue"}
+                      </span>
                     </Button>
                     {onSteer && <Menu>
                       <MenuTrigger render={<Button variant="chrome" size="icon-xs" aria-label="Choose prompt delivery" disabled={sending} />}>
