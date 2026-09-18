@@ -15,6 +15,8 @@ export interface ToolOutputLocation {
   throughSeq?: number
   revision?: number
   omitted: boolean
+  /** Estimated retained payload bytes; metadata never owns the payload. */
+  bytes?: number
 }
 
 export interface ToolOutputResponse<Output> {
@@ -35,11 +37,12 @@ interface ToolOutputCacheOptions<Output> {
 // Preserve the previous warm-cache allowance for results not currently in use.
 // Mounted content is not an eviction candidate: evicting it causes a refetch loop.
 const MAX_INACTIVE_OUTPUTS = 12
+export const MAX_INACTIVE_OUTPUT_BYTES = 8 * 1024 * 1024
 // Leave room in the daemon's 16-request lane for subscriptions and interaction.
 const MAX_CONCURRENT_LOADS = 4
 
 export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Output>) {
-  const hydrated = new Map<string, ToolOutputIdentity>()
+  const hydrated = new Map<string, ToolOutputIdentity & { bytes: number }>()
   const consumers = new Map<string, number>()
   const loads = new Map<string, { identity: ToolOutputIdentity; request: Promise<void> }>()
   let generation = 0
@@ -92,15 +95,29 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
   }
 
   function evict(): void {
-    let inactive = 0
-    for (const key of hydrated.keys()) if (!consumers.has(key)) inactive++
+    let inactive = 0, bytes = 0
+    for (const [key, entry] of hydrated) if (!consumers.has(key)) { inactive++; bytes += entry.bytes }
     for (const [key, identity] of hydrated) {
-      if (inactive <= MAX_INACTIVE_OUTPUTS) break
+      if (inactive <= MAX_INACTIVE_OUTPUTS && bytes <= MAX_INACTIVE_OUTPUT_BYTES) break
       if (consumers.has(key)) continue
       hydrated.delete(key)
       inactive--
+      bytes -= identity.bytes
       options.omit(identity)
     }
+  }
+
+  /** Enroll an already-persisted live result or a replacement snapshot in the
+   * same lease-safe budget as hydrated history. Keep only scalar identity. */
+  function track(threadId: string, toolCallId: string, seq?: number): void {
+    if (disposed) return
+    const current = options.read(threadId, toolCallId, seq)
+    const key = keyFor(threadId, toolCallId, seq ?? current?.seq)
+    hydrated.delete(key)
+    if (!current || current.omitted) return
+    hydrated.set(key, { threadId, toolCallId, seq: current.seq, turnId: current.turnId,
+      throughSeq: current.throughSeq, revision: current.revision, bytes: current.bytes ?? 0 })
+    evict()
   }
 
   /** Each mounted consumer owns its own idempotent release function. */
@@ -149,9 +166,7 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
         // The store callback checks identity and omission in the same update,
         // avoiding a redundant transcript scan and a stale read/write split.
         if (!options.apply(identity, result)) return
-        hydrated.delete(key)
-        hydrated.set(key, identity)
-        evict()
+        track(identity.threadId, identity.toolCallId, identity.seq)
       })
       .catch((error: unknown) => {
         if (isCurrent() && stillOmitted(identity)) options.onError(error)
@@ -181,5 +196,5 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
     consumers.clear()
   }
 
-  return { hydrate, retain, invalidatePending, dispose }
+  return { hydrate, retain, track, invalidatePending, dispose }
 }

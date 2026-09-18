@@ -1,6 +1,7 @@
 import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging"
 import { writeProviderCache } from "./providerCache"
 import { createToolOutputCache } from "./toolOutputCache"
+import { retainedSize } from "@/lib/retainedSize"
 // Owns the daemon connection: boots the client, subscribes to every thread's
 // events, folds them into the store, and exposes typed actions for the views.
 
@@ -71,7 +72,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   let nextToolOutputRevision = 0
   const toolOutputs = createToolOutputCache<JsonValue>({
     read(threadId, toolCallId, seq) {
-      const block = useStore.getState().transcripts[threadId]?.blocks.find(
+      const block = useStore.getState().transcripts[threadId]?.blocks.findLast(
         (block) => block.kind === "tool" && block.call.id === toolCallId && (seq === undefined || block.seq === seq),
       )
       if (block?.kind !== "tool") return
@@ -80,7 +81,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         revision = ++nextToolOutputRevision
         toolOutputRevisions.set(block, revision)
       }
-      return { seq: block.seq, turnId: block.turnId, omitted: !!block.outputOmitted, throughSeq: useStore.getState().transcripts[threadId]?.lastSeq, revision }
+      return { seq: block.seq, turnId: block.turnId, omitted: !!block.outputOmitted, throughSeq: useStore.getState().transcripts[threadId]?.lastSeq, revision, bytes: retainedSize(block.output) }
     },
     load: (threadId, toolCallId, identity) => rpc().call("threads.tool_output", {
       thread_id: threadId, tool_call_id: toolCallId, start_seq: identity.seq, through_seq: identity.throughSeq,
@@ -125,6 +126,15 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   })
   const hydrateToolOutput = toolOutputs.hydrate
   const retainToolOutput = toolOutputs.retain
+
+  function trackThreadOutputs(threadId: ThreadId) {
+    // Snapshot replay can introduce completions that arrived before its rows
+    // existed locally. Enroll those too, using each exact invocation sequence.
+    for (const block of useStore.getState().transcripts[threadId]?.blocks ?? []) {
+      if (block.kind === "tool" && block.complete && !block.outputOmitted && block.output != null)
+        toolOutputs.track(threadId, block.call.id, block.seq)
+    }
+  }
 
   function rpc(): KybernClient {
     if (!client) throw new ConnectionClosedError("Not connected")
@@ -347,6 +357,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           for (const event of replay) next = applyEvent(next, event)
           return isThreadVisible(useStore.getState(), id) ? next : compactThreadState(next)
         })
+        trackThreadOutputs(id)
         const cached = useStore.getState().transcripts
         for (const cachedId of reusableSnapshots)
           if (!cached[cachedId]?.loaded) reusableSnapshots.delete(cachedId)
@@ -395,6 +406,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       const replay = record.buffer.after(base.lastSeq)
       if (!replay) throw new Error("Thread is updating too quickly. Try loading earlier messages again.")
       useStore.getState().updateTranscript(id, (current) => prependThreadHistory(base, page, replay, current))
+      trackThreadOutputs(id)
     }).catch((error) => {
       if (isCurrentHydration(generation)) throw error
     }).finally(() => {
@@ -484,6 +496,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       storeRuntimeTask(ev.task)
     }
     s.receiveEvent(ev)
+    if (ev.kind === "tool_call_completed") toolOutputs.track(ev.thread_id, ev.tool_call_id)
     if (ev.kind.startsWith("collaboration_"))
       collaborationListeners.forEach((listener) => listener(ev))
 
