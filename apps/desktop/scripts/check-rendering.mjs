@@ -62,6 +62,7 @@ try {
     ...process.env,
     KYBERN_PERF_FIXTURE: fixture,
     VITE_LIVE_TOOLS_HISTORY: process.env.KYBERN_PERF_LIVE_HISTORY ?? "0",
+    VITE_LIVE_TOOLS_THREAD: process.env.KYBERN_PERF_LIVE_THREAD ?? "0",
     VITE_EARLIER_STATUS_UNHOSTED: process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED ?? "0",
   } })
   if (build.error) throw build.error

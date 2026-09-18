@@ -1,8 +1,11 @@
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
+import { ThreadView } from "../src/views/Thread"
 import { Transcript } from "../src/views/Transcript"
+import { SidebarProvider } from "../src/components/kit/sidebar"
 import { useStore, activateEnvironmentStore } from "../src/state/store"
 import { createEnvironmentRuntime, setEnvironmentRuntime } from "../src/state/rpc"
+import { ThemeProvider } from "../src/components/theme-provider"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { EVENT_NOTIFICATION, type EventNotification, type EventsSubscribeParams } from "../src/protocol"
 import { retainedSize } from "../src/lib/retainedSize"
@@ -13,6 +16,7 @@ const threadId = "20000000-0000-4000-8000-000000000001"
 const baseline = import.meta.env.VITE_LIVE_TOOLS_BASELINE === "1"
 const fullEvents = baseline || import.meta.env.VITE_LIVE_TOOLS_FULL_EVENTS === "1"
 const seededHistory = import.meta.env.VITE_LIVE_TOOLS_HISTORY === "1"
+const fullThread = import.meta.env.VITE_LIVE_TOOLS_THREAD === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -29,6 +33,10 @@ async function mark(stage: string) {
 }
 async function run() {
   document.documentElement.classList.add("dark")
+  if (fullThread) {
+    localStorage.setItem("theme", "dark")
+    localStorage.setItem("kybern.translucent", "false")
+  }
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
   setEnvironmentRuntime(runtime)
@@ -60,19 +68,46 @@ async function run() {
     if (typeof payload === "string") deliveredOutputChars += payload.length
     if (event.output_omitted) omittedCompletions++
   })
-  const root = createRoot(document.getElementById("root")!)
+  let renderError: unknown
+  const root = createRoot(document.getElementById("root")!, { onUncaughtError: error => { renderError = error } })
   try {
     await until(() => useStore.getState().connection.state === "open", "Scratch connection did not open")
+    if (fullThread) {
+      const listed = await client.call("threads.list", {})
+      useStore.getState().set({ threads: Object.fromEntries(listed.threads.map(thread => [thread.id, thread])) })
+    }
     await runtime.loadThread(threadId)
     const render = (panes: number) => flushSync(() => root.render(
       <ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
-        <div className="flex h-screen">{Array.from({ length: panes }, (_, pane) => <div key={pane} data-pane={pane} className="flex min-w-0 flex-1 flex-col"><Transcript threadId={threadId} bottomInset={0} /></div>)}</div>
+        {fullThread ? <ThemeProvider defaultTheme="dark">
+          <SidebarProvider open onOpenChange={() => {}} style={{ "--sidebar-width": "256px" } as React.CSSProperties}>
+            <div className="flex h-screen min-w-0 flex-1 bg-[var(--app-shell-background)]">
+              <div data-fixture-sidebar-offset className="w-64 shrink-0" />
+              <main data-fixture-thread-surface className="chat-content-card relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
+                <ThreadView threadId={threadId} />
+              </main>
+            </div>
+          </SidebarProvider>
+        </ThemeProvider> : <div className="flex h-screen">{Array.from({ length: panes }, (_, pane) => <div key={pane} data-pane={pane} className="flex min-w-0 flex-1 flex-col"><Transcript threadId={threadId} bottomInset={0} /></div>)}</div>}
       </ThemeProviderContext>,
     ))
     render(1)
+    if (fullThread) {
+      await until(() => {
+        if (renderError) throw renderError
+        return document.querySelector("[data-chat-scroll-container]") !== null
+      }, `Thread surface did not mount: ${document.body.innerHTML.slice(0, 800)}`)
+      const viewport = document.querySelector<HTMLElement>("[data-chat-scroll-container]")!
+      const bounds = viewport.getBoundingClientRect()
+      check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height })}`)
+    }
     if (seededHistory) {
-      const earlier = document.querySelector<HTMLElement>("[data-earlier-history-status]")
-      check(earlier?.classList.contains("chat-paint-host") === true || import.meta.env.VITE_EARLIER_STATUS_UNHOSTED === "1", "Earlier-history status row was not hosted")
+      check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
+      if (!fullThread) {
+        await until(() => document.querySelector("[data-earlier-history-status]") !== null, "Earlier-history status row did not mount")
+        const earlier = document.querySelector<HTMLElement>("[data-earlier-history-status]")
+        check(earlier?.classList.contains("chat-paint-host") === true || import.meta.env.VITE_EARLIER_STATUS_UNHOSTED === "1", "Earlier-history status row was not hosted")
+      }
     }
     await mark("live-startup")
     await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
