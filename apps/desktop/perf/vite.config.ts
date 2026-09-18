@@ -32,6 +32,17 @@ export default mergeConfig(base, {
       if (!id.endsWith("/components/theme-provider.tsx")) return
       return code.replace('"@/lib/tauri"', JSON.stringify(path.resolve(import.meta.dirname, "theme-provider-tauri.ts")))
     },
+  }] : process.env.KYBERN_PERF_FIXTURE === "live-tool-memory" && process.env.KYBERN_PERF_LIVE_ANSWER_LAYER === "1" ? [{
+    name: "live-tool-memory-answer-layer-control",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/Transcript.tsx")) return
+      if (!code.includes('data-answer-host className="')) throw new Error("answer-layer control could not find data-answer-host")
+      if (!code.includes('data-slot="message-content">')) throw new Error("answer-layer control could not find unhosted message-content")
+      return code
+        .replace('data-answer-host className="', 'data-answer-host className="chat-paint-host ')
+        .replace('<div data-slot="message-content">', '<div data-slot="message-content" className="chat-paint-host">')
+    },
   }] : process.env.KYBERN_PERF_FIXTURE === "live-tool-memory" && process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED === "1" ? [{
     name: "live-tool-memory-unhosted-earlier-status-control",
     enforce: "pre",

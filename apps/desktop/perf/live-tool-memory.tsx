@@ -22,9 +22,23 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const answerLayer = import.meta.env.VITE_LIVE_TOOLS_ANSWER_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkAnswerHosts() {
+  const hosts = [...document.querySelectorAll<HTMLElement>("[data-answer-host]")]
+  check(hosts.length > 0, "Answer hosts did not mount")
+  for (const host of hosts) {
+    check(host.classList.contains("chat-paint-host") === answerLayer, `Answer container paint host changed: ${host.className}`)
+    const content = host.querySelector("[data-slot='message-content']")
+    if (content) {
+      check(content.classList.contains("chat-paint-host") === answerLayer, `Answer message-content paint host changed: ${content.className}`)
+      check(!!content.querySelector(".chat-markdown--hosted, .chat-paint-host, p, pre, ul, ol, h1, h2, h3"), "Answer lost nested hosted markdown")
+    }
+    check(!!host.querySelector(".chat-paint-host, .chat-markdown--hosted"), "Answer lost nested paint hosts")
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -132,6 +146,8 @@ async function run() {
         const earlier = document.querySelector<HTMLElement>("[data-earlier-history-status]")
         check(earlier?.classList.contains("chat-paint-host") === true || import.meta.env.VITE_EARLIER_STATUS_UNHOSTED === "1", "Earlier-history status row was not hosted")
       }
+      await until(() => document.querySelector("[data-answer-host]") !== null, "Historical answer host did not mount")
+      checkAnswerHosts()
     }
     await mark("live-startup")
     await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
@@ -142,6 +158,7 @@ async function run() {
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    if (document.querySelector("[data-answer-host]")) checkAnswerHosts()
     await mark("live-results-closed")
     if (seededHistory) {
       const first = liveTools()[0]!
