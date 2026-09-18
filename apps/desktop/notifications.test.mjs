@@ -184,6 +184,36 @@ test("completed threads keep unread dots until their focused foreground pane is 
   runtime.disconnect()
 })
 
+test("a completion arriving in a hidden selected thread stays unread despite native focus", async () => {
+  globalThis.document.visibilityState = "hidden"
+  globalThis.focusProbe = () => true
+  const store = createEnvironmentStore("notification-hidden-arrival")
+  store.getState().set({
+    settings: { notifications: true },
+    selected: { kind: "thread", id: "selected" },
+    threads: { selected: { id: "selected", title: "Selected", status: "idle" } },
+  })
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  globalThis.memoryClient.reply = () => Promise.resolve({ messages: [], checkpoints: [] })
+
+  globalThis.memoryClient.event({
+    seq: 1,
+    thread_id: "selected",
+    turn_id: "hidden-turn",
+    at: new Date(Date.now() + 1000).toISOString(),
+    kind: "turn_completed",
+    stop_reason: "completed",
+    duration_ms: 100,
+    usage: {},
+    terminal_message_id: "final",
+  })
+  await tick()
+
+  assert.equal(store.getState().notifications.selected?.seq, 1)
+  runtime.disconnect()
+})
+
 test("read tracking survives a runtime reconnect without consuming inactive unread threads", async () => {
   globalThis.document.visibilityState = "visible"
   globalThis.focusProbe = () => true

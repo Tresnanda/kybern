@@ -534,7 +534,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     if (disposed) return
     const current = useStore.getState()
     const viewing = isThreadFocused(current, ev.thread_id)
-    if (focused && viewing) return
+    if (document.visibilityState !== "hidden" && focused && viewing) return
     const kind: NotificationKind | null =
       ev.kind === "turn_failed" ? "failed"
       : ev.kind === "approval_requested" || ev.kind === "user_input_requested" ? "blocked"
