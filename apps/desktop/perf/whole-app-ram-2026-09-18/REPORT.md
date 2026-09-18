@@ -1,8 +1,10 @@
 # Whole-app live-result memory check
 
-Date: 2026-09-18  
+Date: 2026-09-18
+
 Runtime: release Tauri shell at `tauri://localhost`, system WebKit on macOS 27,
-1440 × 900 logical pixels, translucent window material unchanged  
+1440 × 900 logical pixels, translucent window material unchanged
+
 Machine: Apple Silicon Mac (the local development machine)
 
 ## Result
@@ -47,9 +49,12 @@ their compiled identifiers. Data and client registries lived below
 opened by either scratch app.
 
 The release Tauri builds completed successfully, including `tauri-macros`.
-The earlier debug-only `E0463: can't find crate tauri_macros` was therefore a
-stale/profile-specific artifact-resolution failure, not evidence of an upstream
-Tauri incompatibility.
+The final parent review identified the debug-only `E0463` more precisely:
+macOS rejected the stripped `tauri_macros` dylib with `mis-aligned LINKEDIT
+string pool`. Two other feature variants loaded successfully. This matches
+[Rust issue 157750](https://github.com/rust-lang/rust/issues/157750); the local
+dev profile now disables stripping only for that build-time proc-macro. It is
+not a Tauri API incompatibility or an application RAM regression.
 
 The installed GUI was closed through normal application termination only. Its
 daemon remained PID 3816 with start identity `Fri Sep 18 15:18:25 2026`

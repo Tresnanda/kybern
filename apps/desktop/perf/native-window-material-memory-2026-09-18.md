@@ -90,3 +90,15 @@ is visible product behavior.
   `tauri_macros`). Retrying after successful direct shell builds reproduced the
   artifact-resolution failure; it is recorded as an environment limitation,
   not presented as a passing packaged build.
+
+
+Final integration diagnosed the debug E0463 through `dlopen`: only the stripped
+custom-protocol macro dylib failed with a misaligned LINKEDIT string pool. See
+[Rust issue 157750](https://github.com/rust-lang/rust/issues/157750). The parent
+added a narrow dev-profile `tauri-macros` strip override; release measurement
+bundles had already built successfully. This replaces speculation about a
+stale artifact or upstream Tauri API failure.
+
+With that override, the final sidecar-aware `pnpm tauri build --debug --no-bundle`
+passed and produced the desktop executable. The original stripped dylib failed
+`dlopen`; the replacement loaded successfully.
