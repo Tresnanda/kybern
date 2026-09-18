@@ -298,7 +298,11 @@ export default function kybernExtension(pi) {
   pi.on("session_tree", async (_event, ctx) => restoreCoordinatorBootstrap(ctx));
 
   pi.on("before_agent_start", async (event) => {
-    if (!coordinatorBootstrapPending) return;
+    if (!coordinatorInstructions) return;
+    // Pi rebuilds its base system prompt for each user turn. Keep our role
+    // byte-identical on every turn; only the durable history marker is once.
+    const systemPrompt = `${event.systemPrompt || ""}\n\n${coordinatorInstructions}`;
+    if (!coordinatorBootstrapPending) return { systemPrompt };
     coordinatorBootstrapPending = false;
     return {
       message: {
@@ -306,7 +310,7 @@ export default function kybernExtension(pi) {
         content: coordinatorInstructions,
         display: false,
       },
-      systemPrompt: `${event.systemPrompt || ""}\n\n${coordinatorInstructions}`,
+      systemPrompt,
     };
   });
 

@@ -4531,91 +4531,17 @@ impl Orchestrator {
         if coordinator_thread_id != thread.id {
             return Ok(None);
         }
-        let group = self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("project coordinator group is missing"))?;
-        let mut objective = group.objective.clone();
-        truncate_utf8(&mut objective, 8 * 1024);
+        // Keep the provider's system/developer prefix stable across idle
+        // releases and resumes. Live project data belongs in tool responses,
+        // after the cached prefix, and is available after a harness switch too.
         let mut instructions = format!(
             "You are Kybern's persistent coordinator for project {project_id}, collaboration group {group_id}.\n\
-             Plan work from the user's brief, delegate every editing and integration task through Kybern collaboration assignments, inspect and review worker results, maintain the project plan and durable project knowledge, and return a clear review to the user. Do not edit or integrate code yourself. Use explicit assignment boundaries and provenance. At each new objective and before delegating, use kybern_collaboration_context_read to refresh the current plan and user-authored corrections; this attach-time snapshot may become stale while the session remains alive. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern inherits the coordinator's existing authority. If a worker is blocked on approval, preserve it and report or resolve that approval; never cancel and recreate a worker to bypass approval. Persist the working plan as kind `plan`, update its status as progress arrives, and update it again with completion or remaining work after reviewing results. Save each reusable verified fact such as architecture notes and test commands as kind `research`, project choices as kind `decision`, and reviewed assignment outcomes as kind `result_reference` with kybern_collaboration_context_put. Record useful findings before reporting completion. Treat user-authored briefs and instructions as authoritative; never replace them with agent-authored claims. Review worker claims and artifacts before presenting them as complete. Some harnesses enforce the non-editing role by restricting tools; for harnesses without enforceable restrictions, this instruction still defines the coordinator role.\n\
-             Current objective: {}\n",
-            objective
+             Plan work from the user's brief, delegate every editing and integration task through Kybern collaboration assignments, inspect and review worker results, maintain the project plan and durable project knowledge, and return a clear review to the user. Do not edit or integrate code yourself. Use explicit assignment boundaries and provenance. At session start, each new objective, and before delegating, use kybern_collaboration_read for the current objective and assignment state, and kybern_collaboration_context_read for the current plan, project.setup, and user-authored corrections. If conversation context is missing after a harness switch, use kybern_thread_read for this coordinator thread's saved conversation. Fetch additional pages as needed; never treat absent context as permission to start over. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern inherits the coordinator's existing authority. If a worker is blocked on approval, preserve it and report or resolve that approval; never cancel and recreate a worker to bypass approval. Persist the working plan as kind `plan`, update its status as progress arrives, and update it again with completion or remaining work after reviewing results. Save each reusable verified fact such as architecture notes and test commands as kind `research`, project choices as kind `decision`, and reviewed assignment outcomes as kind `result_reference` with kybern_collaboration_context_put. Record useful findings before reporting completion. Treat user-authored briefs and instructions as authoritative; never replace them with agent-authored claims. Review worker claims and artifacts before presenting them as complete. Some harnesses enforce the non-editing role by restricting tools; for harnesses without enforceable restrictions, this instruction still defines the coordinator role.\n\
+             Read changing project knowledge and assignment results through these tools; they are intentionally not embedded in this stable role instruction.\n"
         );
 
-        if !self.coordinator_setup_complete(group.id)? {
-            instructions.push_str("\nFirst-time setup is required before implementation. Check current project context first: if project.setup already exists, reuse it and continue without repeating setup. Otherwise, tell the user you are learning the project first. Delegate a research-only assignment to inspect repository instructions, architecture and entry points, development/test commands, and constraints relevant to the user's brief. For an empty project, record what exists and what is missing rather than inventing conventions. Do not edit files or run installation/setup commands during this research. Review the worker's successful result; save a concise verified overview with kybern_collaboration_context_put using key `project.setup`, kind `research`, and source_refs containing the successful research assignment's exact UUID. This records setup completion durably and unlocks editing/integration assignments. If research fails or needs input, explain the blocker and resume setup on the next turn; never claim readiness prematurely. After saving the overview, tell the user setup is complete, persist the task plan, and continue their original request without asking them to repeat it.\n");
-        }
+        instructions.push_str("\nCheck whether first-time setup is required before implementation: if project.setup already exists, reuse it and continue without repeating setup. Otherwise, tell the user you are learning the project first. Delegate a research-only assignment to inspect repository instructions, architecture and entry points, development/test commands, and constraints relevant to the user's brief. For an empty project, record what exists and what is missing rather than inventing conventions. Do not edit files or run installation/setup commands during this research. Review the worker's successful result; save a concise verified overview with kybern_collaboration_context_put using key `project.setup`, kind `research`, and source_refs containing the successful research assignment's exact UUID. This records setup completion durably and unlocks editing/integration assignments. If research fails or needs input, explain the blocker and resume setup on the next turn; never claim readiness prematurely. After saving the overview, tell the user setup is complete, persist the task plan, and continue their original request without asking them to repeat it.\n");
 
-        let mut context = self.inner.store.collaboration_context_latest(group.id)?;
-        context.sort_by_key(|entry| (!entry.user_authored, entry.key.clone()));
-        if !context.is_empty() {
-            instructions.push_str("\nDurable project knowledge (with provenance):\n");
-        }
-        for entry in context {
-            let author = entry.author_thread_id.map_or_else(|| "user".into(), |id| format!("thread:{id}"));
-            let mut line = format!(
-                "- [{} {:?} r{} author={author} sources={}] {}\n",
-                entry.key,
-                entry.kind,
-                entry.revision,
-                entry.source_refs.join(","),
-                entry.body
-            );
-            truncate_utf8(&mut line, 8 * 1024);
-            if instructions.len() + line.len() > 36 * 1024 {
-                instructions.push_str("- Additional project knowledge omitted; retrieve it with kybern_collaboration_context_read.\n");
-                break;
-            }
-            instructions.push_str(&line);
-        }
-
-        let mut assignments = self.inner.store.collaboration_assignments(group.id, true)?;
-        assignments.sort_by_key(|assignment| assignment.updated_at);
-        if !assignments.is_empty() {
-            instructions.push_str("\nRecent assignment state:\n");
-        }
-        for assignment in assignments.into_iter().rev().take(24).rev() {
-            let mut result =
-                assignment.result.as_ref().map_or_else(String::new, |result| format!(" result={:?}: {}", result.outcome, result.summary));
-            truncate_utf8(&mut result, 4 * 1024);
-            let mut line = format!(
-                "- {} [{} {:?}] owner={}{}\n",
-                assignment.id,
-                assignment.title,
-                assignment.status,
-                assignment.owner_thread_id.map_or_else(|| "unassigned".into(), |id| id.to_string()),
-                result
-            );
-            truncate_utf8(&mut line, 6 * 1024);
-            instructions.push_str(&line);
-            if instructions.len() > 46 * 1024 {
-                break;
-            }
-        }
-
-        let events = self.inner.store.events_for_thread_recent(thread.id, 1000)?;
-        let transcript = kybern_store::project_transcript(&events);
-        let recent = transcript
-            .iter()
-            .filter_map(|entry| match entry {
-                TranscriptEntry::User { message, .. } => Some(format!("User: {}", message.plain_text())),
-                TranscriptEntry::Assistant { text, complete: true, origin, .. } if origin.is_root() => Some(format!("Coordinator: {text}")),
-                _ => None,
-            })
-            .rev()
-            .take(16)
-            .collect::<Vec<_>>();
-        if !recent.is_empty() {
-            instructions.push_str("\nBounded handover from the saved coordinator conversation:\n");
-            for mut line in recent.into_iter().rev() {
-                truncate_utf8(&mut line, 8 * 1024);
-                instructions.push_str(&line);
-                instructions.push('\n');
-                if instructions.len() > 60 * 1024 {
-                    break;
-                }
-            }
-        }
-        truncate_utf8(&mut instructions, 63 * 1024);
         Ok(Some(instructions))
     }
 
@@ -6570,6 +6496,10 @@ mod tests {
             })
             .await
             .unwrap();
+        let role_before = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
+        assert!(role_before.contains("kybern_collaboration_read"));
+        assert!(role_before.contains("kybern_collaboration_context_read"));
+        assert!(role_before.contains("kybern_thread_read"));
         fixture
             .orchestrator
             .collaboration_context_put(
@@ -6602,6 +6532,12 @@ mod tests {
             .unwrap();
         assert_eq!(result["entries"][0]["key"], "shared.fact");
         assert_eq!(fixture.store.collaboration_group_for_thread(thread.id).unwrap(), None);
+        let role_after = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
+        assert_eq!(role_before, role_after, "changing project knowledge must not replace the cached system prefix");
+        assert!(!role_after.contains("The project uses a scratch daemon"), "live knowledge belongs in tool responses");
+        let mut resumed = coordinator.thread.clone();
+        resumed.provider_session_id = Some("saved-provider-session".into());
+        assert_eq!(fixture.orchestrator.coordinator_instructions(&resumed).unwrap().as_deref(), Some(role_before.as_str()));
     }
 
     #[tokio::test]
