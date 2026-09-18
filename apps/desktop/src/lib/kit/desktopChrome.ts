@@ -7,9 +7,12 @@ export const CHAT_SURFACE_HEADER_HEIGHT_PX = 46
 
 export const MAC_TRAFFIC_LIGHT_INSET_X_PX = 16
 
-/** Tauri's `trafficLightPosition.y` lands the dot centers about 2px above the
- * value, so 25 centers them on the 46px bar (y=23) like the controls. */
-export const MAC_TRAFFIC_LIGHT_POSITION_Y_PX = 25
+/** On macOS 26+ the traffic-light dots render well above `trafficLightPosition.y`
+ * (~8px, not the ~2px older releases used), which floated them above the 28px
+ * toolbar controls next to them. 31 drops the dot centers onto the 46px bar's
+ * y≈23 centerline, aligned with the sidebar toggle + back/forward arrows.
+ * Must match `trafficLightPosition.y` in `src-tauri/tauri.conf.json`. */
+export const MAC_TRAFFIC_LIGHT_POSITION_Y_PX = 31
 
 /** Radius of a macOS traffic-light dot (~14px across). */
 export const MAC_TRAFFIC_LIGHT_DOT_RADIUS_PX = 7
