@@ -52,6 +52,17 @@ async function waitFor(condition: () => unknown, message: string) {
   recordLiveEdge(message)
   check(condition(), message)
 }
+async function settleReadingLayout() {
+  let signature = ""
+  let stableSince = performance.now()
+  await waitFor(() => {
+    const viewport = scroll()
+    const rows = [...document.querySelectorAll<HTMLElement>("[data-turn-id]")]
+    const next = JSON.stringify([viewport.scrollTop, viewport.scrollHeight, rows.map(row => [row.dataset.turnId, row.getBoundingClientRect().top, row.getBoundingClientRect().height])])
+    if (next !== signature) { signature = next; stableSince = performance.now() }
+    return rows.length > 0 && performance.now() - stableSince >= 200
+  }, "Reading layout settles before capturing its anchor")
+}
 const at = "2026-09-14T00:00:00Z"
 fixture.all = Array.from({ length: 1000 }, (_, i): Block[] => [
   { kind: "user", id: `u${i}`, turnId: `t${i}`, seq: i * 3 + 1, at, message: { parts: [{ type: "text", text: `Question ${i}` }] } },
@@ -84,9 +95,15 @@ async function run() {
   check(document.body.innerText.includes("Answer 999"), "Latest formatted answer stays visible")
   // The store changes before React commits and WebKit finishes end anchoring.
   await waitFor(() => scroll().scrollHeight - scroll().clientHeight - scroll().scrollTop < 60, "Cleanup preserves following position")
+  // Hold the response while the newly visible rows finish measurement. A fixed
+  // 60 ms delay could capture an estimated row that WebKit then unmounted,
+  // making a correct prepend look like an anchor regression on busy runners.
+  let releaseReload!: () => void
+  fixture.beforeReload = new Promise<void>(resolve => { releaseReload = resolve })
   scroll().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }))
   scroll().scrollTop = Number(import.meta.env.VITE_HISTORY_READING_OFFSET ?? 1000)
-  await sleep(60)
+  await waitFor(() => calls.length === 1 && state().loadingEarlier, "Upward reading requests one history page")
+  await settleReadingLayout()
   const top = scroll().getBoundingClientRect().top
   const anchor = [...document.querySelectorAll<HTMLElement>("[data-turn-id]")].find(node => node.getBoundingClientRect().top >= top && node.getBoundingClientRect().top < top + scroll().clientHeight)!
   check(anchor, "Reading anchor exists")
@@ -101,8 +118,10 @@ async function run() {
     else originalScrollTo(args[0])
     recordAnchor("after write")
   }) as typeof view.scrollTo
+  releaseReload()
+  fixture.beforeReload = null
   await waitFor(() => calls.length === 1 && !state().loadingEarlier, "Released history reloads on upward reading")
-  await sleep(350)
+  await settleReadingLayout()
   check(state().blocks.length === 720, "Reloaded history stays retained while reading")
   const anchorShift = Math.abs(anchor.getBoundingClientRect().top - anchorTop)
   recordAnchor("settled")

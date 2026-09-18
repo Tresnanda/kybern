@@ -465,7 +465,14 @@ mod lifecycle_tests {
         for kind in ProviderKind::ALL {
             let root = tempfile::tempdir().unwrap();
             let binary = root.path().join("harness-fixture");
-            std::fs::write(&binary, "#!/bin/sh\n(sleep 0.3; touch escaped) &\ncat >/dev/null\nwait\n").unwrap();
+            // A live descendant announces readiness and cannot expire during
+            // the assertion. Cleanup is tested directly, not against a touch
+            // racing an 80 ms startup timeout on a loaded CI runner.
+            std::fs::write(
+                &binary,
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 0.80.5; exit 0; fi\nsleep 300 &\nchild=$!\nprintf '%s %s' \"$$\" \"$child\" > ready.tmp\nmv ready.tmp ready\ncat >/dev/null\nwait\n",
+            )
+            .unwrap();
             std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
             let config = SessionConfig {
                 cwd: root.path().into(),
@@ -479,13 +486,47 @@ mod lifecycle_tests {
                 binary: Some(binary),
                 env: std::collections::HashMap::new(),
             };
-            let result = tokio::time::timeout(Duration::from_millis(80), registry.get(kind).unwrap().spawn(config)).await;
+            let driver = registry.get(kind).unwrap();
+            let mut startup = Box::pin(driver.spawn(config));
+            let mut session = None;
+            let ready = root.path().join("ready");
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !ready.exists() {
+                    tokio::select! {
+                        result = &mut startup, if session.is_none() => {
+                            session = Some(result.unwrap_or_else(|error| panic!("{kind} fixture startup failed: {error}")));
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{kind} fixture did not announce its descendant"));
+            let pids = std::fs::read_to_string(ready).unwrap();
+            let pids: Vec<u32> = pids.split_whitespace().map(|pid| pid.parse().unwrap()).collect();
+            // Also clean up if an assertion fails; only this fixture's isolated
+            // group is owned by the guard.
+            let _cleanup = crate::process_tree::ProcessTree(pids[0]);
+            assert!(process_is_running(pids[1]).await, "{kind} descendant was not live before cancellation");
             // Claude can finish its non-blocking startup; the others wait for
             // a protocol handshake. Both ownership paths must close descendants.
-            drop(result);
-            tokio::time::sleep(Duration::from_millis(400)).await;
-            assert!(!root.path().join("escaped").exists(), "{kind} left a startup descendant running");
+            drop(startup);
+            drop(session);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while process_is_running(pids[1]).await {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{kind} left startup descendant {} running", pids[1]));
         }
+    }
+
+    async fn process_is_running(pid: u32) -> bool {
+        let output = tokio::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().await.unwrap();
+        // An exited child can briefly remain a zombie until reaped by init.
+        let state = String::from_utf8_lossy(&output.stdout);
+        !state.trim().is_empty() && !state.trim_start().starts_with('Z')
     }
 }
 
