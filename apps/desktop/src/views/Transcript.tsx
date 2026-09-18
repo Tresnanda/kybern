@@ -417,7 +417,7 @@ export function Transcript({
                   persistent status row would discard the reader's position when
                   older turns are inserted immediately after that row. */}
               {hasEarlier && (
-                <div className={cn(ROW, "py-2")}>
+                <div data-earlier-history-status className={cn(ROW, "chat-paint-host py-2")}>
                   <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
                     {earlier.error ? <>
                       <span>Unable to load earlier messages. {earlier.error}</span>
