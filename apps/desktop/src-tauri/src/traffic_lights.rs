@@ -18,8 +18,12 @@ use tauri::{Runtime, WebviewWindow, WindowEvent};
 /// `trafficLightPosition`.
 const INSET_X: f64 = 16.0;
 /// Vertical inset added to the button height to lower the dots onto the toolbar
-/// centerline. Matches `y` in `trafficLightPosition`.
-const INSET_Y: f64 = 25.0;
+/// centerline. Matches `y` in `trafficLightPosition`. The installed (release) app
+/// renders the dots ~4 CSS px lower than the dev build at the same value: 0.4.4
+/// shipped 25 and sat ~4 low on the installed build, while dev-centered measured
+/// ~25 too. 22 backs it off so the *installed* dots land on the icon centerline
+/// (dev shows it a touch high, which is expected and correct).
+const INSET_Y: f64 = 22.0;
 
 /// Re-position the close/miniaturize/zoom buttons. Must run on the main thread.
 ///
@@ -69,21 +73,30 @@ fn reinset<R: Runtime>(window: &WebviewWindow<R>) {
     });
 }
 
-/// Install the traffic-light centering for a window: apply it now, again shortly
-/// after (to beat the post-show reset if no event fires), and on every event that
-/// re-lays out the title bar.
+/// How long after a window opens we keep re-applying the inset, and how often.
+/// macOS resets the buttons once its post-paint layout runs, and that lands any
+/// time up to ~a couple seconds later depending on how long the webview takes to
+/// load. Fixed one-shot delays raced that reset — if it landed after the last
+/// delay, the dots stayed high until a manual window resize. Re-applying on a
+/// steady cadence across the whole settle window catches the reset whenever it
+/// happens, with no resize needed. The calls are idempotent, so they are invisible
+/// once the buttons are in place.
+const SETTLE_TICKS: u32 = 24;
+const SETTLE_INTERVAL_MS: u64 = 120;
+
+/// Install the traffic-light centering for a window: apply it now, keep re-applying
+/// across the settle window so the post-paint reset is always caught, and re-apply
+/// on every later event that re-lays out the title bar.
 pub fn install<R: Runtime>(window: &WebviewWindow<R>) {
     reinset(window);
 
-    // The reset lands asynchronously after the first paint; a few short delays
-    // cover the window whether or not a resize/focus event accompanies it.
-    for delay_ms in [50_u64, 200, 500] {
-        let win = window.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+    let win = window.clone();
+    std::thread::spawn(move || {
+        for _ in 0..SETTLE_TICKS {
+            std::thread::sleep(std::time::Duration::from_millis(SETTLE_INTERVAL_MS));
             reinset(&win);
-        });
-    }
+        }
+    });
 
     let win = window.clone();
     window.on_window_event(move |event| {
