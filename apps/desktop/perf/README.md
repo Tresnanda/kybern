@@ -20,7 +20,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
-| Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
+| Hidden environment windows | A second WebContent process kept a full transcript DOM/heap while occluded or minimized. Unfocused but visible windows must not drop that state. | Compact reconstructible transcript state only when occluded/minimized/page-hidden; restore reading position, drafts, attachments, queued prompts, approvals/questions, and terminal ownership. Verify two-window `vmmap` on macOS. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
 and motion cadence. Inspect the existing modules before tuning them; justify a
@@ -35,6 +35,10 @@ It includes repeated-burst observations, paged-history paint boundaries,
 bounded settled streams, title metadata checks and hidden dock measurements.
 The 200–300 MB target is not a verified ceiling; repeated settled use also
 exceeded it.
+
+See [hidden environment-window compact](hidden-window-compact-2026-09-18.md)
+for visibility-gated transcript release (occlusion/miniaturize, not blur) and
+the macOS two-window `vmmap` check this Linux checkout cannot run.
 
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,
@@ -170,6 +174,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Saved-session picker, search, pagination, keyboard navigation | `node scripts/check-rendering.mjs sessions` |
 | Earlier-history prefetch, retry, prepend anchoring | `node scripts/check-rendering.mjs history` |
 | Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |
+| Occluded or minimized second environment window | Two-window `vmmap` on macOS 27; do not treat blur as compact permission. See `hidden-window-compact-2026-09-18.md`. |
 
 For indicator changes, also run the matrix appearance/visibility comparison
 below. The native runner builds fixtures separately at `tauri://localhost`

@@ -64,6 +64,7 @@ import { newThread } from "@/state/nav"
 import { activeRuntime, subscribeCollaboration, archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
 import { canSplitPane, type PaneId } from "@/state/splitView"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
+import { windowHoldsTranscript } from "@/state/windowSurfaceState"
 
 import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/kit/chat/composerPickerStyles"
 
@@ -129,7 +130,7 @@ export function ThreadView({
   const [overlayHeight, setOverlayHeight] = useState(120)
 
   useEffect(() => {
-    if (!loaded) void loadThread(threadId)
+    if (!loaded && windowHoldsTranscript()) void loadThread(threadId)
   }, [threadId, loaded])
 
   useEffect(() => {

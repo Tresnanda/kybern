@@ -11,7 +11,7 @@ import { connectorApproval, isUserInput } from "@/lib/userInput"
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -73,6 +73,7 @@ import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { activeRuntime, errorText, hydrateToolOutput, retainToolOutput, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
+import { consumeTranscriptAnchor, peekTranscriptAnchor, registerTranscriptAnchor, windowHoldsTranscript } from "@/state/windowSurfaceState"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
@@ -353,6 +354,10 @@ export function Transcript({
   }, [groups, navigationItems])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
+  const restored = useRef(false)
+  if (!state?.loaded) restored.current = false
+  const pendingAnchor = !restored.current && state?.loaded ? peekTranscriptAnchor(threadId) : undefined
+  if (pendingAnchor && pendingAnchor.following !== following) setFollowing(pendingAnchor.following)
   const scroller = useRef<MessageScrollerController>(null)
   useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
   const busy = groups.some((g) => g.running)
@@ -360,9 +365,47 @@ export function Transcript({
     scroller.current?.scrollToEnd()
   }
 
+  useEffect(() => registerTranscriptAnchor(threadId, () => {
+    const scroll = viewport.current
+    const messageId = scroll && !following ? navigationModel.activeId(scroll) : undefined
+    const item = messageId ? navigationItems.find((entry) => entry.id === messageId) : undefined
+    const group = item ? groups[item.turnIndex] : following ? undefined : groups.at(-1)
+    return {
+      following,
+      messageId,
+      turnId: group?.turnId || group?.user?.id,
+      seq: group?.user?.seq ?? group?.answer?.seq,
+    }
+  }), [threadId, following, groups, navigationItems, navigationModel])
+
+  useLayoutEffect(() => {
+    if (!state?.loaded || restored.current) return
+    const saved = peekTranscriptAnchor(threadId)
+    if (!saved || saved.following) {
+      consumeTranscriptAnchor(threadId)
+      restored.current = true
+      return
+    }
+    const index = saved.turnId
+      ? groups.findIndex((group, index) => turnKey(group, index) === saved.turnId || group.turnId === saved.turnId || group.user?.id === saved.turnId)
+      : saved.messageId
+        ? navigationItems.find((item) => item.id === saved.messageId)?.turnIndex ?? -1
+        : -1
+    if (index < 0 && groups.length === 0) return
+    restored.current = true
+    consumeTranscriptAnchor(threadId)
+    if (index < 0) return
+    const item = navigationItems.find((entry) => entry.turnIndex === index)
+    if (item) navigationModel.scrollToItem(item.id)
+    else rows.current?.scrollToIndex(index, { align: "center" })
+  }, [state?.loaded, threadId, groups, navigationItems, navigationModel])
+
   if (!state?.loaded) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-foreground [contain:layout_style_paint]">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-foreground [contain:layout_style_paint]"
+        data-hidden-window-placeholder={windowHoldsTranscript() ? undefined : ""}
+      >
         <div className="opacity-0 [animation:chat-mount-loader-in_200ms_ease-out_150ms_forwards] motion-reduce:animate-none motion-reduce:opacity-100">
           <MatrixLoader variant="twinkle" dot={3} gap={3} className="text-muted-foreground" label="Loading thread" />
         </div>
@@ -387,6 +430,7 @@ export function Transcript({
           navigationLabel="Message navigation"
           navigationSide="left"
           followOutput
+          restoreFollowing={following}
           followKey={latestUserMessageId}
           followThreshold={56}
           onFollowChange={setFollowing}
