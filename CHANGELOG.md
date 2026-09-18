@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.6
+
+<!-- kybern-release-title: Lighter chats, clearer controls -->
+<!-- kybern-release-summary: Long chats and tool-heavy turns use less peak memory, with clearer notifications, reviewed answers, and steadier agent updates. -->
+
+- Reduce memory spikes in long chats and tool-heavy turns while preserving exact saved results, formatting, and useful motion. Large completed results load on demand, and unnecessary graphics layers and historical-result reads are avoided.
+- Answer multiple agent questions one step at a time, move backward to edit, and review all answers before submitting.
+- Refine the environment menu, add icon-only copy and download actions to image previews, and preserve pasted-image thumbnails when switching threads.
+- Keep narrow composers contained and split chats readable, limit the message navigation rail to user prompts, and make translucent command, file, and skill pickers easier to read.
+- Use smaller notification dots: blue for completed, yellow for pending or blocked, and red for errors. Right-click the bell to dismiss completed notices; successful helper completions no longer duplicate notifications.
+- Add a new-thread control when the sidebar is collapsed, align active sidebar shapes with hover states, and improve unread completion indicators.
+- Deliver collaboration updates without stale duplicate wakeups, and keep completed or reused helper agents' activity accurate across harnesses. Fixes #34 and #35.
+
 ## 0.4.5
 
 <!-- kybern-release-title: Steady window controls -->
