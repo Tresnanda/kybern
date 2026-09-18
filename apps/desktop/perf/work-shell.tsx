@@ -49,6 +49,9 @@ async function run() {
   const state = useStore.getState()
   state.receiveEvent({ kind: "thread_updated", seq: ++sequence, thread_id: "thread-0", turn_id: null, at, thread: { ...state.threads["thread-0"]!, title: "Updated immediately", status: "idle" } })
   await sleep(100)
+  flushSync(() => useStore.getState().pushNotification("thread-20", "done", sequence + 1, at))
+  const sidebarUnread = !!document.querySelector('[aria-label="Unread"]')
+  flushSync(() => useStore.getState().clearNotification("thread-20"))
   const pass = samples.every(sample => sample.chrome === (sample.baseline ? 100 : 0)) && state.transcript("thread-0").lastSeq === sequence && document.body.textContent?.includes("Updated immediately") === true
   const activityCommits: number[] = []
   for (let i = 0; i < 100; i++) {
@@ -64,6 +67,6 @@ async function run() {
   const monitoring = !!projectHeader()?.querySelector('[aria-label="Monitoring"]')
   flushSync(() => useStore.getState().set({ threadActivity: {} }))
   const idle = !!projectHeader() && !projectHeader()?.querySelector('[aria-label="Working"], [aria-label="Monitoring"]')
-  native().postMessage(JSON.stringify({ threads: 1000, projects: 20, samples, activityCommitP95: p95(activityCommits), projectActivityTransitions: { working, monitoring, idle }, pass: pass && working && monitoring && idle }))
+  native().postMessage(JSON.stringify({ threads: 1000, projects: 20, samples, sidebarUnread, activityCommitP95: p95(activityCommits), projectActivityTransitions: { working, monitoring, idle }, pass: pass && sidebarUnread && working && monitoring && idle }))
 }
 run().catch(error => native().postMessage(JSON.stringify({ pass: false, error: String(error) })))

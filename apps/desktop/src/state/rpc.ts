@@ -36,12 +36,13 @@ import {
 } from "@/protocol"
 
 import { applyEvent, compactThreadState, seedFromGet, prependThreadHistory } from "./transcript"
-import type { NotificationKind } from "./notifications"
+import { trackFocusedThreadReads, type NotificationKind } from "./notifications"
 import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
 import {
   diffKey,
+  isThreadFocused,
   isThreadVisible,
   isRuntimeTaskActive,
   mergeRuntimeTasks,
@@ -66,6 +67,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const reusableSnapshots = new Set<ThreadId>()
   const uploads = new AbortController()
   const collaborationListeners = new Set<(event: ThreadEvent | null) => void>()
+  const stopReadTracking = trackFocusedThreadReads(useStore, isWindowFocused)
   // Weak keys distinguish replacement snapshots of the same tool row without
   // retaining an old block, transcript, or output in an in-flight request.
   const toolOutputRevisions = new WeakMap<object, number>()
@@ -531,7 +533,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     // another background wave may have arrived while it was in flight.
     if (disposed) return
     const current = useStore.getState()
-    const viewing = isThreadVisible(current, ev.thread_id)
+    const viewing = isThreadFocused(current, ev.thread_id)
     if (focused && viewing) return
     const kind: NotificationKind | null =
       ev.kind === "turn_failed" ? "failed"
@@ -947,6 +949,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
   function disconnect() {
     disposed = true
+    stopReadTracking()
     snapshots.clear()
     historyLoads.clear()
     reusableSnapshots.clear()

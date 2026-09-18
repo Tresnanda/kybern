@@ -172,7 +172,7 @@ export interface AppActions {
   selectThread: (id: ThreadId) => void
   selectDraft: (projectId: ProjectId, purpose?: "thread" | "coordinator") => void
   selectPulls: () => void
-  /** Record that a thread needs attention (bell). Ignored while it is on screen. */
+  /** Record that a thread needs attention (bell + sidebar unread marker). */
   pushNotification: (threadId: ThreadId, kind: NotificationKind, seq: number, at: string) => void
   /** Clear a thread's notification (it has been opened / acknowledged). */
   clearNotification: (threadId: ThreadId) => void
@@ -307,14 +307,12 @@ export function createEnvironmentStore(
       }),
     selectThread: (id) =>
       set((state) => {
-        // Opening a thread acknowledges its notification.
-        const cleared = clearNotificationPatch(state, id)
         const splitView = state.splitView
-        if (!splitView) return { selected: { kind: "thread", id }, ...cleared }
+        if (!splitView) return { selected: { kind: "thread", id } }
 
         const existing = findThreadPaneByThreadId(splitView.root, id)
         const target = existing ?? resolveFocusedThreadPane(splitView)
-        if (!target) return { selected: { kind: "thread", id }, ...cleared }
+        if (!target) return { selected: { kind: "thread", id } }
         const root = existing
           ? splitView.root
           : replacePaneThread(splitView.root, target.id, id)
@@ -323,7 +321,7 @@ export function createEnvironmentStore(
           focusedPaneId: target.id,
         }
         persistSplitView(next)
-        return { selected: { kind: "thread", id }, splitView: next, ...cleared }
+        return { selected: { kind: "thread", id }, splitView: next }
       }),
     pushNotification: (threadId, kind, seq, at) =>
       set((state) => {
@@ -691,6 +689,11 @@ export const selectSelectedThread = (s: AppState): Thread | null =>
 export const isThreadVisible = (s: AppState, threadId: ThreadId): boolean =>
   (s.selected.kind === "thread" && s.selected.id === threadId) ||
   collectSplitThreadIds(s.splitView).includes(threadId)
+
+/** The one thread the user is actively interacting with. Other split panes are
+ * mounted and visible, but must still accumulate unread completion state. */
+export const isThreadFocused = (s: AppState, threadId: ThreadId): boolean =>
+  s.selected.kind === "thread" && s.selected.id === threadId
 
 export const selectAvailableProviders = (s: AppState): ProviderStatus[] =>
   s.providers.filter((p) => p.available)
