@@ -38,8 +38,7 @@ const DOCK_MOTION = { type: "spring", stiffness: 420, damping: 42, mass: 0.7 } a
 
 /** Reserve readable chat width; use an overlay when both panes cannot fit. */
 const RIGHT_DOCK_MIN_WIDTH = 26 * 16
-function useDockWidth() {
-  const containerRef = useRef<HTMLDivElement>(null)
+function useDockWidth(containerRef: React.RefObject<HTMLDivElement | null>) {
   const [available, setAvailable] = useState(window.innerWidth)
   useEffect(() => {
     const container = containerRef.current
@@ -47,11 +46,11 @@ function useDockWidth() {
     const observer = new ResizeObserver(([entry]) => setAvailable(entry.contentRect.width))
     observer.observe(container)
     return () => observer.disconnect()
-  }, [])
+  }, [containerRef])
   const overlay = available < RIGHT_DOCK_MIN_WIDTH + 320
   const max = Math.max(0, overlay ? available : available - 320)
   const resize = useResize({ initial: Math.max(RIGHT_DOCK_MIN_WIDTH, Math.round(window.innerWidth * 0.42)), min: RIGHT_DOCK_MIN_WIDTH, max, side: "right", storageKey: "kybern.dock.width" })
-  return { ...resize, containerRef, overlay, width: Math.min(resize.width, max) }
+  return { ...resize, overlay, width: Math.min(resize.width, max) }
 }
 
 export default function App() {
@@ -88,7 +87,8 @@ function Workspace() {
   }, { allowInInput: true })
 
   const threadId = selected.kind === "thread" ? selected.id : null
-  const dock = useDockWidth()
+  const dockContainerRef = useRef<HTMLDivElement>(null)
+  const dock = useDockWidth(dockContainerRef)
   const dockWidth = dock.width
   const sidebar = useResize({ initial: 256, min: 208, max: 480, side: "left", storageKey: "kybern.sidebar.width" })
 
@@ -126,7 +126,7 @@ function Workspace() {
             data-slot="sidebar-inset-surface"
             className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card relative z-[15] overflow-hidden"
           >
-            <div ref={dock.containerRef} className="relative flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div ref={dockContainerRef} className="relative flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
               <main data-workspace-chat className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <ConnectionBanner />
                 {connecting ? <Welcome /> : splitView ? (
