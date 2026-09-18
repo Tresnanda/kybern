@@ -156,6 +156,7 @@ export function SettingsScreen({
           <div className="settings-nav-footer"><span className="size-1.5 rounded-full bg-muted-foreground/50" />{activeEnvironment()?.name ?? "This machine"}</div>
         </div>
       </aside>
+      {/* Overlay only. The daily-use chat card must not use z-index:15; that stacking context was a viewport-sized WebContent backing. */}
       <main className="settings-content app-settings-surface chat-content-card relative z-[15] overflow-hidden">
         {sidebarResize && (
           <ResizeHandle

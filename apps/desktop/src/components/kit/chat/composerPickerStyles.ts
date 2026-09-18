@@ -83,15 +83,16 @@ export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]"
  *    hit-area and intensifies that same divider on hover via `:has()` — never put a seam
  *    border on the sidebar or draw a second divider/shadow line on the rail.
  *  - `data-sidebar-side` on `SidebarProvider` picks left vs right seam geometry.
- *  - `relative z-[15]` stacks the card above the sidebar shell but below the content-seam
- *    rail (`z-[25]`), so on collapse the sidebar slides *under* the card (the
- *    movement goes "over") rather than the card shifting sideways with it.
+ *  - Later DOM order already places the card above the sidebar's z-0 shell.
+ *    Do not add `z-[15]` here: that stacking context forced a viewport-sized
+ *    WebContent backing (matched whole-app peak 454 → 385 MiB). Settings keeps
+ *    its own overlay z-index; the daily-use chat card must not.
  *  - `overflow-hidden` keeps route content inside the shared surface.
  *
  *  Apply this to the OPAQUE content surface (e.g. the chat wrapper, or a
  *  SidebarInset `surfaceClassName`) — never to a transparent, full-width
- *  `SidebarInset` shell, or its raised z-index would cover and block the sidebar. */
-export const CHAT_CONTENT_CARD_CLASS_NAME = "chat-content-card relative z-[15] overflow-hidden";
+ *  `SidebarInset` shell. */
+export const CHAT_CONTENT_CARD_CLASS_NAME = "chat-content-card relative overflow-hidden";
 
 /** Opaque chat surface that floats as a card over the sidebar: column background + card chrome.
  *  Apply to the element that should read as the raised card (the chat content wrapper, or a
