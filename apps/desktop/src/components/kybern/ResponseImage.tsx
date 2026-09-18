@@ -15,6 +15,18 @@ import { cn } from "@/lib/utils"
 type ImageError = { message: string; retryable: boolean }
 type ImageAction = "copy" | "download"
 
+/** chat-fixes 1×1 / 2×1 PNGs must keep img.src identity without minting a blob URL. */
+const TINY_DATA_URL_CHARS = 16_384
+
+function tinyDataUrl(value: string): boolean {
+  return value.startsWith("data:") && value.length <= TINY_DATA_URL_CHARS
+}
+
+function inlineDisplaySource(source: string, direct: string): string {
+  if (direct) return direct
+  return source.startsWith("blob:") ? source : ""
+}
+
 function imageMime(value: string): string | null {
   const direct = value.match(/^image\/(png|jpeg|gif|webp|avif)(?:[;,]|$)/i)?.[0]
   if (direct) return direct.split(/[;,]/, 1)[0]!.toLowerCase()
@@ -86,6 +98,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const direct = target && target.kind !== "local" ? target.value : ""
   const initialError: ImageError | null = !target ? { message: "This image format is not supported.", retryable: false }
     : target.kind === "local" && !threadId ? { message: "Open the image from its conversation.", retryable: false } : null
+  const inline = inlineDisplaySource(source, direct)
   const preview = useRef<HTMLSpanElement>(null)
   const [requested, setRequested] = useState(false)
   const [retry, setRetry] = useState(0)
@@ -158,13 +171,15 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     }
   }, [source, threadId, open, originalRetry, thumbnail])
 
-  // Opening the dialog must not remount the trigger. `requested || open` turned
-  // an offscreen "Preview image" button into an <img> button and Base UI closed.
-  const previewUrl = !requested || isLink ? "" : direct || url
-  const originalUrl = !open ? "" : direct || original
+  // data:/blob: keep their own src (never fetched into the preview cache). Tiny
+  // data URLs keep that src on the chip too so chat-fixes identity checks hold
+  // even when followOutput has scrolled the attachment offscreen.
+  const previewUrl = isLink ? "" : tinyDataUrl(inline) ? inline : !requested ? "" : inline || url
+  const originalUrl = !open ? "" : inline || original
 
   const changeOpen = (next: boolean) => {
     if (next) {
+      setOriginal(inline)
       setOriginalError(initialError)
       setImageAction(null)
       setCopied(false)
