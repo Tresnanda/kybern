@@ -29,7 +29,7 @@ registerHooks({ resolve(specifier, context, next) {
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} }
 const { createEnvironmentStore, activateEnvironmentStore } = await import("./src/state/store.ts")
 const { emptyThreadState, applyBackgroundEvent, applyEvent, seedFromGet } = await import("./src/state/transcript.ts")
-const { createRetentionPolicy } = await import("./src/state/retention.ts")
+const { createRetentionPolicy, INACTIVE_CACHE_BYTES } = await import("./src/state/retention.ts")
 const { createSnapshotReplay } = await import("./src/state/snapshotReplay.ts")
 const { createIdleRelease } = await import("./src/lib/idleRelease.ts")
 const event = (seq, payload) => ({ seq, thread_id: "t", turn_id: "turn", at: "2026-09-07T00:00:00Z", ...payload })
@@ -165,6 +165,77 @@ test("inactive cache eviction preserves visible split panes and pending user dat
   const trimmed = createRetentionPolicy(1)(split, split)
   assert.equal(trimmed?.transcripts.a ?? split.transcripts.a, a)
   assert.equal(trimmed?.transcripts.c ?? split.transcripts.c, c)
+})
+
+const summaryDiff = (n = 0) => ({
+  from: "HEAD~1",
+  to: "HEAD",
+  files: [{ path: `file-${n}.ts`, status: "modified", additions: 1, deletions: 0, binary: false }],
+  patch: "",
+})
+function turnDiffs(thread, count, whole = true) {
+  const diffs = {}
+  if (whole) diffs[`${thread}:all`] = summaryDiff("all")
+  for (let i = 0; i < count; i++) diffs[`${thread}:turn${i}`] = summaryDiff(i)
+  return diffs
+}
+function turnKeys(diffs, thread) {
+  return Object.keys(diffs).filter((id) => id.startsWith(`${thread}:`) && !id.endsWith(":all"))
+}
+
+test("visible-thread per-turn diffs stay bounded; the whole-thread summary remains", () => {
+  const store = createEnvironmentStore("visible-turn-diffs")
+  store.getState().set({ selected: { kind: "thread", id: "t" }, diffs: turnDiffs("t", 40) })
+  const diffs = store.getState().diffs
+  assert.ok(diffs["t:all"])
+  assert.equal(turnKeys(diffs, "t").length, 16)
+  assert.ok(diffs["t:turn39"])
+  assert.equal(diffs["t:turn0"], undefined)
+  assert.equal(diffs["t:turn23"], undefined)
+  assert.ok(diffs["t:turn24"])
+})
+
+test("visible turn-diff LRU evicts the oldest reconstructible summary", () => {
+  const retain = createRetentionPolicy(INACTIVE_CACHE_BYTES, 4)
+  const base = createEnvironmentStore("visible-turn-diff-lru").getState()
+  let state = { ...base, selected: { kind: "thread", id: "t" }, diffs: { "t:all": summaryDiff("all") } }
+  let previous = base
+  for (let i = 0; i < 5; i++) {
+    previous = state
+    state = { ...state, diffs: { ...state.diffs, [`t:turn${i}`]: summaryDiff(i) } }
+    const patch = retain(state, previous)
+    if (patch?.diffs) state = { ...state, diffs: patch.diffs }
+  }
+  assert.ok(state.diffs["t:all"])
+  assert.deepEqual(turnKeys(state.diffs, "t").sort(), ["t:turn1", "t:turn2", "t:turn3", "t:turn4"])
+  previous = state
+  state = { ...state, diffs: { ...state.diffs, "t:turn0": summaryDiff("reload") } }
+  const reloaded = retain(state, previous)
+  if (reloaded?.diffs) state = { ...state, diffs: reloaded.diffs }
+  assert.deepEqual(turnKeys(state.diffs, "t").sort(), ["t:turn0", "t:turn2", "t:turn3", "t:turn4"])
+  assert.equal(state.diffs["t:turn0"].files[0].path, "file-reload.ts")
+})
+
+test("split panes keep a separate turn-diff budget per visible thread", () => {
+  const store = createEnvironmentStore("visible-turn-diffs-split")
+  store.getState().set({ selected: { kind: "thread", id: "a" }, diffs: { ...turnDiffs("a", 20), ...turnDiffs("b", 20) } })
+  assert.equal(turnKeys(store.getState().diffs, "a").length, 16)
+  assert.equal(turnKeys(store.getState().diffs, "b").length, 20)
+  store.getState().openThreadInSplit("b", "horizontal")
+  const diffs = store.getState().diffs
+  assert.ok(diffs["a:all"] && diffs["b:all"])
+  assert.equal(turnKeys(diffs, "a").length, 16)
+  assert.equal(turnKeys(diffs, "b").length, 16)
+  assert.ok(diffs["b:turn19"])
+  assert.equal(diffs["b:turn0"], undefined)
+})
+
+test("unbounded visible turn diffs keep the full reconstructible set", () => {
+  const retain = createRetentionPolicy(INACTIVE_CACHE_BYTES, Number.POSITIVE_INFINITY)
+  const base = createEnvironmentStore("unbound-turn-diffs").getState()
+  const state = { ...base, selected: { kind: "thread", id: "t" }, diffs: turnDiffs("t", 40) }
+  assert.equal(retain(state, base), null)
+  assert.equal(turnKeys(state.diffs, "t").length, 40)
 })
 
 test("environment changes release heavy caches and retain drafts and pending questions", () => {

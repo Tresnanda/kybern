@@ -10,6 +10,7 @@ import { ThemeProvider } from "../src/components/theme-provider"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { EVENT_NOTIFICATION, type EventNotification, type EventsSubscribeParams } from "../src/protocol"
 import { retainedSize } from "../src/lib/retainedSize"
+import { VISIBLE_TURN_DIFFS } from "../src/state/retention"
 import "../src/index.css"
 
 declare const __TOOL_LEASE_ENDPOINT__: { url: string; token: string; http_base: string; environmentId: string }
@@ -22,9 +23,15 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const unboundTurnDiffs = import.meta.env.VITE_LIVE_TOOLS_UNBOUND_TURN_DIFFS === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkVisibleTurnDiffs() {
+  const ids = Object.keys(useStore.getState().diffs).filter((id) => id.startsWith(`${threadId}:`) && !id.endsWith(":all"))
+  if (unboundTurnDiffs) return
+  check(ids.length <= VISIBLE_TURN_DIFFS, `Visible turn diffs grew to ${ids.length}`)
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -127,6 +134,7 @@ async function run() {
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
+      checkVisibleTurnDiffs()
       if (!fullThread) {
         await until(() => document.querySelector("[data-earlier-history-status]") !== null, "Earlier-history status row did not mount")
         const earlier = document.querySelector<HTMLElement>("[data-earlier-history-status]")
@@ -136,6 +144,7 @@ async function run() {
     await mark("live-startup")
     await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
     await until(() => liveTools().length === 64 && liveTools().every(b => b.complete) && useStore.getState().threads[threadId]?.status === "idle", "Live turn did not complete")
+    checkVisibleTurnDiffs()
     const bytes = liveTools().reduce((total, block) => total + retainedSize(block.output), 0)
     check(calls === 0, "Closed live output was unnecessarily fetched")
     if (!baseline) check(bytes <= 8 * 1024 * 1024, `Closed live payloads exceed budget: ${bytes}`)
