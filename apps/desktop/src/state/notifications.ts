@@ -58,34 +58,36 @@ export function persistThreadNotifications(
 const KIND_RANK: Record<NotificationKind, number> = { blocked: 0, failed: 1, done: 2 }
 
 /**
- * The kind to display now, reconciled with the thread's live status: a block
- * that has since been answered reads as "done", and a thread that has since
- * failed or is asking again reflects that even if the stored kind is stale.
+ * Whether a thread needs attention right now, from its live status plus the
+ * finished-unread inbox. `awaiting-approval` (waiting on you) and `failed` are
+ * read straight from status, so they show regardless of whether the app was
+ * open when they happened. `done` is a turn that finished while you were away
+ * (recorded in `notifications`) and clears once you open the thread. Running
+ * threads and threads you have already caught up on return `null`.
  */
-export function reconcileKind(thread: Thread, stored: NotificationKind): NotificationKind {
+export function threadAttentionKind(thread: Thread, notification: ThreadNotification | undefined): NotificationKind | null {
+  if (thread.status === "archived") return null
   if (thread.status === "awaiting-approval") return "blocked"
   if (thread.status === "failed") return "failed"
-  return stored === "blocked" ? "done" : stored
+  if (thread.status === "idle" && notification?.kind === "done") return "done"
+  return null
 }
 
 export interface AttentionItem {
   thread: Thread
   kind: NotificationKind
-  seq: number
-  at: string
 }
 
-/** Notified threads that still exist and aren't archived, most-urgent first. */
+/** Every thread that needs attention right now, most-urgent first. */
 export function selectAttentionItems(state: {
   threads: Record<ThreadId, Thread>
   notifications: Record<ThreadId, ThreadNotification>
 }): AttentionItem[] {
   const items: AttentionItem[] = []
-  for (const [id, n] of Object.entries(state.notifications)) {
-    const thread = state.threads[id as ThreadId]
-    if (!thread || thread.status === "archived") continue
-    items.push({ thread, kind: reconcileKind(thread, n.kind), seq: n.seq, at: n.at })
+  for (const thread of Object.values(state.threads)) {
+    const kind = threadAttentionKind(thread, state.notifications[thread.id])
+    if (kind) items.push({ thread, kind })
   }
-  items.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || Date.parse(b.at) - Date.parse(a.at))
+  items.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.thread.last_seq - a.thread.last_seq)
   return items
 }

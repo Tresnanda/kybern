@@ -532,11 +532,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         (task.status === "running" || task.status === "waiting" || task.status === "pending"),
       )) return
       if (ev.turn_id) completedTurns.set(ev.thread_id, ev.turn_id)
+      // Record the finished-unread thread for the bell filter. Failed and
+      // waiting-on-you threads are derived from live status, so only "done"
+      // (a turn that finished while you were away) is persisted here.
+      current.pushNotification(ev.thread_id, "done", ev.seq, ev.at)
     }
     if (!kind) return
-    // Persistent in-app notification (the sidebar bell). Independent of the OS
-    // notification toggle below, which only governs toasts and native banners.
-    current.pushNotification(ev.thread_id, kind, ev.seq, ev.at)
     if (!current.settings?.notifications) return
     const title = current.threads[ev.thread_id]?.title || "Thread"
     const body = ev.kind === "user_input_requested" ? "Needs your input"
