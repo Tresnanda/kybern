@@ -937,7 +937,9 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown--user pre,
-.chat-markdown--user .chat-markdown-codeblock::before {
+.chat-markdown--user .chat-markdown-codeblock__header,
+.chat-markdown--user .chat-code-chunk,
+.chat-markdown--user .chat-markdown-codeblock__body:not(:has(.chat-code-chunk)) {
   background: color-mix(in srgb, var(--foreground) 7%, transparent);
 }
 
@@ -1000,20 +1002,19 @@ label:has(> select#reasoning-effort) select {
   border-radius: 0.65rem;
 }
 
-/* The code surface is a promoted, radius-free solid-color layer behind the
-   block instead of a background on the (possibly very tall) rounded wrapper,
-   so the wrapper itself paints nothing; the rounded clip still applies. */
+/* Line chunks already split text past WebKit's 1024 CSS px tiling threshold.
+   A full-size ::before (inset 0 + will-change) and `.chat-markdown--hosted > *`
+   on the wrapper recreate one tall layer those chunks were meant to bound.
+   Paint the fill on the header, each chunk, and short unchunked bodies.
+   Chunked pre padding lives on the chunks so the wrapper and body stay empty.
+   The rounded clip still lives on the wrapper. */
 .chat-markdown .chat-markdown-codeblock::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--app-chat-code-surface);
-  will-change: transform;
+  content: none;
 }
 
 .chat-markdown .chat-markdown-codeblock__header {
   will-change: transform;
+  background: var(--app-chat-code-surface);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1092,11 +1093,20 @@ label:has(> select#reasoning-effort) select {
   color: var(--foreground);
 }
 
+.chat-markdown .chat-markdown-codeblock__body:not(:has(.chat-code-chunk)) {
+  will-change: transform;
+  background: var(--app-chat-code-surface);
+}
+
 .chat-markdown .chat-markdown-codeblock__body pre {
   margin: 0;
   border: none;
   border-radius: 0;
   background: transparent;
+}
+
+.chat-markdown .chat-markdown-codeblock__body:has(.chat-code-chunk) pre {
+  padding: 0;
 }
 
 /* Diagram controls share the code toolbar, with a compact view switch. */
@@ -3196,23 +3206,35 @@ diffs-container {
    painted transcript row lives in its own small compositing layer instead:
    its backing store is bounded by the row, virtualization bounds the number
    of rows, and the scroller, turns and work lists paint nothing themselves.
-   Apply to the element that paints (message, header, work list, answer), not
-   to the scroller or a container that could grow beyond 1024px. See
-   perf/memory-tiles-2026-09-15.md. */
+   Apply to the element that paints (message, header, work list, markdown
+   block, code chunk), not to a whole codeblock, the scroller, or a container
+   that could grow beyond 1024px. See perf/memory-tiles-2026-09-15.md and
+   perf/codeblock-layer-2026-09-18.md. */
 .chat-paint-host {
   will-change: transform;
 }
 
 /* Transcript Markdown hosts each top-level block itself, so a long answer is
    many small layers rather than one tall one. Code blocks taller than the
-   tiling threshold are split into line chunks (see lib/codeChunks.ts). */
-.chat-markdown--hosted > * {
+   tiling threshold are split into line chunks (see lib/codeChunks.ts); do
+   not also promote the wrapping `.chat-markdown-codeblock`. */
+.chat-markdown--hosted > *:not(.chat-markdown-codeblock) {
   will-change: transform;
 }
 
 .chat-code-chunk {
   display: block;
   will-change: transform;
+  background: var(--app-chat-code-surface);
+  padding-inline: 0.6rem;
+}
+
+.chat-code-chunk:first-child {
+  padding-top: 0.5rem;
+}
+
+.chat-code-chunk:last-child {
+  padding-bottom: 0.5rem;
 }
 
 /* Transcript bottom fade. A mask on the scroller costs WebKit two to four

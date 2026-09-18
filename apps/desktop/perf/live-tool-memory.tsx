@@ -22,9 +22,26 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const codeblockLayer = import.meta.env.VITE_LIVE_TOOLS_CODEBLOCK_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkCodeblockLayer() {
+  const blocks = [...document.querySelectorAll<HTMLElement>(".chat-markdown-codeblock")]
+  if (!blocks.length) return
+  for (const block of blocks) {
+    const generated = getComputedStyle(block, "::before").content !== "none"
+    check(generated === codeblockLayer, `Codeblock backdrop layer changed: ${getComputedStyle(block, "::before").content}`)
+    if (block.parentElement?.classList.contains("chat-markdown--hosted")) {
+      check(getComputedStyle(block).willChange.includes("transform") === codeblockLayer, `Codeblock wrapper paint host changed: ${getComputedStyle(block).willChange}`)
+    }
+    const header = block.querySelector(".chat-markdown-codeblock__header")
+    if (header) check(getComputedStyle(header).willChange.includes("transform"), "Code header lost its paint host")
+    for (const chunk of block.querySelectorAll(".chat-code-chunk")) {
+      check(getComputedStyle(chunk).willChange.includes("transform"), "Code chunks lost their paint host")
+    }
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -44,6 +61,9 @@ async function run() {
   }
   if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
     textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
+  if (codeblockLayer) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: '.chat-markdown .chat-markdown-codeblock::before{content:""!important;position:absolute!important;inset:0!important;z-index:-1!important;background:var(--app-chat-code-surface)!important;will-change:transform!important}.chat-markdown--hosted>.chat-markdown-codeblock{will-change:transform!important}.chat-markdown .chat-markdown-codeblock__header,.chat-markdown .chat-code-chunk{background:transparent!important}.chat-markdown .chat-markdown-codeblock__body:not(:has(.chat-code-chunk)){background:transparent!important;will-change:auto!important}.chat-markdown .chat-markdown-codeblock__body:has(.chat-code-chunk) pre{padding:0.5rem 0.6rem!important}.chat-code-chunk{padding:0!important}',
   }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
@@ -124,6 +144,7 @@ async function run() {
       const bounds = viewport.getBoundingClientRect()
       check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar, importApp })}`)
       if (fullShell) check(Math.round(bounds.width) === window.innerWidth - 256 && Math.round(bounds.height) === window.innerHeight - 46, `Full shell viewport changed: ${JSON.stringify({ width: bounds.width, height: bounds.height, windowWidth: window.innerWidth, windowHeight: window.innerHeight })}`)
+      checkCodeblockLayer()
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
@@ -142,6 +163,7 @@ async function run() {
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    checkCodeblockLayer()
     await mark("live-results-closed")
     if (seededHistory) {
       const first = liveTools()[0]!
