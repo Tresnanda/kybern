@@ -1557,6 +1557,7 @@ async fn non_git_project_can_spawn_read_only_worker() {
     fixture.orchestrator.drain_collaboration_assignments().await.unwrap();
     let started = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
     let owner = fixture.store.thread_get(started.owner_thread_id.unwrap()).unwrap().unwrap();
+    assert_eq!(owner.parent_thread_id, Some(fixture.coordinator.id), "UI-spawned helpers also need parent metadata");
     assert!(owner.worktree.is_none());
     assert_eq!(owner.cwd, fixture.coordinator.cwd);
 }

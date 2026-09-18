@@ -135,7 +135,7 @@ test("completion alerts wait for background waves, recheck native focus races, a
   runtime.disconnect()
 })
 
-test("spawned thread completions stay quiet while failures and approvals still demand attention", async () => {
+test("spawned threads never create completion, failure, approval, or input notifications", async () => {
   globalThis.alerts.length = 0
   globalThis.nativeAlerts.length = 0
   globalThis.document.visibilityState = "visible"
@@ -169,8 +169,8 @@ test("spawned thread completions stay quiet while failures and approvals still d
 
   send({ kind: "turn_failed", error: "Worker crashed" })
   await tick()
-  assert.equal(globalThis.alerts.at(-1)?.description, "Failed: Worker crashed")
-  assert.equal(globalThis.nativeAlerts.at(-1)?.body, "Failed: Worker crashed")
+  assert.equal(globalThis.alerts.length, 0)
+  assert.equal(globalThis.nativeAlerts.length, 0)
 
   send({
     kind: "approval_requested",
@@ -186,8 +186,15 @@ test("spawned thread completions stay quiet while failures and approvals still d
     },
   })
   await tick()
-  assert.equal(globalThis.alerts.at(-1)?.description, "Needs approval: Run a command")
-  assert.equal(globalThis.nativeAlerts.at(-1)?.body, "Needs approval: Run a command")
+  send({ kind: "user_input_requested", approval: { id: "input", thread_id: child.id, turn_id: "child-turn", questions: [] } })
+  await tick()
+  assert.equal(globalThis.alerts.length, 0)
+  assert.equal(globalThis.nativeAlerts.length, 0)
+  assert.equal(store.getState().notifications[child.id], undefined)
+  for (const kind of ["done", "blocked", "failed"]) {
+    store.getState().pushNotification(child.id, kind, ++seq, new Date().toISOString())
+    assert.equal(store.getState().notifications[child.id], undefined, "direct notification writes must also suppress helpers")
+  }
 
   const staleCompletion = { kind: "done", seq: 1, at: new Date().toISOString() }
   assert.deepEqual(
@@ -195,9 +202,45 @@ test("spawned thread completions stay quiet while failures and approvals still d
     [],
     "a persisted spawned completion remained visible in the bell",
   )
-  assert.equal(threadAttentionKind({ ...child, status: "failed" }, staleCompletion), "failed")
-  assert.equal(threadAttentionKind({ ...child, status: "awaiting-approval" }, staleCompletion), "blocked")
+  for (const status of ["idle", "running", "failed", "awaiting-approval", "archived"]) {
+    for (const kind of ["done", "blocked", "failed"]) {
+      const notification = { ...staleCompletion, kind }
+      assert.equal(threadAttentionKind({ ...child, status }, notification), null)
+      assert.deepEqual(selectAttentionItems({ threads: { child: { ...child, status } }, notifications: { child: notification } }), [])
+    }
+  }
+  assert.equal(threadAttentionKind({ ...parent, status: "failed" }, undefined), "failed")
+  assert.equal(threadAttentionKind({ ...parent, status: "awaiting-approval" }, undefined), "blocked")
   runtime.disconnect()
+})
+
+test("unknown metadata and a relationship update during focus lookup cannot leak helper alerts", async () => {
+  globalThis.alerts.length = 0
+  globalThis.nativeAlerts.length = 0
+  globalThis.document.visibilityState = "visible"
+  let finishFocus
+  globalThis.focusProbe = () => new Promise((resolve) => { finishFocus = resolve })
+  const store = createEnvironmentStore("notification-relationships")
+  store.getState().set({ settings: { notifications: true }, selected: { kind: "none" } })
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  globalThis.memoryClient.reply = () => Promise.resolve({ messages: [], checkpoints: [] })
+  let seq = 0
+  const send = (payload) => globalThis.memoryClient.event({ seq: ++seq, thread_id: "worker", turn_id: "turn", at: new Date(Date.now() + 1000).toISOString(), ...payload })
+  send({ kind: "turn_failed", error: "Unknown helper" })
+  await tick()
+  assert.equal(finishFocus, undefined, "unknown relationship metadata must not enter the alert path")
+  store.getState().set({ threads: { worker: { id: "worker", title: "Worker", status: "running" } } })
+  send({ kind: "turn_failed", error: "Late relationship" })
+  assert.equal(typeof finishFocus, "function")
+  store.getState().set({ threads: { worker: { id: "worker", title: "Worker", status: "failed", parent_thread_id: "parent" } } })
+  finishFocus(false)
+  await tick()
+  assert.equal(globalThis.alerts.length, 0)
+  assert.equal(globalThis.nativeAlerts.length, 0)
+  assert.deepEqual(selectAttentionItems(store.getState()), [])
+  runtime.disconnect()
+  globalThis.focusProbe = () => false
 })
 
 test("completed threads keep unread dots until their focused foreground pane is actually seen", async () => {

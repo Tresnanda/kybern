@@ -1214,7 +1214,12 @@ impl Orchestrator {
                 joined_at: Utc::now(),
             };
             self.inner.store.collaboration_member_put(&member)?;
-            self.set_thread_relationships(thread.id, assignment.created_by_thread_id, None, Some(group.id))?;
+            self.set_thread_relationships(
+                thread.id,
+                Some(assignment.created_by_thread_id.unwrap_or(group.coordinator_thread_id)),
+                None,
+                Some(group.id),
+            )?;
             self.emit_collaboration(group.id, EventPayload::CollaborationMemberUpdated { member })?;
             assignment.owner_thread_id = Some(thread.id);
             thread.id

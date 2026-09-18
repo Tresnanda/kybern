@@ -36,7 +36,7 @@ import {
 } from "@/protocol"
 
 import { applyEvent, compactThreadState, seedFromGet, prependThreadHistory } from "./transcript"
-import { trackFocusedThreadReads, type NotificationKind } from "./notifications"
+import { threadCanNotify, trackFocusedThreadReads, type NotificationKind } from "./notifications"
 import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
@@ -566,6 +566,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const notificationsStartedAt = Date.now()
 
   async function announce(ev: ThreadEvent) {
+    if (!threadCanNotify(useStore.getState().threads[ev.thread_id])) return
     // Historical replay updates the transcript without replaying old alerts.
     if (Date.parse(ev.at) < notificationsStartedAt || ev.seq <= (announced.get(ev.thread_id) ?? 0)) return
     announced.set(ev.thread_id, ev.seq)
@@ -575,12 +576,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     // another background wave may have arrived while it was in flight.
     if (disposed) return
     const current = useStore.getState()
+    if (!threadCanNotify(current.threads[ev.thread_id])) return
     const viewing = isThreadFocused(current, ev.thread_id)
     if (document.visibilityState !== "hidden" && focused && viewing) return
     const kind: NotificationKind | null =
       ev.kind === "turn_failed" ? "failed"
       : ev.kind === "approval_requested" || ev.kind === "user_input_requested" ? "blocked"
-      : ev.kind === "turn_completed" && ev.stop_reason === "completed" && !current.threads[ev.thread_id]?.parent_thread_id ? "done"
+      : ev.kind === "turn_completed" && ev.stop_reason === "completed" ? "done"
       : null
     if (kind === "done") {
       if (completedTurns.get(ev.thread_id) === ev.turn_id) return

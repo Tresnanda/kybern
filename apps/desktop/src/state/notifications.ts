@@ -56,6 +56,12 @@ export function persistThreadNotifications(
   }
 }
 
+/** Internal helpers report through their parent, never through the user inbox.
+ * Unknown threads stay quiet until their relationship metadata is available. */
+export function threadCanNotify(thread: Thread | undefined): boolean {
+  return !!thread && !thread.parent_thread_id
+}
+
 const KIND_RANK: Record<NotificationKind, number> = { blocked: 0, failed: 1, done: 2 }
 
 /**
@@ -67,13 +73,9 @@ const KIND_RANK: Record<NotificationKind, number> = { blocked: 0, failed: 1, don
  * threads and threads you have already caught up on return `null`.
  */
 export function threadAttentionKind(thread: Thread, notification: ThreadNotification | undefined): NotificationKind | null {
-  if (thread.status === "archived") return null
+  if (!threadCanNotify(thread) || thread.status === "archived") return null
   if (thread.status === "awaiting-approval") return "blocked"
   if (thread.status === "failed") return "failed"
-  // Kybern-managed child threads report their result back to the parent. Their
-  // successful completion is coordinator activity, not a second user-facing
-  // completion. Live failures and approval requests above still need attention.
-  if (thread.parent_thread_id) return null
   if (thread.status === "idle" && notification?.kind === "done") return "done"
   return null
 }
