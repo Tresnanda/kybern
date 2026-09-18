@@ -22,6 +22,7 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const turnLayer = import.meta.env.VITE_LIVE_TOOLS_TURN_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -142,6 +143,13 @@ async function run() {
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    const work = [...document.querySelectorAll("[data-timeline-row-kind='live-work'], [data-timeline-row-kind='settled-work']")].at(-1)
+    const turnRow = work?.closest<HTMLElement>("[data-virtual-owner]")
+    check(turnRow, "Live turn is not in a virtual row")
+    check((turnRow.dataset.virtualPaint === "host") === turnLayer, `Turn-sized virtual row paint host changed: ${turnRow.dataset.virtualPaint}`)
+    check(getComputedStyle(turnRow).willChange.includes("transform") === turnLayer, `Turn-sized virtual row will-change changed: ${getComputedStyle(turnRow).willChange}`)
+    const nestedHost = turnRow.querySelector(".chat-paint-host")
+    check(nestedHost && getComputedStyle(nestedHost).willChange.includes("transform"), "Nested transcript paint hosts were removed")
     await mark("live-results-closed")
     if (seededHistory) {
       const first = liveTools()[0]!

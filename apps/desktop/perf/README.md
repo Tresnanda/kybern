@@ -12,14 +12,15 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Running indicators | Animating dot background colors repainted continuously; invisible indicators kept running. | Opacity animation with matching painted colors; one shared visibility observer; pause hidden/offscreen/inactive loops without resetting phase. |
 | Streaming history | New turn groups and Markdown component types invalidated settled messages, code controls, and highlighted DOM. | Stable identities, memoized rows, stable component types, retained highlighted markup, and subscriptions scoped to the affected state. |
 | Closed and expanded work | Closed details stayed mounted; large histories and expanded tool groups created tens of thousands of DOM nodes. | Unmount closed content after exit; virtualize large history, work groups, and agent activity while retaining small lists in normal flow. |
-| Rendered-history memory | Fast scrolling reached gigabyte-scale WebKit graphics allocations with a small mounted DOM. | Paint boundaries on large outer virtual rows, with room for gutter controls and focus rings; measure native footprint as well as DOM counts. |
-| Scroll tile accumulation | Any content painted by the scroller's tiled layer (or another tiled layer) made WebKit allocate 4 MiB tiles ahead of fast scrolling and release them one cohort per second; dense work reached 140 tiles. | Every painted row is a small `chat-paint-host` layer (virtual rows, messages, headers, work lists, answers); scrollers and large containers paint nothing. Icons promote only while swapping. |
+| Rendered-history memory | Fast scrolling reached gigabyte-scale WebKit graphics allocations with a small mounted DOM. | Nested painted-row hosts plus an 8px bleed on scroller-owned lists for gutter controls and focus rings; do not promote turn-sized groups. Measure native footprint as well as DOM counts. |
+| Scroll tile accumulation | Any content painted by the scroller's tiled layer (or another tiled layer) made WebKit allocate 4 MiB tiles ahead of fast scrolling and release them one cohort per second; dense work reached 140 tiles. | Every painted leaf is a small `chat-paint-host` (nested virtual rows, messages, headers, work lists, answers). Scrollers, turns, and work-list parents paint nothing. Do not `will-change` a turn that can exceed 1024 CSS px. Icons promote only while swapping. |
 | Earlier-history paging | A retry at the top could reuse old scroll intent and download every remaining page. | Consume intent per request; require further reading input before another automatic page, while preserving the anchor. |
 | Markdown and code | Full parsing and highlighting competed with input and scrolling on the renderer thread; serialized equality signatures duplicated retained trees. | Separate module workers, incremental tail parsing, exact structural comparison, bounded queues/caches, cancellation, and source-size limits. Retain prior formatting during updates and readable text on failure. |
 | Diagrams | DOM-based diagram engines and image URLs can outlive visible content. | Load Mermaid only for settled diagrams, bound queued work/cache/output, release its rendering document at idle, and revoke replaced/unmounted image URLs. |
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
+| Turn-sized paint hosts | Promoting transcript `VirtualRows` groups (`will-change: transform`, plus `contain: paint` once history exceeded 30 turns) recreated the discarded "promote the turn only" tiled layer on a live 64-tool turn. | `paintHost={false}` on turn groups. Nested work lists keep the default host. Native A/B: `KYBERN_PERF_LIVE_TURN_LAYER=1`. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
@@ -35,6 +36,10 @@ It includes repeated-burst observations, paged-history paint boundaries,
 bounded settled streams, title metadata checks and hidden dock measurements.
 The 200–300 MB target is not a verified ceiling; repeated settled use also
 exceeded it.
+
+See [turn-sized paint hosts](turn-paint-host-2026-09-18.md) for why transcript
+`VirtualRows` must not promote a live turn past WebKit's tiling threshold, the
+nested-host rule, and the native A/B control (`KYBERN_PERF_LIVE_TURN_LAYER`).
 
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,
