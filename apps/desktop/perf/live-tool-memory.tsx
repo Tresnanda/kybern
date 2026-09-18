@@ -20,6 +20,8 @@ const seededHistory = import.meta.env.VITE_LIVE_TOOLS_HISTORY === "1"
 const fullThread = import.meta.env.VITE_LIVE_TOOLS_THREAD === "1"
 const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
+const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
+const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -40,6 +42,9 @@ async function run() {
     localStorage.setItem("theme", "dark")
     localStorage.setItem("kybern.translucent", "false")
   }
+  if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
   setEnvironmentRuntime(runtime)
@@ -74,6 +79,7 @@ async function run() {
   let renderError: unknown
   const root = createRoot(document.getElementById("root")!, { onUncaughtError: error => { renderError = error } })
   try {
+    if (importApp) (window as unknown as { __retainedAppModule: unknown }).__retainedAppModule = await import("../src/App")
     await until(() => useStore.getState().connection.state === "open", "Scratch connection did not open")
     if (fullThread) {
       const [listed, projects] = await Promise.all([client.call("threads.list", {}), client.call("projects.list", {})])
@@ -93,7 +99,7 @@ async function run() {
               </Sidebar>
               <div className="relative flex h-screen min-h-0 min-w-0 flex-1">
                 <SidebarInset className="h-screen min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
-                  <div data-fixture-thread-surface className="chat-content-card relative z-[15] flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)] text-inherit">
+                  <div data-fixture-thread-surface className="chat-content-card relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)] text-inherit">
                     <main className="relative flex min-h-0 min-w-0 flex-1 flex-col"><ThreadView threadId={threadId} /></main>
                   </div>
                 </SidebarInset>
@@ -116,7 +122,8 @@ async function run() {
       }, `Thread surface did not mount: ${document.body.innerHTML.slice(0, 800)}`)
       const viewport = document.querySelector<HTMLElement>("[data-chat-scroll-container]")!
       const bounds = viewport.getBoundingClientRect()
-      check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar })}`)
+      check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar, importApp })}`)
+      if (fullShell) check(Math.round(bounds.width) === window.innerWidth - 256 && Math.round(bounds.height) === window.innerHeight - 46, `Full shell viewport changed: ${JSON.stringify({ width: bounds.width, height: bounds.height, windowWidth: window.innerWidth, windowHeight: window.innerHeight })}`)
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
