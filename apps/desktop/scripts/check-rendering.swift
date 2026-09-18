@@ -50,10 +50,6 @@ final class Bench: NSObject, WKScriptMessageHandler {
   if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1" || ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" { print("Debug window id: \(window.windowNumber)"); fflush(stdout) }
   window.contentView = web
   window.orderFront(nil)
-  if ProcessInfo.processInfo.environment["KYBERN_PERF_FOREGROUND"] == "1" {
-   window.makeKeyAndOrderFront(nil)
-   app.activate(ignoringOtherApps: true)
-  }
   let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
   let history = Int(ProcessInfo.processInfo.environment["KYBERN_PERF_HISTORY"] ?? "400") ?? 400
   var query = "?history=\(history)"

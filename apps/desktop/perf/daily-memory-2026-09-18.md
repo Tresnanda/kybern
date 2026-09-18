@@ -171,8 +171,12 @@ notifications does not answer or hide live approvals/failures.
   decoded gallery content with closed tool details, and lease cleanup passed.
 - Native `live-tool-memory`: four serialized full/compact runs passed exact
   output and shared hydration checks, with the scheduling limitation above.
-- Notification fixture checks the plain dot, two menu commands, dismissal,
-  stale child completions and project activity states.
+- The focused notification fixture checks the plain dot, two menu commands,
+  dismissal, stale child completions and project activity states. Use
+  `VITE_NOTIFICATIONS_ONLY=1 KYBERN_PERF_KEEP_ACTIVE=1 node scripts/check-rendering.mjs work-shell`
+  for unattended functional verification. It skips the frame-based performance
+  loops and reports no timing evidence; full rendering checks need a visible
+  window because requestAnimationFrame can remain suspended when hidden.
 
 ## Remaining acceptance work
 
