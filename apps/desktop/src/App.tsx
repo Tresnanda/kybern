@@ -135,9 +135,10 @@ function Workspace() {
         {sidebarOpen && <ResizeHandle edge="left" label="Resize sidebar" onPointerDown={sidebar.onPointerDown} dragging={sidebar.dragging} className="z-[25]" />}
         {/* The content card owns the fill; an opaque inset behind it hides native vibrancy. */}
         <SidebarInset className="h-dvh min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
+          {/* Keep the full-window card out of its own stacking context. Its later DOM order already places it above the sidebar's z-0 shell; a z-index here forces WebKit to retain another viewport-sized backing. */}
           <div
             data-slot="sidebar-inset-surface"
-            className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card relative z-[15] overflow-hidden"
+            className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card relative overflow-hidden"
           >
             <div ref={dockContainerRef} className="relative flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
               <main data-workspace-chat inert={overlayOpen} aria-hidden={overlayOpen || undefined} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
