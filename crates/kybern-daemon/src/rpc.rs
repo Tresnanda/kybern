@@ -247,6 +247,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .map_err(internal)?;
             let (mut transcript, next_before_seq) =
                 kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            if p.defer_tool_stream.unwrap_or(false) {
+                state.store.mark_tool_streams_omitted_through(id, &mut transcript, through_seq).map_err(internal)?;
+            }
             if p.include_tool_output.unwrap_or(true) {
                 state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
             }
@@ -270,12 +273,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             let through_seq = p.through_seq.unwrap_or(thread.last_seq).min(thread.last_seq);
-            let (output, is_error) = state
+            let include_tool_stream = p.include_tool_stream.unwrap_or(false);
+            let (output, is_error, stream, stream_omitted) = state
                 .store
-                .tool_call_output_through(p.thread_id, &p.tool_call_id, p.start_seq, through_seq)
+                .tool_call_result_through(p.thread_id, &p.tool_call_id, p.start_seq, through_seq, include_tool_stream)
                 .map_err(internal)?
                 .ok_or_else(|| RpcError::not_found("tool output"))?;
-            ok(ThreadsToolOutputResult { output, is_error })
+            ok(ThreadsToolOutputResult { output, is_error, stream, stream_omitted })
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;

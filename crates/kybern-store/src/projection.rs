@@ -464,12 +464,13 @@ fn apply_transcript_event(
                     call: call.clone(),
                     output: None,
                     output_omitted: false,
+                    stream_omitted: false,
                     is_error: false,
                     complete: false,
                     at: ev.at,
                 });
             }
-            EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted: _, is_error } => {
+            EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted: _, is_error, .. } => {
                 if let Some(TranscriptEntry::ToolCall { output: o, output_omitted, is_error: e, complete, .. }) =
                     out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::ToolCall { call, .. } if &call.id == tool_call_id))
                 {
@@ -989,6 +990,7 @@ mod tests {
                     tool_call_id: "call-1".into(),
                     output: serde_json::Value::Null,
                     output_omitted: false,
+                    stream_recoverable: false,
                     is_error: false,
                 },
             ),
@@ -1038,6 +1040,7 @@ mod tests {
                     tool_call_id: "call-1".into(),
                     output: serde_json::Value::Null,
                     output_omitted: false,
+                    stream_recoverable: false,
                     is_error: false,
                 },
             ),
@@ -1185,6 +1188,7 @@ mod tests {
                     tool_call_id: "small".into(),
                     output: small.clone(),
                     output_omitted: false,
+                    stream_recoverable: false,
                     is_error: false,
                 },
             ),
@@ -1201,6 +1205,7 @@ mod tests {
                     tool_call_id: "large".into(),
                     output: large.clone(),
                     output_omitted: false,
+                    stream_recoverable: false,
                     is_error: false,
                 },
             ),

@@ -17,6 +17,8 @@ import sys
 root = Path(sys.argv[1]).resolve()
 if ".scratch" not in root.parts:
     raise ValueError("Use an isolated .scratch directory")
+if subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True).returncode == 0:
+    raise ValueError("Keep scratch data outside a Git worktree; checkpoints would include the benchmark database")
 
 scripts = Path(__file__).resolve().parent
 subprocess.run([sys.executable, scripts / "seed-memory-workload.py", root], check=True)

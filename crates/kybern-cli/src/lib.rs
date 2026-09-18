@@ -714,7 +714,13 @@ pub async fn run() -> Result<()> {
         }
         Cmd::ToolOutput { thread, tool_call_id, start_seq, through_seq } => {
             let result = client
-                .call::<ThreadsToolOutput>(ThreadsToolOutputParams { thread_id: thread.parse()?, tool_call_id, start_seq, through_seq })
+                .call::<ThreadsToolOutput>(ThreadsToolOutputParams {
+                    thread_id: thread.parse()?,
+                    tool_call_id,
+                    start_seq,
+                    through_seq,
+                    include_tool_stream: None,
+                })
                 .await?;
             print_json(&result)?;
         }

@@ -1761,6 +1761,40 @@ impl Store {
         })
     }
 
+    /// Replay batches for compact event subscriptions. Large settled tool
+    /// results remain borrowed as raw JSON while the row is decoded, so a
+    /// replay does not allocate a `serde_json::Value` for output that will be
+    /// replaced by the transport omission marker anyway.
+    pub fn events_after_bounded_compact(
+        &self,
+        thread_id: Option<ThreadId>,
+        after: EventSeq,
+        limit: u32,
+        max_bytes: usize,
+    ) -> Result<Vec<ThreadEvent>> {
+        self.with(|c| {
+            let sql = match thread_id {
+                Some(_) => {
+                    "SELECT seq,thread_id,turn_id,at,kind,payload FROM events WHERE seq > ?1 AND thread_id = ?2 ORDER BY seq LIMIT ?3"
+                }
+                None => "SELECT seq,thread_id,turn_id,at,kind,payload FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?3",
+            };
+            let mut st = c.prepare(sql)?;
+            let mut rows = st.query(params![after, thread_id.map(|id| id.to_string()).unwrap_or_default(), limit])?;
+            let mut events = Vec::new();
+            let mut bytes = 0usize;
+            while let Some(row) = rows.next()? {
+                let size = row.get_ref(5)?.as_str()?.len();
+                if !events.is_empty() && bytes.saturating_add(size) > max_bytes {
+                    break;
+                }
+                bytes = bytes.saturating_add(size);
+                events.push(row_to_compact_event(row)?);
+            }
+            Ok(events)
+        })
+    }
+
     pub fn events_for_thread(&self, thread_id: ThreadId) -> Result<Vec<ThreadEvent>> {
         self.events_for_thread_through(thread_id, i64::MAX)
     }
@@ -1850,6 +1884,52 @@ impl Store {
         })
     }
 
+    /// Mark completed tool rows whose exact invocation has persisted output
+    /// deltas. The projection intentionally does not concatenate those deltas;
+    /// clients can request them later through the sequence-bounded tool-output
+    /// RPC. The query uses the tool-start sequence and reused-ID barrier so a
+    /// later invocation cannot make an earlier row appear stream-hydratable.
+    pub fn mark_tool_streams_omitted_through(
+        &self,
+        thread_id: ThreadId,
+        entries: &mut [TranscriptEntry],
+        through_seq: EventSeq,
+    ) -> Result<()> {
+        self.with(|c| {
+            // Scan the two small JSON identity fields once, instead of issuing
+            // one correlated query per transcript row. The active start map
+            // naturally handles provider call-ID reuse as the sequence grows.
+            let mut statement = c.prepare(
+                "SELECT seq, kind,
+                        CASE WHEN kind = 'tool_call_started'
+                             THEN json_extract(payload, '$.call.id')
+                             ELSE json_extract(payload, '$.tool_call_id') END
+                 FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2
+                   AND kind IN ('tool_call_started', 'tool_call_output_delta')
+                 ORDER BY seq",
+            )?;
+            let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
+            let mut active = std::collections::HashMap::<String, EventSeq>::new();
+            let mut streamed = std::collections::HashSet::<(EventSeq, String)>::new();
+            while let Some(row) = rows.next()? {
+                let seq: EventSeq = row.get(0)?;
+                let kind: String = row.get(1)?;
+                let Some(call_id) = row.get::<_, Option<String>>(2)? else { continue };
+                if kind == "tool_call_started" {
+                    active.insert(call_id, seq);
+                } else if let Some(start) = active.get(&call_id) {
+                    streamed.insert((*start, call_id));
+                }
+            }
+            for entry in entries {
+                let TranscriptEntry::ToolCall { seq, call, complete: true, stream_omitted, .. } = entry else { continue };
+                *stream_omitted = streamed.contains(&(*seq, call.id.clone()));
+            }
+            Ok(())
+        })
+    }
+
     /// Fetch the completion belonging to this exact start, at the requested
     /// snapshot. A reused provider call ID must never hydrate an older row with
     /// a newer invocation's result.
@@ -1860,6 +1940,22 @@ impl Store {
         start_seq: Option<EventSeq>,
         through_seq: EventSeq,
     ) -> Result<Option<(serde_json::Value, bool)>> {
+        Ok(self
+            .tool_call_result_through(thread_id, tool_call_id, start_seq, through_seq, false)?
+            .map(|(output, is_error, _, _)| (output, is_error)))
+    }
+
+    /// Fetch a settled tool result and, when requested, its exact persisted
+    /// output-delta stream. The stream is bounded by the requested snapshot,
+    /// and the same intervening-start guard protects reused provider IDs.
+    pub fn tool_call_result_through(
+        &self,
+        thread_id: ThreadId,
+        tool_call_id: &str,
+        start_seq: Option<EventSeq>,
+        through_seq: EventSeq,
+        include_stream: bool,
+    ) -> Result<Option<(serde_json::Value, bool, Option<String>, bool)>> {
         self.with(|c| {
             let start: Option<EventSeq> = c
                 .query_row(
@@ -1872,7 +1968,18 @@ impl Store {
                 .optional()?;
             let Some(start) = start else { return Ok(None) };
             let mut statement = c.prepare_cached(TOOL_OUTPUT_AT_START_SQL)?;
-            read_tool_output_at_start(&mut statement, thread_id, tool_call_id, start, through_seq)
+            let Some((_completion_seq, output, is_error)) =
+                read_tool_completion_at_start(&mut statement, thread_id, tool_call_id, start, through_seq)?
+            else {
+                return Ok(None);
+            };
+            // Deltas can arrive just after the completion row on providers
+            // that flush their stream asynchronously. Keep the caller's
+            // snapshot barrier so hydration matches the live projection.
+            let stream = read_tool_stream_at_start(c, thread_id, tool_call_id, start, through_seq, include_stream)?;
+            let stream_omitted = !include_stream && stream.is_some();
+            let stream = include_stream.then_some(stream).flatten();
+            Ok(Some((output, is_error, stream, stream_omitted)))
         })
     }
 
@@ -2270,7 +2377,7 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
 // intervening-start check ranges over the thread's sequence index, and prevents
 // crossing a reused call ID without adding a migration or a second read model.
 const TOOL_OUTPUT_AT_START_SQL: &str = "
-    SELECT c.payload FROM events c
+    SELECT c.seq, c.payload FROM events c
     WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
       AND json_extract(c.payload, '$.tool_call_id') = ?2
       AND c.seq > ?3 AND c.seq <= ?4
@@ -2281,6 +2388,23 @@ const TOOL_OUTPUT_AT_START_SQL: &str = "
                       AND json_extract(n.payload, '$.call.id') = ?2)
     ORDER BY c.seq DESC LIMIT 1";
 
+fn read_tool_completion_at_start(
+    statement: &mut rusqlite::Statement<'_>,
+    thread_id: ThreadId,
+    tool_call_id: &str,
+    start_seq: EventSeq,
+    through_seq: EventSeq,
+) -> Result<Option<(EventSeq, serde_json::Value, bool)>> {
+    let mut rows = statement.query(params![thread_id.to_string(), tool_call_id, start_seq, through_seq])?;
+    let Some(row) = rows.next()? else { return Ok(None) };
+    let seq = row.get(0)?;
+    let payload: EventPayload = serde_json::from_str(row.get_ref(1)?.as_str()?)?;
+    match payload {
+        EventPayload::ToolCallCompleted { output, is_error, .. } => Ok(Some((seq, output, is_error))),
+        _ => anyhow::bail!("invalid stored tool completion"),
+    }
+}
+
 fn read_tool_output_at_start(
     statement: &mut rusqlite::Statement<'_>,
     thread_id: ThreadId,
@@ -2288,13 +2412,57 @@ fn read_tool_output_at_start(
     start_seq: EventSeq,
     through_seq: EventSeq,
 ) -> Result<Option<(serde_json::Value, bool)>> {
-    let mut rows = statement.query(params![thread_id.to_string(), tool_call_id, start_seq, through_seq])?;
-    let Some(row) = rows.next()? else { return Ok(None) };
-    let payload: EventPayload = serde_json::from_str(row.get_ref(0)?.as_str()?)?;
-    match payload {
-        EventPayload::ToolCallCompleted { output, is_error, .. } => Ok(Some((output, is_error))),
-        _ => anyhow::bail!("invalid stored tool completion"),
+    Ok(read_tool_completion_at_start(statement, thread_id, tool_call_id, start_seq, through_seq)?
+        .map(|(_, output, is_error)| (output, is_error)))
+}
+
+fn read_tool_stream_at_start(
+    c: &Connection,
+    thread_id: ThreadId,
+    tool_call_id: &str,
+    start_seq: EventSeq,
+    through_seq: EventSeq,
+    include_stream: bool,
+) -> Result<Option<String>> {
+    let sql = if include_stream {
+        "SELECT json_extract(d.payload, '$.delta') FROM events d
+         WHERE d.thread_id = ?1 AND d.kind = 'tool_call_output_delta'
+           AND d.seq > ?2 AND d.seq <= ?3
+           AND json_extract(d.payload, '$.tool_call_id') = ?4
+           AND NOT EXISTS (
+             SELECT 1 FROM events s
+             WHERE s.thread_id = ?1 AND s.kind = 'tool_call_started'
+               AND s.seq > ?2 AND s.seq <= d.seq
+               AND json_extract(s.payload, '$.call.id') = ?4
+           )
+         ORDER BY d.seq"
+    } else {
+        "SELECT 1 FROM events d
+         WHERE d.thread_id = ?1 AND d.kind = 'tool_call_output_delta'
+           AND d.seq > ?2 AND d.seq <= ?3
+           AND json_extract(d.payload, '$.tool_call_id') = ?4
+           AND NOT EXISTS (
+             SELECT 1 FROM events s
+             WHERE s.thread_id = ?1 AND s.kind = 'tool_call_started'
+               AND s.seq > ?2 AND s.seq <= d.seq
+               AND json_extract(s.payload, '$.call.id') = ?4
+           )
+         LIMIT 1"
+    };
+    if !include_stream {
+        return Ok(c
+            .query_row(sql, params![thread_id.to_string(), start_seq, through_seq, tool_call_id], |row| row.get::<_, i64>(0))
+            .optional()?
+            .map(|_| String::new()));
     }
+    let mut statement = c.prepare_cached(sql)?;
+    let mut rows = statement.query(params![thread_id.to_string(), start_seq, through_seq, tool_call_id])?;
+    let mut stream = None;
+    while let Some(row) = rows.next()? {
+        let delta: String = row.get(0)?;
+        stream.get_or_insert_with(String::new).push_str(&delta);
+    }
+    Ok(stream)
 }
 
 fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
@@ -2306,6 +2474,50 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
         turn_id: turn.map(parse_uuid).transpose()?,
         at: parse_time(r.get::<_, String>(3)?)?,
         payload: serde_json::from_str(&payload).map_err(other)?,
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct BorrowedToolCompletion<'a> {
+    tool_call_id: String,
+    #[serde(borrow)]
+    output: &'a serde_json::value::RawValue,
+    #[serde(default)]
+    output_omitted: bool,
+    is_error: bool,
+}
+
+fn compact_or_decode_tool_completion(payload: &str) -> std::result::Result<EventPayload, serde_json::Error> {
+    let raw: BorrowedToolCompletion<'_> = serde_json::from_str(payload)?;
+    let output = if raw.output_omitted || raw.output.get().len() <= LARGE_TOOL_OUTPUT_BYTES {
+        serde_json::from_str(raw.output.get())?
+    } else {
+        serde_json::Value::Null
+    };
+    Ok(EventPayload::ToolCallCompleted {
+        tool_call_id: raw.tool_call_id,
+        output,
+        output_omitted: raw.output_omitted || raw.output.get().len() > LARGE_TOOL_OUTPUT_BYTES,
+        stream_recoverable: false,
+        is_error: raw.is_error,
+    })
+}
+
+fn row_to_compact_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
+    let kind: String = r.get(4)?;
+    let payload = r.get_ref(5)?.as_str()?;
+    let turn: Option<String> = r.get(2)?;
+    let payload = if kind == "tool_call_completed" {
+        compact_or_decode_tool_completion(&payload).map_err(other)?
+    } else {
+        serde_json::from_str(&payload).map_err(other)?
+    };
+    Ok(ThreadEvent {
+        seq: r.get(0)?,
+        thread_id: parse_uuid(r.get::<_, String>(1)?)?,
+        turn_id: turn.map(parse_uuid).transpose()?,
+        at: parse_time(r.get::<_, String>(3)?)?,
+        payload,
     })
 }
 
@@ -2719,6 +2931,13 @@ mod tests {
                 },
             )
             .unwrap();
+        store
+            .event_append(
+                thread.id,
+                Some(turn),
+                EventPayload::ToolCallOutputDelta { tool_call_id: "big".into(), delta: "streamed output\n".repeat(4) },
+            )
+            .unwrap();
         let output = serde_json::json!("x".repeat(LARGE_TOOL_OUTPUT_BYTES + 8));
         store
             .event_append(
@@ -2728,6 +2947,7 @@ mod tests {
                     tool_call_id: "big".into(),
                     output: output.clone(),
                     output_omitted: false,
+                    stream_recoverable: false,
                     is_error: false,
                 },
             )
@@ -2748,7 +2968,13 @@ mod tests {
                 .event_append(
                     thread.id,
                     Some(turn),
-                    EventPayload::ToolCallCompleted { tool_call_id: id, output: output.clone(), output_omitted: false, is_error: false },
+                    EventPayload::ToolCallCompleted {
+                        tool_call_id: id,
+                        output: output.clone(),
+                        output_omitted: false,
+                        stream_recoverable: false,
+                        is_error: false,
+                    },
                 )
                 .unwrap();
         }
@@ -2758,9 +2984,25 @@ mod tests {
         let transcript_bytes = serde_json::to_vec(&transcript).unwrap().len();
         assert!(transcript_bytes * 10 < event_bytes, "cached projection {transcript_bytes} should drop the {event_bytes}-byte event log");
         eprintln!("tool-output-omit event_bytes={event_bytes} transcript_bytes={transcript_bytes}");
+        let compact_events = store.events_after_bounded_compact(Some(thread.id), 0, 500, 2 * 1024 * 1024).unwrap();
+        assert!(compact_events.iter().any(|event| matches!(
+            event.payload,
+            EventPayload::ToolCallCompleted { output: serde_json::Value::Null, output_omitted: true, .. }
+        )));
+        let full_events = store.events_after_bounded(Some(thread.id), 0, 500, 2 * 1024 * 1024).unwrap();
+        assert!(full_events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::ToolCallCompleted { output: candidate, output_omitted: false, .. } if candidate == &output
+        )));
         assert!(matches!(
             transcript.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { output: None, output_omitted: true, .. })
+        ));
+        let mut stream_marked = transcript.clone();
+        store.mark_tool_streams_omitted_through(thread.id, &mut stream_marked, i64::MAX).unwrap();
+        assert!(matches!(
+            stream_marked.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
+            Some(TranscriptEntry::ToolCall { stream_omitted: true, .. })
         ));
         let mut page = transcript.clone();
         store.hydrate_tool_outputs_through(thread.id, &mut page, i64::MAX).unwrap();
@@ -2788,7 +3030,8 @@ mod tool_output_allocation_tests {
     }
 
     fn complete(store: &Store, thread: ThreadId, id: &str, output: serde_json::Value, is_error: bool) {
-        let payload = EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, output_omitted: false, is_error };
+        let payload =
+            EventPayload::ToolCallCompleted { tool_call_id: id.into(), output, output_omitted: false, stream_recoverable: false, is_error };
         store.with(|c| {
             let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE thread_id=?1 AND kind='tool_call_started' AND json_extract(payload, '$.call.id')=?2)", params![thread.to_string(), id], |row| row.get(0))?;
             if !exists {

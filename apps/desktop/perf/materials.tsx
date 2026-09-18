@@ -55,6 +55,8 @@ async function run() {
   const popup = document.querySelector<HTMLElement>('[data-slot="context-menu-content"]')
   if (!popup) throw new Error("Right click did not open the actual context menu")
   const filter = (el: Element) => getComputedStyle(el).getPropertyValue("-webkit-backdrop-filter")
+  const pseudoFilter = (el: Element) => getComputedStyle(el, "::before").getPropertyValue("-webkit-backdrop-filter")
+  const hasNoPseudoFilter = (value: string) => value === "" || value === "none"
   const results: Record<string, unknown> = {}
   let pass = true
   for (const variant of ["dark", "light"] as const) {
@@ -110,8 +112,9 @@ async function run() {
     theme(variant)
     await sleep(100)
     const background = getComputedStyle(commands).backgroundColor
-    results[`${variant}Commands`] = { background, filter: filter(commands), pseudoFilter: getComputedStyle(commands, "::before").getPropertyValue("-webkit-backdrop-filter") }
-    pass &&= filter(commands).includes("blur(") && getComputedStyle(commands, "::before").getPropertyValue("-webkit-backdrop-filter") === "none"
+    const beforeFilter = pseudoFilter(commands)
+    results[`${variant}Commands`] = { background, filter: filter(commands), pseudoFilter: beforeFilter }
+    pass &&= filter(commands).includes("blur(") && hasNoPseudoFilter(beforeFilter)
   }
   root.dataset.windowMaterial = "opaque"
   await sleep(100)

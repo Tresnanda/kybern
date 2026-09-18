@@ -689,3 +689,35 @@ test("compact live completions stay hydratable and preserve distinct streams and
     assert.equal(state.blocks[0].isError, true)
   }
 })
+
+test("saved rows distinguish a lazily recoverable stream from canonical output", () => {
+  const state = seedFromGet({
+    thread: { last_seq: 9 },
+    transcript: [{
+      role: "tool_call", turn_id: T, seq: 7, origin: { kind: "root" },
+      call: { id: "tool", name: "exec", input: {} }, output: "canonical",
+      stream_omitted: true, is_error: false, complete: true, at: AT,
+    }],
+    pending_approvals: [],
+  })
+  assert.equal(state.blocks[0].output, "canonical")
+  assert.equal(state.blocks[0].outputOmitted, false)
+  assert.equal(state.blocks[0].stream, "")
+  assert.equal(state.blocks[0].streamOmitted, true)
+})
+
+test("an omitted settled stream ignores partial late deltas until exact hydration", () => {
+  let state = seedFromGet({
+    thread: { last_seq: 3 },
+    transcript: [{
+      role: "tool_call", turn_id: T, seq: 1, origin: { kind: "root" },
+      call: { id: "tool", name: "exec", input: {} }, output: null,
+      stream_omitted: true, is_error: false, complete: true, at: AT,
+    }],
+    pending_approvals: [],
+  })
+  state = applyEvent(state, { seq: 4, thread_id: "t", turn_id: T, at: AT, kind: "tool_call_output_delta", tool_call_id: "tool", delta: "partial suffix" })
+  assert.equal(state.blocks[0].stream, "")
+  assert.equal(state.blocks[0].streamOmitted, true)
+  assert.equal(state.lastSeq, 4)
+})

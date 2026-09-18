@@ -27,6 +27,11 @@ const results = (value: unknown) => {
   ;(target.__chatCollaborationResults ??= []).push(value)
   target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify(value))
 }
+const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
+  const target = window as unknown as { __memoryContinue?: () => void; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
+  target.__memoryContinue = resolve
+  target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({ stage, memory: true }))
+})
 const projects: Record<string, Project> = Object.fromEntries(["Kybern", "Website"].map((name, index) => [`project-${index}`, { id: `project-${index}`, name, path: "/project", is_git: true, created_at: at, updated_at: at }]))
 const thread = (id: string, title: string, extra: Partial<Thread> = {}): Thread => ({ id, title, project_id: "project-0", provider: { kind: "claude-code", instance: "default" }, permission_mode: "supervised", status: "idle", cwd: "/project", pinned: false, created_at: at, updated_at: at, last_seq: 0, ...extra })
 const threads: Record<string, Thread> = {
@@ -77,6 +82,15 @@ async function run() {
   useStore.getState().set({ projects, threads, providers, selected: { kind: "thread", id: "main" }, splitView: null, transcripts, composerDrafts: {}, connection: { state: "open" }, rightOpen: false, rightTabs: [], rightTab: null, envOpen: false })
   flushSync(() => createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error) }) }).render(<Shell />))
   await sleep(650)
+  if (preview === "dock-memory") {
+    useStore.getState().set({ rightOpen: true, rightTabs: ["collaboration"], rightTab: "collaboration" })
+    await sleep(500)
+    await sampleMemory("dock-one-panel")
+    useStore.getState().set({ rightTabs: ["collaboration", "activity", "changes", "terminal", "artifacts", "explorer"], rightTab: "collaboration" })
+    await sleep(500)
+    await sampleMemory("dock-six-panels")
+    return results({ preview, pass: document.querySelectorAll(".t-pane").length === 6 && document.querySelectorAll('.t-pane[data-active="false"]').length === 5 })
+  }
   const initialHasNoSetup = !document.body.textContent?.includes("Let agent start helpers") && !!document.querySelector('[data-testid="composer-editor"]')
   const helperToggle = findButton("Expand 2 helpers for Improve sign-in")
   const helperRows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-marquee-host]")).filter(row => row.textContent?.includes("Implement sign-in") || row.textContent?.includes("Review sign-in"))

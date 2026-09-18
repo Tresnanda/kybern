@@ -427,7 +427,8 @@
   transition:
     opacity var(--duration-fast) var(--ease-smooth-out),
     transform var(--duration-fast) var(--ease-smooth-out);
-  will-change: opacity, transform;
+  /* Let WebKit promote only during the transition. A permanent will-change
+     keeps every inactive dock pane in its own graphics backing store. */
 }
 .t-pane[data-active="false"] {
   opacity: 0;

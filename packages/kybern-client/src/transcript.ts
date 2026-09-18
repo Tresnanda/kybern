@@ -49,6 +49,8 @@ export type Block =
       origin: EventOrigin
       call: ToolCall
       stream: string
+      streamRecoverable?: boolean
+      streamOmitted?: boolean
       output: JsonValue | null
       outputOmitted?: boolean
       isError: boolean
@@ -181,6 +183,8 @@ function entryToBlock(e: TranscriptEntry): Block | null {
         origin: e.origin ?? ROOT_ORIGIN,
         call: e.call,
         stream: "",
+        streamRecoverable: e.stream_omitted ?? false,
+        streamOmitted: e.stream_omitted ?? false,
         output: e.output ?? null,
         outputOmitted: e.output_omitted ?? false,
         isError: e.is_error,
@@ -339,7 +343,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "tool_call_output_delta": {
       const idx = findLast(blocks, `tool:${ev.tool_call_id}`)
       const b = blocks[idx]
-      if (b && b.kind === "tool") blocks = replaceAt(blocks, idx, { ...b, stream: b.stream + ev.delta })
+      // Once the exact stream is deferred, individual replay/live suffixes
+      // would be incomplete. Keep the marker and recover the whole sequence.
+      if (b && b.kind === "tool" && !b.streamOmitted) blocks = replaceAt(blocks, idx, { ...b, stream: b.stream + ev.delta })
       break
     }
     case "tool_call_completed": {
@@ -352,6 +358,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         // An omitted canonical result cannot establish stream equivalence.
         // Preserve distinct output and agent receipts until exact hydration.
         stream: !ev.output_omitted && ev.output === b.stream && !/^\s*(?:agent|task)[_ ]?id\s*:/i.test(b.stream) ? "" : b.stream,
+        streamRecoverable: ev.stream_recoverable ?? b.streamRecoverable,
         output: ev.output_omitted ? null : ev.output,
         outputOmitted: ev.output_omitted ?? false,
         isError: ev.is_error,

@@ -525,6 +525,10 @@ expression: schema_for!(ThreadEvent)
           "description": "Transport-only marker used by opt-in compact event subscriptions.\nPersisted events always leave this false; clients fetch the exact\nresult through `threads.tool_output` when it is true.",
           "type": "boolean"
         },
+        "stream_recoverable": {
+          "description": "Transport-only capability marker for exact output-delta recovery.\nDurable events leave this false; compact subscriptions set it when\nthe matching sequence-bounded RPC is available.",
+          "type": "boolean"
+        },
         "is_error": {
           "type": "boolean"
         },

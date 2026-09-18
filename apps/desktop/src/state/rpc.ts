@@ -83,24 +83,49 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         revision = ++nextToolOutputRevision
         toolOutputRevisions.set(block, revision)
       }
-      return { seq: block.seq, turnId: block.turnId, omitted: !!block.outputOmitted, throughSeq: useStore.getState().transcripts[threadId]?.lastSeq, revision, bytes: retainedSize(block.output) }
+      return {
+        seq: block.seq,
+        turnId: block.turnId,
+        omitted: !!block.outputOmitted || !!block.streamOmitted,
+        outputOmitted: !!block.outputOmitted,
+        streamOmitted: !!block.streamOmitted,
+        throughSeq: useStore.getState().transcripts[threadId]?.lastSeq,
+        revision,
+        bytes:
+          (block.outputOmitted ? 0 : retainedSize(block.output)) +
+          (block.streamRecoverable && !block.streamOmitted ? block.stream.length * 2 : 0),
+      }
     },
-    load: (threadId, toolCallId, identity) => rpc().call("threads.tool_output", {
-      thread_id: threadId, tool_call_id: toolCallId, start_seq: identity.seq, through_seq: identity.throughSeq,
-    }),
+    load: async (threadId, toolCallId, identity) => {
+      const result = await rpc().call("threads.tool_output", {
+        thread_id: threadId, tool_call_id: toolCallId, start_seq: identity.seq,
+        through_seq: identity.throughSeq, include_tool_stream: !!identity.streamOmitted,
+      })
+      if (identity.streamOmitted && result.stream === undefined)
+        throw new Error("The daemon did not return the saved tool stream.")
+      return result
+    },
     apply({ threadId, toolCallId, seq, turnId, revision }, result) {
       if (!useStore.getState().transcripts[threadId]) return false
       let changed = false
       useStore.getState().updateTranscript(threadId, (state) => {
         const index = state.blocks.findIndex((block) =>
           block.kind === "tool" && block.call.id === toolCallId &&
-          block.seq === seq && block.turnId === turnId && block.outputOmitted && toolOutputRevisions.get(block) === revision,
+          block.seq === seq && block.turnId === turnId &&
+          (block.outputOmitted || block.streamOmitted) && toolOutputRevisions.get(block) === revision,
         )
         if (index < 0) return state
         const block = state.blocks[index]
         if (block.kind !== "tool") return state
         const blocks = state.blocks.slice()
-        blocks[index] = { ...block, output: result.output, isError: result.is_error, outputOmitted: false }
+        blocks[index] = {
+          ...block,
+          output: block.outputOmitted ? result.output : block.output,
+          stream: block.streamOmitted ? result.stream! : block.stream,
+          isError: result.is_error,
+          outputOmitted: false,
+          streamOmitted: false,
+        }
         toolOutputRevisions.set(blocks[index], revision!)
         changed = true
         return { ...state, blocks }
@@ -112,13 +137,21 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       useStore.getState().updateTranscript(threadId, (state) => {
         const index = state.blocks.findIndex((block) =>
           block.kind === "tool" && block.call.id === toolCallId &&
-          block.seq === seq && block.turnId === turnId && !block.outputOmitted && block.output != null && toolOutputRevisions.get(block) === revision,
+          block.seq === seq && block.turnId === turnId &&
+          (!block.outputOmitted || !block.streamOmitted) &&
+          (block.output != null || block.stream.length > 0) && toolOutputRevisions.get(block) === revision,
         )
         if (index < 0) return state
         const block = state.blocks[index]
         if (block.kind !== "tool") return state
         const blocks = state.blocks.slice()
-        blocks[index] = { ...block, output: null, outputOmitted: true }
+        blocks[index] = {
+          ...block,
+          output: block.output == null ? block.output : null,
+          outputOmitted: block.output == null ? block.outputOmitted : true,
+          stream: block.stream.length === 0 || !block.streamRecoverable ? block.stream : "",
+          streamOmitted: block.stream.length === 0 || !block.streamRecoverable ? block.streamOmitted : true,
+        }
         return { ...state, blocks }
       })
     },
@@ -133,7 +166,9 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     // Snapshot replay can introduce completions that arrived before its rows
     // existed locally. Enroll those too, using each exact invocation sequence.
     for (const block of useStore.getState().transcripts[threadId]?.blocks ?? []) {
-      if (block.kind === "tool" && block.complete && !block.outputOmitted && block.output != null)
+      if (block.kind === "tool" && block.complete &&
+        ((!block.outputOmitted && block.output != null) ||
+          (block.streamRecoverable && !block.streamOmitted && block.stream.length > 0)))
         toolOutputs.track(threadId, block.call.id, block.seq)
     }
   }
@@ -143,8 +178,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     return client
   }
 
-  function transcriptGet(threadId: ThreadId, extra: Omit<ThreadsGetParams, "thread_id" | "include_tool_output"> = {}) {
-    return rpc().call("threads.get", { thread_id: threadId, include_tool_output: false, ...extra })
+  function transcriptGet(threadId: ThreadId, extra: Omit<ThreadsGetParams, "thread_id" | "include_tool_output" | "defer_tool_stream"> = {}) {
+    return rpc().call("threads.get", { thread_id: threadId, include_tool_output: false, defer_tool_stream: true, ...extra })
   }
 
   function connect(ep: EndpointInfo): void {
@@ -498,7 +533,14 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       storeRuntimeTask(ev.task)
     }
     s.receiveEvent(ev)
-    if (ev.kind === "tool_call_completed") toolOutputs.track(ev.thread_id, ev.tool_call_id)
+    if (ev.kind === "tool_call_completed") {
+      toolOutputs.track(ev.thread_id, ev.tool_call_id)
+    } else if (ev.kind === "tool_call_output_delta") {
+      const block = useStore.getState().transcripts[ev.thread_id]?.blocks.findLast(
+        candidate => candidate.kind === "tool" && candidate.call.id === ev.tool_call_id,
+      )
+      if (block?.kind === "tool" && block.complete) toolOutputs.track(ev.thread_id, ev.tool_call_id, block.seq)
+    }
     if (ev.kind.startsWith("collaboration_"))
       collaborationListeners.forEach((listener) => listener(ev))
 

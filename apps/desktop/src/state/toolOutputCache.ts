@@ -7,6 +7,8 @@ export interface ToolOutputIdentity {
   turnId: string
   throughSeq?: number
   revision?: number
+  outputOmitted?: boolean
+  streamOmitted?: boolean
 }
 
 export interface ToolOutputLocation {
@@ -15,12 +17,15 @@ export interface ToolOutputLocation {
   throughSeq?: number
   revision?: number
   omitted: boolean
-  /** Estimated retained payload bytes; metadata never owns the payload. */
+  outputOmitted?: boolean
+  streamOmitted?: boolean
+  /** Estimated recoverable payload bytes; metadata never owns the payload. */
   bytes?: number
 }
 
 export interface ToolOutputResponse<Output> {
   output: Output
+  stream?: string
   is_error: boolean
 }
 
@@ -114,7 +119,9 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
     const current = options.read(threadId, toolCallId, seq)
     const key = keyFor(threadId, toolCallId, seq ?? current?.seq)
     hydrated.delete(key)
-    if (!current || current.omitted) return
+    // A compact live completion can already omit its canonical output while
+    // still owning a large recoverable stream. Budget that partial payload too.
+    if (!current || (current.omitted && (current.bytes ?? 0) === 0)) return
     hydrated.set(key, { threadId, toolCallId, seq: current.seq, turnId: current.turnId,
       throughSeq: current.throughSeq, revision: current.revision, bytes: current.bytes ?? 0 })
     evict()
@@ -153,7 +160,16 @@ export function createToolOutputCache<Output>(options: ToolOutputCacheOptions<Ou
     const pending = loads.get(key)
     if (pending && pending.identity.seq === current.seq && pending.identity.turnId === current.turnId && pending.identity.revision === current.revision) return pending.request
     // Capture scalar identity, not the old block or transcript (which may be large).
-    const identity = { threadId, toolCallId, seq: current.seq, turnId: current.turnId, throughSeq: current.throughSeq, revision: current.revision }
+    const identity = {
+      threadId,
+      toolCallId,
+      seq: current.seq,
+      turnId: current.turnId,
+      throughSeq: current.throughSeq,
+      revision: current.revision,
+      outputOmitted: current.outputOmitted,
+      streamOmitted: current.streamOmitted,
+    }
     const requestGeneration = generation
     const isCurrent = () => !disposed && requestGeneration === generation && loads.get(key)?.identity === identity
     const request = Promise.resolve()

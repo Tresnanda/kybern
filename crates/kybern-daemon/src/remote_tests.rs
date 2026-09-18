@@ -189,6 +189,14 @@ async fn compact_event_subscription_defers_large_tool_output_to_exact_rpc() {
             },
         )
         .unwrap();
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            Some(turn),
+            EventPayload::ToolCallOutputDelta { tool_call_id: tool_call_id.into(), delta: "stream é😀\n".repeat(4) },
+        )
+        .unwrap();
     let output = json!({ "stdout": "exact é😀\n".repeat(1000) });
     let completion = host
         .state
@@ -200,8 +208,18 @@ async fn compact_event_subscription_defers_large_tool_output_to_exact_rpc() {
                 tool_call_id: tool_call_id.into(),
                 output: output.clone(),
                 output_omitted: false,
+                stream_recoverable: false,
                 is_error: true,
             },
+        )
+        .unwrap();
+    let late_delta = host
+        .state
+        .store
+        .event_append(
+            thread.id,
+            Some(turn),
+            EventPayload::ToolCallOutputDelta { tool_call_id: tool_call_id.into(), delta: "late stream\n".into() },
         )
         .unwrap();
 
@@ -236,11 +254,14 @@ async fn compact_event_subscription_defers_large_tool_output_to_exact_rpc() {
             thread_id: thread.id,
             tool_call_id: tool_call_id.into(),
             start_seq: Some(start.seq),
-            through_seq: Some(completion.seq),
+            through_seq: Some(late_delta.seq),
+            include_tool_stream: Some(true),
         })
         .await
         .unwrap();
     assert_eq!(exact.output, output);
+    assert_eq!(exact.stream.as_deref(), Some("stream é😀\nstream é😀\nstream é😀\nstream é😀\nlate stream\n"));
+    assert!(!exact.stream_omitted);
     assert!(exact.is_error);
 
     let full = host.client().await;
@@ -668,6 +689,7 @@ async fn artifacts_paginate_receipts_and_confine_isolated_previews() {
                         tool_call_id: id,
                         output: json!({"url":"https://claude.ai/public/artifacts/example"}),
                         output_omitted: false,
+                        stream_recoverable: false,
                         is_error: index == 1,
                     },
                 )
@@ -684,6 +706,7 @@ async fn artifacts_paginate_receipts_and_confine_isolated_previews() {
                 tool_call_id: "artifact-1".into(),
                 output: json!({"url":"https://claude.ai/public/artifacts/example"}),
                 output_omitted: false,
+                stream_recoverable: false,
                 is_error: true,
             },
         )
@@ -929,6 +952,7 @@ async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rp
         tool_call_id: "reused:é😀".into(),
         output: a.clone(),
         output_omitted: false,
+        stream_recoverable: false,
         is_error: true,
     })
     .seq;
@@ -937,6 +961,7 @@ async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rp
         tool_call_id: "reused:é😀".into(),
         output: corrected.clone(),
         output_omitted: false,
+        stream_recoverable: false,
         is_error: false,
     });
     let second = append(start()).seq;
@@ -945,6 +970,7 @@ async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rp
         tool_call_id: "reused:é😀".into(),
         output: b.clone(),
         output_omitted: false,
+        stream_recoverable: false,
         is_error: false,
     });
     let client = host.client().await;
@@ -960,6 +986,7 @@ async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rp
         tool_call_id: "reused:é😀".into(),
         start_seq: Some(first),
         through_seq: Some(barrier),
+        include_tool_stream: None,
     };
     let result = client.call::<ThreadsToolOutput>(exact.clone()).await.unwrap();
     assert_eq!(result.output, a);

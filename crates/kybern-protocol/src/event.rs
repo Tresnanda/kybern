@@ -129,6 +129,11 @@ pub enum EventPayload {
         /// result through `threads.tool_output` when it is true.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         output_omitted: bool,
+        /// Transport-only capability marker for exact output-delta recovery.
+        /// Durable events leave this false; compact subscriptions set it when
+        /// the matching sequence-bounded RPC is available.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stream_recoverable: bool,
         is_error: bool,
     },
     /// A provider-owned subagent, process, or monitor became visible.
@@ -285,6 +290,7 @@ mod kind_tests {
                 tool_call_id: "a:b".into(),
                 output: serde_json::json!({ "nested": [null, true, "x".repeat(1024 * 1024)] }),
                 output_omitted: false,
+                stream_recoverable: false,
                 is_error: false,
             },
             EventPayload::AssistantTextDelta { message_id: MessageId::nil(), origin: Default::default(), delta: "é".into() },
@@ -318,6 +324,6 @@ mod kind_tests {
             "is_error": false,
         }))
         .unwrap();
-        assert!(matches!(payload, EventPayload::ToolCallCompleted { output_omitted: false, .. }));
+        assert!(matches!(payload, EventPayload::ToolCallCompleted { output_omitted: false, stream_recoverable: false, .. }));
     }
 }

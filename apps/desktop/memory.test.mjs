@@ -110,7 +110,7 @@ test("expanding an omitted tool result fetches only that payload", async () => {
   }))
   try {
     await runtime.hydrateToolOutput("t", "c")
-    assert.deepEqual(fetched, { thread_id: "t", tool_call_id: "c", start_seq: 1, through_seq: 1 })
+    assert.deepEqual(fetched, { thread_id: "t", tool_call_id: "c", start_seq: 1, through_seq: 1, include_tool_stream: false })
     const block = store.getState().transcripts.t.blocks[0]
     assert.equal(block.output, "full result")
     assert.equal(block.outputOmitted, false)
@@ -336,6 +336,7 @@ test("refresh of a large loaded history stays paged and replays concurrent outpu
     requests.push(params)
     assert.ok(params.transcript_limit > 0 && params.transcript_limit <= 500, "every refresh request must be bounded")
     assert.equal(params.include_tool_output, false)
+    assert.equal(params.defer_tool_stream, true)
     if (requests.length === 2) {
       assert.equal(params.through_seq, 2000)
       client.event(event(2001, { kind: "assistant_text_delta", message_id: "m1999", delta: " live" }))
@@ -485,6 +486,128 @@ test("mounted output leases prevent a 13-result runtime refetch cycle", async ()
     for (const release of releases) release()
     f.runtime.disconnect()
   }
+})
+
+test("completed fallback streams use the sequence-safe result budget and rehydrate exactly", async () => {
+  const f = await toolOutputRuntimeFixture("settled-tool-streams", 13)
+  const requests = []
+  f.client.reply = async (method, params) => {
+    if (method !== "threads.tool_output") return { checkpoints: [] }
+    requests.push(params)
+    return {
+      output: null,
+      stream: params.tool_call_id === "c0"
+        ? "agentId: helper-😀\nreceipt\0"
+        : `fallback:${params.tool_call_id}:é😀`,
+      is_error: false,
+    }
+  }
+  f.store.getState().updateTranscript("t", state => ({
+    ...state,
+    lastSeq: 99,
+    blocks: state.blocks.map(block => ({
+      ...block,
+      outputOmitted: false,
+      stream: "",
+      streamRecoverable: true,
+      streamOmitted: true,
+    })),
+  }))
+  try {
+    for (let i = 0; i < 13; i++) await f.runtime.hydrateToolOutput("t", `c${i}`)
+    let block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.stream, "")
+    assert.equal(block.streamOmitted, true)
+    assert.equal(block.outputOmitted, false)
+
+    await f.runtime.hydrateToolOutput("t", "c0")
+    block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.stream, "agentId: helper-😀\nreceipt\0")
+    assert.equal(block.streamOmitted, false)
+    assert.deepEqual(requests.at(-1), {
+      thread_id: "t", tool_call_id: "c0", start_seq: 1, through_seq: 99, include_tool_stream: true,
+    })
+  } finally { f.runtime.disconnect() }
+})
+
+test("legacy live streams are never evicted without an explicit retrieval capability", async () => {
+  const f = await toolOutputRuntimeFixture("legacy-settled-tool-streams", 0)
+  f.client.reply = async () => { throw new Error("legacy streams must not be fetched or evicted") }
+  try {
+    for (let i = 0; i < 13; i++) {
+      const id = `legacy${i}`
+      f.client.event(event(i * 3 + 1, { kind: "tool_call_started", call: { id, name: "bash", input: {} }, origin: { kind: "root" } }))
+      f.client.event(event(i * 3 + 2, { kind: "tool_call_output_delta", tool_call_id: id, delta: `exact legacy ${i}` }))
+      f.client.event(event(i * 3 + 3, { kind: "tool_call_completed", tool_call_id: id, output: null, is_error: false }))
+    }
+    const blocks = f.store.getState().transcripts.t.blocks
+    assert.equal(blocks.length, 13)
+    assert.deepEqual(blocks.map(block => block.stream), Array.from({ length: 13 }, (_, i) => `exact legacy ${i}`))
+    assert.ok(blocks.every(block => !block.streamOmitted && !block.streamRecoverable))
+  } finally { f.runtime.disconnect() }
+})
+
+test("a compact completion immediately evicts an oversized recoverable stream", async () => {
+  const f = await toolOutputRuntimeFixture("compact-live-tool-stream", 0)
+  const exact = `agentId: helper\0${"é😀".repeat(1_400_000)}`
+  let calls = 0
+  f.client.reply = async (method, params) => {
+    if (method !== "threads.tool_output") return { checkpoints: [] }
+    calls++
+    assert.deepEqual(params, { thread_id: "t", tool_call_id: "large", start_seq: 1, through_seq: 3, include_tool_stream: true })
+    return { output: "canonical", stream: exact, is_error: false }
+  }
+  try {
+    f.client.event(event(1, { kind: "tool_call_started", call: { id: "large", name: "Task", input: {} }, origin: { kind: "root" } }))
+    f.client.event(event(2, { kind: "tool_call_output_delta", tool_call_id: "large", delta: exact }))
+    f.client.event(event(3, {
+      kind: "tool_call_completed", tool_call_id: "large", output: null,
+      output_omitted: true, stream_recoverable: true, is_error: false,
+    }))
+    let block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.stream, "")
+    assert.equal(block.streamOmitted, true)
+    assert.equal(block.outputOmitted, true)
+
+    const release = f.runtime.retainToolOutput("t", "large", 1)
+    await f.runtime.hydrateToolOutput("t", "large", 1)
+    block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.output, "canonical")
+    assert.equal(block.stream, exact)
+    assert.equal(block.streamOmitted, false)
+    assert.equal(calls, 1)
+    release()
+    assert.equal(f.store.getState().transcripts.t.blocks[0].streamOmitted, true)
+  } finally { f.runtime.disconnect() }
+})
+
+test("late deltas on a completed recoverable stream remain bounded and hydrate through the latest sequence", async () => {
+  const f = await toolOutputRuntimeFixture("late-settled-tool-stream", 0)
+  const oversized = "late é😀 ".repeat(600_000)
+  const exact = `prefix:${oversized}:tail`
+  f.client.reply = async (method, params) => {
+    if (method !== "threads.tool_output") return { checkpoints: [] }
+    assert.deepEqual(params, { thread_id: "t", tool_call_id: "late", start_seq: 1, through_seq: 5, include_tool_stream: true })
+    return { output: null, stream: exact, is_error: false }
+  }
+  try {
+    f.client.event(event(1, { kind: "tool_call_started", call: { id: "late", name: "Task", input: {} }, origin: { kind: "root" } }))
+    f.client.event(event(2, { kind: "tool_call_output_delta", tool_call_id: "late", delta: "prefix:" }))
+    f.client.event(event(3, { kind: "tool_call_completed", tool_call_id: "late", output: null, stream_recoverable: true, is_error: false }))
+    f.client.event(event(4, { kind: "tool_call_output_delta", tool_call_id: "late", delta: oversized }))
+    let block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.stream, "")
+    assert.equal(block.streamOmitted, true)
+    f.client.event(event(5, { kind: "tool_call_output_delta", tool_call_id: "late", delta: ":tail" }))
+    block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.stream, "", "An omitted stream must not retain a partial late suffix")
+
+    const release = f.runtime.retainToolOutput("t", "late", 1)
+    await f.runtime.hydrateToolOutput("t", "late", 1)
+    block = f.store.getState().transcripts.t.blocks[0]
+    assert.equal(block.stream, exact)
+    release()
+  } finally { f.runtime.disconnect() }
 })
 
 test("shared runtime result leases survive one viewer closing", async () => {

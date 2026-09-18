@@ -22,12 +22,11 @@ import { useStore } from "@/state/store"
 import { selectAttentionItems, type NotificationKind } from "@/state/notifications"
 import { cn } from "@/lib/utils"
 
-// Reuse the sidebar StatusGlyph colour language: amber = waiting on you,
-// destructive = failed, emerald = finished.
+// Notification colors: yellow = waiting on you, red = failed, blue = finished.
 const KIND_DOT: Record<NotificationKind, string> = {
-  blocked: "bg-amber-500 dark:bg-amber-300/90",
-  failed: "bg-destructive",
-  done: "bg-emerald-500 dark:bg-emerald-400/90",
+  blocked: "bg-yellow-500 dark:bg-yellow-300/90",
+  failed: "bg-red-500 dark:bg-red-400/90",
+  done: "bg-blue-500 dark:bg-blue-400/90",
 }
 
 export function NotificationBell() {
@@ -69,7 +68,7 @@ export function NotificationBell() {
                       aria-hidden
                       data-slot="notification-dot"
                       className={cn(
-                        "absolute top-0.5 right-0.5 size-2 rounded-full",
+                        "absolute top-0.5 right-0.5 size-1.5 rounded-full",
                         KIND_DOT[topKind],
                       )}
                     />

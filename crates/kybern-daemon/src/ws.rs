@@ -88,7 +88,7 @@ struct BorrowedEventNotification<'a> {
 /// would briefly retain a second copy of a large result, defeating the point
 /// of compact delivery.
 fn compact_tool_completion(event: &ThreadEvent) -> Option<ThreadEvent> {
-    let EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted, is_error } = &event.payload else {
+    let EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted, is_error, .. } = &event.payload else {
         return None;
     };
     if *output_omitted || !kybern_store::should_omit_tool_output(output) {
@@ -103,6 +103,32 @@ fn compact_tool_completion(event: &ThreadEvent) -> Option<ThreadEvent> {
             tool_call_id: tool_call_id.clone(),
             output: Value::Null,
             output_omitted: true,
+            stream_recoverable: true,
+            is_error: *is_error,
+        },
+    })
+}
+
+/// Mark small completions as stream-recoverable too. A large delta stream can
+/// legitimately end in a tiny or null canonical result, so capability cannot
+/// depend on the completion payload crossing the omission threshold.
+fn mark_stream_recoverable(event: &ThreadEvent) -> Option<ThreadEvent> {
+    let EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted, stream_recoverable, is_error } = &event.payload else {
+        return None;
+    };
+    if *stream_recoverable {
+        return None;
+    }
+    Some(ThreadEvent {
+        seq: event.seq,
+        thread_id: event.thread_id,
+        turn_id: event.turn_id,
+        at: event.at,
+        payload: EventPayload::ToolCallCompleted {
+            tool_call_id: tool_call_id.clone(),
+            output: output.clone(),
+            output_omitted: *output_omitted,
+            stream_recoverable: true,
             is_error: *is_error,
         },
     })
@@ -290,7 +316,14 @@ impl ConnectionCtx {
         let mut cursor = after;
         while cursor < head {
             let store = state.store.clone();
-            let batch = tokio::task::spawn_blocking(move || store.events_after_bounded(thread_id, cursor, 500, 2 * 1024 * 1024)).await??;
+            let batch = tokio::task::spawn_blocking(move || {
+                if include_tool_output {
+                    store.events_after_bounded(thread_id, cursor, 500, 2 * 1024 * 1024)
+                } else {
+                    store.events_after_bounded_compact(thread_id, cursor, 500, 2 * 1024 * 1024)
+                }
+            })
+            .await??;
             if batch.is_empty() {
                 break;
             }
@@ -308,6 +341,11 @@ impl ConnectionCtx {
     async fn send_event(&self, subscription_id: SubscriptionId, event: &ThreadEvent, include_tool_output: bool) {
         if !include_tool_output && let Some(compact) = compact_tool_completion(event) {
             let params = BorrowedEventNotification { subscription_id, event: &compact };
+            let _ = self.out.notify(EVENT_NOTIFICATION, params).await;
+            return;
+        }
+        if !include_tool_output && let Some(marked) = mark_stream_recoverable(event) {
+            let params = BorrowedEventNotification { subscription_id, event: &marked };
             let _ = self.out.notify(EVENT_NOTIFICATION, params).await;
             return;
         }
@@ -516,7 +554,13 @@ mod typed_notification_memory_tests {
             thread_id: ThreadId::nil(),
             turn_id: Some(TurnId::nil()),
             at: "2026-09-17T00:00:00Z".parse().unwrap(),
-            payload: EventPayload::ToolCallCompleted { tool_call_id: "a:b\n\0é".into(), output, output_omitted: false, is_error: false },
+            payload: EventPayload::ToolCallCompleted {
+                tool_call_id: "a:b\n\0é".into(),
+                output,
+                output_omitted: false,
+                stream_recoverable: false,
+                is_error: false,
+            },
         }
     }
 
@@ -551,17 +595,21 @@ mod typed_notification_memory_tests {
     fn compact_subscription_event_replaces_only_large_completion_payload() {
         let original = event(serde_json::json!({ "long": "x".repeat(kybern_store::LARGE_TOOL_OUTPUT_BYTES + 1) }));
         let compact = compact_tool_completion(&original).expect("large completion should be compacted");
-        let EventPayload::ToolCallCompleted { output, output_omitted, tool_call_id, is_error } = &compact.payload else {
+        let EventPayload::ToolCallCompleted { output, output_omitted, stream_recoverable, tool_call_id, is_error } = &compact.payload
+        else {
             panic!("expected tool completion")
         };
         assert_eq!(tool_call_id, "a:b\n\0é");
         assert_eq!(output, &Value::Null);
         assert!(*output_omitted);
+        assert!(*stream_recoverable);
         assert!(!is_error);
         assert!(serde_json::to_string(&compact).unwrap().len() < 512);
 
         let small = event(serde_json::json!("ok"));
         assert!(compact_tool_completion(&small).is_none());
+        let marked = mark_stream_recoverable(&small).expect("small completion remains stream-recoverable");
+        assert!(matches!(marked.payload, EventPayload::ToolCallCompleted { stream_recoverable: true, .. }));
         let full_wire = serde_json::to_value(&small.payload).unwrap();
         assert!(full_wire.get("output_omitted").is_none(), "legacy full wire stays unchanged");
     }

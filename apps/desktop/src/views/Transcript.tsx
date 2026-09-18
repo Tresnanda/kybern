@@ -218,7 +218,7 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
     prompt: block ? runtimeActivityPrompt(block.call) : null,
     result: block ? runtimeActivityResult(block.output, block.stream) : null,
     resultPending: block ? !block.complete || !!(task && isRuntimeTaskActive(task)) : !!(task && isRuntimeTaskActive(task)),
-    resultLoading: !!block?.outputOmitted,
+    resultLoading: !!block && (!!block.outputOmitted || !!block.streamOmitted),
     resultTool: block,
     failed: block?.isError || task?.status === "failed",
     entries,
@@ -263,7 +263,7 @@ export function Transcript({
     return retainToolOutput(threadId, activityToolCallId, activityToolSeq)
   }, [threadId, activityToolCallId, activityToolSeq])
   useEffect(() => {
-    if (connected && activityResult?.outputOmitted) void hydrateToolOutput(threadId, activityResult.call.id, activityResult.seq)
+    if (connected && (activityResult?.outputOmitted || activityResult?.streamOmitted)) void hydrateToolOutput(threadId, activityResult.call.id, activityResult.seq)
   }, [threadId, activityResult, connected])
   const openAgentActivity = useCallback<OpenAgentActivity>((target) => {
     const selection: AgentActivitySelection = { ...target, threadId }
@@ -1312,7 +1312,7 @@ function ToolRow({
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
     const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted }
+    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1388,10 +1388,10 @@ function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface
     return retainToolOutput(threadId, block.call.id, block.seq)
   }, [threadId, block.call.id, block.seq])
   useEffect(() => {
-    if (connected && threadId && block.outputOmitted) void hydrateToolOutput(threadId, block.call.id, block.seq)
+    if (connected && threadId && (block.outputOmitted || block.streamOmitted)) void hydrateToolOutput(threadId, block.call.id, block.seq)
   }, [connected, threadId, block])
   const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
-  if (block.outputOmitted && !out.trim() && screenshots.length === 0) {
+  if ((block.outputOmitted || block.streamOmitted) && !out.trim() && screenshots.length === 0) {
     return <p className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
   }
   return (

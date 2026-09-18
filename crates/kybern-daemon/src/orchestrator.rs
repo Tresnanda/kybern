@@ -5197,6 +5197,7 @@ impl Orchestrator {
                         tool_call_id: tool_call_id.clone(),
                         output: output.clone(),
                         output_omitted: false,
+                        stream_recoverable: false,
                         is_error,
                     },
                 )?;
