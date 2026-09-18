@@ -25,7 +25,14 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "live-tool-memory" && process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED === "1" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "theme-provider" ? [{
+    name: "theme-provider-fixture-tauri",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/components/theme-provider.tsx")) return
+      return code.replace('"@/lib/tauri"', JSON.stringify(path.resolve(import.meta.dirname, "theme-provider-tauri.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "live-tool-memory" && process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED === "1" ? [{
     name: "live-tool-memory-unhosted-earlier-status-control",
     enforce: "pre",
     transform(code, id) {

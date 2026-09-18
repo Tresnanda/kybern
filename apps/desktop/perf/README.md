@@ -55,11 +55,11 @@ matched release-daemon measurements, and the remaining whole-app and page-aware
 reconstruction gates. Run `tool-leases` with a release daemon to exercise real
 RPC hydration of 16 results shared across two native WebKit panes.
 
-See [native window material memory](native-window-material-memory-2026-09-18.md)
-for the opaque-mode Tauri fix. The native macOS effect view now exists only
-while translucent surfaces are enabled; the report records an exploratory
-production-CSP WebKit diagnostic, its concurrent-run limitation, and its
-substantial run-to-run variance. It is not accepted savings evidence.
+The [native window material experiment](native-window-material-memory-2026-09-18.md)
+is superseded: clearing the effect when full translucency is off broke the
+normal macOS sidebar in v0.4.8. Preserve native vibrancy in both content modes.
+The exploratory memory figures are not accepted savings evidence, and material
+checks must include the production ThemeProvider lifecycle and sidebar.
 
 See [scroll tile accumulation](memory-tiles-2026-09-15.md) for the attribution of
 the remaining native peak to WebKit's scroll tiles, the paint-host layer rule,
