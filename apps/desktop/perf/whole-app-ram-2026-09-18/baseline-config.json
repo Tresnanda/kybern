@@ -1,0 +1,27 @@
+{
+  "identifier": "dev.kybern.memory-profile.livebase1",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "kybern",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "focus": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 21 },
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["underWindowBackground"],
+          "state": "active",
+          "radius": 0
+        }
+      }
+    ]
+  }
+}

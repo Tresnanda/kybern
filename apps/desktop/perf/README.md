@@ -32,6 +32,11 @@ See [live tool result retention](live-tool-retention-2026-09-18.md) for the live
 completion path that previously bypassed lazy-result budgets, its byte/count
 limits and exact-content fixture, and the daemon/CLI retention follow-up.
 
+See [the whole-app live-result memory check](whole-app-ram-2026-09-18/REPORT.md)
+for the isolated release Tauri coalition pair, exact 64-result content check,
+WebKit allocator evidence, lifecycle review and the explicit distinction between
+an unchanged burst peak and lower settled allocated bytes.
+
 See [the consolidated memory review](memory-review-2026-09-17/REPORT.md) for
 snapshot-safe tool hydration, mounted result leases, borrowed daemon paging,
 matched release-daemon measurements, and the remaining whole-app and page-aware
