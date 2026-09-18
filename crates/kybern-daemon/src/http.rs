@@ -205,7 +205,10 @@ mod tests {
 
 #[derive(Deserialize)]
 struct ImageQuery {
-    path: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default)]
     preview: bool,
 }
@@ -223,10 +226,28 @@ async fn get_thread_image(
             return (StatusCode::FORBIDDEN, "token cannot read images").into_response();
         }
         let Ok(Some(thread)) = state.store.thread_get(id) else { return (StatusCode::NOT_FOUND, "thread not found").into_response() };
+        let path = query.path.as_deref().filter(|value| !value.is_empty());
+        let url = query.url.as_deref().filter(|value| !value.is_empty());
+        match (path, url) {
+            (None, Some(url)) => {
+                if !query.preview {
+                    return (StatusCode::BAD_REQUEST, "Remote images can only be loaded as a preview. Open the original image.")
+                        .into_response();
+                }
+                return crate::remote_preview::response(url).await;
+            }
+            (Some(_), Some(_)) | (None, None) => {
+                return (StatusCode::BAD_REQUEST, "provide a path or a remote image URL").into_response();
+            }
+            (Some(_), None) => {}
+        }
         let Ok(root) = tokio::fs::canonicalize(&thread.cwd).await else {
             return (StatusCode::NOT_FOUND, "thread folder is unavailable").into_response();
         };
-        let Ok(path) = tokio::fs::canonicalize(root.join(&query.path)).await else {
+        let Some(path) = path else {
+            return (StatusCode::BAD_REQUEST, "provide a path or a remote image URL").into_response();
+        };
+        let Ok(path) = tokio::fs::canonicalize(root.join(path)).await else {
             return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
         };
         if !path.starts_with(&root) {
@@ -277,7 +298,7 @@ async fn get_thread_image(
     with_asset_cors(response, origin)
 }
 
-fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if bytes.starts_with(&[255, 216, 255]) {

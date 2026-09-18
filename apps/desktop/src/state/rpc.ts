@@ -986,7 +986,11 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   }
 
   async function fetchThreadImage(threadId: string, path: string, signal: AbortSignal, preview = false): Promise<Blob> {
-    const response = await fetch(`${httpBase}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(path)}${preview ? "&preview=true" : ""}`, { headers: { authorization: `Bearer ${token}` }, signal })
+    const remote = /^https?:\/\//i.test(path)
+    const query = remote
+      ? `url=${encodeURIComponent(path)}&preview=true`
+      : `path=${encodeURIComponent(path)}${preview ? "&preview=true" : ""}`
+    const response = await fetch(`${httpBase}/threads/${encodeURIComponent(threadId)}/image?${query}`, { headers: { authorization: `Bearer ${token}` }, signal })
     if (!response.ok) throw new Error((await response.text()).trim() || "Unable to load image. Try again.")
     return response.blob()
   }

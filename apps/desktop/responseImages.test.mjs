@@ -14,6 +14,7 @@ test("packaged and development CSP allow the remote image schemes accepted by th
 test("image URLs retain machine-local paths and reject active or unknown schemes", () => {
   assert.deepEqual(imageSource("screens/first%20pass.png"), { kind: "local", value: "screens/first pass.png" })
   assert.deepEqual(imageSource("file:///workspace/a%20b.png"), { kind: "local", value: "/workspace/a b.png" })
+  assert.deepEqual(imageSource("https://example.com/a.png"), { kind: "remote", value: "https://example.com/a.png" })
   for (const src of ["javascript:alert(1)", "data:text/html;base64,YQ==", "data:image/svg+xml;base64,YQ==", "file://other/a.png", "//other/a.png", "%zz"]) assert.equal(imageSource(src), null)
 })
 

@@ -7,11 +7,22 @@ const attempts = new Map<string, number>()
 export async function openExternal(url: string) { external.push(url) }
 export async function fetchThreadImage(_thread: string, path: string, signal: AbortSignal, preview = false) {
   fetched.push(path)
-  requests.push({ path, preview })
+  requests.push({ path, preview: preview || /^https?:\/\//i.test(path) })
   attempts.set(path, (attempts.get(path) ?? 0) + 1)
   if (path.endsWith("retry.png") && attempts.get(path) === 1) throw new Error("Connection interrupted")
   if (path.startsWith("/tmp/")) throw new Error("image must be inside the thread folder")
   signal.throwIfAborted()
+  if (/^https?:\/\//i.test(path)) {
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    signal.throwIfAborted()
+    const canvas = document.createElement("canvas")
+    canvas.width = 560
+    canvas.height = 352
+    const ctx = canvas.getContext("2d")!
+    ctx.fillStyle = "#181818"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    return new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob!), "image/png"))
+  }
   if (path.includes("sized-")) {
     await new Promise((resolve) => setTimeout(resolve, 120))
     signal.throwIfAborted()

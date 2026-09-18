@@ -81,6 +81,20 @@ async function run() {
   const original = document.querySelector<HTMLImageElement>('[role="dialog"] img')!
   await original.decode()
   check(original.naturalHeight === 1800 && original.src !== previews[0]!.src, "Viewer does not fetch the full image")
+  render("![Remote photo](https://example.com/photo.png)")
+  await waitFor(() => root.querySelector(".response-image-preview img"), "Remote preview did not mount")
+  const remoteChip = root.querySelector<HTMLImageElement>(".response-image-preview img")!
+  await remoteChip.decode()
+  check(remoteChip.src.startsWith("blob:"), "Remote chip decoded the original URL")
+  check(remoteChip.naturalWidth <= 560 && remoteChip.naturalHeight <= 352, "Remote chip decode exceeds pixel budget")
+  check(fetched.includes("https://example.com/photo.png"), "Remote preview bypassed the thread image endpoint")
+  check(requests.some((request) => request.path === "https://example.com/photo.png" && request.preview), "Remote chip fetched the original raster")
+  remoteChip.closest("button")!.click()
+  await waitForImage()
+  const remoteDialog = document.querySelector<HTMLImageElement>('[role="dialog"] img')!
+  check(remoteDialog.src === "https://example.com/photo.png", "Dialog lost the original remote image")
+  document.querySelector<HTMLButtonElement>('[role="dialog"] [aria-label="Close"]')!.click()
+  await waitFor(() => !document.querySelector('[role="dialog"]'), "Remote preview did not close")
   render("![Offscreen](artifacts/sized-offscreen.png)")
   root.style.marginTop = "3000px"
   await sleep(100)

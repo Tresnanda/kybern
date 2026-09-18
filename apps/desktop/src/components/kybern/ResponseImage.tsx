@@ -86,9 +86,10 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const initialError: ImageError | null = !target ? { message: "This image format is not supported.", retryable: false }
     : target.kind === "local" && !threadId ? { message: "Open the image from its conversation.", retryable: false } : null
   const preview = useRef<HTMLSpanElement>(null)
+  const remote = target?.kind === "remote"
   const [requested, setRequested] = useState(false)
   const [retry, setRetry] = useState(0)
-  const [url, setUrl] = useState(direct)
+  const [url, setUrl] = useState(remote && threadId ? "" : direct)
   const [error, setError] = useState(initialError)
   const [loaded, setLoaded] = useState(false)
   const [open, setOpen] = useState(false)
@@ -114,14 +115,18 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
 
   useEffect(() => {
     const target = imageSource(source)
-    if (!requested || isLink || target?.kind !== "local" || !threadId) return
+    if (!requested || isLink || !threadId || !target || (target.kind !== "local" && target.kind !== "remote")) return
     const controller = new AbortController()
     let objectUrl = ""
     void fetchThreadImage(threadId, target.value, controller.signal, true).then((blob) => {
       if (controller.signal.aborted) return
       objectUrl = URL.createObjectURL(blob)
       setUrl(objectUrl)
-    }).catch((error: unknown) => { if (!controller.signal.aborted) setError(responseImageError(error)) })
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      if (target.kind === "remote") { setUrl(target.value); return }
+      setError(responseImageError(error))
+    })
     return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [source, threadId, requested, retry, isLink])
 
@@ -147,7 +152,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     }
     setOpen(next)
   }
-  const retryPreview = () => { setError(null); setLoaded(false); setUrl(direct); setRetry((n) => n + 1) }
+  const retryPreview = () => { setError(null); setLoaded(false); setUrl(remote && threadId ? "" : direct); setRetry((n) => n + 1) }
   const retryOriginal = () => { setOriginalError(null); setOriginal(direct); setOriginalRetry((n) => n + 1) }
   const displayError = (): ImageError => ({ message: "Unable to display image. Check that the file is still available, then retry.", retryable: true })
   const runImageAction = async (kind: ImageAction) => {
