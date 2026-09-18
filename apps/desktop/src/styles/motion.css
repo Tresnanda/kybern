@@ -409,6 +409,16 @@
   opacity: 0;
 }
 
+/* Dock hover and selection share their shape. The moving pill must not inherit
+   the square scroll container's radius. Keep a rounded fallback for WebKit. */
+.dock-tab-shape,
+.t-tabs-pill.dock-tab-shape {
+  border-radius: var(--radius-lg);
+}
+@supports (corner-shape: squircle) {
+  .dock-tab-shape { corner-shape: squircle; }
+}
+
 /* ─── Pane switch ───────────────────────────────────────────────────────────
    Panes that stay mounted while hidden (dock tabs). Hidden panes sit slightly
    scaled and lifted so the cross-fade has direction; no blur here because

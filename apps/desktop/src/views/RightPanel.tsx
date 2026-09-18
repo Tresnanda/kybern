@@ -30,7 +30,7 @@ import { ExplorerPane } from "./Explorer"
 import { TerminalWorkspace } from "./Terminal"
 import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME, DOCK_HEADER_ICON_BUTTON_CLASS } from "./chrome"
 
-const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} inline-flex min-w-0 items-center !gap-0 !px-0`
+const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} dock-tab-shape inline-flex min-w-0 items-center !gap-0 !px-0`
 const DOCK_TAB_ACTIVE = "text-[var(--color-text-foreground)]"
 const DOCK_PANELS = [
   { id: "collaboration", label: "Agents", Icon: UsersIcon },
@@ -85,7 +85,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "drag-region gap-1 px-1.5")}
       >
         <div ref={tabsRef} className="t-tabs flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {tab && <span aria-hidden className="t-tabs-pill z-0 rounded-lg bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />}
+          {tab && <span aria-hidden className="t-tabs-pill dock-tab-shape z-0 bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />}
           {tabs.map((id) => {
             const { label, Icon } = DOCK_PANELS.find((panel) => panel.id === id)!
             return <DockTab key={id} active={workspaceActive && tab === id} onClick={() => set({ rightTab: id })} onClose={() => closeTab(id)} icon={<Icon className="size-3.5 shrink-0 opacity-70" />} label={id === "collaboration" && projectCoordinator ? "Project" : label}>

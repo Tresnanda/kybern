@@ -141,7 +141,13 @@ async function run() {
   const closeSelectsNeighbor = useStore.getState().rightTab === "changes" && dock().querySelectorAll(".t-pane").length === 1
   await click("Close Diff panel")
   const closeLastEmptiesDock = dock().textContent?.includes("Add a panel with +.") && dock().querySelectorAll(".t-pane").length === 0 && document.activeElement?.getAttribute("aria-label") === "Add panel"
-  const dockChecks = { messageInitiallyCollapsed, messageReadable, messageUnmounted, sidebarDisclosure, updatesInitiallyCollapsed, updatesReadable, emptyDock, firstPanel, noDuplicatePanels, dockReopensChoices, closeSelectsNeighbor, closeLastEmptiesDock }
+  await addPanel("Terminal")
+  const activePill = getComputedStyle(dock().querySelector(".t-tabs-pill")!)
+  const terminalTab = getComputedStyle(dock().querySelector("[data-tab-active='true']")!)
+  const terminalShapeMatches = parseFloat(activePill.borderTopLeftRadius) > 0 && activePill.borderRadius === terminalTab.borderRadius && activePill.getPropertyValue("corner-shape") === terminalTab.getPropertyValue("corner-shape")
+  if (preview === "terminal-shape") return results({ preview, pass: terminalShapeMatches, radius: activePill.borderRadius, corner: activePill.getPropertyValue("corner-shape") })
+  await click("Close Terminal panel")
+  const dockChecks = { messageInitiallyCollapsed, messageReadable, messageUnmounted, sidebarDisclosure, updatesInitiallyCollapsed, updatesReadable, emptyDock, firstPanel, noDuplicatePanels, dockReopensChoices, closeSelectsNeighbor, closeLastEmptiesDock, terminalShapeMatches }
   await click("Collapse panel")
   await click(findButton("Implement sign-in") ? "Implement sign-in" : "Implement sign-inWorking")
   const back = findButton("Main thread") ?? findButton("Back to Improve sign-in")

@@ -11,7 +11,7 @@ const at = "2026-09-14T10:00:00Z"
 const coordinatorPlan: ContextEntry = { id: "coordinator-plan", group_id: "coordinator-group", key: "current-plan", kind: "plan", body: "Confirm the local workflow, delegate the desktop and mobile changes, then review both results.", author_thread_id: "project-coordinator", user_authored: false, revision: 2, source_refs: [], created_at: at, updated_at: at }
 const coordinatorFinding: ContextEntry = { id: "coordinator-finding", group_id: "coordinator-group", key: "native-review", kind: "research", body: "The draft stays inert until Send, and the coordinator reopens with its project knowledge intact.", author_thread_id: "project-coordinator", user_authored: false, revision: 1, source_refs: [], created_at: at, updated_at: at }
 const coordinatorResult: CollaborationAssignment = { id: "coordinator-result", group_id: "coordinator-group", owner_thread_id: "project-coordinator", created_by_thread_id: "project-coordinator", title: "Review coordinator integration", instructions: "Verify the desktop and mobile coordinator flows.", kind: "review", status: "completed", depth: 1, revision: 2, created_at: at, updated_at: at, result: { outcome: "success", summary: "Verified the inert draft, harness switching, project plan, and returned work across desktop and mobile.", changes: ["Desktop and mobile coordinator UX"], checks: ["Native WebKit fixture", "Mobile typecheck"], artifacts: [], unresolved: [], completed_at: at } }
-const connection = { call }
+const connection = { call, onNotification: () => () => {}, onStatus: () => () => {} }
 const runtime = { rpc, loadThread }
 export function rpc() { return connection }
 export function activeRuntime() { return runtime }
@@ -38,6 +38,8 @@ export const queueMessage = sendMessage
 async function call(method: string, params: any): Promise<any> {
   chatFixture.calls.push({ method, params: structuredClone(params) })
   const state = useStore.getState()
+  if (method === "terminals.create") return { id: params.terminal_id, thread_id: params.thread_id, status: "running", cols: params.cols, rows: params.rows }
+  if (method.startsWith("terminals.")) return method === "terminals.list" ? { terminals: [] } : {}
   if (method === "threads.search") {
     const query = String(params.query ?? "").toLowerCase()
     return { threads: Object.values(state.threads).filter((thread) => (params.all_projects || !params.project_id || params.project_id === thread.project_id) && (params.include_archived || thread.status !== "archived") && (!query || thread.title.toLowerCase().includes(query))).slice(0, params.limit ?? 12).map((thread) => ({ thread })), next_cursor: null }
