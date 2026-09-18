@@ -7,6 +7,7 @@ import { IconSwap } from "@/components/kybern/motion"
 import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
+import { fitImageBlob, inlineImageBlob, thumbnailUsesSource, THUMBNAIL_MAX_EDGE } from "@/lib/imageFit"
 import { isTauri, platform, saveImageFile, writeImageClipboard } from "@/lib/tauri"
 import { fetchThreadImage } from "@/state/rpc"
 import { cn } from "@/lib/utils"
@@ -88,7 +89,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const preview = useRef<HTMLSpanElement>(null)
   const [requested, setRequested] = useState(false)
   const [retry, setRetry] = useState(0)
-  const [url, setUrl] = useState(direct)
+  const [url, setUrl] = useState(thumbnail && direct && !thumbnailUsesSource(direct) ? "" : direct)
   const [error, setError] = useState(initialError)
   const [loaded, setLoaded] = useState(false)
   const [open, setOpen] = useState(false)
@@ -126,6 +127,34 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   }, [source, threadId, requested, retry, isLink])
 
   useEffect(() => {
+    if (!thumbnail || !direct || isLink || thumbnailUsesSource(direct)) return
+    const controller = new AbortController()
+    let objectUrl = ""
+    void (async () => {
+      const blob = await inlineImageBlob(direct, controller.signal)
+      if (controller.signal.aborted) return
+      const fitted = await fitImageBlob(blob, THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE, controller.signal)
+      if (controller.signal.aborted) return
+      if (fitted === blob) {
+        setUrl(direct)
+        return
+      }
+      if (controller.signal.aborted) return
+      objectUrl = URL.createObjectURL(fitted)
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(objectUrl)
+        objectUrl = ""
+        return
+      }
+      setUrl(objectUrl)
+    })().catch((error: unknown) => { if (!controller.signal.aborted) setError(responseImageError(error)) })
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [thumbnail, direct, isLink, retry])
+
+  useEffect(() => {
     const target = imageSource(source)
     if (!open || target?.kind !== "local" || !threadId) return
     const controller = new AbortController()
@@ -147,7 +176,12 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     }
     setOpen(next)
   }
-  const retryPreview = () => { setError(null); setLoaded(false); setUrl(direct); setRetry((n) => n + 1) }
+  const retryPreview = () => {
+    setError(null)
+    setLoaded(false)
+    setUrl(thumbnail && direct && !thumbnailUsesSource(direct) ? "" : direct)
+    setRetry((n) => n + 1)
+  }
   const retryOriginal = () => { setOriginalError(null); setOriginal(direct); setOriginalRetry((n) => n + 1) }
   const displayError = (): ImageError => ({ message: "Unable to display image. Check that the file is still available, then retry.", retryable: true })
   const runImageAction = async (kind: ImageAction) => {
@@ -208,9 +242,9 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
 
   return <span ref={preview} className={isLink ? "inline" : thumbnail ? "block size-16 shrink-0" : compact ? "block w-[280px] max-w-full" : "my-3 block w-[280px] max-w-full"}>
     {isLink ? <a href={source} className="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline" onClick={(event) => { event.preventDefault(); changeOpen(true) }}>{linkLabel}</a>
-      : thumbnail && (error || !url) ? <button type="button" aria-label={`Preview ${label}`} className="response-image-preview response-image-thumbnail rounded-xl p-1 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => changeOpen(true)}>Preview image</button>
+      : thumbnail && (error || !url) ? <button type="button" aria-label={`Preview ${label}`} data-image-original={direct || source} className="response-image-preview response-image-thumbnail rounded-xl p-1 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => changeOpen(true)}>Preview image</button>
       : error || !url ? <span className="response-image-preview">{status(error, retryPreview, true)}</span>
-      : <button type="button" aria-label={`Preview ${label}`} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl")} onClick={() => changeOpen(true)}>
+      : <button type="button" aria-label={`Preview ${label}`} data-image-original={direct || source} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl")} onClick={() => changeOpen(true)}>
         <img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
       </button>}
     <Dialog open={open} onOpenChange={changeOpen}>
