@@ -26,7 +26,6 @@ import {
   AnalyticsIcon,
   ArchiveIcon,
   GitPullRequestIcon,
-  BellIcon,
   BookIcon,
   CircleQuestionIcon,
   ClockIcon,
@@ -69,6 +68,7 @@ import { createProjectThreadsSelector, useStore } from "@/state/store"
 
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
+import { NotificationBell } from "./NotificationBell"
 import { ProjectPicker } from "./ProjectPicker"
 import { SidebarUpdateButton } from "./AppUpdate"
 
@@ -144,18 +144,8 @@ export function ThreadSidebar() {
             </ComposerPickerMenuPopup>
           </Menu>
           <div className="ml-auto flex items-center gap-1.5">
-            <SidebarIconButton icon={SearchIcon} label="Search" glyph="leading" size="header" tooltip={`Search (${mod}K)`} tooltipSide="bottom" className="text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]" onClick={() => setTimeout(() => set({ paletteOpen: true }), 0)} />
-            <SidebarIconButton
-              icon={BellIcon}
-              label="Activity"
-              glyph="leading"
-              size="header"
-              tooltip="Activity"
-              tooltipSide="bottom"
-              className="text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]"
-              disabled={selected.kind !== "thread"}
-              onClick={() => set({ rightOpen: true, rightTab: "activity" })}
-            />
+            <SidebarIconButton icon={SearchIcon} label="Search" glyph="leading" size="header" tooltip={`Search (${mod}K)`} tooltipSide="bottom" className="text-foreground/80 hover:text-foreground" onClick={() => setTimeout(() => set({ paletteOpen: true }), 0)} />
+            <NotificationBell />
           </div>
         </div>
 

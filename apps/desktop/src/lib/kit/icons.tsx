@@ -39,6 +39,7 @@ import {
   Layout01Icon as HiRows3,
   CheckListIcon as HiListCheck,
   Task01Icon as HiListTodo,
+  Notification03Icon as HiBell,
   Loading03Icon as HiLoader,
   ArrowExpand01Icon as HiMaximize,
   ArrowShrink01Icon as HiMinimize,
@@ -82,7 +83,6 @@ import {
   Copy01Icon as HcCopy,
   Link01Icon as HcLink,
   GitCompareIcon as HcDiff,
-  Note01Icon as HcNotes,
   Clock01Icon as HcClock,
   SourceCodeIcon as HcCode,
   FolderLibraryIcon as HcFolders,
@@ -226,7 +226,9 @@ export const DiffIcon = hugeIcon(HcDiff);
 export const DownloadIcon = hugeIcon(HiDownload);
 // The clock doubles as the automation glyph everywhere it appears (meta chip,
 // Automations nav, slash command, created card, environment section).
-export const BellIcon: LucideIcon = hugeIcon(HcNotes);
+// Real bell for notifications (the Activity/notification button and the
+// Notifications settings tab). Previously mis-pointed at a notes glyph.
+export const BellIcon: LucideIcon = hugeIcon(HiBell);
 export const ClockIcon = hugeIcon(HcClock);
 export const EllipsisIcon = hugeIcon(HiDots);
 export const ExternalLinkIcon = hugeIcon(HiExternalLink);
