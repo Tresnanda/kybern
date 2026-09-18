@@ -8,6 +8,7 @@ import { Button } from "@/components/kit/button"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
 import { openExternal } from "@/lib/tauri"
 import { observeResizeFrame } from "@/lib/resizeObserver"
+import { usePhysicalWindowHold } from "@/lib/usePhysicalWindowHold"
 import "@xterm/xterm/css/xterm.css"
 
 import { createTerminalRenderer } from "@/lib/terminalRenderer"
@@ -102,6 +103,7 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
   const activeKey = useStore((s) => s.activeTerminalTab[threadId] ?? null)
   const set = useStore((s) => s.set)
   const clis = useAgentClis()
+  const windowHeld = usePhysicalWindowHold()
 
   const setTabs = useCallback(
     (f: (tabs: TerminalTab[]) => TerminalTab[], nextActive?: string | null) =>
@@ -197,7 +199,7 @@ export function TerminalWorkspace({ threadId, active }: { threadId: ThreadId; ac
           const isActive = active && t.key === current?.key
           return (
             <div key={t.key} className={cn("absolute inset-0 min-h-0 min-w-0 transition-opacity", isActive ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0")}>
-              <TerminalInstance threadId={threadId} tab={t} active={isActive} onExit={() => closeTab(t.key)} onTitle={(title) => retitle(t.key, title)} />
+              <TerminalInstance threadId={threadId} tab={t} active={isActive} windowHeld={windowHeld} onExit={() => closeTab(t.key)} onTitle={(title) => retitle(t.key, title)} />
             </div>
           )
         })}
@@ -228,8 +230,9 @@ function TabChip({ tab, active, onSelect, onClose }: { tab: TerminalTab; active:
   )
 }
 
-/** One xterm bound to one daemon pty. Created on first show, kept alive while its tab exists. */
-function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId: ThreadId; tab: TerminalTab; active: boolean; onExit: () => void; onTitle: (t: string) => void }) {
+/** PTY stays for the tab. xterm/WebGL are dropped while the window is occluded
+ * or minimized — not on blur — and restored from daemon scrollback replay. */
+function TerminalInstance({ threadId, tab, active, windowHeld, onExit, onTitle }: { threadId: ThreadId; tab: TerminalTab; active: boolean; windowHeld: boolean; onExit: () => void; onTitle: (t: string) => void }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [loginUrl, setLoginUrl] = useState<string | null>(null)
@@ -269,7 +272,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
   useEffect(() => {
     const term = termRef.current
     const fit = fitRef.current
-    if (!active || !term || !fit) return
+    if (!active || windowHeld || !term || !fit) return
     const raf = requestAnimationFrame(() => {
       fit.fit()
       term.refresh(0, Math.max(0, term.rows - 1))
@@ -277,11 +280,92 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       term.focus()
     })
     return () => cancelAnimationFrame(raf)
-  }, [active, ready])
+  }, [active, ready, windowHeld])
+
+  useEffect(() => {
+    if (!cwd || !everActive) return
+    let disposed = false
+    const client = rpc()
+    const ownerStore = useStore
+    let attaching = false
+    let exitTimer: ReturnType<typeof setTimeout> | undefined
+    const loginOutput = tab.connectorLogin ? connectorLoginOutput() : null
+    const offOut = client.onNotification(TERMINAL_OUTPUT_NOTIFICATION, (p) => {
+      const n = p as TerminalOutputNotification
+      if (n.terminal_id !== idRef.current) return
+      termRef.current?.write(b64ToBytes(n.data))
+      const url = loginOutput?.(n.data)
+      if (url) setLoginUrl(url)
+    })
+    const offExit = client.onNotification(TERMINAL_EXITED_NOTIFICATION, (p) => {
+      const n = p as TerminalExitedNotification
+      if (n.terminal_id !== idRef.current) return
+      termRef.current?.write(`\r\n\x1b[2m[process exited${n.exit_code != null ? ` with ${n.exit_code}` : ""}]\x1b[0m\r\n`)
+      idRef.current = null
+      exitTimer = setTimeout(() => { if (!disposed) onExitRef.current() }, 600)
+    })
+
+    const attach = async () => {
+      if (disposed || attaching || client.status !== "open") return
+      const startedAt = ownerStore.getState().info?.started_at
+      const saved = ownerStore.getState().terminalTabs[threadId]?.find((item) => item.key === tab.key)
+      if (!saved) return
+      if (saved.daemonStartedAt && saved.daemonStartedAt !== startedAt) {
+        setError("The environment restarted. Open a new terminal tab to start a new process.")
+        return
+      }
+      attaching = true
+      setError(null)
+      setReady(false)
+      ownerStore.getState().set((state) => ({ terminalTabs: {
+        ...state.terminalTabs,
+        [threadId]: (state.terminalTabs[threadId] ?? []).map((item) => item.key === tab.key ? { ...item, terminalId: tab.key, daemonStartedAt: startedAt } : item),
+      } }))
+      try {
+        const term = termRef.current
+        const info = tab.connectorLogin
+          ? (await client.call("terminals.list", { thread_id: threadId })).terminals.find(info => info.id === tab.terminalId)
+          : await client.call("terminals.create", { terminal_id: tab.key, thread_id: threadId, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, command: tab.command })
+        if (!info) throw new Error("The sign-in terminal closed. Start sign-in again from Integrations.")
+        if (disposed) {
+          if (!ownerStore.getState().terminalTabs[threadId]?.some((item) => item.key === tab.key)) {
+            void client.call("terminals.close", { terminal_id: info.id }).catch(() => {})
+          }
+          return
+        }
+        idRef.current = info.id
+        const view = termRef.current
+        if (view) view.reset()
+        await client.call("terminals.subscribe", { terminal_id: info.id, replay: !!view })
+        if (!disposed) { setReady(true); if (active && view) view.focus() }
+      } catch (e) { if (!disposed) setError(errorText(e)) }
+      finally { attaching = false }
+    }
+    const offStatus = client.onStatus((status) => {
+      if (status === "open") void attach()
+      else if (!disposed) setReady(false)
+    })
+    const offLag = client.onNotification("terminal.lagged", (params) => {
+      if ((params as { terminal_id: string }).terminal_id === idRef.current) void attach()
+    })
+    void attach()
+
+    return () => {
+      disposed = true
+      offOut()
+      offExit()
+      offStatus()
+      offLag()
+      clearTimeout(exitTimer)
+      if (idRef.current) client.call("terminals.unsubscribe", { terminal_id: idRef.current }).catch(() => {})
+      idRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId, cwd, everActive])
 
   useEffect(() => {
     const el = host.current
-    if (!el || !cwd || !everActive) return
+    if (!el || !cwd || !everActive || windowHeld) return
     let disposed = false
     const term = new Terminal({
       fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", "SF Mono", Menlo, monospace',
@@ -298,7 +382,6 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       scrollback: 5000,
     })
     termRef.current = term
-    // App shortcuts (Cmd+K, Cmd+B, ...) win over the shell.
     term.attachCustomKeyEventHandler((e) => !(e.metaKey && !e.ctrlKey && !e.altKey))
     const fit = new FitAddon()
     fitRef.current = fit
@@ -308,30 +391,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     const renderer = createTerminalRenderer(term)
     rendererRef.current = renderer
     renderer.setActive(active && !document.hidden)
-
-    const client = rpc()
-    const ownerStore = useStore
-    let attaching = false
-    let exitTimer: ReturnType<typeof setTimeout> | undefined
-    const loginOutput = tab.connectorLogin ? connectorLoginOutput() : null
-    const offOut = client.onNotification(TERMINAL_OUTPUT_NOTIFICATION, (p) => {
-      const n = p as TerminalOutputNotification
-      if (n.terminal_id === idRef.current) {
-        term.write(b64ToBytes(n.data))
-        const url = loginOutput?.(n.data)
-        if (url) setLoginUrl(url)
-      }
-    })
-    const offExit = client.onNotification(TERMINAL_EXITED_NOTIFICATION, (p) => {
-      const n = p as TerminalExitedNotification
-      if (n.terminal_id !== idRef.current) return
-      term.write(`\r\n\x1b[2m[process exited${n.exit_code != null ? ` with ${n.exit_code}` : ""}]\x1b[0m\r\n`)
-      idRef.current = null
-      // A tab whose program ended closes itself.
-      exitTimer = setTimeout(() => { if (!disposed) onExitRef.current() }, 600)
-    })
     const titleSub = term.onTitleChange((raw) => {
-      // Shells announce "user@host:/full/path"; the tab only needs the folder name.
       const t = raw.trim()
       if (!t) return
       const m = /^[^@\s]+@[^:]+:(.+)$/.exec(t)
@@ -339,76 +399,30 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       const name = path.replace(/\/+$/, "").split("/").pop() || path
       onTitleRef.current(name.length > 32 ? `${name.slice(0, 31)}…` : name)
     })
-
-    const attach = async () => {
-      if (disposed || attaching || client.status !== "open") return
-      const startedAt = ownerStore.getState().info?.started_at
-      const saved = ownerStore.getState().terminalTabs[threadId]?.find((item) => item.key === tab.key)
-      if (!saved) return
-      if (saved.daemonStartedAt && saved.daemonStartedAt !== startedAt) {
-        setError("The environment restarted. Open a new terminal tab to start a new process.")
-        return
-      }
-      attaching = true
-      setError(null)
-      setReady(false)
-      // Persist the request identity before sending. Retrying after a lost
-      // acknowledgment attaches to the same PTY instead of launching twice.
-      ownerStore.getState().set((state) => ({ terminalTabs: {
-        ...state.terminalTabs,
-        [threadId]: (state.terminalTabs[threadId] ?? []).map((item) => item.key === tab.key ? { ...item, terminalId: tab.key, daemonStartedAt: startedAt } : item),
-      } }))
-      try {
-        const info = tab.connectorLogin
-          ? (await client.call("terminals.list", { thread_id: threadId })).terminals.find(info => info.id === tab.terminalId)
-          : await client.call("terminals.create", { terminal_id: tab.key, thread_id: threadId, cwd, cols: term.cols, rows: term.rows, command: tab.command })
-        if (!info) throw new Error("The sign-in terminal closed. Start sign-in again from Integrations.")
-        if (disposed) {
-          if (!ownerStore.getState().terminalTabs[threadId]?.some((item) => item.key === tab.key)) {
-            void client.call("terminals.close", { terminal_id: info.id }).catch(() => {})
-          }
-          return
-        }
-        idRef.current = info.id
-        term.reset()
-        await client.call("terminals.subscribe", { terminal_id: info.id, replay: true })
-        if (!disposed) { setReady(true); if (active) term.focus() }
-      } catch (e) { if (!disposed) setError(errorText(e)) }
-      finally { attaching = false }
-    }
-    const offStatus = client.onStatus((status) => {
-      if (status === "open") void attach()
-      else if (!disposed) setReady(false)
-    })
-    const offLag = client.onNotification("terminal.lagged", (params) => {
-      if ((params as { terminal_id: string }).terminal_id === idRef.current) void attach()
-    })
-    void attach()
-
     const inputSub = term.onData((data) => {
-      if (idRef.current) client.call("terminals.input", { terminal_id: idRef.current, data: bytesToB64(data) }).catch(() => {})
+      if (idRef.current) rpc().call("terminals.input", { terminal_id: idRef.current, data: bytesToB64(data) }).catch(() => {})
     })
     const stopResize = observeResizeFrame(el, () => {
       if (el.clientWidth === 0 || el.clientHeight === 0) return
       const { cols, rows } = term
       fit.fit()
       if (idRef.current && (term.cols !== cols || term.rows !== rows)) {
-        client.call("terminals.resize", { terminal_id: idRef.current, cols: term.cols, rows: term.rows }).catch(() => {})
+        rpc().call("terminals.resize", { terminal_id: idRef.current, cols: term.cols, rows: term.rows }).catch(() => {})
       }
     })
+    const replay = idRef.current
+    if (replay) {
+      term.reset()
+      void rpc().call("terminals.subscribe", { terminal_id: replay, replay: true }).then(() => {
+        if (!disposed) { setReady(true); if (active) term.focus() }
+      }).catch((e) => { if (!disposed) setError(errorText(e)) })
+    }
 
     return () => {
       disposed = true
       stopResize()
       inputSub.dispose()
       titleSub.dispose()
-      offOut()
-      offExit()
-      offStatus()
-      offLag()
-      clearTimeout(exitTimer)
-      if (idRef.current) client.call("terminals.unsubscribe", { terminal_id: idRef.current }).catch(() => {})
-      idRef.current = null
       renderer.dispose()
       rendererRef.current = null
       term.dispose()
@@ -416,7 +430,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       fitRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, cwd, everActive])
+  }, [threadId, cwd, everActive, windowHeld])
 
   useEffect(() => {
     const update = () => rendererRef.current?.setActive(active && !document.hidden)
@@ -434,7 +448,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     } catch (e) { setError(errorText(e)) } finally { setSubmitting(false) }
   }
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] px-3 pt-1 pb-2">
+    <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] px-3 pt-1 pb-2" data-terminal-held={windowHeld ? "" : undefined}>
       {tab.connectorLogin && <div className="mb-3 space-y-2">
         {loginUrl && <Button size="sm" variant="subtle" onClick={() => void openExternal(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
         <p className="text-xs text-muted-foreground">After signing in, paste the full redirect URL when Claude asks for it.</p>
