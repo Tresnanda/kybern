@@ -60,6 +60,14 @@ export function highlightToHtml(code: string, lang: string | null, dark: boolean
   }).finally(() => idle.settle())
 }
 
+/** Drop the Shiki worker heap immediately. Hidden windows must not wait for
+ * the idle timer; the next highlight recreates the worker. */
+export function releaseHighlightRuntime() {
+  idle.dispose()
+  cache.clear()
+  releaseWorker()
+}
+
 if (import.meta.hot) import.meta.hot.dispose(() => {
   idle.dispose()
   queue.dispose()

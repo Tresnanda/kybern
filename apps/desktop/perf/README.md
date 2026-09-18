@@ -17,6 +17,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Earlier-history paging | A retry at the top could reuse old scroll intent and download every remaining page. | Consume intent per request; require further reading input before another automatic page, while preserving the anchor. |
 | Markdown and code | Full parsing and highlighting competed with input and scrolling on the renderer thread; serialized equality signatures duplicated retained trees. | Separate module workers, incremental tail parsing, exact structural comparison, bounded queues/caches, cancellation, and source-size limits. Retain prior formatting during updates and readable text on failure. |
 | Diagrams | DOM-based diagram engines and image URLs can outlive visible content. | Load Mermaid only for settled diagrams, bound queued work/cache/output, release its rendering document at idle, and revoke replaced/unmounted image URLs. |
+| Hidden environment renderer runtimes | A second WebContent kept mermaid's 1024×768 nested document and Shiki/Markdown workers until idle (30s / 2s) while occluded or minimized. Unfocused but visible windows must not drop them. | Release the mermaid document and highlight/markdown workers after 400 ms of occlusion/miniaturize/page-hidden; recreate lazily on the next job. Blur is not discard. Verify two-window `vmmap` on macOS. |
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
@@ -81,6 +82,10 @@ profile controls, responsive grouping, diagram expansion, and motion/focus check
 See [renderer follow-ups](renderer-followups-2026-09-14.md) for Markdown data
 retention, the latest peer-source review, lazy diagram rendering, OMP profiles
 and the opaque composer correction.
+
+See [hidden-window renderer runtime release](hidden-window-renderers-2026-09-18.md)
+for occlusion-gated dispose of mermaid's nested document and Shiki/Markdown
+workers (not blur). Drafts and attachment previews are not in those runtimes.
 
 See [rendered-history memory](rendered-history-memory-2026-09-14.md) for the
 fast-scroll graphics spike, its native before/after comparison, and the remaining

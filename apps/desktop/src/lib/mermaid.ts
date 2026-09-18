@@ -88,6 +88,16 @@ export function renderMermaid(code: string, dark: boolean, signal: AbortSignal):
     return svg
   }).finally(() => idle.settle())
 }
+
+/** Drop the nested diagram document immediately. Hidden windows must not wait
+ * for the idle timer; the next `renderMermaid` recreates the frame. */
+export function releaseMermaidRenderer() {
+  idle.dispose()
+  cache.clear()
+  cacheBytes = 0
+  releaseFrame()
+}
+
 if (import.meta.hot) import.meta.hot.dispose(() => {
   idle.dispose()
   releaseFrame()
