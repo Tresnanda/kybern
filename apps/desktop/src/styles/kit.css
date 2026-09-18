@@ -2894,9 +2894,9 @@ diffs-container {
    primitive, so give it the same material explicitly. Keep the blur on the
    panel itself (and no ::before layer) so it owns exactly one backdrop. */
 .composer-command-menu-surface {
-  background: var(--app-composer-picker-surface, var(--popover));
-  -webkit-backdrop-filter: var(--app-composer-picker-backdrop-filter, none);
-  backdrop-filter: var(--app-composer-picker-backdrop-filter, none);
+  background: var(--app-composer-command-surface, var(--app-composer-picker-surface, var(--popover)));
+  -webkit-backdrop-filter: var(--app-composer-command-backdrop-filter, var(--app-composer-picker-backdrop-filter, none));
+  backdrop-filter: var(--app-composer-command-backdrop-filter, var(--app-composer-picker-backdrop-filter, none));
 }
 
 /* Density tokens per size modifier (--normal / --small). Width is opt-in below. */
@@ -3043,6 +3043,12 @@ diffs-container {
   --picker-option-min-h: 0;
   --picker-option-px: 0.75rem;
   --picker-option-py: 0.5625rem;
+}
+
+/* Environment choices have two lines; action rows keep normal menu density. */
+.environment-switcher-menu {
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.25rem;
 }
 
 /* Sidebar rows keep the rounded fallback on older WebKit while taking the

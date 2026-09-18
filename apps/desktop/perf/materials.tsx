@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "../src/components/ui/context-menu"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
-import { PencilIcon, PinIcon, HandoffIcon, SquareSplitVertical, SquareSplitHorizontal, ArchiveIcon } from "../src/lib/kit/icons"
+import { PencilIcon, PinIcon, HandoffIcon, SquareSplitVertical, SquareSplitHorizontal, ArchiveIcon, FileIcon } from "../src/lib/kit/icons"
+import { COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME, COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME, COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME } from "../src/components/kit/chat/composerPickerStyles"
 import "../src/index.css"
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -16,6 +17,7 @@ function theme(variant: "dark" | "light") {
   root.style.setProperty("--app-opaque-content-surface", built.variables["--color-background-surface"]!)
 }
 let selected = ""
+const view = createRoot(document.getElementById("root")!)
 export function Demo() {
   return <div style={{ width: 550, padding: 24, background: "var(--color-background-panel)", minHeight: "100vh" }}>
     <ContextMenu>
@@ -45,7 +47,7 @@ async function run() {
   root.dataset.runtime = "electron"; root.dataset.platform = "macos"
   root.dataset.windowMaterial = "translucent"; root.dataset.fullTranslucency = ""
   theme("dark")
-  flushSync(() => createRoot(document.getElementById("root")!).render(<Demo />))
+  flushSync(() => view.render(<Demo />))
   await sleep(100)
   const trigger = document.getElementById("menu-trigger")!
   trigger.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 95, clientY: 70 }))
@@ -94,6 +96,30 @@ async function run() {
   await sleep(180)
   document.querySelector<HTMLElement>('[data-slot="context-menu-sub-trigger"]')?.click()
   await sleep(180)
+  // Exercise the plain command list too: it cannot inherit a menu primitive's
+  // pseudo-element blur. Use exactly the production surface and row constants.
+  flushSync(() => view.render(<div style={{ padding: 24, minHeight: "100vh", background: "var(--app-opaque-content-surface)" }}>
+    {Array.from({ length: 12 }, (_, index) => <p key={index} className="py-3 text-xl">Keep long conversations readable while tools work in the background.</p>)}
+    <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME} role="listbox" style={{ position: "absolute", insetInlineStart: 40, top: 110, width: "min(640px, calc(100vw - 80px))" }}>
+      <p className="px-3 py-2 text-xs text-muted-foreground">Files</p>
+      {["useSupportTicket.tsx", "create_workspace.sql", "release-notes.md", "composer.test.tsx"].map((name, index) => <button key={name} role="option" aria-selected={index === 0} className={`${COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME} ${index === 0 ? COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME : ""} w-full`}><FileIcon className="size-4 shrink-0" /><span className="truncate">{name}</span><span className="ms-auto truncate text-muted-foreground">src/features</span></button>)}
+    </div>
+  </div>))
+  const commands = document.querySelector<HTMLElement>('[role="listbox"]')!
+  for (const variant of ["dark", "light"] as const) {
+    theme(variant)
+    await sleep(100)
+    const background = getComputedStyle(commands).backgroundColor
+    results[`${variant}Commands`] = { background, filter: filter(commands), pseudoFilter: getComputedStyle(commands, "::before").getPropertyValue("-webkit-backdrop-filter") }
+    pass &&= filter(commands).includes("blur(") && getComputedStyle(commands, "::before").getPropertyValue("-webkit-backdrop-filter") === "none"
+  }
+  root.dataset.windowMaterial = "opaque"
+  await sleep(100)
+  results.opaqueCommands = filter(commands)
+  pass &&= filter(commands) === "none"
+  root.dataset.windowMaterial = "translucent"
+  theme(import.meta.env.VITE_COMMAND_THEME === "light" ? "light" : "dark")
+  await sleep(300)
   const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }
   native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ ...results, selected, pass }))
 }

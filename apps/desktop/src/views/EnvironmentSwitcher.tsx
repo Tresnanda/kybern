@@ -138,7 +138,7 @@ export function EnvironmentSwitcher() {
           <ComposerPickerMenuPopup
             align="start"
             side="bottom"
-            className="sidebar-surface-picker-menu w-[min(20rem,calc(100vw-1.5rem))] min-w-0"
+            className="environment-switcher-menu w-[min(19rem,calc(100vw-1.5rem))] min-w-0"
           >
             <MenuGroup>
               <MenuGroupLabel>Environments</MenuGroupLabel>
@@ -149,8 +149,8 @@ export function EnvironmentSwitcher() {
                   const current = item.id === selectedId
                   const detail = current ? statusLabel : item.local ? "On this Mac" : item.ssh ? "SSH connection" : "Remote environment"
                   return (
-                    <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-lg pe-1 has-[[data-highlighted]]:bg-[var(--color-background-button-secondary-hover)]" role="presentation">
-                      <MenuRadioItem className="min-h-11 rounded-lg data-[checked]:bg-[var(--color-background-button-secondary)] data-highlighted:bg-transparent" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
+                    <div key={item.id} className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-lg pe-1 has-[[data-highlighted]]:bg-[var(--color-background-button-secondary-hover)]", current && "bg-[var(--color-background-button-secondary)]")} role="presentation">
+                      <MenuRadioItem className="min-h-11 rounded-lg data-highlighted:bg-transparent" value={item.id} title={item.ssh?.target || item.hostname || item.name} onClick={() => {
                         if (current && connection.state === "failed") void switchEnvironment(item.id)
                       }}>
                         {item.local ? <DeviceLaptopIcon className="-mx-0.5 size-4 shrink-0 opacity-80" /> : <GlobeIcon className="-mx-0.5 size-4 shrink-0 opacity-80" />}
@@ -177,7 +177,6 @@ export function EnvironmentSwitcher() {
             </MenuGroup>
             <MenuSeparator />
             <MenuGroup>
-              <MenuGroupLabel>Manage</MenuGroupLabel>
               <MenuItem
                 onClick={() => {
                   setEditing(null)

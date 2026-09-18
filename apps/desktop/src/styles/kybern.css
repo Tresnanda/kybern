@@ -290,12 +290,12 @@ html[data-thread-pointer-dragging="true"] * {
    Positive accessibility queries also work when WebKit does not know a feature. */
 html[data-full-translucency][data-window-material="translucent"] {
   --app-full-translucency: 1;
-  --app-glass-panel-opacity: 72%;
+  --app-glass-panel-opacity: 58%;
   --app-glass-popup-opacity: 78%;
   --app-glass-control-opacity: 40%;
   --app-glass-surface: color-mix(in srgb, var(--app-opaque-content-surface) 72%, transparent);
   --app-glass-popup-surface: color-mix(in srgb, var(--app-opaque-popover) var(--app-glass-popup-opacity), transparent);
-  --app-glass-backdrop-filter: blur(20px) saturate(125%);
+  --app-glass-backdrop-filter: blur(16px) saturate(125%);
   --color-background-surface: var(--app-glass-surface) !important;
   --app-settings-surface: var(--app-glass-surface) !important;
   /* Settings is already over native vibrancy; a second full-pane blur adds no detail. */
@@ -315,6 +315,9 @@ html[data-full-translucency][data-window-material="translucent"] {
   --app-chat-code-surface: var(--color-background-control-opaque) !important;
   --app-user-message-background: var(--color-background-control-opaque) !important;
   --app-composer-picker-surface: var(--app-glass-popup-surface) !important;
+  /* Lists sit directly over transcript text. A denser tint keeps filenames
+     readable even when WebKit temporarily skips backdrop compositing. */
+  --app-composer-command-surface: color-mix(in srgb, var(--app-opaque-popover) 94%, transparent);
   --app-composer-picker-backdrop-filter: var(--app-glass-backdrop-filter) !important;
   --composer-surface: var(--color-background-control-opaque) !important;
   --composer-glass-surface: var(--app-opaque-popover) !important;
@@ -344,12 +347,14 @@ html[data-full-translucency][data-window-material="translucent"] :is([data-slot=
     --app-glass-control-opacity: 100%;
     --app-glass-surface: var(--app-opaque-content-surface);
     --app-glass-backdrop-filter: none;
+    --app-composer-command-surface: var(--app-opaque-popover);
     --composer-glass-surface: var(--app-opaque-color-background-control-opaque) !important;
   }
 }
 /* Opaque mode must also stop frosting the transcript under the composer.
    Keep the elevated fill and borders without allocating a backdrop layer. */
 html[data-window-material="opaque"] {
+  --app-composer-command-backdrop-filter: none !important;
   --composer-glass-surface: var(--popover) !important;
   --composer-glass-opacity: 100% !important;
   --composer-glass-stacked-opacity: 100% !important;
@@ -357,6 +362,7 @@ html[data-window-material="opaque"] {
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   html[data-window-material] {
+    --app-composer-command-backdrop-filter: none !important;
     --composer-glass-surface: var(--popover) !important;
     --composer-glass-opacity: 100% !important;
     --composer-glass-stacked-opacity: 100% !important;
