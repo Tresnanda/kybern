@@ -113,6 +113,16 @@ export function collectSplitThreadIds(splitView: SplitView | null): ThreadId[] {
   return [...new Set(ids)]
 }
 
+/** Split panes plus the selected thread, even when the window is off-screen. */
+export function collectOpenThreadIds(
+  splitView: SplitView | null,
+  selectedThreadId?: ThreadId | null,
+): ThreadId[] {
+  const ids = new Set(collectSplitThreadIds(splitView))
+  if (selectedThreadId) ids.add(selectedThreadId)
+  return [...ids]
+}
+
 export function findPane(root: Pane, id: PaneId): Pane | null {
   if (root.id === id) return root
   if (root.kind === "leaf") return null

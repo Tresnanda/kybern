@@ -220,11 +220,12 @@ pub async fn environment_open_window<R: tauri::Runtime>(app: tauri::AppHandle<R>
     let config = environment_window_config(base, &profile)?;
     tauri::WebviewWindowBuilder::from_config(&app, &config)
         .and_then(|builder| builder.build())
-        .map(|_window| {
+        .map(|window| {
             // Keep this window's traffic lights centered like the main window;
             // macOS resets them after the first paint otherwise.
             #[cfg(target_os = "macos")]
-            crate::traffic_lights::install(&_window);
+            crate::traffic_lights::install(&window);
+            crate::window_surface::install(&window);
         })
         .map_err(|e| format!("Unable to open window: {e}"))
 }

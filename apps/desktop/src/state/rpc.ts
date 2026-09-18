@@ -47,8 +47,11 @@ import {
   isRuntimeTaskActive,
   mergeRuntimeTasks,
   summarizeRuntimeTasks,
+  collectOpenThreadIds,
+  useStore as activeEnvironmentStore,
   type EnvironmentStore,
 } from "./store"
+import { windowHoldsTranscript } from "./windowSurfaceState"
 
 export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   let client: KybernClient | null = null
@@ -327,6 +330,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   function loadThread(id: ThreadId, force = false): Promise<void> {
     const pending = threadLoads.get(id)
     if (pending) return pending
+    if (!windowHoldsTranscript()) return Promise.resolve()
     if (!force && canReuseSnapshots && reusableSnapshots.has(id) && useStore.getState().transcripts[id]?.loaded)
       return Promise.resolve()
 
@@ -1063,8 +1067,14 @@ export function activeRuntime(): EnvironmentRuntime {
   return currentRuntime
 }
 export async function boot(): Promise<void> {
+  const { installWindowSurface } = await import("./windowSurface")
   const { bootEnvironments } = await import("./environments")
+  void installWindowSurface()
   await bootEnvironments()
+}
+export function loadOpenThreads(): void {
+  if (!windowHoldsTranscript() || !currentRuntime) return
+  for (const threadId of collectOpenThreadIds(activeEnvironmentStore.getState())) void currentRuntime.loadThread(threadId)
 }
 export const rpc: EnvironmentRuntime["rpc"] = (...args) =>
   activeRuntime().rpc(...args)
