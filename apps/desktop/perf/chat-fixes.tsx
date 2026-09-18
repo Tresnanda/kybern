@@ -172,6 +172,13 @@ async function run() {
 
   const savedAttachment = { id: "upload", name: "Restored.png", media_type: "image/png", size: 68 }
   useStore.getState().set(state => ({ composerDrafts: { ...state.composerDrafts, recovery: { text: "", attachments: [savedAttachment], mentions: [], skills: [] } } }))
+  useStore.getState().set({ connection: { state: "connecting" } })
+  const disconnectedReads = assets.reads
+  flushSync(() => view.render(<Composer key="connecting-asset" draftKey="recovery" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
+  await sleep(100)
+  check(assets.reads === disconnectedReads, "Preview fetched before its environment was connected")
+  flushSync(() => useStore.getState().set({ connection: { state: "open" } }))
+  await waitFor(() => document.querySelector<HTMLImageElement>('[aria-label="Preview Restored.png"] img')?.complete, "Connecting did not restore the draft thumbnail")
   assets.fail = true
   flushSync(() => view.render(<Composer key="retry-asset" draftKey="recovery" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
   await waitFor(() => document.querySelector('[aria-label="Retry preview Restored.png"]'), "Failed preview cannot be retried")

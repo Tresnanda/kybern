@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react"
 import { fetchAssetImage } from "@/state/rpc"
+import { useStore } from "@/state/store"
 import { ResponseImage } from "./ResponseImage"
 
+type ImageAttachmentProps = { id: string; name: string; preview?: string }
+
 /** Drafts retain asset IDs, not blob URLs. Recreate the preview only while mounted. */
-export function ComposerImageAttachment({ id, name, preview }: { id: string; name: string; preview?: string }) {
+export function ComposerImageAttachment(props: ImageAttachmentProps) {
+  const connected = useStore(state => state.connection.state === "open")
+  if (!props.preview && !connected) return <span aria-label={`Waiting for connection to preview ${props.name}`} className="flex size-16 items-center justify-center rounded-xl bg-[var(--composer-surface)] p-1 text-xs text-muted-foreground"><span className="min-w-0 truncate">{props.name}</span></span>
+  return <ConnectedImageAttachment {...props} />
+}
+
+function ConnectedImageAttachment({ id, name, preview }: ImageAttachmentProps) {
   const [restored, setRestored] = useState("")
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
