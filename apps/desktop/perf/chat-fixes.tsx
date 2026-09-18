@@ -3,6 +3,7 @@ import { flushSync } from "react-dom"
 import { Composer } from "../src/views/Composer"
 import { Transcript } from "../src/views/Transcript"
 import { EnvironmentSwitcher } from "../src/views/EnvironmentSwitcher"
+import { ResponseImage } from "../src/components/kybern/ResponseImage"
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { applyEvent, emptyThreadState } from "../src/state/transcript"
@@ -23,6 +24,10 @@ async function waitFor(condition: () => unknown, message: string) {
 }
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 const source = `data:image/png;base64,${png}`
+const gif = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+const gifSource = `data:image/gif;base64,${gif}`
+const native = () => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench
+const nativeImage = new URLSearchParams(location.search).has("native-image")
 function theme(variant: "light" | "dark") {
   document.documentElement.classList.toggle("dark", variant === "dark")
   document.documentElement.setAttribute("data-theme-variant", variant)
@@ -46,7 +51,40 @@ async function openPreview(button: HTMLButtonElement, expected: string) {
   check(!document.querySelector('[role="dialog"]'), "Preview did not close")
   check(document.activeElement === button, "Preview did not restore focus")
 }
+async function nativeImageCopy(source: string, label: string) {
+  flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="p-8"><ResponseImage key={label} source={source} label={label} /></div></ThemeProviderContext>))
+  await waitFor(() => document.querySelector<HTMLButtonElement>(`[aria-label="Preview ${label}"]`), `Missing ${label} preview`)
+  const preview = document.querySelector<HTMLButtonElement>(`[aria-label="Preview ${label}"]`)!
+  preview.click()
+  await waitFor(() => document.querySelector('[role="dialog"] button[aria-label="Copy image"]'), `${label} dialog did not open`)
+  const copy = document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Copy image"]')!
+  const bridge = window as unknown as { __nativeImageContinue: (passed: boolean) => void }
+  const completed = new Promise<void>((resolve, reject) => {
+    bridge.__nativeImageContinue = (passed) => passed ? resolve() : reject(new Error(`${label} was not written as PNG`))
+  })
+  copy.click()
+  await completed
+  document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Close"]')!.click()
+  await waitFor(() => !document.querySelector('[role="dialog"]'), `${label} dialog did not close`)
+}
+async function runNativeImages() {
+  // Exercise the production Tauri fallback while keeping this fixture in a
+  // standalone WKWebView: the mocked IPC forwards the converted bytes to the
+  // native harness, which verifies the real macOS pasteboard.
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {
+    invoke: async (command: string, args: Uint8Array) => {
+      check(command === "write_image_clipboard", `Unexpected native operation: ${command}`)
+      check(args instanceof Uint8Array, "Native image IPC was not binary")
+      native().postMessage(JSON.stringify({ stage: "native-image-bytes", nativeClipboardBytes: true, data: [...args] }))
+    },
+  }, configurable: true })
+  Object.defineProperty(navigator, "clipboard", { value: { write: async () => { throw new DOMException("User activation unavailable", "NotAllowedError") } }, configurable: true })
+  await nativeImageCopy(source, "PNG image")
+  await nativeImageCopy(gifSource, "GIF image")
+  return { pass: true, nativeClipboard: ["png", "gif-converted-to-png"] }
+}
 async function run() {
+  if (nativeImage) return runNativeImages()
   for (const variant of ["light", "dark"] as const) {
     theme(variant)
     let state = { ...emptyThreadState(), loaded: true }

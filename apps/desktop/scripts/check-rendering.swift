@@ -47,7 +47,9 @@ final class Bench: NSObject, WKScriptMessageHandler {
   window.orderFront(nil)
   let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
   let history = Int(ProcessInfo.processInfo.environment["KYBERN_PERF_HISTORY"] ?? "400") ?? 400
-  web.load(URLRequest(url: URL(string: "tauri://localhost/perf/\(fixture).html?history=\(history)")!))
+  var query = "?history=\(history)"
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_NATIVE_IMAGE"] == "1" { query += "&native-image=1" }
+  web.load(URLRequest(url: URL(string: "tauri://localhost/perf/\(fixture).html\(query)")!))
  }
  func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
   print(message.body)
@@ -55,6 +57,24 @@ final class Bench: NSObject, WKScriptMessageHandler {
   let json = (message.body as? String)?.data(using: .utf8)
   let result = json.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
   if result?["stage"] != nil {
+   if result?["nativeClipboardBytes"] as? Bool == true, let encoded = result?["data"] as? [Int] {
+    // Verify the production native fallback on the real macOS pasteboard.
+    let board = NSPasteboard.general
+    let saved = (board.pasteboardItems ?? []).map { item in
+     let copy = NSPasteboardItem()
+     for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+     return copy
+    }
+    let data = Data(encoded.compactMap { value in value >= 0 && value <= 255 ? UInt8(value) : nil })
+    let pngType = NSPasteboard.PasteboardType("public.png")
+    board.clearContents()
+    let copied = board.setData(data, forType: pngType)
+    let signature = data.count >= 8 && Array(data.prefix(8)) == [137, 80, 78, 71, 13, 10, 26, 10]
+    board.clearContents()
+    if !saved.isEmpty { board.writeObjects(saved) }
+    web.evaluateJavaScript("window.__nativeImageContinue(\(copied && signature ? "true" : "false"))")
+    return
+   }
    if result?["copySelection"] as? Bool == true, let expected = result?["expected"] as? String {
     // Exercise WebKit's native Copy action, preserving the user's pasteboard.
     let board = NSPasteboard.general

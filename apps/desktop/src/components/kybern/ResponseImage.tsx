@@ -6,6 +6,7 @@ import { IconSwap } from "@/components/kybern/motion"
 import { CheckIcon, CopyIcon, DownloadIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
+import { isTauri, saveImageFile, writeImageClipboard } from "@/lib/tauri"
 import { fetchThreadImage } from "@/state/rpc"
 import { cn } from "@/lib/utils"
 
@@ -24,6 +25,51 @@ function imageDownloadName(label: string, source: string, mime: string): string 
   const safeLabel = label.trim().replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "image"
   if (/\.(png|jpe?g|gif|webp|avif)$/i.test(safeLabel)) return safeLabel
   return `${safeLabel}.${mime.split("/")[1] === "jpeg" ? "jpg" : mime.split("/")[1] || imageMime(source)?.split("/")[1] || "png"}`
+}
+
+async function fetchImageBlob(source: string): Promise<Blob> {
+  const response = await fetch(source)
+  if (!response.ok) throw new Error(`Image request failed with ${response.status}`)
+  const blob = await response.blob()
+  const mime = imageMime(blob.type) ?? imageMime(source) ?? "image/png"
+  return imageMime(blob.type) === mime ? blob : new Blob([blob], { type: mime })
+}
+
+/** Clipboard image writes use PNG because Safari does not promise other image types. */
+async function fetchPng(source: string): Promise<Blob> {
+  const blob = await fetchImageBlob(source)
+  if (imageMime(blob.type) === "image/png") return blob
+
+  let objectUrl = ""
+  let drawable: ImageBitmap | HTMLImageElement | null = null
+  const loadImageElement = async (): Promise<HTMLImageElement> => {
+    objectUrl = URL.createObjectURL(blob)
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image()
+      image.onload = () => resolve(image)
+      image.onerror = () => reject(new Error("Image format cannot be converted to PNG"))
+      image.src = objectUrl
+    })
+  }
+  try {
+    if (typeof createImageBitmap === "function") {
+      try { drawable = await createImageBitmap(blob) } catch { drawable = await loadImageElement() }
+    } else {
+      drawable = await loadImageElement()
+    }
+    const canvas = document.createElement("canvas")
+    canvas.width = drawable.width
+    canvas.height = drawable.height
+    const context = canvas.getContext("2d")
+    if (!context) throw new Error("Image conversion is not available in this window.")
+    context.drawImage(drawable, 0, 0)
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((png) => png ? resolve(png) : reject(new Error("Image format cannot be converted to PNG")), "image/png")
+    })
+  } finally {
+    if ("close" in (drawable ?? {}) && typeof drawable.close === "function") drawable.close()
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+  }
 }
 
 /** Local previews and originals share the authenticated thread boundary. */
@@ -107,16 +153,22 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     if (!original || imageAction) return
     setImageAction(kind)
     try {
-      const response = await fetch(original)
-      if (!response.ok) throw new Error(`Image request failed with ${response.status}`)
-      const blob = await response.blob()
-      const mime = imageMime(blob.type) ?? imageMime(source) ?? "image/png"
-      const image = blob.type === mime ? blob : new Blob([blob], { type: mime })
       if (kind === "copy") {
-        if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-          throw new Error("Image copying is not available in this window.")
+        if (isTauri()) {
+          // The Tauri custom scheme does not consistently expose WebKit's
+          // image clipboard API. Keep the conversion native-independent, then
+          // send the PNG directly to AppKit without relying on activation.
+          const nativePng = await fetchPng(original)
+          await writeImageClipboard(new Uint8Array(await nativePng.arrayBuffer()))
+        } else {
+          if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+            throw new Error("Image copying is not available in this window.")
+          }
+          // ClipboardItem accepts a promise. Construct it and call write before
+          // awaiting anything so WebKit keeps the click's user activation.
+          const png = fetchPng(original)
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": png })])
         }
-        await navigator.clipboard.write([new ClipboardItem({ [mime]: image })])
         setCopied(true)
         if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current)
         copiedTimer.current = window.setTimeout(() => {
@@ -124,6 +176,10 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
           setCopied(false)
         }, 1400)
       } else {
+        const image = await fetchImageBlob(original)
+        const mime = imageMime(image.type) ?? imageMime(source) ?? "image/png"
+        const nativeSave = await saveImageFile(new Uint8Array(await image.arrayBuffer()), imageDownloadName(label, source, mime))
+        if (nativeSave !== null) return
         const downloadUrl = URL.createObjectURL(image)
         const link = document.createElement("a")
         link.href = downloadUrl
