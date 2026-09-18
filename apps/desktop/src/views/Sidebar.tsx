@@ -1,7 +1,8 @@
 import { collaborationThreadRows } from "../../../../packages/kybern-client/src/collaboration"
 // Left sidebar: 46px drag-region title bar,
 // brand row, primary nav, "Projects" list with nested thread rows, footer
-// with Settings and Help.
+// with Settings and Help. Occluded or minimized windows drop the
+// reconstructible project/thread list; the drag-region header stays.
 
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
@@ -21,6 +22,8 @@ import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger }
 import { SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/kit/sidebar"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { mod } from "@/lib/format"
+import { sidebarListMounts } from "@/lib/sidebarWindowHold"
+import { useSidebarWindowHold } from "@/lib/useSidebarWindowHold"
 import {
   AddPlusIcon,
   AnalyticsIcon,
@@ -90,6 +93,7 @@ export function ThreadSidebar() {
   const selected = useStore((s) => s.selected)
   const mac = platform() === "macos"
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
+  const windowHeld = useSidebarWindowHold()
   const connection = useStore((s) => s.connection)
   const threads = useStore((s) => s.threads)
   const notifications = useStore((s) => s.notifications)
@@ -136,7 +140,7 @@ export function ThreadSidebar() {
         <div className="hidden h-7 w-[84px] md:block" aria-hidden="true" />
       </SidebarHeader>
 
-      <SidebarContent className="gap-0 font-system-ui">
+      <SidebarContent className="gap-0 font-system-ui" data-sidebar-held={windowHeld ? "" : undefined}>
         <div className="flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5">
           <Menu>
             <MenuTrigger
@@ -168,39 +172,43 @@ export function ThreadSidebar() {
           </div>
         </div>
 
-        <EnvironmentSwitcher />
-        <div className="sidebar-surface-enter">
-          <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-            <SidebarMenu className="gap-0.5">
-              <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
-              <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
-              <PrimaryAction icon={<GitPullRequestIcon className="size-3.5 shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
-              <PrimaryAction icon={<AnalyticsIcon className="size-3.5 shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
-            </SidebarMenu>
-          </SidebarGroup>
+        {sidebarListMounts(windowHeld) && (
+          <>
+            <EnvironmentSwitcher />
+            <div className="sidebar-surface-enter">
+              <SidebarGroup className="px-1.5 pt-1 pb-1.5">
+                <SidebarMenu className="gap-0.5">
+                  <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
+                  <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
+                  <PrimaryAction icon={<GitPullRequestIcon className="size-3.5 shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
+                  <PrimaryAction icon={<AnalyticsIcon className="size-3.5 shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
+                </SidebarMenu>
+              </SidebarGroup>
 
-          <SidebarGroup className="px-1.5 py-1.5">
-            <div className="group/project-header relative my-1">
-              <div className={cn("flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]", SIDEBAR_SECTION_LABEL_CLASS_NAME)}>
-                <span className="truncate">Projects</span>
-              </div>
-              <div className={REVEAL_TOOLBAR}>
-                <SidebarIconButton icon={AddPlusIcon} label="Add project" size="md" tooltip="Add project" onClick={onAddProject} />
-              </div>
+              <SidebarGroup className="px-1.5 py-1.5">
+                <div className="group/project-header relative my-1">
+                  <div className={cn("flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]", SIDEBAR_SECTION_LABEL_CLASS_NAME)}>
+                    <span className="truncate">Projects</span>
+                  </div>
+                  <div className={REVEAL_TOOLBAR}>
+                    <SidebarIconButton icon={AddPlusIcon} label="Add project" size="md" tooltip="Add project" onClick={onAddProject} />
+                  </div>
+                </div>
+                {attentionIds && attentionIds.size === 0 ? (
+                  <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">You're all caught up. No threads need attention.</div>
+                ) : projectList.length === 0 ? (
+                  <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">No projects yet. Add a folder to see its threads here.</div>
+                ) : (
+                  <SidebarMenu className="gap-3">
+                    {visibleProjects.map((p) => (
+                      <ProjectItem key={p.id} project={p} filterThreadIds={attentionIds ?? undefined} />
+                    ))}
+                  </SidebarMenu>
+                )}
+              </SidebarGroup>
             </div>
-            {attentionIds && attentionIds.size === 0 ? (
-              <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">You're all caught up. No threads need attention.</div>
-            ) : projectList.length === 0 ? (
-              <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">No projects yet. Add a folder to see its threads here.</div>
-            ) : (
-              <SidebarMenu className="gap-3">
-                {visibleProjects.map((p) => (
-                  <ProjectItem key={p.id} project={p} filterThreadIds={attentionIds ?? undefined} />
-                ))}
-              </SidebarMenu>
-            )}
-          </SidebarGroup>
-        </div>
+          </>
+        )}
       </SidebarContent>
 
       <ProjectPicker open={projectPickerOpen} onOpenChange={setProjectPickerOpen} />
