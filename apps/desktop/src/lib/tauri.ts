@@ -112,6 +112,13 @@ export async function isWindowFocused(): Promise<boolean> {
   return getCurrentWindow().isFocused()
 }
 
+/** Keep the native macOS backdrop alive only while translucent UI is visible. */
+export async function setWindowVibrancy(enabled: boolean): Promise<void> {
+  if (!isTauri() || platform() !== "macos") return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("set_window_vibrancy", { enabled })
+}
+
 export const platform = (): "macos" | "windows" | "linux" | "web" => {
   const ua = navigator.userAgent
   if (/Mac/.test(ua)) return "macos"

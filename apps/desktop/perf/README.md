@@ -34,6 +34,11 @@ matched release-daemon measurements, and the remaining whole-app and page-aware
 reconstruction gates. Run `tool-leases` with a release daemon to exercise real
 RPC hydration of 16 results shared across two native WebKit panes.
 
+See [native window material memory](native-window-material-memory-2026-09-18.md)
+for the opaque-mode Tauri fix. The native macOS effect view now exists only
+while translucent surfaces are enabled; the report records the production-CSP
+WebKit comparison and its substantial run-to-run variance.
+
 See [scroll tile accumulation](memory-tiles-2026-09-15.md) for the attribution of
 the remaining native peak to WebKit's scroll tiles, the paint-host layer rule,
 and the diagnostic hooks (`KYBERN_SCROLL_EXTRA_CSS`, `KYBERN_PERF_DEBUG_LAYERS`).

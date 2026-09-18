@@ -406,6 +406,27 @@ fn data_dir_path() -> Option<String> {
     data_dir().map(|p| p.display().to_string())
 }
 
+/// Match the native material to the visible CSS material. Tauri's built-in
+/// `set_effects(None)` does not remove vibrancy on macOS, so opaque mode used
+/// to retain an invisible full-window NSVisualEffectView for the process
+/// lifetime. Clear first to keep this idempotent across StrictMode remounts.
+#[tauri::command]
+fn set_window_vibrancy(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState, apply_vibrancy, clear_vibrancy};
+
+        clear_vibrancy(&window).map_err(|error| error.to_string())?;
+        if enabled {
+            apply_vibrancy(&window, NSVisualEffectMaterial::UnderWindowBackground, Some(NSVisualEffectState::Active), Some(0.0))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, enabled);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -433,6 +454,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             endpoint,
             data_dir_path,
+            set_window_vibrancy,
             notifications::notification_permission,
             notifications::send_notification,
             environments::environments_list,
