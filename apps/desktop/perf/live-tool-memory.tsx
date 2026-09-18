@@ -22,9 +22,27 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const proseLayer = import.meta.env.VITE_LIVE_TOOLS_PROSE_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkProseLayer() {
+  const hosted = [...document.querySelectorAll<HTMLElement>(".chat-markdown--hosted")]
+  const wrappers = hosted.flatMap((root) => [...root.querySelectorAll<HTMLElement>(":scope > ul, :scope > ol, :scope > .chat-markdown-table")])
+  if (!wrappers.length) return
+  for (const wrapper of wrappers) {
+    check(getComputedStyle(wrapper).willChange.includes("transform") === proseLayer, `Hosted markdown list/table wrapper paint host changed: ${getComputedStyle(wrapper).willChange}`)
+  }
+  for (const root of hosted) {
+    for (const item of root.querySelectorAll<HTMLElement>("li")) {
+      if (item.querySelector(":scope > ul, :scope > ol")) continue
+      check(getComputedStyle(item).willChange.includes("transform") !== proseLayer, `Hosted markdown list item paint host changed: ${getComputedStyle(item).willChange}`)
+    }
+    for (const row of root.querySelectorAll<HTMLElement>(".chat-markdown-table tr")) {
+      check(getComputedStyle(row).willChange.includes("transform") !== proseLayer, `Hosted markdown table row paint host changed: ${getComputedStyle(row).willChange}`)
+    }
+  }
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -44,6 +62,9 @@ async function run() {
   }
   if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
     textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
+  if (proseLayer) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: ".chat-markdown--hosted>ul,.chat-markdown--hosted>ol,.chat-markdown--hosted>.chat-markdown-table{will-change:transform!important}.chat-markdown--hosted li,.chat-markdown--hosted .chat-markdown-table tr{will-change:auto!important}",
   }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
@@ -124,6 +145,7 @@ async function run() {
       const bounds = viewport.getBoundingClientRect()
       check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar, importApp })}`)
       if (fullShell) check(Math.round(bounds.width) === window.innerWidth - 256 && Math.round(bounds.height) === window.innerHeight - 46, `Full shell viewport changed: ${JSON.stringify({ width: bounds.width, height: bounds.height, windowWidth: window.innerWidth, windowHeight: window.innerHeight })}`)
+      checkProseLayer()
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
@@ -142,6 +164,7 @@ async function run() {
     check(completionSeqs.size === 64 && !unexpectedCompletion, `Expected exactly 64 distinct completion events: ${JSON.stringify({ uniqueCompletions: completionSeqs.size, unexpectedCompletion })}`)
     if (fullEvents) check(omittedCompletions === 0 && deliveredOutputChars > 75_000_000, `Full-event control did not deliver all results: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
     else check(omittedCompletions === 64 && deliveredOutputChars === 0, `Compact events still delivered closed payloads: ${JSON.stringify({ omittedCompletions, deliveredOutputChars })}`)
+    checkProseLayer()
     await mark("live-results-closed")
     if (seededHistory) {
       const first = liveTools()[0]!

@@ -3196,17 +3196,29 @@ diffs-container {
    painted transcript row lives in its own small compositing layer instead:
    its backing store is bounded by the row, virtualization bounds the number
    of rows, and the scroller, turns and work lists paint nothing themselves.
-   Apply to the element that paints (message, header, work list, answer), not
-   to the scroller or a container that could grow beyond 1024px. See
-   perf/memory-tiles-2026-09-15.md. */
+   Apply to the element that paints (message, header, work list, answer, list
+   item, table row), not to the scroller or a container that could grow beyond
+   1024px. See perf/memory-tiles-2026-09-15.md and perf/hosted-prose-2026-09-18.md. */
 .chat-paint-host {
   will-change: transform;
 }
 
 /* Transcript Markdown hosts each top-level block itself, so a long answer is
-   many small layers rather than one tall one. Code blocks taller than the
-   tiling threshold are split into line chunks (see lib/codeChunks.ts). */
-.chat-markdown--hosted > * {
+   many small layers rather than one tall one. Lists and tables host their
+   rows instead of the wrapping `ul`/`ol`/`.chat-markdown-table`. Nested list
+   parents stay unhosted so they do not retile around already-hosted children.
+   Blockquotes keep the wrapper host: their left border still paints on the
+   quote. Code blocks taller than the tiling threshold are split into line
+   chunks (see lib/codeChunks.ts). */
+.chat-markdown--hosted > *:not(ul):not(ol):not(.chat-markdown-table) {
+  will-change: transform;
+}
+
+.chat-markdown--hosted li:not(:has(> ul, > ol)) {
+  will-change: transform;
+}
+
+.chat-markdown--hosted .chat-markdown-table tr {
   will-change: transform;
 }
 

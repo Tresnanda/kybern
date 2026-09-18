@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test agentStart.test.mjs appUpdate.test.mjs releaseNotes.test.mjs chatLinks.test.mjs codeChunks.test.mjs tailChange.test.mjs toolActivity.test.mjs transcript.test.mjs performance.test.mjs loopVisibility.test.mjs uiDiagnostics.test.mjs splitView.test.mjs smoothStream.test.mjs environments.test.mjs userInput.test.mjs responseImages.test.mjs toolSurface.test.mjs highlightCache.test.mjs highlightQueue.test.mjs markdownQueue.test.mjs markdownParser.test.mjs transcriptNavigation.test.mjs memory.test.mjs toolOutputCache.test.mjs notifications.test.mjs tauriEvents.test.mjs tauriWindowMaterial.test.mjs",
+    "test": "node --experimental-strip-types --test agentStart.test.mjs appUpdate.test.mjs releaseNotes.test.mjs chatLinks.test.mjs codeChunks.test.mjs tailChange.test.mjs toolActivity.test.mjs transcript.test.mjs performance.test.mjs loopVisibility.test.mjs uiDiagnostics.test.mjs splitView.test.mjs smoothStream.test.mjs environments.test.mjs userInput.test.mjs responseImages.test.mjs toolSurface.test.mjs highlightCache.test.mjs highlightQueue.test.mjs markdownQueue.test.mjs markdownParser.test.mjs transcriptNavigation.test.mjs memory.test.mjs toolOutputCache.test.mjs notifications.test.mjs tauriEvents.test.mjs tauriWindowMaterial.test.mjs hostedProse.test.mjs",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b --noEmit",
