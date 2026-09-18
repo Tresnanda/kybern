@@ -127,6 +127,21 @@ test("completion-only text after a tool opens a new sequence row", () => {
   )
 })
 
+test("canonical completion corrections preserve astral Unicode boundaries across segments", () => {
+  const state = fold([
+    start,
+    { kind: "assistant_text_delta", message_id: "m1", delta: "Prefix \ud83d", origin: ROOT },
+    { kind: "tool_call_started", call: readTool("unicode-boundary"), origin: ROOT },
+    { kind: "tool_call_completed", tool_call_id: "unicode-boundary", output: null, is_error: false },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "\ude00old", origin: ROOT },
+    { kind: "assistant_message_completed", message_id: "m1", text: "Prefix \ud83d\ude01new", thinking: null, origin: ROOT },
+  ])
+
+  const pieces = state.blocks.filter((block) => block.kind === "assistant").map((block) => block.text)
+  assert.equal(pieces.join(""), "Prefix \ud83d\ude01new")
+  assert.deepEqual(pieces, ["Prefix \ud83d\ude01new", ""])
+})
+
 test("an earlier separate message stays muted work; the final message is the answer", () => {
   const state = fold([
     start,
