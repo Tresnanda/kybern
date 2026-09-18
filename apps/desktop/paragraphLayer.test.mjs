@@ -23,6 +23,7 @@ test("tall hosted paragraphs are not one leftover paint host", () => {
 
   assert.match(markdown, /className="chat-prose-chunk"/)
   assert.match(markdown, /chunkProseText/)
+  assert.match(markdown, /stateKey === "user" \? content : renderProseChunks\(content\)/)
   assert.match(markdown, /LIVE_COMPONENTS = \{ \.\.\.BASE_COMPONENTS, \.\.\.LIVE_TEXT_COMPONENTS \}/)
   assert.match(chunks, /PROSE_CHUNK_CHARS = 1600/)
   assert.match(kit, /\.chat-markdown--hosted \.chat-prose-chunk \{[^}]*display:\s*block/)

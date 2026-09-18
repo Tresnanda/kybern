@@ -39,6 +39,9 @@ function mapText(children: ReactNode, transform: (text: string, key: number) => 
 type TextTransform = (text: string, key: number) => ReactNode
 type ProseTag = "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
 
+const MarkdownLiveContext = createContext(false)
+const MarkdownStateContext = createContext("markdown")
+
 function renderProseChunks(children: ReactNode): ReactNode {
   if (typeof children === "string") {
     const chunks = chunkProseText(children)
@@ -54,8 +57,12 @@ function renderProseChunks(children: ReactNode): ReactNode {
 
 function proseTag(Tag: ProseTag, transform?: TextTransform) {
   return function Prose({ children }: { children?: ReactNode }) {
+    const stateKey = useContext(MarkdownStateContext)
     const content = transform ? mapText(children, transform) : children
-    return <Tag>{renderProseChunks(content)}</Tag>
+    // User markdown is not `.chat-markdown--hosted`. Extra chunk spans would
+    // still change `p.firstChild` from a text node into an element, which
+    // breaks preserved-newline selection in native chat-fixes.
+    return <Tag>{stateKey === "user" ? content : renderProseChunks(content)}</Tag>
   }
 }
 
@@ -78,9 +85,6 @@ function textComponents(transform: TextTransform) {
 
 const streamTransform: TextTransform = (text, key) => <StreamWords key={key} text={text} />
 const LIVE_TEXT_COMPONENTS = textComponents(streamTransform)
-
-const MarkdownLiveContext = createContext(false)
-const MarkdownStateContext = createContext("markdown")
 
 function MarkdownCode({ children, node }: { children?: ReactNode; node?: { position?: { start: { offset?: number } } } }) {
   const live = useContext(MarkdownLiveContext)
