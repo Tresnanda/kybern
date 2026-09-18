@@ -53,6 +53,8 @@ async function openPreview(button: HTMLButtonElement, expected: string) {
   check(image.naturalWidth > 0, "Preview did not decode")
   const close = dialog!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
   check(close, "Preview has no close button")
+  const copyBounds = dialog!.querySelector('[aria-label="Copy image"]')!.getBoundingClientRect()
+  check(Math.abs(copyBounds.y - close.getBoundingClientRect().y) < 1, "Image toolbar actions are not aligned")
   close.click()
   await waitFor(() => !document.querySelector('[role="dialog"]') && document.activeElement === button, "Preview did not close and restore focus")
   check(!document.querySelector('[role="dialog"]'), "Preview did not close")

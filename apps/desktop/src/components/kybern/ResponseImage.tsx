@@ -1,10 +1,10 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
+import { Dialog, DialogClose, DialogPopup, DialogTitle, DialogDescription } from "@/components/kit/dialog"
 import { Button } from "@/components/kit/button"
 import { IconButton } from "@/components/kit/icon-button"
 import { IconSwap } from "@/components/kybern/motion"
-import { CheckIcon, CopyIcon, DownloadIcon } from "@/lib/kit/icons"
+import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from "@/lib/kit/icons"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
 import { isTauri, platform, saveImageFile, writeImageClipboard } from "@/lib/tauri"
@@ -214,10 +214,11 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
         <img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
       </button>}
     <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogPopup finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
-        <div className="flex min-w-0 items-center justify-between gap-3 pe-8">
+      <DialogPopup showCloseButton={false} finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
+        <div className="flex min-w-0 items-center justify-between gap-3">
           <DialogTitle className="min-w-0 flex-1 truncate text-sm">{label}</DialogTitle>
-          {original && !originalError && <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
+          {original && !originalError && <>
             <IconButton
               type="button"
               variant="ghost"
@@ -240,7 +241,11 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
             >
               <DownloadIcon className="size-3.5" />
             </IconButton>
-          </div>}
+          </>}
+            <DialogClose render={<IconButton label="Close" tooltip="Close" size="icon-sm" />}>
+              <XIcon className="size-3.5" />
+            </DialogClose>
+          </div>
         </div>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>
         {originalError || !original ? status(originalError, retryOriginal) : <img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
