@@ -39,12 +39,15 @@ function theme(variant: "light" | "dark") {
   const built = buildThemeCssVariables({ codeThemeId: DEFAULT_THEME_STATE.codeThemeIds[variant], theme: DEFAULT_THEME_STATE.chromeThemes[variant] }, variant, { electron: true, isMac: true, systemUiFont: true })
   for (const [key, value] of Object.entries(built.variables)) document.documentElement.style.setProperty(key, value)
 }
+function previewIdentity(image: HTMLImageElement | null | undefined): string {
+  return image?.getAttribute("data-image-original") || image?.src || ""
+}
 async function openPreview(button: HTMLButtonElement, expected: string) {
   button.click()
-  await waitFor(() => document.querySelector<HTMLImageElement>('[role="dialog"] img')?.src === expected, "Preview lost the original image")
+  await waitFor(() => previewIdentity(document.querySelector<HTMLImageElement>('[role="dialog"] img')) === expected, "Preview lost the original image")
   const dialog = document.querySelector('[role="dialog"]')
   const image = dialog?.querySelector("img")
-  check(image?.src === expected, "Preview lost the original image")
+  check(previewIdentity(image) === expected, "Preview lost the original image")
   check(dialog?.querySelector('button[aria-label="Copy image"]'), "Preview has no copy image control")
   check(dialog?.querySelector('button[aria-label="Download image"]'), "Preview has no download image control")
   for (const action of dialog!.querySelectorAll<HTMLButtonElement>('[aria-label="Copy image"], [aria-label="Download image"]')) {

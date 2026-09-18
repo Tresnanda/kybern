@@ -80,7 +80,14 @@ async function run() {
   await waitForImage()
   const original = document.querySelector<HTMLImageElement>('[role="dialog"] img')!
   await original.decode()
-  check(original.naturalHeight === 1800 && original.src !== previews[0]!.src, "Viewer does not fetch the full image")
+  const identity = original.getAttribute("data-image-original") || original.src
+  check(original.src !== previews[0]!.src, "Viewer reused the inline preview")
+  check(identity !== previews[0]!.src, "Viewer reused the inline preview")
+  check(original.naturalHeight > 352 && original.naturalHeight <= 1350, "Viewer decode is not fitted to the dialog")
+  const full = new Image()
+  full.src = identity
+  await full.decode()
+  check(full.naturalHeight === 1800, "Copy/download original lost full resolution")
   render("![Offscreen](artifacts/sized-offscreen.png)")
   root.style.marginTop = "3000px"
   await sleep(100)

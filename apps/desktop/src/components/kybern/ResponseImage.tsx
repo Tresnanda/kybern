@@ -5,6 +5,7 @@ import { Button } from "@/components/kit/button"
 import { IconButton } from "@/components/kit/icon-button"
 import { IconSwap } from "@/components/kybern/motion"
 import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from "@/lib/kit/icons"
+import { DIALOG_MAX_HEIGHT, DIALOG_MAX_WIDTH, dialogNeedsFit, dialogSkipFit, fitImageBlob, inlineImageBlob } from "@/lib/dialogImageFit"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { imageSource, responseImageError } from "@/lib/responseImages"
 import { isTauri, platform, saveImageFile, writeImageClipboard } from "@/lib/tauri"
@@ -93,6 +94,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const [loaded, setLoaded] = useState(false)
   const [open, setOpen] = useState(false)
   const [original, setOriginal] = useState(direct)
+  const [displayUrl, setDisplayUrl] = useState(dialogNeedsFit(direct) ? "" : direct)
   const [originalError, setOriginalError] = useState(initialError)
   const [originalRetry, setOriginalRetry] = useState(0)
   const [imageAction, setImageAction] = useState<ImageAction | null>(null)
@@ -129,18 +131,70 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     const target = imageSource(source)
     if (!open || target?.kind !== "local" || !threadId) return
     const controller = new AbortController()
-    let objectUrl = ""
-    void fetchThreadImage(threadId, target.value, controller.signal).then((blob) => {
+    let originalUrl = ""
+    let fittedUrl = ""
+    void (async () => {
+      const blob = await fetchThreadImage(threadId, target.value, controller.signal)
       if (controller.signal.aborted) return
-      objectUrl = URL.createObjectURL(blob)
-      setOriginal(objectUrl)
-    }).catch((error: unknown) => { if (!controller.signal.aborted) setOriginalError(responseImageError(error)) })
-    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
+      originalUrl = URL.createObjectURL(blob)
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(originalUrl)
+        originalUrl = ""
+        return
+      }
+      setOriginal(originalUrl)
+      const fitted = dialogSkipFit(source, blob) ? blob : await fitImageBlob(blob, DIALOG_MAX_WIDTH, DIALOG_MAX_HEIGHT, controller.signal)
+      if (controller.signal.aborted) return
+      if (fitted === blob) {
+        setDisplayUrl(originalUrl)
+        return
+      }
+      fittedUrl = URL.createObjectURL(fitted)
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(fittedUrl)
+        fittedUrl = ""
+        return
+      }
+      setDisplayUrl(fittedUrl)
+    })().catch((error: unknown) => { if (!controller.signal.aborted) setOriginalError(responseImageError(error)) })
+    return () => {
+      controller.abort()
+      if (fittedUrl) URL.revokeObjectURL(fittedUrl)
+      if (originalUrl) URL.revokeObjectURL(originalUrl)
+    }
   }, [source, threadId, open, originalRetry])
+
+  useEffect(() => {
+    if (!open || !dialogNeedsFit(direct)) return
+    const controller = new AbortController()
+    let fittedUrl = ""
+    void (async () => {
+      const blob = await inlineImageBlob(direct, controller.signal)
+      if (controller.signal.aborted) return
+      const fitted = dialogSkipFit(direct, blob) ? blob : await fitImageBlob(blob, DIALOG_MAX_WIDTH, DIALOG_MAX_HEIGHT, controller.signal)
+      if (controller.signal.aborted) return
+      if (fitted === blob) {
+        setDisplayUrl(direct)
+        return
+      }
+      fittedUrl = URL.createObjectURL(fitted)
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(fittedUrl)
+        fittedUrl = ""
+        return
+      }
+      setDisplayUrl(fittedUrl)
+    })().catch((error: unknown) => { if (!controller.signal.aborted) setOriginalError(responseImageError(error)) })
+    return () => {
+      controller.abort()
+      if (fittedUrl) URL.revokeObjectURL(fittedUrl)
+    }
+  }, [open, direct, originalRetry])
 
   const changeOpen = (next: boolean) => {
     if (next) {
       setOriginal(direct)
+      setDisplayUrl(dialogNeedsFit(direct) ? "" : direct)
       setOriginalError(initialError)
       setImageAction(null)
       setCopied(false)
@@ -148,7 +202,12 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     setOpen(next)
   }
   const retryPreview = () => { setError(null); setLoaded(false); setUrl(direct); setRetry((n) => n + 1) }
-  const retryOriginal = () => { setOriginalError(null); setOriginal(direct); setOriginalRetry((n) => n + 1) }
+  const retryOriginal = () => {
+    setOriginalError(null)
+    setOriginal(direct)
+    setDisplayUrl(dialogNeedsFit(direct) ? "" : direct)
+    setOriginalRetry((n) => n + 1)
+  }
   const displayError = (): ImageError => ({ message: "Unable to display image. Check that the file is still available, then retry.", retryable: true })
   const runImageAction = async (kind: ImageAction) => {
     if (!original || imageAction) return
@@ -248,7 +307,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
           </div>
         </div>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>
-        {originalError || !original ? status(originalError, retryOriginal) : <img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
+        {originalError || !displayUrl ? status(originalError, retryOriginal) : <img key={originalRetry} src={displayUrl} alt={label} data-image-original={original || source} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
       </DialogPopup>
     </Dialog>
   </span>
