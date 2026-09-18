@@ -158,8 +158,9 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
     }
   }, [source, threadId, open, originalRetry, thumbnail])
 
-  const presenting = requested || open
-  const previewUrl = !presenting || isLink ? "" : direct || url
+  // Opening the dialog must not remount the trigger. `requested || open` turned
+  // an offscreen "Preview image" button into an <img> button and Base UI closed.
+  const previewUrl = !requested || isLink ? "" : direct || url
   const originalUrl = !open ? "" : direct || original
 
   const changeOpen = (next: boolean) => {
