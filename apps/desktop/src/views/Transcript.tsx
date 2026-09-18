@@ -608,7 +608,11 @@ function GeneratedImageGallery({
   const [visible, setVisible] = useState(true)
   useEffect(() => {
     if (!host) return
-    const observer = new IntersectionObserver(([entry]) => setVisible(!!entry?.isIntersecting), { rootMargin: "300px" })
+    const root = host.closest("[data-chat-scroll-container]")
+    const observer = new IntersectionObserver(([entry]) => setVisible(!!entry?.isIntersecting), {
+      root: root instanceof Element ? root : null,
+      rootMargin: "300px",
+    })
     observer.observe(host)
     return () => observer.disconnect()
   }, [host])

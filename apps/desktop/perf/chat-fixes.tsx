@@ -179,9 +179,15 @@ async function run() {
     check(generatedLeases === 1, "Generated image output has no mounted lease")
     const galleryHost = document.querySelector<HTMLElement>("[data-generated-image-gallery]")
     check(galleryHost, "Generated image gallery host missing")
-    galleryHost.style.marginTop = "4000px"
+    // marginTop inside MessageScroller grows the content and followOutput
+    // scrolls the gallery back into view. Take it out of flow instead.
+    galleryHost.style.position = "fixed"
+    galleryHost.style.top = "-4000px"
+    galleryHost.style.left = "0"
     await waitFor(() => generatedLeases === 0, "Offscreen generated image kept its output lease")
-    galleryHost.style.marginTop = ""
+    galleryHost.style.position = ""
+    galleryHost.style.top = ""
+    galleryHost.style.left = ""
     await waitFor(() => generatedLeases === 1, "Returning to the gallery did not restore its output lease")
     await waitFor(() => [...document.querySelectorAll<HTMLImageElement>("[data-response-images] img")].some((image) => image.src === generatedSource && image.complete), "Reopened generated image lost exact source")
     check(generatedHydrationCalls === variantIndex + 1, "Offscreen gallery lease churned hydration")

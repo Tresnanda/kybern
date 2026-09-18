@@ -21,8 +21,11 @@ thresholds, paint hosts, or hidden-window compact. It stacks independently of
 ## Reproduction
 
 `chat-fixes` hydrates an omitted generated image into the final gallery, then
-pushes `[data-generated-image-gallery]` offscreen and back. The mock lease
-count must drop to 0 offscreen and return to 1 with the same `img.src`.
+moves `[data-generated-image-gallery]` out of the transcript flow (fixed and
+above the viewport) and back. `marginTop` is not enough: `followOutput` would
+scroll the grown content and keep the lease. The mock lease count must drop to
+0 offscreen and return to 1 with the same `img.src`. The observer root is the
+transcript scroll container.
 
 ```sh
 node scripts/check-rendering.mjs chat-fixes
