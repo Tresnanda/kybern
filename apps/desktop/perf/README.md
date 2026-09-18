@@ -20,6 +20,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
+| Chat card stacking | `z-index: 15` on the full-window chat card forced a viewport-sized WebContent backing (matched whole-app peak 454 → 385 MiB). A leftover `::before { inset: 0; z-index: 1 }` on the same card is the same class of overlay. | Keep the chat card at `z-index: auto`. The sidebar seam is a 1px left strip; do not restore `inset: 0` on `.chat-content-card::before`. Settings may keep its overlay z-index. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
@@ -35,6 +36,10 @@ It includes repeated-burst observations, paged-history paint boundaries,
 bounded settled streams, title metadata checks and hidden dock measurements.
 The 200–300 MB target is not a verified ceiling; repeated settled use also
 exceeded it.
+
+See [the chat seam overlay](chat-seam-layer-2026-09-18.md) for the remaining
+full-card `::before` stacking context on that same surface, the 1px strip, and
+the native A/B control (`KYBERN_PERF_LIVE_FULL_SEAM_LAYER`).
 
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,

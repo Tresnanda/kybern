@@ -22,6 +22,7 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const fullSeamLayer = import.meta.env.VITE_LIVE_TOOLS_FULL_SEAM_LAYER === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -44,6 +45,9 @@ async function run() {
   }
   if (stackedContentCard) document.head.appendChild(Object.assign(document.createElement("style"), {
     textContent: "[data-fixture-thread-surface]{z-index:15!important}",
+  }))
+  if (fullSeamLayer) document.head.appendChild(Object.assign(document.createElement("style"), {
+    textContent: ".chat-content-card::before{inset:0!important;width:auto!important}",
   }))
   activateEnvironmentStore(__TOOL_LEASE_ENDPOINT__.environmentId)
   const runtime = createEnvironmentRuntime(useStore)
