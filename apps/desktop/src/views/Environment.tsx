@@ -3,6 +3,8 @@ import { activeEnvironment } from "@/state/environments"
 // Environment panel: a floating w-72 card
 // docked at the right edge of the thread, toggled from the header. Rows use
 // the EnvironmentRow skin; sections can be hidden from the gear menu.
+// Occluded or minimized windows drop the reconstructible body; blur only
+// fades the card.
 
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
@@ -17,6 +19,8 @@ import { DiffStat } from "@/components/kit/chat/DiffStatLabel"
 import { ENVIRONMENT_PANEL_MOTION_CLASS, ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { copyText, useLocalStorage } from "@/lib/hooks"
+import { environmentPanelBodyMounts } from "@/lib/environmentWindowHold"
+import { useEnvironmentWindowHold } from "@/lib/useEnvironmentWindowHold"
 import {
   ArrowUpRightIcon,
   ChangesIcon,
@@ -152,6 +156,7 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
   const [busy, setBusy] = useState<"commit" | "pr" | null>(null)
   const [hidden, setHidden] = useLocalStorage<Partial<Record<Section, boolean>>>("kybern.env.hidden", {})
   const [notesOpen, setNotesOpen] = useLocalStorage("kybern.env.notes", true)
+  const windowHeld = useEnvironmentWindowHold()
 
   useEffect(() => {
     if (!open) return
@@ -197,7 +202,7 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
   }
 
   return (
-    <div className="pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3" data-environment-panel-variant="docked">
+    <div className="pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3" data-environment-panel-variant="docked" data-environment-held={windowHeld ? "" : undefined}>
       <aside
         aria-label="Environment"
         aria-hidden={!open}
@@ -209,6 +214,7 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
           open ? "pointer-events-auto translate-x-0 opacity-100" : "pointer-events-none translate-x-full opacity-0",
         )}
       >
+        {environmentPanelBodyMounts(windowHeld) && (
         <div className="min-h-0 overflow-y-auto">
           <div className="flex flex-col gap-0.5 p-1.5">
             <div className="flex items-center justify-between gap-2 px-2 pt-0.5 pb-0.5">
@@ -356,6 +362,7 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
             )}
           </div>
         </div>
+        )}
       </aside>
     </div>
   )
