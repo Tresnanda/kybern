@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.9
+
+<!-- kybern-release-title: Sidebar blur restored -->
+<!-- kybern-release-summary: Restore the frosted macOS sidebar when full translucency is turned off. -->
+
+- Restore native sidebar blur in normal appearance mode so windows behind Kybern no longer show through sharply. Full-content translucency remains optional.
+- Add a release regression check covering theme startup and translucency toggles.
+
 ## 0.4.8
 
 <!-- kybern-release-title: Quieter helpers, reliable follow-ups -->
