@@ -1242,6 +1242,7 @@ impl Orchestrator {
                 assignment.dispatch_message_id = None;
                 assignment.uncertainty = None;
                 assignment.revision += 1;
+                assignment.updated_at = Utc::now();
                 self.inner.store.collaboration_assignment_put(assignment)?;
                 return Ok(false);
             }
