@@ -3196,18 +3196,44 @@ diffs-container {
    painted transcript row lives in its own small compositing layer instead:
    its backing store is bounded by the row, virtualization bounds the number
    of rows, and the scroller, turns and work lists paint nothing themselves.
-   Apply to the element that paints (message, header, work list, answer), not
-   to the scroller or a container that could grow beyond 1024px. See
-   perf/memory-tiles-2026-09-15.md. */
+   Apply to the element that paints (message, header, work list, answer, quote
+   child), not to the scroller or a container that could grow beyond 1024px. See
+   perf/memory-tiles-2026-09-15.md and perf/hosted-quote-2026-09-18.md. */
 .chat-paint-host {
   will-change: transform;
 }
 
 /* Transcript Markdown hosts each top-level block itself, so a long answer is
-   many small layers rather than one tall one. Code blocks taller than the
-   tiling threshold are split into line chunks (see lib/codeChunks.ts). */
-.chat-markdown--hosted > * {
+   many small layers rather than one tall one. Blockquotes host their children
+   instead of the wrapping quote: the left bar moves onto those children so the
+   wrapper paints nothing. Adjacent children use padding instead of margin so
+   the bar stays continuous. Code blocks taller than the tiling threshold are
+   split into line chunks (see lib/codeChunks.ts). */
+.chat-markdown--hosted > *:not(blockquote) {
   will-change: transform;
+}
+
+.chat-markdown--hosted > blockquote {
+  border-left: none;
+  padding-left: 0;
+}
+
+.chat-markdown--hosted > blockquote > * {
+  will-change: transform;
+  border-left: 2px solid var(--border);
+  padding-left: 0.8rem;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: calc(0.65rem / 2);
+  padding-bottom: calc(0.65rem / 2);
+}
+
+.chat-markdown--hosted > blockquote > *:first-child {
+  padding-top: 0;
+}
+
+.chat-markdown--hosted > blockquote > *:last-child {
+  padding-bottom: 0;
 }
 
 .chat-code-chunk {
