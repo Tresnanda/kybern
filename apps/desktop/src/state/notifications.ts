@@ -130,11 +130,13 @@ export function trackFocusedThreadReads(
   }
 
   const onForeground = () => { void acknowledge() }
+  const onBlur = () => { probe++ }
   const unsubscribe = store.subscribe((next, previous) => {
     if (next.selected !== previous.selected || next.notifications !== previous.notifications)
       void acknowledge()
   })
   window.addEventListener("focus", onForeground)
+  window.addEventListener("blur", onBlur)
   document.addEventListener("visibilitychange", onForeground)
   void acknowledge()
 
@@ -143,6 +145,7 @@ export function trackFocusedThreadReads(
     probe++
     unsubscribe()
     window.removeEventListener("focus", onForeground)
+    window.removeEventListener("blur", onBlur)
     document.removeEventListener("visibilitychange", onForeground)
   }
 }

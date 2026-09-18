@@ -176,6 +176,15 @@ test("completed threads keep unread dots until their focused foreground pane is 
   await tick()
   assert.equal(store.getState().notifications[background.id]?.seq, 2, "an older focus probe did not clear a newer completion")
 
+  let finishBlurredProbe
+  globalThis.focusProbe = () => new Promise((resolve) => { finishBlurredProbe = resolve })
+  globalThis.window.dispatchEvent({ type: "focus" })
+  await Promise.resolve()
+  globalThis.window.dispatchEvent({ type: "blur" })
+  finishBlurredProbe(true)
+  await tick()
+  assert.equal(store.getState().notifications[background.id]?.seq, 2, "a focus probe resolved after blur did not consume unread state")
+
   globalThis.focusProbe = () => true
   globalThis.window.dispatchEvent({ type: "focus" })
   await tick()
