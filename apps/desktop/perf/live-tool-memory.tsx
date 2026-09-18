@@ -2,7 +2,8 @@ import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { ThreadView } from "../src/views/Thread"
 import { Transcript } from "../src/views/Transcript"
-import { SidebarProvider } from "../src/components/kit/sidebar"
+import { ThreadSidebar } from "../src/views/Sidebar"
+import { Sidebar, SidebarInset, SidebarProvider } from "../src/components/kit/sidebar"
 import { useStore, activateEnvironmentStore } from "../src/state/store"
 import { createEnvironmentRuntime, setEnvironmentRuntime } from "../src/state/rpc"
 import { ThemeProvider } from "../src/components/theme-provider"
@@ -17,6 +18,8 @@ const baseline = import.meta.env.VITE_LIVE_TOOLS_BASELINE === "1"
 const fullEvents = baseline || import.meta.env.VITE_LIVE_TOOLS_FULL_EVENTS === "1"
 const seededHistory = import.meta.env.VITE_LIVE_TOOLS_HISTORY === "1"
 const fullThread = import.meta.env.VITE_LIVE_TOOLS_THREAD === "1"
+const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
+const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -73,20 +76,34 @@ async function run() {
   try {
     await until(() => useStore.getState().connection.state === "open", "Scratch connection did not open")
     if (fullThread) {
-      const listed = await client.call("threads.list", {})
-      useStore.getState().set({ threads: Object.fromEntries(listed.threads.map(thread => [thread.id, thread])) })
+      const [listed, projects] = await Promise.all([client.call("threads.list", {}), client.call("projects.list", {})])
+      useStore.getState().set({
+        projects: Object.fromEntries(projects.projects.map(project => [project.id, project])),
+        threads: Object.fromEntries(listed.threads.map(thread => [thread.id, thread])),
+      })
     }
     await runtime.loadThread(threadId)
     const render = (panes: number) => flushSync(() => root.render(
       <ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
         {fullThread ? <ThemeProvider defaultTheme="dark">
           <SidebarProvider open onOpenChange={() => {}} style={{ "--sidebar-width": "256px" } as React.CSSProperties}>
-            <div className="flex h-screen min-w-0 flex-1 bg-[var(--app-shell-background)]">
+            {fullShell ? <>
+              <Sidebar side="left" collapsible="offcanvas" transparentSurface innerClassName="app-sidebar-surface">
+                {!emptySidebar && <ThreadSidebar />}
+              </Sidebar>
+              <div className="relative flex h-screen min-h-0 min-w-0 flex-1">
+                <SidebarInset className="h-screen min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
+                  <div data-fixture-thread-surface className="chat-content-card relative z-[15] flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)] text-inherit">
+                    <main className="relative flex min-h-0 min-w-0 flex-1 flex-col"><ThreadView threadId={threadId} /></main>
+                  </div>
+                </SidebarInset>
+              </div>
+            </> : <div className="flex h-screen min-w-0 flex-1 bg-[var(--app-shell-background)]">
               <div data-fixture-sidebar-offset className="w-64 shrink-0" />
               <main data-fixture-thread-surface className="chat-content-card relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
-                <ThreadView threadId={threadId} />
+                  <ThreadView threadId={threadId} />
               </main>
-            </div>
+            </div>}
           </SidebarProvider>
         </ThemeProvider> : <div className="flex h-screen">{Array.from({ length: panes }, (_, pane) => <div key={pane} data-pane={pane} className="flex min-w-0 flex-1 flex-col"><Transcript threadId={threadId} bottomInset={0} /></div>)}</div>}
       </ThemeProviderContext>,
@@ -99,7 +116,7 @@ async function run() {
       }, `Thread surface did not mount: ${document.body.innerHTML.slice(0, 800)}`)
       const viewport = document.querySelector<HTMLElement>("[data-chat-scroll-container]")!
       const bounds = viewport.getBoundingClientRect()
-      check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height })}`)
+      check(bounds.width > 800 && bounds.height > 500, `Thread viewport is not representative: ${JSON.stringify({ width: bounds.width, height: bounds.height, fullShell, emptySidebar })}`)
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
