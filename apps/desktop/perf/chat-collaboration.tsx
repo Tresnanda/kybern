@@ -82,6 +82,18 @@ async function run() {
   useStore.getState().set({ projects, threads, providers, selected: { kind: "thread", id: "main" }, splitView: null, transcripts, composerDrafts: {}, connection: { state: "open" }, rightOpen: false, rightTabs: [], rightTab: null, envOpen: false })
   flushSync(() => createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error) }) }).render(<Shell />))
   await sleep(650)
+  if (preview === "composer-caret-before") {
+    const baseline = document.createElement("style")
+    baseline.textContent = '[data-composer-editor-frame]{min-height:0!important}[data-testid="composer-editor"],.chat-composer-backdrop,[data-composer-editor-frame]{line-height:1.625!important}[data-testid="composer-editor"]{min-height:var(--app-density-composer-editor-min-height,2lh)!important}'
+    document.head.append(baseline)
+  }
+  if (preview === "composer-caret-before" || preview === "composer-caret-after") {
+    const editor = write("subthreads")
+    const frame = editor.closest<HTMLElement>('[data-composer-editor-frame]')!
+    await sleep(100)
+    const lineHeight = parseFloat(getComputedStyle(editor).lineHeight)
+    return results({ preview, pass: true, editorHeight: editor.getBoundingClientRect().height, frameHeight: frame.getBoundingClientRect().height, lineHeight })
+  }
   if (preview === "dock-memory") {
     useStore.getState().set({ rightOpen: true, rightTabs: ["collaboration"], rightTab: "collaboration" })
     await sleep(500)
@@ -92,6 +104,13 @@ async function run() {
     return results({ preview, pass: document.querySelectorAll(".t-pane").length === 6 && document.querySelectorAll('.t-pane[data-active="false"]').length === 5 })
   }
   const initialHasNoSetup = !document.body.textContent?.includes("Let agent start helpers") && !!document.querySelector('[data-testid="composer-editor"]')
+  const initialEditor = document.querySelector<HTMLTextAreaElement>('[data-testid="composer-editor"]')!
+  const initialEditorFrame = initialEditor.closest<HTMLElement>('[data-composer-editor-frame]')!
+  const editorLineHeight = parseFloat(getComputedStyle(initialEditor).lineHeight)
+  const composerSingleLineEditorInTwoLineFrame = initialEditor.clientHeight <= editorLineHeight + 1 && initialEditorFrame.clientHeight >= editorLineHeight * 1.9
+  initialEditor.blur()
+  initialEditorFrame.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
+  const blankComposerAreaFocusesEditor = document.activeElement === initialEditor
   const helperToggle = findButton("Expand 2 helpers for Improve sign-in")
   const helperRows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-marquee-host]")).filter(row => row.textContent?.includes("Implement sign-in") || row.textContent?.includes("Review sign-in"))
   let sidebarDisclosure = true
@@ -236,7 +255,7 @@ async function run() {
   await click("Create coordinator"); await sleep(250)
   const recreationDraftInert = chatFixture.coordinatorCreates === 1 && !!document.querySelector('[data-testid="composer-editor"]')
   const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
-  const checks = { ...dockChecks, initialHasNoSetup, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, advisoryRestrictionVisible, coordinatorOpensChat, initialGoalPreserved, stableFirstMessageId, harnessSwitched, projectKnowledgeVisible, resultsVisible, oneCoordinatorCreated, setupVisible, setupCompletes, deleteCopyClear, cancelledDeletionInert, deleteErrorVisible, retryPreservesIdentity, coordinatorRemoved, recreationDraftInert, noHorizontalOverflow: horizontalOverflow <= 1 }
+  const checks = { ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, advisoryRestrictionVisible, coordinatorOpensChat, initialGoalPreserved, stableFirstMessageId, harnessSwitched, projectKnowledgeVisible, resultsVisible, oneCoordinatorCreated, setupVisible, setupCompletes, deleteCopyClear, cancelledDeletionInert, deleteErrorVisible, retryPreservesIdentity, coordinatorRemoved, recreationDraftInert, noHorizontalOverflow: horizontalOverflow <= 1 }
   results({ fixture: "chat-collaboration", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
 }
 window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason) }))

@@ -31,6 +31,7 @@ import {
   ArchiveIcon,
   ChangesIcon,
   ClockIcon,
+  ComputerTerminalIcon,
   EllipsisIcon,
   FoldersIcon,
   GitBranchIcon,
@@ -42,6 +43,7 @@ import {
   PencilIcon,
   PinFilledIcon,
   PinIcon,
+  RobotIcon,
   SettingsIcon,
   SteerIcon,
   StopIcon,
@@ -393,13 +395,21 @@ function HelperThreadsPanel({ threads }: { threads: import("@/protocol").Thread[
   const set = useStore((state) => state.set)
   const working = threads.filter((thread) => thread.status === "running").length
   const approvals = threads.filter((thread) => thread.status === "awaiting-approval").length
+  const previewProviders = [...new Set(threads.map((thread) => thread.provider.kind))].slice(0, 3)
+  const previewHarnesses = previewProviders.map((kind) => PROVIDER_LABEL[kind]).join(", ")
   const [open, setOpen] = useState(() => (working > 0 || approvals > 0) && threads.length <= 3)
   const summary = approvals > 0 ? `${approvals} ${approvals === 1 ? "needs" : "need"} approval` : working > 0 ? `${working} working` : null
   return (
     <ComposerStackedPanel>
       <ComposerStackedPanelRow compact className="gap-1">
         <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-start outline-hidden focus-visible:ring-1 focus-visible:ring-ring">
-          <UsersIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          <span aria-label={`Helpers using ${previewHarnesses}`} role="img" title={previewHarnesses} className="flex shrink-0 items-center">
+            {previewProviders.map((kind, index) => (
+              <span key={kind} className={cn("composer-harness-mark flex size-5 items-center justify-center rounded-full", index > 0 && "-ms-1")}>
+                <ProviderMark kind={kind} size={16} className="size-4" />
+              </span>
+            ))}
+          </span>
           <span className="truncate font-medium text-foreground/85">{threads.length} {threads.length === 1 ? "helper" : "helpers"}{summary ? ` · ${summary}` : ""}</span>
           <DisclosureChevron open={open} className="shrink-0 text-muted-foreground/60" />
         </button>
@@ -433,12 +443,17 @@ function HelperThreadsPanel({ threads }: { threads: import("@/protocol").Thread[
 function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
   const set = useStore((state) => state.set)
   const foreground = tasks.find((task) => !task.backgrounded)
+  const primary = foreground ?? tasks[0]
   const detail = foreground?.title ?? tasks[0]?.title
   return (
     <ComposerStackedPanel className="t-panel-enter">
       <ComposerStackedPanelRow>
         <ComposerStackedPanelRowMain>
-          <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          {primary?.kind === "process"
+            ? <ComputerTerminalIcon className={cn(COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, "translate-y-px")} />
+            : primary?.kind === "agent"
+              ? <RobotIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+              : <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />}
           <span className="truncate font-medium text-foreground/85">{activeTaskSummary(tasks)}</span>
           {detail && <span className="hidden min-w-0 truncate text-muted-foreground/55 sm:inline">· {detail}</span>}
         </ComposerStackedPanelRowMain>
@@ -681,7 +696,7 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
             <MenuTrigger render={<ChatHeaderIconButton label="Thread actions" />}>
               <EllipsisIcon className="size-3.5" />
             </MenuTrigger>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
+            <ComposerPickerMenuPopup align="end" side="bottom" className="thread-actions-menu">
               <MenuGroup>
                 <MenuItem disabled={!canSplitRight} onClick={() => split("horizontal")}>
                   <SquareSplitVertical /> Split right

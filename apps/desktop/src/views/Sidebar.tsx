@@ -93,13 +93,14 @@ export function ThreadSidebar() {
   const connection = useStore((s) => s.connection)
   const threads = useStore((s) => s.threads)
   const notifications = useStore((s) => s.notifications)
+  const notificationDismissals = useStore((s) => s.notificationDismissals)
   const notificationFilter = useStore((s) => s.notificationFilter)
   // Bell filter: restrict the list to threads that need attention and the
   // projects that contain them.
   const attentionIds = useMemo(() => {
     if (!notificationFilter) return null
-    return new Set<ThreadId>(selectAttentionItems({ threads, notifications }).map((item) => item.thread.id))
-  }, [notificationFilter, threads, notifications])
+    return new Set<ThreadId>(selectAttentionItems({ threads, notifications, notificationDismissals }).map((item) => item.thread.id))
+  }, [notificationFilter, threads, notifications, notificationDismissals])
   const visibleProjects = useMemo(() => {
     if (!attentionIds) return projectList
     const withAttention = new Set<ProjectId>()
@@ -445,7 +446,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
   const selected = useStore((s) => s.selected.kind === "thread" && s.selected.id === thread.id)
   const splitView = useStore((s) => s.splitView)
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
-  const unread = useStore((s) => threadAttentionKind(thread, s.notifications[thread.id]) === "done")
+  const unread = useStore((s) => threadAttentionKind(thread, s.notifications[thread.id], s.notificationDismissals[thread.id]) === "done")
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [title, setTitle] = useState(thread.title)

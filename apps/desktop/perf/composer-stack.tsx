@@ -291,6 +291,18 @@ async function run() {
     await sleep(300)
     toolbarGeometry("narrow preview")
   }
+  if (import.meta.env.VITE_COMPOSER_PREVIEW === "answers") {
+    flushSync(() => useStore.getState().set(state => ({
+      transcripts: { [thread.id]: { ...state.transcripts[thread.id]!, blocks: [
+        { kind: "user", id: "question-context", turnId: "turn", at, seq: 1, message: { parts: [{ type: "text", text: "Use the existing layout and keep the keyboard shortcuts." }] } },
+        { kind: "approval", id: "answered-question", turnId: "turn", at, seq: 2, approval: blocking, decision: { decision: "submit", response: { layout: "Shared panel edges" } } },
+      ] } },
+    })))
+    await sleep(500)
+    const answer = document.querySelector<HTMLElement>('[title="Answers submitted"]')
+    check(answer && answer.getBoundingClientRect().height > 0, "Submitted answer row is visible")
+    check(answer?.previousElementSibling?.querySelector("svg"), "Submitted answer has a semantic status icon")
+  }
   const post = (value: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(value))
   post({ pass: failures.length === 0, samples, failures })
 }

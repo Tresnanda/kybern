@@ -1,8 +1,6 @@
 /* Dedicated settings and usage screens, using the kit's surfaces and motion scale. */
-.settings-workspace { transition: opacity var(--duration-fast) var(--ease-smooth-out); }
 .settings-workspace[data-settings-open="true"] { opacity: 0; pointer-events: none; }
 .settings-workspace[inert] *, .settings-workspace[inert] *::before, .settings-workspace[inert] *::after { animation-play-state: paused !important; }
-.settings-workspace[data-keyboard] { transition: none; }
 .settings-screen { display: flex; width: 100%; height: 100dvh; min-width: 0; color: var(--foreground); background: var(--app-shell-background); font-family: var(--font-system-ui, system-ui); }
 /* Width tracks the thread sidebar (`--sidebar-width` from the same resize hook). */
 .settings-navigation { display: flex; flex-direction: column; width: var(--sidebar-width, 16rem); flex-shrink: 0; min-width: 0; }
@@ -130,7 +128,7 @@
   .settings-row { padding-inline: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .settings-workspace, .settings-theme-preview { transition: none; }
+  .settings-theme-preview { transition: none; }
   .settings-section-content { animation: none; }
 }
 @media (prefers-contrast: more) {

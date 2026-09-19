@@ -22,7 +22,9 @@ import {
   COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
   COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
   COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
+  COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
+  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
   COMPOSER_FOOTER_ICON_BUTTON_CLASS_NAME,
   COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
   COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
@@ -126,7 +128,7 @@ const MODES: { mode: PermissionMode; label: string; description: string; icon: R
 // The textarea and its highlight layer share these metrics exactly so the
 // painted tokens sit under the same glyphs the user is editing.
 const EDITOR_METRICS_CLASS =
-  "block box-border m-0 border-0 p-0 max-h-[200px] w-full font-normal tracking-normal [font-kerning:none] [font-variant-ligatures:none] [tab-size:8] font-system-ui text-[length:var(--app-font-size-chat,12px)] leading-relaxed break-words whitespace-pre-wrap min-h-[var(--app-density-composer-editor-min-height,2lh)]"
+  cn("block box-border m-0 border-0 p-0 max-h-[200px] w-full font-normal tracking-normal [font-kerning:none] [font-variant-ligatures:none] [tab-size:8] break-words whitespace-pre-wrap", COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME)
 
 const EDITOR_CLASS = cn(
   EDITOR_METRICS_CLASS,
@@ -849,7 +851,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               </div>
             )}
 
-            <div className="relative">
+            <div
+              data-composer-editor-frame
+              className={cn("relative", COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME, COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME)}
+              onPointerDown={(event) => {
+                if (event.target !== event.currentTarget) return
+                event.preventDefault()
+                ta.current?.focus({ preventScroll: true })
+              }}
+            >
             <div ref={backdrop} aria-hidden className={cn(EDITOR_BACKDROP_CLASS, disabled && "opacity-60")}>
               {segments.map((segment, i) =>
                 segment.kind === "token" ? (

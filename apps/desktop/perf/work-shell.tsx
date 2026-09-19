@@ -7,6 +7,7 @@ import { ThreadSidebar } from "../src/views/Sidebar"
 import { Sidebar, SidebarProvider } from "../src/components/kit/sidebar"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { useStore } from "../src/state/store"
+import { selectAttentionItems } from "../src/state/notifications"
 import { emptyThreadState } from "../src/state/transcript"
 import type { Thread, Project } from "../src/protocol"
 import "../src/index.css"
@@ -21,6 +22,8 @@ const origin = { kind: "root" } as const
 const projects: Record<string, Project> = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`project-${i}`, { id: `project-${i}`, name: `Project ${i}`, path: "/project", is_git: false, worktrees_default: false, created_at: at, updated_at: at }]))
 const threads: Record<string, Thread> = Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`thread-${i}`, { id: `thread-${i}`, project_id: `project-${i % 20}`, title: `Thread ${i}`, provider: { kind: "omp", instance: "default" }, model: null, effort: null, permission_mode: "full-access", status: i === 0 ? "running" : "idle", cwd: "/project", worktree: null, provider_session_id: null, pinned: false, created_at: at, updated_at: at, last_seq: 0 }]))
 threads["thread-999"] = { ...threads["thread-999"]!, parent_thread_id: "thread-0" }
+threads["thread-998"] = { ...threads["thread-998"]!, status: "failed", last_seq: 12 }
+threads["thread-997"] = { ...threads["thread-997"]!, status: "awaiting-approval", last_seq: 15 }
 const native = () => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench
 async function run() {
   document.documentElement.classList.add("dark")
@@ -72,10 +75,12 @@ async function run() {
   const firstMenu = document.querySelector<HTMLElement>('[data-slot="context-menu-content"]')!
   const firstMenuText = firstMenu.textContent ?? ""
   const menuItems = Array.from(firstMenu.querySelectorAll<HTMLElement>('[data-slot="context-menu-item"]'))
-  const dismissCompleted = menuItems.find(item => item.textContent?.includes("Dismiss completed"))
-  dismissCompleted?.click()
+  const dismissAll = menuItems.find(item => item.textContent?.includes("Dismiss all"))
+  dismissAll?.click()
   await sleep(50)
-  const allDismissed = Object.keys(useStore.getState().notifications).length === 0
+  const allDismissed = selectAttentionItems(useStore.getState()).length === 0
+  flushSync(() => useStore.getState().set(state => ({ threads: { ...state.threads, "thread-998": { ...state.threads["thread-998"]!, last_seq: 13 } } })))
+  const newerFailureVisible = selectAttentionItems(useStore.getState()).some(item => item.thread.id === "thread-998" && item.kind === "failed")
   flushSync(() => {
     useStore.getState().pushNotification("thread-20", "done", sequence + 4, at)
     useStore.getState().pushNotification("thread-21", "done", sequence + 5, at)
@@ -85,8 +90,9 @@ async function run() {
     dotHasNoOutline,
     boundedActions: menuItems.length === 2,
     hasFilterAction: firstMenuText.includes("Show notifications"),
-    hasDismissAction: firstMenuText.includes("Dismiss completed"),
+    hasDismissAction: firstMenuText.includes("Dismiss all"),
     allDismissed,
+    newerFailureVisible,
   }
   const pass = samples.every(sample => sample.chrome === (sample.baseline ? 100 : 0)) && state.transcript("thread-0").lastSeq === sequence && document.body.textContent?.includes("Updated immediately") === true
   const activityCommits: number[] = []

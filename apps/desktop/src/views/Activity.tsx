@@ -11,8 +11,9 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   ClockIcon,
+  ComputerTerminalIcon,
+  RobotIcon,
   StopIcon,
-  TerminalIcon,
   WorkflowIcon,
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
@@ -133,9 +134,9 @@ function TaskGlyph({ task }: { task: RuntimeTask }) {
   if (task.status === "failed") return <CircleAlertIcon className="size-3.5 text-destructive" />
   if (!isRuntimeTaskActive(task)) return <CircleCheckIcon className="size-3.5 opacity-60" />
   if (task.status === "running" || task.status === "pending" || task.status === "stopping") return <ThreadRunningSpinner className="size-3.5" />
-  if (task.kind === "process") return <TerminalIcon className="size-3.5" />
+  if (task.kind === "process") return <ComputerTerminalIcon className="size-3.5" />
   if (task.kind === "monitor") return <ClockIcon className="size-3.5" />
-  return <WorkflowIcon className="size-3.5" />
+  return <RobotIcon className="size-3.5" />
 }
 
 function statusLabel(status: RuntimeTaskStatus, backgrounded: boolean): string {

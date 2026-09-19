@@ -2737,6 +2737,15 @@ diffs-container {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* Opaque discs conceal the preceding mark where harness logos overlap.
+   Composite the rail fill over the chat canvas so the circular separator has
+   the rail's color without adding another translucent layer or blur. */
+.composer-harness-mark {
+  --harness-surface: color-mix(in srgb, var(--composer-glass-surface) var(--composer-glass-stacked-opacity), var(--color-background-surface));
+  background: var(--harness-surface);
+  box-shadow: 0 0 0 2px var(--harness-surface);
+}
+
 .composer-panel-stack:empty { display: none; }
 .composer-panel-stack[data-closed="true"] {
   border-bottom-width: 1px;
@@ -3024,6 +3033,35 @@ diffs-container {
 .composer-picker-menu--normal [data-slot="menu-popup-body"],
 .composer-picker-menu-wide--normal [data-slot="menu-popup-body"] {
   padding: var(--picker-menu-body-p);
+}
+
+/* Thread actions keep one icon column and let labels determine the width.
+   The row radius nests inside the existing 0.65rem shell and 0.25rem inset. */
+.thread-actions-menu {
+  width: max-content;
+  min-width: min(13rem, 92vw);
+  --picker-option-min-h: 1.75rem;
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.25rem;
+  --picker-option-gap: 0.625rem;
+  --picker-option-icon-size: 1rem;
+}
+
+.thread-actions-menu [data-slot="menu-item"] {
+  border-radius: 0.375rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.thread-actions-menu [data-slot="menu-item"] > svg {
+  margin-inline: 0;
+}
+
+.thread-actions-menu [data-slot="menu-shortcut"] {
+  flex-shrink: 0;
+  padding-inline-start: 1rem;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 /* Permission mode picker: wider, calmer rows matching the native approval menu. */

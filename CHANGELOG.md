@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.11
+
+<!-- kybern-release-title: Clearer chat controls -->
+<!-- kybern-release-summary: Clear stale notifications and see terminal activity, helper harnesses, and submitted answers more clearly. -->
+
+- Add Dismiss all to clear stale notifications, including errors and pending requests, while allowing new attention events to appear.
+- Clarify submitted answers, terminal commands, and background activity with dedicated icons, and show overlapping harness logos for helper threads.
+- Refine thread menu spacing and composer input sizing, and remove the overlapping fades when opening Settings.
+
 ## 0.4.10
 
 <!-- kybern-release-title: Sidebar blur restored -->

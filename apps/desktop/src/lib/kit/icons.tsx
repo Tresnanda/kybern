@@ -17,6 +17,7 @@ import {
   BrainIcon as HiBrain,
   BugIcon as HiBug,
   Camera01Icon as HiCamera,
+  ComputerTerminal01Icon as HiComputerTerminal,
   Tick02Icon as HiCheck,
   ChevronDownIcon as HiChevronDown,
   ChevronLeftIcon as HiChevronLeft,
@@ -24,6 +25,7 @@ import {
   ChevronUpIcon as HiChevronUp,
   UnfoldMoreIcon as HiSelector,
   CheckmarkCircle02Icon as HiCircleCheck,
+  CheckmarkSquare04Icon as HiCheckmarkSquare04,
   LayoutTwoColumnIcon as HiColumns2,
   MoreHorizontalIcon as HiDots,
   Download04Icon as HiDownload,
@@ -74,7 +76,7 @@ import {
   PreferenceHorizontalIcon as HcCustomize,
   EraserIcon as HcEraser,
   ArrowUpDownIcon as HcSort,
-  RoboticIcon as HcRobot,
+  Robot01Icon as HiRobot,
   Book02Icon as HcBook,
   HelpCircleIcon as HcQuestion,
   CircleArrowUp01Icon as HcArrowUpCircle,
@@ -200,7 +202,7 @@ export const SortIcon: LucideIcon = hugeIcon(HcSort);
 // Single source for the robot/agent glyph so every robot affordance (reasoning
 // rows, agent-task rows, agent mention chips, subagent menus, agent-activity
 // headers) renders one identical icon.
-export const BotIcon: LucideIcon = hugeIcon(HcRobot);
+export const BotIcon: LucideIcon = hugeIcon(HiRobot);
 export const BookIcon: LucideIcon = hugeIcon(HcBook);
 export const BugIcon = hugeIcon(HiBug);
 export const CameraIcon = hugeIcon(HiCamera);
@@ -212,6 +214,7 @@ export const ChevronUpIcon = hugeIcon(HiChevronUp);
 export const ChevronsUpDownIcon = hugeIcon(HiSelector);
 export const CircleAlertIcon = hugeIcon(HiAlertCircle);
 export const CircleCheckIcon = hugeIcon(HiCircleCheck);
+export const CheckmarkSquare04Icon = hugeIcon(HiCheckmarkSquare04);
 export const CheckCircle2Icon: LucideIcon = hugeIcon(HiCircleCheck);
 // User-input rows: a question-mark circle while the agent waits for an answer,
 // and an up-arrow circle once the answer is submitted.
@@ -357,6 +360,10 @@ export const TemporaryThreadIcon: LucideIcon = ({ className, ...props }) => (
   <TemporaryThreadGlyph className={cn("size-3.5 shrink-0", className)} {...props} />
 );
 export const TerminalIcon = hugeIcon(HcConsole);
+/** Terminal activity glyph: the computer-terminal mark distinguishes a ran command from generic tools. */
+export const ComputerTerminalIcon: LucideIcon = hugeIcon(HiComputerTerminal);
+/** Agent activity glyph: the Robot01 mark distinguishes a subagent from a process. */
+export const RobotIcon: LucideIcon = BotIcon;
 export const TerminalSquare = hugeIcon(HcConsole);
 export const TerminalSquareIcon = hugeIcon(HcConsole);
 export const TextWrapIcon = hugeIcon(HiTextWrap);

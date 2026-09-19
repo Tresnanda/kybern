@@ -50,9 +50,13 @@ import {
   type SplitView,
 } from "./splitView"
 import {
-  persistThreadNotifications,
-  readThreadNotifications,
+  persistThreadNotificationState,
+  readThreadNotificationState,
+  selectAttentionItems,
+  threadAttentionSequence,
+  threadStatusAttentionKind,
   type NotificationKind,
+  type ThreadNotificationDismissal,
   type ThreadNotification,
 } from "./notifications"
 
@@ -108,6 +112,8 @@ export interface AppState {
   /** Threads that need attention (finished, failed, or waiting on you) and have
    *  not been opened since. Backs the sidebar notification bell. */
   notifications: Record<ThreadId, ThreadNotification>
+  /** Current attention cursors dismissed from the bell, persisted per environment. */
+  notificationDismissals: Record<ThreadId, ThreadNotificationDismissal>
   /** `threadId:turnId` → diff, filled lazily for "Edited N files" cards and the changes panel. */
   diffs: Record<string, Diff>
   /** Shared git status snapshots so the dock and Environment panel do not duplicate `git`/`gh` work. */
@@ -176,8 +182,8 @@ export interface AppActions {
   pushNotification: (threadId: ThreadId, kind: NotificationKind, seq: number, at: string) => void
   /** Clear a thread's notification (it has been opened / acknowledged). */
   clearNotification: (threadId: ThreadId) => void
-  /** Clear every notification (the "Mark all read" action). */
-  clearAllNotifications: () => void
+  /** Hide every current attention item without changing thread/approval state. */
+  dismissAllNotifications: () => void
   splitFocusedPane: (
     direction: SplitDirection,
     threadId?: ThreadId,
@@ -210,13 +216,56 @@ function clearNotificationPatch(state: AppState, threadId: ThreadId): { notifica
   if (!(threadId in state.notifications)) return {}
   const notifications = { ...state.notifications }
   delete notifications[threadId]
-  persistThreadNotifications(notifications, state.environmentId)
+  persistThreadNotificationState(notifications, state.notificationDismissals, state.environmentId)
   return { notifications }
+}
+
+/**
+ * Keep a dismissed live status attached to the status transition that made it
+ * visible. Metadata-only thread updates advance the cursor so a rename or pin
+ * change does not resurrect the same stale failure. Explicit failure/request
+ * events clear it first, so a genuinely new attention event still surfaces.
+ */
+function reconcileNotificationDismissalForEvent(
+  state: AppState,
+  event: ThreadEvent,
+): Record<ThreadId, ThreadNotificationDismissal> | undefined {
+  const current = state.notificationDismissals[event.thread_id]
+  if (!current || event.seq <= current.seq) return undefined
+
+  const explicitKind = event.kind === "turn_failed" ? "failed"
+    : event.kind === "approval_requested" || event.kind === "user_input_requested" ? "blocked"
+    : null
+  if (explicitKind === current.kind) {
+    const next = { ...state.notificationDismissals }
+    delete next[event.thread_id]
+    return next
+  }
+  if (event.kind !== "thread_updated") return undefined
+
+  const incomingKind = threadStatusAttentionKind(event.thread.status)
+  if (incomingKind !== current.kind || typeof event.thread.last_seq !== "number") return undefined
+  const previous = state.threads[event.thread_id]
+  const previousKind = previous ? threadStatusAttentionKind(previous.status) : null
+  if (!previous || previousKind !== incomingKind) {
+    const next = { ...state.notificationDismissals }
+    delete next[event.thread_id]
+    return next
+  }
+  // Carry the dismissal only while it covers everything already received.
+  // An unseen newer snapshot must remain eligible to notify.
+  const knownSeq = Math.max(previous.last_seq, state.transcripts[event.thread_id]?.lastSeq ?? 0)
+  if (current.seq < knownSeq) return undefined
+  return {
+    ...state.notificationDismissals,
+    [event.thread_id]: { ...current, seq: Math.max(event.seq, event.thread.last_seq) },
+  }
 }
 
 export function createEnvironmentStore(
   environmentId: string
 ): EnvironmentStore {
+  const notificationState = readThreadNotificationState(environmentId)
   const persistSplitView = (view: SplitView | null) =>
     saveSplitView(view, environmentId)
   const store = create<Store>()((set, get) => ({
@@ -231,7 +280,8 @@ export function createEnvironmentStore(
     transcripts: {},
     runtimeTasks: {},
     threadActivity: {},
-    notifications: readThreadNotifications(environmentId),
+    notifications: notificationState.notifications,
+    notificationDismissals: notificationState.dismissals,
     diffs: {},
     gitStatuses: {},
     selected: { kind: "none" },
@@ -270,6 +320,11 @@ export function createEnvironmentStore(
     transcript: (id) => get().transcripts[id] ?? emptyThreadState(),
     receiveEvent: (event) => {
       const current = get()
+      const notificationDismissals = reconcileNotificationDismissalForEvent(current, event)
+      if (notificationDismissals) {
+        persistThreadNotificationState(current.notifications, notificationDismissals, current.environmentId)
+        current.set({ notificationDismissals })
+      }
       current.updateTranscript(event.thread_id, (state) =>
         state.loaded || isThreadVisible(current, event.thread_id) ? applyEvent(state, event) : applyBackgroundEvent(state, event))
     },
@@ -329,15 +384,33 @@ export function createEnvironmentStore(
         const existing = state.notifications[threadId]
         // Keep the earliest unseen trigger's timestamp but honour the latest kind.
         const notifications = { ...state.notifications, [threadId]: { kind, seq, at: existing?.at ?? at } }
-        persistThreadNotifications(notifications, state.environmentId)
-        return { notifications }
+        const dismissal = state.notificationDismissals[threadId]
+        const notificationDismissals = { ...state.notificationDismissals }
+        if (!dismissal || dismissal.kind !== kind || dismissal.seq < seq) delete notificationDismissals[threadId]
+        persistThreadNotificationState(notifications, notificationDismissals, state.environmentId)
+        return { notifications, notificationDismissals }
       }),
     clearNotification: (threadId) => set((state) => clearNotificationPatch(state, threadId)),
-    clearAllNotifications: () =>
+    dismissAllNotifications: () =>
       set((state) => {
-        if (Object.keys(state.notifications).length === 0) return {}
-        persistThreadNotifications({}, state.environmentId)
-        return { notifications: {} }
+        const current = selectAttentionItems({
+          threads: state.threads,
+          notifications: state.notifications,
+        })
+        const notificationDismissals = { ...state.notificationDismissals }
+        let changed = Object.keys(state.notifications).length > 0
+        for (const item of current) {
+          const seq = Math.max(
+            threadAttentionSequence(item.thread, item.kind, state.notifications[item.thread.id]),
+            state.transcripts[item.thread.id]?.lastSeq ?? 0,
+          )
+          const previous = notificationDismissals[item.thread.id]
+          if (previous?.kind !== item.kind || previous.seq !== seq) changed = true
+          notificationDismissals[item.thread.id] = { kind: item.kind, seq }
+        }
+        if (!changed) return {}
+        persistThreadNotificationState({}, notificationDismissals, state.environmentId)
+        return { notifications: {}, notificationDismissals }
       }),
     selectDraft: (projectId, purpose) => {
       persistSplitView(null)

@@ -31,12 +31,12 @@ const KIND_DOT: Record<NotificationKind, string> = {
 
 export function NotificationBell() {
   const notifications = useStore((s) => s.notifications)
+  const notificationDismissals = useStore((s) => s.notificationDismissals)
   const threads = useStore((s) => s.threads)
   const active = useStore((s) => s.notificationFilter)
-  const clearAllNotifications = useStore((s) => s.clearAllNotifications)
+  const dismissAllNotifications = useStore((s) => s.dismissAllNotifications)
 
-  const items = useMemo(() => selectAttentionItems({ threads, notifications }), [threads, notifications])
-  const completedCount = Object.keys(notifications).length
+  const items = useMemo(() => selectAttentionItems({ threads, notifications, notificationDismissals }), [threads, notifications, notificationDismissals])
   const count = items.length
   const topKind = items[0]?.kind
 
@@ -88,8 +88,8 @@ export function NotificationBell() {
           <ContextMenuItem onClick={() => useStore.getState().set((s) => ({ notificationFilter: !s.notificationFilter }))}>
             <BellIcon /> {active ? "Show all threads" : "Show notifications"}
           </ContextMenuItem>
-          <ContextMenuItem disabled={completedCount === 0} onClick={clearAllNotifications}>
-            <CheckIcon /> Dismiss completed
+          <ContextMenuItem disabled={count === 0} onClick={dismissAllNotifications}>
+            <CheckIcon /> Dismiss all
           </ContextMenuItem>
         </ContextMenuGroup>
       </ContextMenuContent>

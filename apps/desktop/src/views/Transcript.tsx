@@ -45,13 +45,15 @@ import { useTranscriptRowState } from "@/lib/transcriptRowState"
 import { TranscriptStateRoot } from "@/components/kybern/TranscriptStateScope"
 import {
   ArrowDownIcon,
-  BotIcon,
+  CheckmarkSquare04Icon,
   BrainIcon,
   ChangesIcon,
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleAlertIcon,
+  CircleQuestionIcon,
+  ComputerTerminalIcon,
   CopyIcon,
   DeviceLaptopIcon,
   EyeIcon,
@@ -63,7 +65,7 @@ import {
   PencilIcon,
   SearchIcon,
   SkillCubeIcon,
-  TerminalIcon,
+  RobotIcon,
   Undo2Icon,
   WebSearchIcon,
 } from "@/lib/kit/icons"
@@ -496,7 +498,7 @@ function AgentActivityDetailView({ detail, bottomInset, onBack, onOpenAgentActiv
         <header className="mt-3 border-b border-border/55 pb-4">
           <div className="flex min-w-0 items-start gap-3">
             <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/45 bg-background/65 text-muted-foreground/60">
-              {detail.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
+              {detail.kind === "process" ? <ComputerTerminalIcon className="size-3.5" /> : <RobotIcon className="size-3.5" />}
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -560,7 +562,7 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
   const body = (
     <>
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-        {task.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
+        {task.kind === "process" ? <ComputerTerminalIcon className="size-3.5" /> : <RobotIcon className="size-3.5" />}
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate leading-6 text-muted-foreground transition-colors group-hover/tool-row:text-foreground" style={CHAT_FONT}>
@@ -780,7 +782,7 @@ function RuntimeTaskTranscriptRow({ task, onOpenAgentActivity }: { task: Runtime
       className="group/task-row flex w-full cursor-pointer items-center gap-1.5 py-1 text-start focus-visible:outline-none"
     >
       <span className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
-        {task.kind === "process" ? <TerminalIcon className="size-3.5" /> : <BotIcon className="size-3.5" />}
+        {task.kind === "process" ? <ComputerTerminalIcon className="size-3.5" /> : <RobotIcon className="size-3.5" />}
       </span>
       <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
         {task.kind === "agent" ? `${active ? "Delegating" : "Delegated"} ${task.title}` : `Started ${noun} · ${task.title}`}
@@ -955,7 +957,7 @@ function workIcon(kind: ToolVisualKind, isError: boolean) {
     case "skill":
       return <SkillCubeIcon className="size-3.5" />
     case "command":
-      return <TerminalIcon className="size-3.5" />
+      return <ComputerTerminalIcon className="size-3.5" />
     case "edit":
     case "write":
       return <PencilIcon className="size-3.5" />
@@ -969,7 +971,7 @@ function workIcon(kind: ToolVisualKind, isError: boolean) {
     case "image":
       return <EyeIcon className="size-3.5" />
     case "delegate":
-      return <BotIcon className="size-3.5" />
+      return <RobotIcon className="size-3.5" />
     default:
       return <HammerIcon className="size-3.5" />
   }
@@ -1029,8 +1031,19 @@ function approvalRowText(approval: ApprovalRequest, decision: { decision: string
     return decision ? (decision.decision === "deny" ? `Declined ${target}` : `Allowed ${target}`) : `Waiting to allow ${target}`
   }
   if (isUserInput(approval))
-    return decision ? (decision.decision === "deny" ? "Input request declined" : "Answered the agent’s questions") : "Waiting for your input"
+    return decision ? (decision.decision === "deny" ? "Input request declined" : "Answers submitted") : "Waiting for your input"
   return `${decision ? (decision.decision === "deny" ? "Declined " : "Approved ") : "Waiting to approve "}${approval.summary || approval.tool_name}`
+}
+
+/** User-input approvals get a stable semantic status icon instead of the generic
+ * work spinner/check pair. The icon remains readable after the answer settles. */
+function approvalRowIcon(approval: ApprovalRequest, decision: { decision: string } | null) {
+  if (isUserInput(approval)) {
+    if (!decision) return <CircleQuestionIcon className="size-4" />
+    if (decision.decision === "deny") return <CircleAlertIcon className="size-4" />
+    return <CheckmarkSquare04Icon className="size-4" />
+  }
+  return <IconSwap active={decision ? "b" : "a"} a={<MatrixLoader variant="pulse" />} b={<CheckIcon className="t-success size-4" />} />
 }
 
 const TONE = "text-muted-foreground transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground"
@@ -1260,18 +1273,21 @@ const WorkRow = memo(function WorkRow({
     case "runtime_task":
       return <RuntimeTaskTranscriptRow task={block.task} onOpenAgentActivity={onOpenAgentActivity} />
     case "approval":
-      return (
-        <div className="rounded-lg py-1">
-          <div className="flex w-full items-center gap-2">
-            <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-              <IconSwap active={block.decision ? "b" : "a"} a={<MatrixLoader variant="pulse" />} b={<CheckIcon className="t-success size-4 text-muted-foreground/50" />} />
-            </span>
-            <p className="truncate leading-6 text-muted-foreground" style={CHAT_FONT}>
-              {approvalRowText(block.approval, block.decision)}
-            </p>
+      {
+        const text = approvalRowText(block.approval, block.decision)
+        return (
+          <div className="rounded-lg py-1">
+            <div className="flex w-full min-w-0 items-center gap-2">
+              <span className={cn("flex size-5 shrink-0 items-center justify-center", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/75" : "text-muted-foreground")}>
+                {approvalRowIcon(block.approval, block.decision)}
+              </span>
+              <p className={cn("min-w-0 truncate leading-6", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/80" : "text-muted-foreground")} style={CHAT_FONT} title={text}>
+                {text}
+              </p>
+            </div>
           </div>
-        </div>
-      )
+        )
+      }
     case "notice":
       return (
         <div className="rounded-lg py-1">

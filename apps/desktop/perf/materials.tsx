@@ -1,6 +1,8 @@
 // Exercise the sidebar's actual context-menu primitive over busy content.
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
+import { Menu, MenuTrigger, MenuGroup, MenuItem, MenuSeparator, MenuShortcut } from "../src/components/kit/menu"
+import { ComposerPickerMenuPopup } from "../src/components/kit/chat/ComposerPickerMenuPopup"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "../src/components/ui/context-menu"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
 import { PencilIcon, PinIcon, HandoffIcon, SquareSplitVertical, SquareSplitHorizontal, ArchiveIcon, FileIcon } from "../src/lib/kit/icons"
@@ -123,6 +125,71 @@ async function run() {
   root.dataset.windowMaterial = "translucent"
   theme(import.meta.env.VITE_COMMAND_THEME === "light" ? "light" : "dark")
   await sleep(300)
+  // The thread ellipsis uses the picker primitive, not the sidebar context menu.
+  flushSync(() => view.render(<div style={{ padding: 24 }}>
+    <Menu><MenuTrigger id="thread-actions-trigger">Thread actions</MenuTrigger>
+      <ComposerPickerMenuPopup align="start" className="thread-actions-menu">
+        <MenuGroup>
+          <MenuItem><SquareSplitVertical /> Split right<MenuShortcut>⌘\</MenuShortcut></MenuItem>
+          <MenuItem disabled><SquareSplitHorizontal /> Split down<MenuShortcut>⌘⇧\</MenuShortcut></MenuItem>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuGroup>
+          <MenuItem onClick={() => { selected = "thread-rename" }}><PencilIcon /> Rename thread</MenuItem>
+          <MenuItem><PinIcon /> Pin</MenuItem>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuItem variant="destructive"><ArchiveIcon /> Archive</MenuItem>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  </div>))
+  document.getElementById("thread-actions-trigger")!.click()
+  await sleep(300)
+  const actions = document.querySelector<HTMLElement>(".thread-actions-menu")!
+  const rows = Array.from(actions.querySelectorAll<HTMLElement>('[data-slot="menu-item"]'))
+  const geometry = () => ({
+    width: actions.getBoundingClientRect().width,
+    rowHeight: rows[0]!.getBoundingClientRect().height,
+    iconWidth: rows[0]!.querySelector("svg")!.getBoundingClientRect().width,
+    iconMargin: getComputedStyle(rows[0]!.querySelector("svg")!).marginInlineStart,
+    shortcutTracking: getComputedStyle(rows[0]!.querySelector("kbd")!).letterSpacing,
+    overflow: actions.scrollWidth > actions.clientWidth,
+  })
+  actions.classList.remove("thread-actions-menu")
+  actions.style.width = "14rem"
+  results.threadActionsBefore = geometry()
+  actions.style.removeProperty("width")
+  actions.classList.add("thread-actions-menu")
+  for (const variant of ["dark", "light"] as const) {
+    theme(variant)
+    await sleep(80)
+    const measured = geometry()
+    results[`${variant}ThreadActions`] = measured
+    pass &&= measured.iconWidth === 16 && measured.iconMargin === "0px" && !measured.overflow
+  }
+  // Text enlargement and RTL retain the icon/label/shortcut reading order.
+  root.style.setProperty("--app-font-size-ui", "24px")
+  root.dir = "rtl"
+  await sleep(80)
+  const enlarged = geometry()
+  results.enlargedRtlThreadActions = enlarged
+  pass &&= !enlarged.overflow && enlarged.rowHeight >= 33
+  root.dir = "ltr"
+  root.style.removeProperty("--app-font-size-ui")
+  theme("dark")
+  actions.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }))
+  await sleep(40)
+  results.threadActionsKeyboardFocus = document.activeElement === rows[0]
+  pass &&= !!results.threadActionsKeyboardFocus
+  rows[2]!.click()
+  await sleep(200)
+  results.threadActionsCloses = selected === "thread-rename" && !document.querySelector(".thread-actions-menu")
+  pass &&= !!results.threadActionsCloses
+  document.getElementById("thread-actions-trigger")!.click()
+  await sleep(600)
+  const settledMenu = document.querySelector<HTMLElement>(".thread-actions-menu")!
+  results.threadActionsSettled = { filter: getComputedStyle(settledMenu).filter, opacity: getComputedStyle(settledMenu).opacity, starting: settledMenu.hasAttribute("data-starting-style") }
+  pass &&= getComputedStyle(settledMenu).filter === "none" && getComputedStyle(settledMenu).opacity === "1"
   const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }
   native.webkit.messageHandlers.bench.postMessage(JSON.stringify({ ...results, selected, pass }))
 }

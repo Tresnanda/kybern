@@ -27,7 +27,12 @@ registerHooks({ resolve(specifier, context, next) {
   ` }
   return next(url, context)
 } })
-globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} }
+const persistedStorage = new Map()
+globalThis.localStorage = {
+  getItem: (key) => persistedStorage.get(key) ?? null,
+  setItem: (key, value) => persistedStorage.set(key, value),
+  removeItem: (key) => persistedStorage.delete(key),
+}
 const listeners = new Map()
 const eventSurface = {
   addEventListener(type, listener) {
@@ -382,4 +387,120 @@ test("read tracking survives a runtime reconnect without consuming inactive unre
   await tick()
   assert.equal(store.getState().notifications.inactive, undefined)
   second.disconnect()
+})
+
+test("dismiss all hides stale live statuses, persists across restart, and reveals newer events", () => {
+  const failed = { id: "failed", title: "Failed", status: "failed", last_seq: 12 }
+  const blocked = { id: "blocked", title: "Needs input", status: "awaiting-approval", last_seq: 15 }
+  const completed = { id: "completed", title: "Completed", status: "idle", last_seq: 18 }
+  const store = createEnvironmentStore("notification-dismiss-all")
+  store.getState().set({
+    threads: { failed, blocked, completed },
+    notifications: { [completed.id]: { kind: "done", seq: 18, at: "2026-09-19T00:00:18Z" } },
+  })
+
+  assert.deepEqual(
+    selectAttentionItems(store.getState()).map(({ thread, kind }) => [thread.id, kind]),
+    [["blocked", "blocked"], ["failed", "failed"], ["completed", "done"]],
+  )
+  store.getState().dismissAllNotifications()
+
+  assert.equal(store.getState().threads.failed.status, "failed", "dismissal did not mutate the failed thread")
+  assert.equal(store.getState().threads.blocked.status, "awaiting-approval", "dismissal did not resolve the pending request")
+  assert.deepEqual(selectAttentionItems(store.getState()), [], "dismiss all left stale attention items visible")
+  assert.deepEqual(createEnvironmentStore("notification-dismiss-all").getState().notificationDismissals, {
+    failed: { kind: "failed", seq: 12 },
+    blocked: { kind: "blocked", seq: 15 },
+    completed: { kind: "done", seq: 18 },
+  })
+
+  const restarted = createEnvironmentStore("notification-dismiss-all")
+  restarted.getState().set({ threads: { failed, blocked, completed } })
+  assert.deepEqual(selectAttentionItems(restarted.getState()), [], "a stale persisted ping returned after restart")
+
+  restarted.getState().set({ threads: { failed: { ...failed, last_seq: 11 }, blocked, completed } })
+  assert.deepEqual(selectAttentionItems(restarted.getState()), [], "an older reconnect snapshot revived a dismissed alert")
+  restarted.getState().set({ threads: { failed: { ...failed, last_seq: 13 }, blocked, completed } })
+  assert.deepEqual(
+    selectAttentionItems(restarted.getState()).map(({ thread, kind }) => [thread.id, kind]),
+    [["failed", "failed"]],
+    "a newer failure did not become visible after dismiss all",
+  )
+  restarted.getState().dismissAllNotifications()
+  assert.deepEqual(selectAttentionItems(restarted.getState()), [], "a newer failure could not be dismissed again")
+  assert.equal(createEnvironmentStore("notification-dismiss-all").getState().notificationDismissals.failed.seq, 13)
+  restarted.getState().set({ threads: { failed: { ...failed, last_seq: 13 }, blocked: { ...blocked, last_seq: 16 }, completed } })
+  assert.deepEqual(selectAttentionItems(restarted.getState()).map(({ kind }) => kind), ["blocked"], "a new approval stayed dismissed")
+  restarted.getState().pushNotification("completed", "done", 19, "2026-09-19T00:00:19Z")
+  assert.deepEqual(
+    selectAttentionItems(restarted.getState()).map(({ thread, kind }) => [thread.id, kind]),
+    [["blocked", "blocked"], ["completed", "done"]],
+    "a newer completion stayed dismissed",
+  )
+})
+
+
+test("dismissal storage migrates completions and stays scoped to the environment", () => {
+  persistedStorage.set("kybern.thread-notifications:notification-v1", JSON.stringify({
+    version: 1,
+    notifications: { done: { kind: "done", seq: 20, at: "2026-09-19T00:00:20Z" } },
+  }))
+  const migrated = createEnvironmentStore("notification-v1").getState()
+  assert.equal(migrated.notifications.done.seq, 20)
+  assert.deepEqual(migrated.notificationDismissals, {})
+  assert.deepEqual(createEnvironmentStore("notification-unrelated").getState().notificationDismissals, {})
+})
+
+test("same-status metadata updates preserve dismissal while new attention events reopen it", () => {
+  const at = "2026-09-19T00:01:00Z"
+  const failed = { id: "failed-metadata", title: "Failed", status: "failed", last_seq: 30 }
+  const blocked = { id: "blocked-metadata", title: "Needs input", status: "awaiting-approval", last_seq: 40 }
+  const store = createEnvironmentStore("notification-metadata-events")
+  store.getState().set({ threads: { [failed.id]: failed, [blocked.id]: blocked } })
+  store.getState().dismissAllNotifications()
+
+  store.getState().receiveEvent({
+    kind: "thread_updated", seq: 31, thread_id: failed.id, turn_id: null, at,
+    thread: { ...failed, title: "Renamed after failure" },
+  })
+  store.getState().receiveEvent({
+    kind: "thread_updated", seq: 41, thread_id: blocked.id, turn_id: null, at,
+    thread: { ...blocked, pinned: true },
+  })
+  assert.deepEqual(selectAttentionItems(store.getState()), [], "metadata edits resurrected dismissed statuses")
+
+  const reloaded = createEnvironmentStore("notification-metadata-events")
+  reloaded.getState().set({
+    threads: {
+      [failed.id]: { ...failed, title: "Renamed after failure", last_seq: 31 },
+      [blocked.id]: { ...blocked, title: "Pinned request", last_seq: 41 },
+    },
+  })
+  assert.deepEqual(selectAttentionItems(reloaded.getState()), [], "metadata dismissal was not persisted")
+
+  reloaded.getState().receiveEvent({ kind: "turn_failed", seq: 30, thread_id: failed.id, turn_id: "old-turn", at, error: "Old auth failure" })
+  reloaded.getState().receiveEvent({
+    kind: "approval_requested", seq: 40, thread_id: blocked.id, turn_id: "old-turn", at,
+    approval: { id: "approval-old", thread_id: blocked.id, turn_id: "old-turn", tool_name: "shell", input: {}, summary: "Old request", suggestions: [], created_at: at },
+  })
+  assert.deepEqual(selectAttentionItems(reloaded.getState()), [], "replayed older attention events revived dismissed statuses")
+
+  reloaded.getState().receiveEvent({ kind: "turn_failed", seq: 32, thread_id: failed.id, turn_id: "turn", at, error: "Auth revoked" })
+  assert.deepEqual(selectAttentionItems(reloaded.getState()).map(({ thread, kind }) => [thread.id, kind]), [[failed.id, "failed"]], "a new failure stayed dismissed")
+
+  // Dismissing the received failure also covers its later status projection.
+  reloaded.getState().dismissAllNotifications()
+  reloaded.getState().receiveEvent({
+    kind: "thread_updated", seq: 33, thread_id: failed.id, turn_id: null, at,
+    thread: { ...failed, title: "Auth revoked", last_seq: 33 },
+  })
+  assert.deepEqual(selectAttentionItems(reloaded.getState()), [], "a status projection revived a failure already dismissed")
+  reloaded.getState().receiveEvent({ kind: "turn_failed", seq: 34, thread_id: failed.id, turn_id: "later-turn", at, error: "A later failure" })
+  assert.deepEqual(selectAttentionItems(reloaded.getState()).map(({ thread, kind }) => [thread.id, kind]), [[failed.id, "failed"]], "a later failure stayed dismissed")
+
+  reloaded.getState().receiveEvent({
+    kind: "approval_requested", seq: 42, thread_id: blocked.id, turn_id: "turn", at,
+    approval: { id: "approval-new", thread_id: blocked.id, turn_id: "turn", tool_name: "shell", input: {}, summary: "Run a command", suggestions: [], created_at: at },
+  })
+  assert.deepEqual(selectAttentionItems(reloaded.getState()).map(({ thread, kind }) => [thread.id, kind]), [[blocked.id, "blocked"], [failed.id, "failed"]], "a new approval stayed dismissed")
 })

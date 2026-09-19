@@ -108,6 +108,8 @@ async function run() {
   settingsFixture.empty = false; await click('Show all time')
   check('all time clears lower bound', settingsFixture.calls.at(-1).since === undefined)
   if (!__UPDATE_REDUCED_MOTION__) {
+    const screenLayer = document.querySelector<HTMLElement>('.settings-screen')!.parentElement!
+    check('screen transition stays opaque', getComputedStyle(screenLayer).opacity === '1' && screenLayer.style.opacity === '')
     button('Back to workspace').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     button('Back to workspace').click(); await sleep(30)
     useStore.getState().set({ settingsOpen: true }); await sleep(300)
