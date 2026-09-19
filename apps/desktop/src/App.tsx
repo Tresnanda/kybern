@@ -190,9 +190,10 @@ function Workspace() {
       </div>
       <AnimatePresence initial={false} onExitComplete={() => { if (!useStore.getState().settingsOpen && workspaceFocus.current?.isConnected) workspaceFocus.current.focus({ preventScroll: true }) }}>
         {settingsOpen && <motion.div key="settings-screen" className="absolute inset-0 z-50"
-          initial={{ x: 8 }}
-          animate={{ x: 0 }}
-          exit={{ x: 8 }}
+          style={{ willChange: "transform, opacity" }}
+          initial={{ x: 8, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={reducedMotion || keyboardNavigation ? { opacity: 0 } : { x: 6, opacity: 0, transition: { duration: 0.12, ease: [0.4, 0, 1, 1] } }}
           transition={reducedMotion || keyboardNavigation ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 }}>
           <ErrorBoundary label="settings"><SettingsScreen sidebarResize={{ onPointerDown: sidebar.onPointerDown, dragging: sidebar.dragging }} /></ErrorBoundary>
         </motion.div>}

@@ -1031,12 +1031,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           <ProviderMark kind={provider.kind} size={14} className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100" />
                           <span className={cn(
                             "min-w-0 truncate leading-none text-[var(--color-text-foreground)]",
+                            "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
                             "@max-[360px]:hidden",
                           )}>{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
                           {modelLabel && effortLabel && (
                             <span
                               className={cn(
                                 "shrink-0 capitalize leading-none",
+                                "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
                                 COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
                                 "@max-[620px]:hidden",
                               )}
