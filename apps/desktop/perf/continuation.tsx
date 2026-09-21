@@ -36,7 +36,9 @@ async function run() {
     }
     await sleep(500)
     check(document.querySelectorAll("[data-turn-id]").length === 1, "Anonymous second Worked group appeared")
+    check(document.querySelectorAll("[data-transcript-date]").length === 1, "Transcript date section is missing or duplicated")
     check(document.querySelectorAll('[data-message-role="user"]').length === 1, "Continuation invented a user message")
+    check(!!document.querySelector('[data-message-role="user"] time[datetime]'), "Prompt time is missing its exact timestamp")
     const answer = document.querySelector('[data-message-role="assistant"] [data-slot="message-content"]')!
     check(answer?.textContent?.includes("All four replay arms completed."), "Final answer is missing")
     check(answer.querySelector("strong")?.textContent === "The results are ready.", "Final Markdown was not formatted")
@@ -46,7 +48,7 @@ async function run() {
     await sleep(500)
     check(document.body.textContent?.includes("replay.log"), "Follow-up tool did not stay inside its parent work group")
   }
-  return { pass: true, themes: 2, turns: 1, userMessages: 1, formattedFinal: true, followUpTools: true }
+  return { pass: true, themes: 2, turns: 1, userMessages: 1, dateSections: true, exactPromptTime: true, formattedFinal: true, followUpTools: true }
 }
 const report = (result: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(result))
 run().then(report).catch((error) => report({ pass: false, error: String(error), stack: error.stack }))

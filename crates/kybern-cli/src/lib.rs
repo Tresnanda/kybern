@@ -597,7 +597,7 @@ pub async fn run() -> Result<()> {
             };
             let thread = client
                 .call::<ThreadsCreate>(ThreadsCreateParams {
-                    project_id,
+                    project_id: Some(project_id),
                     provider: ProviderInstance::default_for(provider.parse().map_err(|e: String| anyhow!(e))?),
                     model,
                     effort,

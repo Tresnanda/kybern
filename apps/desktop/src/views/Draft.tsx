@@ -10,7 +10,7 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
-import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
+import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
@@ -22,9 +22,9 @@ import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from ".
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { SurfaceHeader } from "./chrome"
 
-export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }: { projectId: ProjectId; paneId?: PaneId; onProjectChange?: (id: ProjectId) => void; purpose?: "thread" | "coordinator" }) {
+export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }: { projectId?: ProjectId; paneId?: PaneId; onProjectChange?: (id: ProjectId) => void; purpose?: "thread" | "coordinator" }) {
   const environmentId = useStore((s) => s.environmentId)
-  const project = useStore((s) => s.projects[projectId])
+  const project = useStore((s) => projectId ? s.projects[projectId] : undefined)
   const projects = useStore((s) => s.projects)
   const settings = useStore((s) => s.settings)
   const allProviders = useStore((s) => s.providers)
@@ -52,7 +52,8 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
     return pick ? { kind: pick.kind, instance: "default" } : null
   }, [providerStored, providers, settings])
   const choice = provider ? modelStored[provider.kind] : undefined
-  const useWorktree = worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
+  const freeChat = !projectId
+  const useWorktree = freeChat ? false : worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
   const coordinatorDraft = purpose === "coordinator"
   const providerStatus = provider ? providers.find((item) => item.kind === provider.kind) : undefined
   const dedicatedCoordinator = provider ? projectCoordinatorMode(provider.kind) === "dedicated" : false
@@ -63,7 +64,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
 
   const isGit = project?.is_git ?? false
   const loadBranches = useCallback(() => {
-    if (!isGit) return
+    if (!isGit || !projectId) return
     rpc()
       .call("git.branches", { project_id: projectId })
       .then(setBranches)
@@ -77,8 +78,8 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
 
   const commands = useMemo<SlashCommand[]>(
     () => [
-      { name: "resume", hint: "Continue a saved session", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: projectId }) },
-      { name: "sessions", hint: "Browse saved sessions", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: projectId }) },
+      { name: "resume", hint: "Continue a saved session", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: projectId ?? null }) },
+      { name: "sessions", hint: "Browse saved sessions", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: projectId ?? null }) },
       { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
       { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
       { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
@@ -86,7 +87,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
     [set, projectId],
   )
 
-  if (!project) return null
+  if (!freeChat && !project) return null
   const projectList = Object.values(projects).sort((a, b) => a.name.localeCompare(b.name))
 
   return (
@@ -97,6 +98,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
           <div className="t-stagger flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]">
             <Logo size={40} className="text-foreground" />
             <h2 style={{ "--i": 1 } as CSSProperties} className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
+              {freeChat ? "What can I help with?" : <>
               {coordinatorDraft ? "What should we work on in" : "What should we do in"}{" "}
               <Menu>
                 <MenuTrigger
@@ -107,7 +109,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                     />
                   }
                 >
-                  {project.name}
+                  {project!.name}
                 </MenuTrigger>
                 <ComposerPickerMenuPopup align="center" side="bottom" className="min-w-56">
                   <MenuGroup>
@@ -121,7 +123,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                   </MenuGroup>
                 </ComposerPickerMenuPopup>
               </Menu>
-              ?
+              ?</>}
             </h2>
             {coordinatorDraft && (
               <p style={{ "--i": 2 } as CSSProperties} className="max-w-[58ch] text-pretty text-[length:var(--app-font-size-ui,12px)] leading-relaxed text-muted-foreground/75">
@@ -135,7 +137,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
           <div style={{ "--i": coordinatorDraft ? 3 : 2 } as CSSProperties}>
           <Composer
             surfaceMode={paneId ? "split" : "single"}
-            draftKey={`${coordinatorDraft ? "coordinator" : "project"}:${projectId}:${paneId ?? "main"}`}
+            draftKey={freeChat ? `free:${paneId ?? "main"}` : `${coordinatorDraft ? "coordinator" : "project"}:${projectId}:${paneId ?? "main"}`}
             ref={composer}
             autoFocus
             mode={mode}
@@ -168,10 +170,15 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                     <span className="min-w-0 truncate">Project coordinator</span>
                   </span>
                 )}
-                <Menu>
+                {freeChat ? (
+                  <span className={cn(TRAY_CHIP_CLASS_NAME, "cursor-default text-[var(--color-text-foreground)]")}>
+                    <MessageCircleIcon className="size-3.5 shrink-0" />
+                    <span>Free chat</span>
+                  </span>
+                ) : <Menu>
                   <MenuTrigger render={<button type="button" aria-label="Switch project" className={TRAY_CHIP_CLASS_NAME} />}>
                     <FolderIcon className="size-3.5 shrink-0" />
-                    <span className="min-w-0 truncate">{project.name}</span>
+                    <span className="min-w-0 truncate">{project!.name}</span>
                     <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
                   </MenuTrigger>
                   <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="min-w-56">
@@ -186,9 +193,9 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                       ))}
                     </MenuGroup>
                   </ComposerPickerMenuPopup>
-                </Menu>
+                </Menu>}
 
-                {!coordinatorDraft && <Menu>
+                {!freeChat && !coordinatorDraft && <Menu>
                   <MenuTrigger render={<button type="button" aria-label="Choose where the thread runs" className={cn(TRAY_CHIP_CLASS_NAME, useWorktree && "text-[var(--color-text-foreground)]")} />}>
                     {useWorktree ? <WorktreeIcon className="size-3.5 shrink-0" /> : <DeviceLaptopIcon className="size-3.5 shrink-0" />}
                     <span className="min-w-0 truncate">{useWorktree ? "New worktree" : "Checkout"}</span>
@@ -201,7 +208,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                         <MenuRadioItem value="local">
                           <DeviceLaptopIcon className="size-3.5" />
                           <span className="min-w-0 flex-1 truncate">Checkout</span>
-                          <span className="shrink-0 text-muted-foreground/70">{parentPath(project.path)}</span>
+                          <span className="shrink-0 text-muted-foreground/70">{parentPath(project!.path)}</span>
                         </MenuRadioItem>
                         <MenuRadioItem value="worktree" disabled={!isGit}>
                           <WorktreeIcon className="size-3.5" />
@@ -213,7 +220,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                   </ComposerPickerMenuPopup>
                 </Menu>}
 
-                {!coordinatorDraft && isGit && (
+                {!freeChat && !coordinatorDraft && isGit && (
                   <Menu onOpenChange={(open) => open && loadBranches()}>
                     <MenuTrigger render={<button type="button" aria-label="Choose a branch" className={cn(TRAY_CHIP_CLASS_NAME, baseBranch && "text-[var(--color-text-foreground)]")} />}>
                       <GitBranchIcon className="size-3.5 shrink-0" />
@@ -262,6 +269,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                 await createThread({ paneId, projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
                 return
               }
+              if (!projectId) throw new Error("Choose a project for the coordinator.")
               if (!providerStatus) throw new Error("Choose an available harness for the project coordinator.")
               const runtime = activeRuntime()
               if (!coordinatorStarter.current || coordinatorStarter.current.runtime !== runtime) {

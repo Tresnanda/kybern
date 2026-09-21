@@ -299,7 +299,7 @@ impl Orchestrator {
             let created = self
                 .create_thread_with_id(
                     methods::ThreadsCreateParams {
-                        project_id: project.id,
+                        project_id: Some(project.id),
                         provider: params.provider.clone(),
                         model: params.model.clone(),
                         effort: params.effort.clone(),
@@ -1191,7 +1191,7 @@ impl Orchestrator {
             let project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
             let thread = self
                 .create_thread(methods::ThreadsCreateParams {
-                    project_id: group.project_id,
+                    project_id: Some(group.project_id),
                     provider: child.provider,
                     model: child.model,
                     effort: child.effort,
@@ -3448,12 +3448,20 @@ impl Orchestrator {
     }
 
     async fn create_thread_with_id(&self, params: methods::ThreadsCreateParams, id: ThreadId) -> Result<Thread> {
-        let mut project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+        let free_chat = params.project_id.is_none();
+        let mut project = match params.project_id {
+            Some(project_id) => self.inner.store.project_get(project_id)?.ok_or_else(|| anyhow!("project not found"))?,
+            None => self.ensure_free_chat_project()?,
+        };
         let settings = self.inner.settings.get();
         let configured_model = settings.providers.get(&params.provider.kind).and_then(|provider| provider.model.clone());
         let selected_model = params.model.as_deref().or(configured_model.as_deref());
         self.validate_provider_selection(project.id, &params.provider, selected_model, params.effort.as_deref()).await?;
-        let use_worktree = params.use_worktree.or(project.worktrees_default).unwrap_or(settings.worktrees_default);
+        if free_chat && (params.use_worktree == Some(true) || params.base_branch.is_some()) {
+            return Err(anyhow!("free chats cannot use a worktree or branch"));
+        }
+        let use_worktree =
+            if free_chat { false } else { params.use_worktree.or(project.worktrees_default).unwrap_or(settings.worktrees_default) };
         if use_worktree && !project.is_git {
             // Re-probe a stale cached flag before refusing (see `project_path_is_git`);
             // a folder `git init`-ed after registration must still support worktrees.
@@ -3510,6 +3518,28 @@ impl Orchestrator {
             thread = self.inner.store.thread_get(thread.id)?.unwrap_or(thread);
         }
         Ok(thread)
+    }
+
+    fn ensure_free_chat_project(&self) -> Result<Project> {
+        if let Some(project) = self.inner.store.project_get(FREE_CHAT_PROJECT_ID)? {
+            return Ok(project);
+        }
+        let path = self.inner.paths.root.join("free-chat");
+        std::fs::create_dir_all(&path)?;
+        let now = Utc::now();
+        let project = Project {
+            id: FREE_CHAT_PROJECT_ID,
+            name: "Free chats".into(),
+            path: path.to_string_lossy().into_owned(),
+            is_git: false,
+            worktrees_default: Some(false),
+            created_at: now,
+            updated_at: now,
+        };
+        match self.inner.store.project_insert(&project) {
+            Ok(()) => Ok(project),
+            Err(error) => self.inner.store.project_get(FREE_CHAT_PROJECT_ID)?.ok_or(error),
+        }
     }
 
     async fn create_worktree(&self, project: &Project, thread_id: ThreadId, base: Option<&str>) -> Result<WorktreeInfo> {
@@ -5683,6 +5713,7 @@ fn is_compact_message(message: &UserMessage) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant, SystemTime};
@@ -5834,6 +5865,55 @@ mod tests {
         assert!(healed.is_git, "cached is_git self-heals to true");
         let stored = store.project_get(first.id).unwrap().unwrap();
         assert!(stored.is_git, "corrected flag is persisted to the store");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn free_chat_uses_a_hidden_neutral_workspace() {
+        let root = std::env::temp_dir().join(format!("kybern-free-chat-test-{}", Uuid::now_v7()));
+        let paths = Paths::resolve(Some(root.clone())).unwrap();
+        let settings = SettingsStore::load(&paths.settings).unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
+        let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
+
+        let thread = orchestrator
+            .create_thread(methods::ThreadsCreateParams {
+                project_id: None,
+                provider: ProviderInstance::default_for(ProviderKind::Codex),
+                model: None,
+                effort: None,
+                permission_mode: None,
+                use_worktree: None,
+                base_branch: None,
+                title: Some("Free chat".into()),
+                message: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(thread.project_id, FREE_CHAT_PROJECT_ID);
+        assert_eq!(PathBuf::from(&thread.cwd), root.join("free-chat"));
+        assert!(PathBuf::from(&thread.cwd).is_dir());
+        assert!(store.projects_list().unwrap().is_empty(), "the neutral workspace is not a user project");
+        assert!(store.project_get(FREE_CHAT_PROJECT_ID).unwrap().is_some());
+        assert!(store.project_delete(FREE_CHAT_PROJECT_ID).is_err());
+
+        let rejected = orchestrator
+            .create_thread(methods::ThreadsCreateParams {
+                project_id: None,
+                provider: ProviderInstance::default_for(ProviderKind::Codex),
+                model: None,
+                effort: None,
+                permission_mode: None,
+                use_worktree: Some(true),
+                base_branch: None,
+                title: None,
+                message: None,
+            })
+            .await;
+        assert!(rejected.is_err());
 
         let _ = std::fs::remove_dir_all(&root);
     }

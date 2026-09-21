@@ -13,6 +13,7 @@ import { AutocompleteItem } from "@/components/kit/autocomplete"
 import { mod, relativeTime } from "@/lib/format"
 import { ClockIcon, FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
+import { isFreeChatProject } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { loadThread } from "@/state/rpc"
 import { selectRecentThreads, useStore } from "@/state/store"
@@ -115,12 +116,12 @@ export function Palette() {
     const threadItems: Item[] = threads.slice(0, 40).map((t) => ({
       id: `thread:${t.id}`,
       label: t.title || "Untitled",
-      keywords: `${t.title} ${projects[t.project_id]?.name ?? ""}`,
+      keywords: `${t.title} ${isFreeChatProject(t.project_id) ? "Free chat" : projects[t.project_id]?.name ?? ""}`,
       group: "Threads",
       icon: t.status === "running" ? <ThreadRunningSpinner /> : <ProviderMark kind={t.provider.kind} size={15} className="size-[15px]" />,
       meta: (
         <>
-          <span className="w-24 shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">{projects[t.project_id]?.name}</span>
+          <span className="w-24 shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">{isFreeChatProject(t.project_id) ? "Free chat" : projects[t.project_id]?.name}</span>
           <span className="w-10 shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,9px)] text-muted-foreground/79">{relativeTime(t.updated_at)}</span>
         </>
       ),

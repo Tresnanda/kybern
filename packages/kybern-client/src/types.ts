@@ -22,6 +22,8 @@ export const EVENTS_LAGGED_NOTIFICATION = "events.lagged";
 
 export type Uuid = string;
 export type ProjectId = Uuid;
+export const FREE_CHAT_PROJECT_ID: ProjectId = "00000000-0000-0000-0000-000000000001";
+export const isFreeChatProject = (projectId: ProjectId): boolean => projectId === FREE_CHAT_PROJECT_ID;
 export type ThreadId = Uuid;
 export type GroupId = Uuid;
 export type AssignmentId = Uuid;
@@ -864,7 +866,8 @@ export interface ThreadsReadResult {
 }
 
 export interface ThreadsCreateParams {
-  project_id: ProjectId;
+  /** Omit to create a free chat in the daemon-owned neutral workspace. */
+  project_id?: ProjectId;
   provider: ProviderInstance;
   model?: string;
   effort?: string;

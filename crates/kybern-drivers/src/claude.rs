@@ -1297,6 +1297,14 @@ impl AgentSession for SessionHandle {
             .await
     }
 
+    async fn steer(&self, message_id: &str, message: &UserMessage) -> Result<()> {
+        // Claude's stream-json input remains writable while native background
+        // work is active. A task-notification result may arrive before Claude
+        // consumes this prompt; handle_result keeps that notification as a
+        // response boundary and leaves current_user_uuid attached to this input.
+        self.send_message(message_id, message).await
+    }
+
     async fn interrupt(&self) -> Result<()> {
         self.0.send_control("interrupt", json!({})).await.map(|_| ())
     }
@@ -1414,7 +1422,7 @@ mod tests {
             matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { anchors, .. }) if anchors.turn_id.as_deref() == Some("first-user"))
         );
 
-        handle.send_message("second-user", &UserMessage::text("Another request")).await.unwrap();
+        handle.steer("second-user", &UserMessage::text("Another request")).await.unwrap();
         // Captured Claude notification sequence: request starts, then the result
         // is explicitly attributed to task-notification rather than user input.
         session.handle_frame(json!({"type":"system", "subtype":"status", "status":"requesting"})).await;

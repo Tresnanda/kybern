@@ -288,7 +288,9 @@ method!(ThreadsRead, "threads.read", Some(Scope::OrchestrationRead), ThreadsRead
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsCreateParams {
-    pub project_id: ProjectId,
+    /// Omit to create a free chat in the daemon-owned neutral workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
     pub provider: ProviderInstance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,

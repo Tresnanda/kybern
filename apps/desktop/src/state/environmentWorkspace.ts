@@ -27,7 +27,7 @@ export function readWorkspace(environmentId: string): Partial<AppState> {
         selected.kind === "pulls" ||
         (selected.kind === "thread" && typeof selected.id === "string") ||
         (selected.kind === "draft" &&
-          typeof selected.draft?.projectId === "string"))
+          (selected.draft?.projectId === undefined || typeof selected.draft.projectId === "string")))
     const result: Partial<AppState> = {
       ...(validSelection ? { selected } : {}),
     }

@@ -9,6 +9,13 @@ use uuid::Uuid;
 use crate::event::NoticeLevel;
 
 pub type ProjectId = Uuid;
+/// Daemon-owned neutral workspace used by chats that are not attached to a
+/// user project. Clients present these threads as project-free.
+pub const FREE_CHAT_PROJECT_ID: ProjectId = Uuid::from_u128(1);
+
+pub fn is_free_chat_project(id: ProjectId) -> bool {
+    id == FREE_CHAT_PROJECT_ID
+}
 pub type ThreadId = Uuid;
 pub type TurnId = Uuid;
 pub type MessageId = Uuid;

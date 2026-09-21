@@ -13,6 +13,7 @@ import {
   consumeThreadPointerDragClick,
 } from "@/components/kybern/chatPaneDrag"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
+import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { SidebarIconButton } from "@/components/kit/SidebarIconButton"
 import { ThreadRunningSpinner } from "@/components/kit/ThreadRunningSpinner"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
@@ -60,7 +61,7 @@ import { activeEnvironment } from "@/state/environments"
 import { cn } from "@/lib/utils"
 import { TextSwap } from "@/components/kybern/motion"
 import { primeMarquee } from "@/lib/kit/marquee"
-import type { Project, ProjectId, Thread, ThreadActivityState, ThreadId } from "@/protocol"
+import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type Project, type ProjectId, type Thread, type ThreadActivityState, type ThreadId } from "@/protocol"
 import { selectAttentionItems, threadAttentionKind } from "@/state/notifications"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
@@ -92,6 +93,12 @@ export function ThreadSidebar() {
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
   const connection = useStore((s) => s.connection)
   const threads = useStore((s) => s.threads)
+  const freeThreads = useMemo(
+    () => Object.values(threads).filter((thread) => isFreeChatProject(thread.project_id) && thread.status !== "archived" && !thread.parent_thread_id).sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    [threads],
+  )
+  const freeDraftSelected = selected.kind === "draft" && !selected.draft.projectId
+  const hasFreeDraft = useStore((s) => !!s.composerDrafts["free:main"])
   const notifications = useStore((s) => s.notifications)
   const notificationDismissals = useStore((s) => s.notificationDismissals)
   const notificationFilter = useStore((s) => s.notificationFilter)
@@ -101,6 +108,13 @@ export function ThreadSidebar() {
     if (!notificationFilter) return null
     return new Set<ThreadId>(selectAttentionItems({ threads, notifications, notificationDismissals }).map((item) => item.thread.id))
   }, [notificationFilter, threads, notifications, notificationDismissals])
+  const visibleFreeThreads = useMemo(
+    () => freeThreads.filter((thread) => !attentionIds || attentionIds.has(thread.id)),
+    [attentionIds, freeThreads],
+  )
+  const recentsCollapsed = useStore((s) => !!s.collapsedProjects[FREE_CHAT_PROJECT_ID])
+  const recentsOpen = attentionIds ? true : !recentsCollapsed
+  const toggleRecents = useStore((s) => s.toggleProject)
   const visibleProjects = useMemo(() => {
     if (!attentionIds) return projectList
     const withAttention = new Set<ProjectId>()
@@ -173,8 +187,15 @@ export function ThreadSidebar() {
         <div className="sidebar-surface-enter">
           <SidebarGroup className="px-1.5 pt-1 pb-1.5">
             <SidebarMenu className="gap-0.5">
-              <PrimaryAction icon={<NewThreadIcon className="size-3.5 shrink-0" />} label="New thread" shortcut={["⌘", "N"]} onClick={() => newThread()} />
-              <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId : selected.kind === "thread" ? useStore.getState().threads[selected.id]?.project_id ?? null : null })} />
+              <PrimaryAction
+                icon={<NewThreadIcon className="size-3.5 shrink-0" />}
+                label="New chat"
+                shortcut={["⌘", "N"]}
+                active={freeDraftSelected}
+                trailing={hasFreeDraft ? <span data-composer-draft="free-chat" role="img" aria-label="Unsent free chat draft" title="Unsent free chat draft" className="inline-flex size-4 items-center justify-center text-muted-foreground/65"><PencilIcon className="size-3" /></span> : undefined}
+                onClick={() => newThread()}
+              />
+              <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId ?? null : selected.kind === "thread" ? (isFreeChatProject(useStore.getState().threads[selected.id]?.project_id ?? "") ? null : useStore.getState().threads[selected.id]?.project_id ?? null) : null })} />
               <PrimaryAction icon={<GitPullRequestIcon className="size-3.5 shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
               <PrimaryAction icon={<AnalyticsIcon className="size-3.5 shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
             </SidebarMenu>
@@ -201,6 +222,33 @@ export function ThreadSidebar() {
               </SidebarMenu>
             )}
           </SidebarGroup>
+
+          {(visibleFreeThreads.length > 0 || (!attentionIds && freeDraftSelected)) && (
+            <SidebarGroup className="px-1.5 py-1.5">
+              <button
+                type="button"
+                aria-controls="sidebar-recents"
+                aria-expanded={recentsOpen}
+                aria-label={`${recentsOpen ? "Collapse" : "Expand"} Recents`}
+                data-recents-disclosure
+                onClick={() => toggleRecents(FREE_CHAT_PROJECT_ID)}
+                className={cn(
+                  "flex h-7 w-full cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-start outline-hidden transition-[color,background-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)] focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100",
+                  SIDEBAR_SECTION_LABEL_CLASS_NAME,
+                )}
+              >
+                <span>Recents</span>
+                <DisclosureChevron open={recentsOpen} className="size-3 text-muted-foreground/65" />
+              </button>
+              <DisclosureRegion open={recentsOpen} className="pt-0.5">
+                <SidebarMenu id="sidebar-recents" className="gap-0.5">
+                  {visibleFreeThreads
+                    .slice(0, MAX_PROJECT_THREADS)
+                    .map((thread) => <ThreadRow key={thread.id} thread={thread} nested={false} />)}
+                </SidebarMenu>
+              </DisclosureRegion>
+            </SidebarGroup>
+          )}
         </div>
       </SidebarContent>
 
@@ -248,7 +296,7 @@ export function ThreadSidebar() {
   )
 }
 
-function PrimaryAction({ icon, label, shortcut, onClick, active }: { icon: React.ReactNode; label: string; shortcut?: string[]; onClick: () => void; active?: boolean }) {
+function PrimaryAction({ icon, label, shortcut, trailing, onClick, active }: { icon: React.ReactNode; label: string; shortcut?: string[]; trailing?: React.ReactNode; onClick: () => void; active?: boolean }) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
@@ -263,6 +311,7 @@ function PrimaryAction({ icon, label, shortcut, onClick, active }: { icon: React
       >
         <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-inherit">{icon}</span>
         <span className="truncate">{label}</span>
+        {trailing && <span className={cn("ml-auto", shortcut && "group-hover/sidebar-primary-action:hidden group-focus-visible/sidebar-primary-action:hidden")}>{trailing}</span>}
         {shortcut && (
           <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
             <KbdGroup>
@@ -284,6 +333,7 @@ function ProjectItem({ project, filterThreadIds }: { project: Project; filterThr
   const collapsed = useStore((s) => !!s.collapsedProjects[project.id])
   const toggle = useStore((s) => s.toggleProject)
   const selected = useStore((s) => s.selected)
+  const hasNewThreadDraft = useStore((s) => Object.keys(s.composerDrafts).some((key) => key.startsWith(`project:${project.id}:`)))
   const activityState = useStore((s): ThreadActivityState | undefined => {
     const projectThreads = selectThreads(s)
     if (projectThreads.some((thread) => s.threadActivity[thread.id]?.state === "working")) return "working"
@@ -346,6 +396,11 @@ function ProjectItem({ project, filterThreadIds }: { project: Project; filterThr
               </span>
               <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]">
                 <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/95">{project.name}</span>
+                {hasNewThreadDraft && (
+                  <span data-composer-draft="new-thread" role="img" aria-label="Unsent new thread draft" title="Unsent new thread draft" className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/65">
+                    <PencilIcon className="size-3" />
+                  </span>
+                )}
               </div>
               {!open && (running || waiting || activityState) && (
                 <span className={cn("ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center", HOVER_HIDE_PROJECT)}>
@@ -442,11 +497,12 @@ function StatusGlyph({ status, activity, unread }: { status: Thread["status"]; a
   return null
 }
 
-function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, onToggleChildren }: { thread: Thread; depth?: number; childCount?: number; childrenOpen?: boolean; onToggleChildren?: () => void }) {
+function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, onToggleChildren, nested = true }: { thread: Thread; depth?: number; childCount?: number; childrenOpen?: boolean; onToggleChildren?: () => void; nested?: boolean }) {
   const selected = useStore((s) => s.selected.kind === "thread" && s.selected.id === thread.id)
   const splitView = useStore((s) => s.splitView)
   const activity = useStore((s) => s.threadActivity[thread.id]?.state ?? undefined)
   const unread = useStore((s) => threadAttentionKind(thread, s.notifications[thread.id], s.notificationDismissals[thread.id]) === "done")
+  const hasDraft = useStore((s) => !!s.composerDrafts[`thread:${thread.id}`])
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [title, setTitle] = useState(thread.title)
@@ -507,7 +563,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
           }}
           data-active={selected || undefined}
           data-marquee-host
-          style={{ paddingInlineStart: 32 + depth * 20 }}
+          style={{ paddingInlineStart: nested ? 32 + depth * 20 : 8 }}
           onPointerEnter={(event) => primeMarquee(event.currentTarget)}
           onFocus={(event) => primeMarquee(event.currentTarget)}
           aria-current={selected ? "page" : undefined}
@@ -542,6 +598,11 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
               />
             ) : (
               <TextSwap text={thread.coordinator_project_id ? "Open coordinator" : thread.title || "Untitled"} className={cn("t-marquee flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/95")} />
+            )}
+            {hasDraft && !renaming && (
+              <span data-composer-draft="thread" role="img" aria-label="Unsent draft" title="Unsent draft" className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/65">
+                <PencilIcon className="size-3" />
+              </span>
             )}
             {thread.status === "awaiting-approval" && <span className="t-pop shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-300/90">Pending</span>}
           </div>

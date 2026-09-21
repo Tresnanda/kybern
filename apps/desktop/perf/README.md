@@ -148,6 +148,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Streaming, Markdown, highlighting, message rail | `node scripts/check-rendering.mjs` |
 | Thinking disclosure re-entry, mixed work, dynamic row heights | `node scripts/check-rendering.mjs work-stream` |
 | Store publication, sidebar, composer, background task status | `node scripts/check-rendering.mjs work-shell` |
+| Project-free draft, recents, and neutral composer controls | `node scripts/check-rendering.mjs free-chat` |
 | Collaboration group lifecycle, paging, attribution, and context revisions | `node scripts/check-rendering.mjs collaboration` |
 | Ordinary-chat delegation, child navigation, earlier-thread references, project coordinator entry, and optional dock panels | `node scripts/check-rendering.mjs chat-collaboration` |
 | Release announcement, release details, and sidebar update controls | `node scripts/check-rendering.mjs app-update` |
