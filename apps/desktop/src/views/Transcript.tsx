@@ -87,6 +87,11 @@ const HOVER_REVEAL =
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?.text.length ?? 0) / 75 * 20)
 const turnTimestamp = (group: TurnGroup) => group.user?.at ?? group.work[0]?.at ?? group.end?.at ?? ""
+type TranscriptVirtualRow =
+  | { kind: "date"; key: string; at: string }
+  | { kind: "turn"; key: string; group: TurnGroup; groupIndex: number }
+const transcriptRowKey = (row: TranscriptVirtualRow) => row.key
+const estimateTranscriptRowSize = (row: TranscriptVirtualRow) => row.kind === "date" ? 49 : estimateTurnSize(row.group)
 const blockKey = (block: Block) => block.id
 const estimateWorkSize = () => 32
 const chunkKey = (chunk: WorkChunk) => chunk.kind === "single" ? chunk.block.id : `group:${chunk.blocks[0]!.id}`
@@ -248,9 +253,26 @@ export function Transcript({
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
+  const transcriptRows = useMemo<TranscriptVirtualRow[]>(() => {
+    const result: TranscriptVirtualRow[] = []
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      const group = groups[groupIndex]!
+      const at = turnTimestamp(group)
+      const previousAt = groupIndex > 0 ? turnTimestamp(groups[groupIndex - 1]!) : ""
+      const dateKey = calendarDateKey(at)
+      if (dateKey && dateKey !== calendarDateKey(previousAt)) result.push({ kind: "date", key: `date:${dateKey}`, at })
+      result.push({ kind: "turn", key: `turn:${turnKey(group, groupIndex)}`, group, groupIndex })
+    }
+    return result
+  }, [groups])
+  const groupRowIndices = useMemo(() => {
+    const result = new Map<number, number>()
+    transcriptRows.forEach((row, rowIndex) => { if (row.kind === "turn") result.set(row.groupIndex, rowIndex) })
+    return result
+  }, [transcriptRows])
   const hasEarlier = state?.nextBeforeSeq != null
-  const virtualKey = useCallback(turnKey, [])
-  const virtualEstimate = useCallback(estimateTurnSize, [])
+  const virtualKey = useCallback(transcriptRowKey, [])
+  const virtualEstimate = useCallback(estimateTranscriptRowSize, [])
   const [agentActivityTrail, setAgentActivityTrail] = useState<AgentActivitySelection[]>([])
   const selectedActivity = agentActivityTrail.at(-1)
   const runtimeTasks = useStore((s) => selectedActivity?.threadId === threadId ? s.runtimeTasks[threadId] ?? EMPTY_RUNTIME_TASKS : EMPTY_RUNTIME_TASKS)
@@ -315,10 +337,13 @@ export function Transcript({
       },
       activeId(scroll) {
         const index = (rows.current?.getVirtualItemForOffset(scroll.scrollTop + scroll.clientHeight / 2)?.index ?? 0)
-        const candidates = byTurn.get(index) ?? []
-        const group = groups[index]
+        const virtualRow = transcriptRows[index]
+        const groupIndex = virtualRow?.kind === "turn" ? virtualRow.groupIndex : transcriptRows.slice(index + 1).find((row) => row.kind === "turn")?.groupIndex
+        if (groupIndex === undefined) return ""
+        const candidates = byTurn.get(groupIndex) ?? []
+        const group = groups[groupIndex]
         if (!group) return ""
-        const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(group, index))}"]`)
+        const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(group, groupIndex))}"]`)
         const middle = scroll.getBoundingClientRect().top + scroll.clientHeight / 2
         let closest = candidates[0]?.id ?? ""
         let distance = Infinity
@@ -336,7 +361,7 @@ export function Transcript({
         const scroll = viewport.current
         if (!item || !scroll) return
         cancelAnimationFrame(navigationFrame.current)
-        rows.current?.scrollToIndex(item.turnIndex, { align: "start" })
+        rows.current?.scrollToIndex(groupRowIndices.get(item.turnIndex) ?? item.turnIndex, { align: "start" })
         let attempts = 0
         const refine = () => {
           const turn = scroll.querySelector(`[data-turn-id="${CSS.escape(turnKey(groups[item.turnIndex]!, item.turnIndex))}"]`)
@@ -350,7 +375,7 @@ export function Transcript({
         navigationFrame.current = requestAnimationFrame(refine)
       },
     }
-  }, [groups, navigationItems])
+  }, [groups, groupRowIndices, navigationItems, transcriptRows])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
   const scroller = useRef<MessageScrollerController>(null)
@@ -429,16 +454,12 @@ export function Transcript({
                   </div>
                 </div>
               )}
-              <VirtualRows items={groups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
-                {(g, i) => {
-                  const at = turnTimestamp(g)
-                  const previousAt = i > 0 ? turnTimestamp(groups[i - 1]!) : ""
-                  const startsDay = !!at && calendarDateKey(at) !== calendarDateKey(previousAt)
-                  return <div data-turn-id={turnKey(g, i)}>
-                    {startsDay && <DateSeparator at={at} />}
-                    <Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} />
-                  </div>
-                }}
+              <VirtualRows items={transcriptRows} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
+                {(row) => row.kind === "date"
+                  ? <DateSeparator at={row.at} />
+                  : <div data-turn-id={turnKey(row.group, row.groupIndex)}>
+                      <Turn group={row.group} threadId={threadId} isLast={row.groupIndex === groups.length - 1} onOpenAgentActivity={openAgentActivity} />
+                    </div>}
               </VirtualRows>
             </TranscriptStateRoot>
           )}
