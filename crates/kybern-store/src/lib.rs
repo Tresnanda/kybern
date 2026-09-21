@@ -1205,6 +1205,9 @@ impl Store {
     }
 
     pub fn project_delete(&self, id: ProjectId) -> Result<()> {
+        if is_free_chat_project(id) {
+            return Err(anyhow::anyhow!("the free-chat workspace cannot be removed"));
+        }
         self.with(|c| {
             c.execute("DELETE FROM projects WHERE id = ?1", [id.to_string()])?;
             Ok(())
@@ -1235,9 +1238,11 @@ impl Store {
 
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
-            let mut st =
-                c.prepare("SELECT id, name, path, is_git, worktrees_default, created_at, updated_at FROM projects ORDER BY name")?;
-            let rows = st.query_map([], row_to_project)?;
+            let mut st = c.prepare(
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at
+                 FROM projects WHERE id != ?1 ORDER BY name",
+            )?;
+            let rows = st.query_map([FREE_CHAT_PROJECT_ID.to_string()], row_to_project)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
     }

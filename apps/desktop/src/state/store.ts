@@ -70,7 +70,8 @@ export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {
-  projectId: ProjectId
+  /** Missing for a free chat that is not attached to a user project. */
+  projectId?: ProjectId
   purpose?: "thread" | "coordinator"
 }
 
@@ -177,6 +178,7 @@ export interface AppActions {
   updateTranscript: (id: ThreadId, f: (t: ThreadState) => ThreadState) => void
   selectThread: (id: ThreadId) => void
   selectDraft: (projectId: ProjectId, purpose?: "thread" | "coordinator") => void
+  selectFreeDraft: () => void
   selectPulls: () => void
   /** Record that a thread needs attention (bell + sidebar unread marker). */
   pushNotification: (threadId: ThreadId, kind: NotificationKind, seq: number, at: string) => void
@@ -418,6 +420,10 @@ export function createEnvironmentStore(
         selected: { kind: "draft", draft: { projectId, ...(purpose ? { purpose } : {}) } },
         splitView: null,
       })
+    },
+    selectFreeDraft: () => {
+      persistSplitView(null)
+      set({ selected: { kind: "draft", draft: {} }, splitView: null })
     },
     selectPulls: () => {
       persistSplitView(null)

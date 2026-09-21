@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.13
+
+<!-- kybern-release-title: Free chats and clearer conversation context -->
+<!-- kybern-release-summary: Start chats without a project, keep drafts visible, see message timing, and steer agents while background work continues. -->
+
+- Start project-free chats from New chat and find them in a collapsible Recents section beneath Projects, with an isolated neutral workspace instead of repository controls.
+- Keep unsent work visible with pencil indicators for new-chat and thread drafts, and show the remaining provider prompt-cache window in the composer.
+- Group conversations by date and show message timestamps so earlier prompts and responses are easier to place in time.
+- Send new instructions while supported harnesses continue background tasks, including Claude Code continuation support and parity checks for other providers.
+
 ## 0.4.11
 
 <!-- kybern-release-title: Clearer chat controls -->

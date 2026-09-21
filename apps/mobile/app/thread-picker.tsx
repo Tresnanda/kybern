@@ -4,7 +4,10 @@ import { View } from "react-native";
 import { threadReferencePart } from "../../../packages/kybern-client/src/threadReferences";
 import { addContext } from "../src/state/draft";
 import type { Thread, ThreadSearchHit } from "../src/state/protocol";
-import { PROVIDER_DISPLAY_NAME } from "../src/state/protocol";
+import {
+  isFreeChatProject,
+  PROVIDER_DISPLAY_NAME,
+} from "../src/state/protocol";
 import { errorText, rpc, useApp } from "../src/state/runtime";
 import {
   Empty,
@@ -112,8 +115,10 @@ export default function ThreadPicker() {
   }
 
   const scopeName = scopeProjectId
-    ? app.projects.find((project) => project.id === scopeProjectId)?.name ??
-      "This project"
+    ? isFreeChatProject(scopeProjectId)
+      ? "Free chat"
+      : app.projects.find((project) => project.id === scopeProjectId)?.name ??
+        "This project"
     : "All projects";
   const grouped = useMemo(() => {
     const groups = new Map<string, ThreadSearchHit[]>();
@@ -185,8 +190,10 @@ export default function ThreadPicker() {
           <Group
             key={groupProjectId}
             title={
-              app.projects.find((project) => project.id === groupProjectId)
-                ?.name ?? "Project"
+              isFreeChatProject(groupProjectId)
+                ? "Free chat"
+                : app.projects.find((project) => project.id === groupProjectId)
+                    ?.name ?? "Project"
             }
           >
             {items.map(({ thread, snippet, matched_at: matchedAt }) => (

@@ -15,7 +15,11 @@ import {
   THREAD_FILTERS,
   type ThreadFilter,
 } from "../state/threadList";
-import { type Thread, PROVIDER_DISPLAY_NAME } from "../state/protocol";
+import {
+  isFreeChatProject,
+  type Thread,
+  PROVIDER_DISPLAY_NAME,
+} from "../state/protocol";
 import { Empty, Icon, IconButton, Row, styles, T, Tap } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { type, useTheme } from "../ui/theme";
@@ -196,7 +200,9 @@ export function Sidebar() {
     return [...byProject.entries()]
       .map(([projectId, threads]) => ({
         projectId,
-        name: app.projects.find((p) => p.id === projectId)?.name ?? "Project",
+        name: isFreeChatProject(projectId)
+          ? "Free chats"
+          : (app.projects.find((p) => p.id === projectId)?.name ?? "Project"),
         threads,
         recent: threads.reduce(
           (max, t) => (t.updated_at > max ? t.updated_at : max),

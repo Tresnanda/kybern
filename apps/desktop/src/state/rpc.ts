@@ -297,6 +297,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       const hydrated = useStore.getState()
       if (
         (hydrated.selected.kind === "draft" &&
+          hydrated.selected.draft.projectId &&
           !hydrated.projects[hydrated.selected.draft.projectId]) ||
         (hydrated.selected.kind === "thread" &&
           !hydrated.threads[hydrated.selected.id])
@@ -312,6 +313,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       if (visibleThreadIds.size === 0 && next.selected.kind === "none") {
         const first = projects.projects[0]
         if (first) useStore.getState().selectDraft(first.id)
+        else useStore.getState().selectFreeDraft()
       }
     } catch (e) {
       if (isCurrentHydration(generation)) {
@@ -695,7 +697,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
   async function createThread(opts: {
     paneId?: import("@/state/splitView").PaneId
-    projectId: ProjectId
+    projectId?: ProjectId
     provider: ProviderInstance
     permissionMode: PermissionMode
     model?: string
@@ -705,7 +707,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     message?: UserMessage
   }): Promise<ThreadId> {
     const t = await rpc().call("threads.create", {
-      project_id: opts.projectId,
+      ...(opts.projectId ? { project_id: opts.projectId } : {}),
       provider: opts.provider,
       permission_mode: opts.permissionMode,
       model: opts.model,

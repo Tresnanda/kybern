@@ -1,5 +1,7 @@
 import { ComposerImageAttachment } from "@/components/kybern/ComposerImageAttachment"
+import { PromptCacheIndicator } from "@/components/kybern/PromptCacheIndicator"
 import { ProviderUsageIndicator } from "@/components/kybern/ProviderUsageIndicator"
+import type { PromptCacheWindow } from "@/lib/promptCache"
 import type { ProviderUsage } from "@/protocol"
 // Composer: frosted 1.2rem squircle
 // surface, 12px system-ui editor, footer with the + menu, permission-mode
@@ -50,7 +52,7 @@ import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, P
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
 import { InlineToken } from "@/components/kybern/InlineToken"
-import type { ContentPart, PermissionMode, ProjectId, ProviderInstance, ProviderStatus, SkillInfo, Thread, UserMessage } from "@/protocol"
+import { isFreeChatProject, type ContentPart, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderStatus, type SkillInfo, type Thread, type UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { customModelId, modelChoices } from "../../../../packages/kybern-client/src/models"
@@ -82,6 +84,7 @@ export interface ComposerProps {
   /** Unique within the selected environment: a thread or project draft. */
   providerUsage?: ProviderUsage
   showProviderUsage?: boolean
+  promptCache?: { window: PromptCacheWindow; lastActivityAt: string }
   draftKey?: string
   placeholder?: string
   running?: boolean
@@ -464,7 +467,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }
   const pickThread = (thread: Thread) => {
     if (!mention) return
-    const projectName = projects[thread.project_id]?.name
+    const projectName = isFreeChatProject(thread.project_id) ? "Free chat" : projects[thread.project_id]?.name
     const reference = createComposerThreadReference(thread, selectedThreadReferences.current, projectName)
     selectedThreadReferences.current = [...selectedThreadReferences.current.filter((item) => item.part.thread_id !== thread.id), reference]
     syncTokenSources()
@@ -801,7 +804,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                   )}
                                 </span>
                                 {item.type === "thread" ? (
-                                  <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{projects[item.thread.project_id]?.name ?? "Project"}</span>
+                                  <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{isFreeChatProject(item.thread.project_id) ? "Free chat" : projects[item.thread.project_id]?.name ?? "Project"}</span>
                                 ) : item.type === "file" ? (
                                   <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
                                 ) : item.type === "command" ? (
@@ -1001,6 +1004,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 data-chat-composer-actions="right"
                 className="flex min-w-0 flex-1 items-center justify-end gap-1"
               >
+                {props.promptCache && (
+                  <PromptCacheIndicator
+                    cacheWindow={props.promptCache.window}
+                    lastActivityAt={props.promptCache.lastActivityAt}
+                    running={running}
+                  />
+                )}
                 {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
                   <Menu onOpenChange={(open) => open && canReloadModels && void reloadModels()}>

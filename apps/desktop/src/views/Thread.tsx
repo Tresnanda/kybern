@@ -25,6 +25,7 @@ import { ComposerPanelStack, ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDE
 import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/kit/chat/ComposerStackedPanelContent"
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/kit/menu"
 import { PROVIDER_LABEL, basename, mod, toolLine } from "@/lib/format"
+import { promptCacheWindow } from "@/lib/promptCache"
 import { activeTaskSummary } from "@/lib/runtimeActivity"
 import {
   ArrowLeftIcon,
@@ -58,7 +59,7 @@ import {
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import type { ApprovalRequest, JsonValue, RuntimeTask, ThreadId, UserMessage } from "@/protocol"
+import { isFreeChatProject, type ApprovalRequest, type JsonValue, type RuntimeTask, type ThreadId, type UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { activeRuntime, subscribeCollaboration, archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
 import { canSplitPane, type PaneId } from "@/state/splitView"
@@ -101,6 +102,16 @@ export function ThreadView({
     thread?.coordinator_project_id ? s.projects[thread.project_id]?.name : undefined
   )
   const providerUsage = useStore((s) => s.transcripts[threadId]?.providerUsage)
+  const promptCacheActivityAt = useStore((s) => {
+    const blocks = s.transcripts[threadId]?.blocks
+    if (!blocks) return undefined
+    for (let index = blocks.length - 1; index >= 0; index--) {
+      const block = blocks[index]
+      if (block?.kind === "turn_end") return block.at
+    }
+    return undefined
+  })
+  const settings = useStore((s) => s.settings)
   const loaded = useStore((s) => s.transcripts[threadId]?.loaded)
   const questions = useStore((s) => s.transcripts[threadId]?.pendingQuestions ?? EMPTY)
   const pending = useStore((s) => s.transcripts[threadId]?.pendingApprovals ?? EMPTY)
@@ -175,13 +186,14 @@ export function ThreadView({
   }, [approval?.id, isFocused])
 
   const nativeCommands = useStore((s) => s.transcripts[threadId]?.providerCommands ?? EMPTY)
+  const freeChat = !!thread && isFreeChatProject(thread.project_id)
   const canCompact = !!thread?.provider_session_id && (
     ["codex", "pi", "omp", "opencode"].includes(thread.provider.kind) || nativeCommands.some((command) => command.name === "compact")
   )
   const commands = useMemo<SlashCommand[]>(
     () => [
-      { name: "resume", hint: "Continue a saved session", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: thread?.project_id ?? null }) },
-      { name: "sessions", hint: "Browse saved sessions", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: thread?.project_id ?? null }) },
+      { name: "resume", hint: "Continue a saved session", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: freeChat ? null : thread?.project_id ?? null }) },
+      { name: "sessions", hint: "Browse saved sessions", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: freeChat ? null : thread?.project_id ?? null }) },
       ...(canCompact ? [{ name: "compact", hint: "Compact context and keep conversation history", icon: <WorkflowIcon className="size-4" />, run: () => {
         void rpc().call("threads.compact", { thread_id: threadId }).catch((error) => toast.error("Unable to compact context", { description: errorText(error) }))
       } }] : []),
@@ -191,7 +203,7 @@ export function ThreadView({
         hint: `${PROVIDER_LABEL[thread?.provider.kind ?? "codex"]} · ${command.description}`,
         insert: true, run: () => {},
       })),
-      { name: "new", hint: "Start a new thread in this project", icon: <NewThreadIcon className="size-4" />, run: () => newThread(thread?.project_id) },
+      { name: "new", hint: freeChat ? "Start a new free chat" : "Start a new thread in this project", icon: <NewThreadIcon className="size-4" />, run: () => newThread(freeChat ? undefined : thread?.project_id) },
       { name: "reconnect", hint: "Release the idle agent; resume history on your next message", icon: <WorkflowIcon className="size-4" />, run: () => {
         void rpc().call("threads.release", { thread_id: threadId }).then(() => toast("Agent released", { description: "Your next message resumes the saved conversation." })).catch((error) => toast.error("Unable to release agent", { description: errorText(error) }))
       } },
@@ -200,11 +212,12 @@ export function ThreadView({
       { name: "agents", hint: "Start and coordinate helper agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "collaboration" }) },
       { name: "collaboration", hint: "Open Agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "collaboration" }) },
       { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
-      { name: "changes", hint: "Show the changes panel", icon: <ChangesIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" }) },
       { name: "terminal", hint: "Open a terminal in this thread", icon: <TerminalIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "terminal" }) },
-      { name: "files", hint: "Browse the project files", icon: <FoldersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "explorer" }) },
-      { name: "environment", hint: "Show branch, commit and pull request controls", icon: <GitBranchIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" }) },
-      {
+      ...(!freeChat ? [
+        { name: "changes", hint: "Show the changes panel", icon: <ChangesIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" as const }) },
+        { name: "files", hint: "Browse the project files", icon: <FoldersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "explorer" as const }) },
+        { name: "environment", hint: "Show branch, commit and pull request controls", icon: <GitBranchIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" as const }) },
+        {
         name: "pr",
         hint: "Create a pull request from this thread",
         icon: <GitPullRequestIcon className="size-4" />,
@@ -213,15 +226,21 @@ export function ThreadView({
             .call("github.pr.create", { thread_id: threadId })
             .then((p) => toast("Pull request opened", { description: p.title, action: { label: "Open", onClick: () => void openExternal(p.url) } }))
             .catch((e) => toast.error("Unable to create pull request", { description: errorText(e) })),
-      },
+        },
+      ] : []),
       ...(!thread?.coordinator_project_id ? [{ name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) }] : []),
       { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
       { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
     ],
-    [threadId, thread?.project_id, thread?.coordinator_project_id, thread?.provider, canCompact, nativeCommands, set],
+    [threadId, thread?.project_id, thread?.coordinator_project_id, thread?.provider, freeChat, canCompact, nativeCommands, set],
   )
 
   if (!thread) return null
+
+  const cacheWindow = promptCacheWindow(thread.provider.kind, settings?.providers[thread.provider.kind]?.env)
+  const promptCache = cacheWindow && promptCacheActivityAt
+    ? { window: cacheWindow, lastActivityAt: promptCacheActivityAt }
+    : undefined
 
   const onSend = async (message: UserMessage) => {
     if (running) {
@@ -231,7 +250,7 @@ export function ThreadView({
     await sendMessage(threadId, message)
   }
 
-  const onSteer = ["codex", "pi"].includes(thread.provider.kind) ? async (message: UserMessage) => {
+  const onSteer = ["claude-code", "codex", "pi", "omp"].includes(thread.provider.kind) ? async (message: UserMessage) => {
     const signature = JSON.stringify([threadId, message])
     if (steeringAttempt.current?.signature !== signature) steeringAttempt.current = { signature, id: crypto.randomUUID() }
     await rpc().call("threads.steer", { thread_id: threadId, id: steeringAttempt.current.id, message })
@@ -299,6 +318,7 @@ export function ThreadView({
               className="thread-composer"
               showProviderUsage
               providerUsage={providerUsage}
+              promptCache={promptCache}
               draftKey={`thread:${threadId}`}
               ref={composer}
               placeholder={placeholder}
@@ -321,7 +341,7 @@ export function ThreadView({
                   ? (model, effort) => switchCoordinatorHarness(thread.provider, model, effort)
                   : undefined
                 : (model, effort) => updateThread(threadId, { model, effort })}
-              projectId={thread.project_id}
+              projectId={freeChat ? undefined : thread.project_id}
               commands={commands}
               onDigit={(n) => answer(n)}
               above={

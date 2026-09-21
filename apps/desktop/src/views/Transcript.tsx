@@ -34,7 +34,7 @@ import {
   getChatMessageFooterTextStyle,
   getChatTranscriptTextStyle,
 } from "@/components/kit/chat/chatTypography"
-import { clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
+import { calendarDateKey, calendarDateLabel, clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
 import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel, type MessageScrollerController } from "@/components/beui/message-scroller"
@@ -86,6 +86,7 @@ const HOVER_REVEAL =
 
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?.text.length ?? 0) / 75 * 20)
+const turnTimestamp = (group: TurnGroup) => group.user?.at ?? group.work[0]?.at ?? group.end?.at ?? ""
 const blockKey = (block: Block) => block.id
 const estimateWorkSize = () => 32
 const chunkKey = (chunk: WorkChunk) => chunk.kind === "single" ? chunk.block.id : `group:${chunk.blocks[0]!.id}`
@@ -429,7 +430,15 @@ export function Transcript({
                 </div>
               )}
               <VirtualRows items={groups} getKey={virtualKey} estimateSize={virtualEstimate} viewport={virtualViewport} controllerRef={rows} followEnd={following}>
-                {(g, i) => <div data-turn-id={turnKey(g, i)}><Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} /></div>}
+                {(g, i) => {
+                  const at = turnTimestamp(g)
+                  const previousAt = i > 0 ? turnTimestamp(groups[i - 1]!) : ""
+                  const startsDay = !!at && ((!hasEarlier && i === 0) || (i > 0 && calendarDateKey(at) !== calendarDateKey(previousAt)))
+                  return <div data-turn-id={turnKey(g, i)}>
+                    {startsDay && <DateSeparator at={at} />}
+                    <Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} />
+                  </div>
+                }}
               </VirtualRows>
             </TranscriptStateRoot>
           )}
@@ -742,7 +751,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             {settled && (group.answer || group.end) && (
               <div className="chat-paint-host mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]" style={META}>
                 <CopyAction text={group.answer?.text ?? ""} />
-                {group.end?.at && <p className="tabular-nums">{clockTime(group.end.at)}</p>}
+                {group.end?.at && <time dateTime={group.end.at} title={new Date(group.end.at).toLocaleString()} className="tabular-nums">{clockTime(group.end.at)}</time>}
               </div>
             )}
           </div>
@@ -751,6 +760,18 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
     </>
   )
 })
+
+function DateSeparator({ at }: { at: string }) {
+  return (
+    <div className={cn(ROW, "chat-paint-host flex items-center gap-3 py-4")} data-transcript-date={calendarDateKey(at)}>
+      <span aria-hidden className="h-px min-w-4 flex-1 bg-border/55" />
+      <time dateTime={at} title={new Date(at).toLocaleString()} className="shrink-0 font-system-ui text-[11px] font-medium text-muted-foreground/55">
+        {calendarDateLabel(at)}
+      </time>
+      <span aria-hidden className="h-px min-w-4 flex-1 bg-border/55" />
+    </div>
+  )
+}
 
 function RuntimeTaskTranscriptRow({ task, onOpenAgentActivity }: { task: RuntimeTask; onOpenAgentActivity: OpenAgentActivity }) {
   const set = useStore((state) => state.set)
@@ -932,7 +953,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
             </div>
           )}
           <div className="absolute top-full right-0 flex items-center justify-end gap-2 pt-1 pr-0.5 font-system-ui font-normal whitespace-nowrap text-muted-foreground/45" style={META}>
-            <p className={cn("tabular-nums", HOVER_REVEAL)}>{clockTime(at)}</p>
+            <time dateTime={at} title={new Date(at).toLocaleString()} className={cn("tabular-nums", HOVER_REVEAL)}>{clockTime(at)}</time>
             <div className={cn("flex items-center gap-2", HOVER_REVEAL)}>
               <CopyAction text={text} />
             </div>

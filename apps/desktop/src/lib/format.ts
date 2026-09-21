@@ -25,6 +25,25 @@ export function clockTime(iso: string): string {
   return new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
 }
 
+/** Local calendar identity for transcript sectioning. */
+export function calendarDateKey(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ""
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+}
+
+/** Exact local date with a relative cue for the two dates people scan most. */
+export function calendarDateLabel(iso: string, now = new Date()): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ""
+  const key = calendarDateKey(iso)
+  const today = calendarDateKey(now.toISOString())
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+  const relative = key === today ? "Today" : key === calendarDateKey(yesterday.toISOString()) ? "Yesterday" : null
+  const exact = date.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })
+  return relative ? `${relative} · ${exact}` : exact
+}
+
 export function dayBucket(iso: string, now = Date.now()): "Today" | "Yesterday" | "This week" | "Earlier" {
   const t = new Date(iso)
   const n = new Date(now)
