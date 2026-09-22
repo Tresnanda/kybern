@@ -30,14 +30,16 @@ async function run() {
     selected: { kind: "draft", draft: {} },
     composerDrafts: { "free:main": { text: "Help me think through a fresh idea", attachments: [], mentions: [], skills: [], threadReferences: [] } },
   }))
-  flushSync(() => createRoot(document.getElementById("root")!).render(
+  const root = createRoot(document.getElementById("root")!)
+  const renderFixture = (draftKey: string) => root.render(
     <ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}>
       <SidebarProvider>
         <Sidebar><ThreadSidebar /></Sidebar>
-        <main className="flex h-screen min-w-0 flex-1 flex-col"><Draft /></main>
+        <main className="flex h-screen min-w-0 flex-1 flex-col"><Draft key={draftKey} /></main>
       </SidebarProvider>
     </ThemeProviderContext>,
-  ))
+  )
+  flushSync(() => renderFixture("initial"))
   await new Promise((resolve) => setTimeout(resolve, 500))
   const labels = [...document.querySelectorAll("span")]
   const projectsLabel = labels.find((element) => element.textContent === "Projects")
@@ -52,10 +54,47 @@ async function run() {
     && document.getElementById("sidebar-recents")?.closest("[aria-hidden=true]") !== null
   recentsDisclosure?.click()
   await new Promise((resolve) => setTimeout(resolve, 280))
+  const locationTrigger = document.querySelector<HTMLButtonElement>('button[aria-label="Choose a project"]')
+  locationTrigger?.click()
+  await new Promise((resolve) => setTimeout(resolve, 280))
+  const projectChoice = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
+    .find((element) => element.textContent?.includes(project.name))
+  const addProjectChoice = document.querySelector<HTMLElement>("[data-project-picker-add]")
+  const projectIcon = projectChoice?.querySelector<SVGElement>("svg")?.getBoundingClientRect()
+  const addProjectIcon = addProjectChoice?.querySelector<SVGElement>("svg")?.getBoundingClientRect()
+  const projectLabel = [...(projectChoice?.querySelectorAll<HTMLElement>("span") ?? [])]
+    .find((element) => element.textContent === project.name)
+    ?.getBoundingClientRect()
+  const addProjectLabel = [...(addProjectChoice?.querySelectorAll<HTMLElement>("span") ?? [])]
+    .find((element) => element.textContent === "Add project…")
+    ?.getBoundingClientRect()
+  const sameGeometry = !!projectChoice && !!addProjectChoice && !!projectIcon && !!addProjectIcon && !!projectLabel && !!addProjectLabel
+    && Math.abs(projectChoice.getBoundingClientRect().height - addProjectChoice.getBoundingClientRect().height) < 0.5
+    && Math.abs(projectIcon.x - addProjectIcon.x) < 0.5
+    && Math.abs(projectIcon.width - addProjectIcon.width) < 0.5
+    && Math.abs(projectLabel.x - addProjectLabel.x) < 0.5
+  const projectMenu = {
+    trigger: locationTrigger?.textContent?.includes("Free chat") === true,
+    current: [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
+      .some((element) => element.textContent?.includes("Free chat") && element.dataset.checked !== undefined),
+    project: !!projectChoice,
+    add: document.body.textContent?.includes("Add project…") === true,
+    geometry: sameGeometry,
+  }
+  projectChoice?.click()
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  const switchesToProject = useStore.getState().selected.kind === "draft"
+    && useStore.getState().selected.draft.projectId === project.id
+  useStore.getState().selectFreeDraft()
+  flushSync(() => renderFixture("proof"))
+  document.querySelector<HTMLButtonElement>('button[aria-label="Choose a project"]')?.click()
+  await new Promise((resolve) => setTimeout(resolve, 280))
+  const pickerReopened = document.body.textContent?.includes("Add project…") === true
   const checks = {
     heading: document.body.textContent?.includes("What can I help with?") === true,
     recents: freeThreads.every((thread) => document.body.textContent?.includes(thread.title)),
     freeChatChip: document.body.textContent?.includes("Free chat") === true,
+    freeChatPicker: Object.values(projectMenu).every(Boolean) && switchesToProject && pickerReopened,
     noProjectControls: !document.body.textContent?.includes("Checkout") && !document.body.textContent?.includes("New worktree"),
     draft: document.querySelectorAll('[data-composer-draft="free-chat"]').length === 1,
     recentsBelowProjects: !!projectsLabel && !!recentsLabel && Boolean(projectsLabel.compareDocumentPosition(recentsLabel) & Node.DOCUMENT_POSITION_FOLLOWING),

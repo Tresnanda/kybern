@@ -10,7 +10,7 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
-import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, GitBranchIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
+import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
@@ -21,6 +21,7 @@ import { createProjectCoordinatorStarter, projectCoordinatorMode } from "../../.
 import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from "./Composer"
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { SurfaceHeader } from "./chrome"
+import { ProjectPicker } from "./ProjectPicker"
 
 export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }: { projectId?: ProjectId; paneId?: PaneId; onProjectChange?: (id: ProjectId) => void; purpose?: "thread" | "coordinator" }) {
   const environmentId = useStore((s) => s.environmentId)
@@ -43,6 +44,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   const [worktree, setWorktree] = useState<boolean | null>(null)
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
   const [branches, setBranches] = useState<GitBranchesResult | null>(null)
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false)
 
   const mode = modeStored ?? settings?.default_permission_mode ?? "supervised"
   const provider = useMemo<ProviderInstance | null>(() => {
@@ -171,10 +173,55 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                   </span>
                 )}
                 {freeChat ? (
-                  <span className={cn(TRAY_CHIP_CLASS_NAME, "cursor-default text-[var(--color-text-foreground)]")}>
-                    <MessageCircleIcon className="size-3.5 shrink-0" />
-                    <span>Free chat</span>
-                  </span>
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Choose a project"
+                          className={cn(
+                            TRAY_CHIP_CLASS_NAME,
+                            "text-[var(--color-text-foreground)] transition-[color,background-color,scale] active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100",
+                          )}
+                        />
+                      }
+                    >
+                      <MessageCircleIcon className="size-3.5 shrink-0" />
+                      <span className="truncate whitespace-nowrap">Free chat</span>
+                      <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+                    </MenuTrigger>
+                    <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="min-w-64">
+                      <MenuGroup>
+                        <MenuGroupLabel>Chat location</MenuGroupLabel>
+                        <MenuRadioGroup
+                          value="free"
+                          onValueChange={(value) => {
+                            if (value !== "free") useStore.getState().selectDraft(value)
+                          }}
+                        >
+                          <MenuRadioItem value="free">
+                            <MessageCircleIcon className="size-3.5" />
+                            <span className="min-w-0 flex-1 truncate">Free chat</span>
+                          </MenuRadioItem>
+                          {projectList.map((p) => (
+                            <MenuRadioItem key={p.id} value={p.id}>
+                              <FolderIcon className="size-3.5" />
+                              <span className="min-w-0 flex-1 truncate" title={p.name}>{p.name}</span>
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </MenuGroup>
+                      <MenuSeparator />
+                      <MenuGroup>
+                        <MenuItem className="w-full min-w-0 px-2.5" data-project-picker-add onClick={() => setProjectPickerOpen(true)}>
+                          <span className="flex w-full min-w-0 items-center gap-2">
+                            <FolderOpenIcon className="size-3.5 shrink-0" />
+                            <span className="min-w-0 flex-1 truncate">Add project…</span>
+                          </span>
+                        </MenuItem>
+                      </MenuGroup>
+                    </ComposerPickerMenuPopup>
+                  </Menu>
                 ) : <Menu>
                   <MenuTrigger render={<button type="button" aria-label="Switch project" className={TRAY_CHIP_CLASS_NAME} />}>
                     <FolderIcon className="size-3.5 shrink-0" />
@@ -296,6 +343,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
           </div>
         </div>
       </div>
+      <ProjectPicker open={projectPickerOpen} onOpenChange={setProjectPickerOpen} />
     </div>
   )
 }
