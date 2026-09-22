@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.14
+
+<!-- kybern-release-title: Project switching from free chats -->
+<!-- kybern-release-summary: Move a new free-chat draft into an existing or newly added project directly from the composer. -->
+
+- Turn the Free chat composer chip into an anchored project picker with clear selection, matching row geometry, and an Add project action.
+
 ## 0.4.13
 
 <!-- kybern-release-title: Free chats and clearer conversation context -->
