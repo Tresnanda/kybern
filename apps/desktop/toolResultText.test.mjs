@@ -7,7 +7,6 @@ import {
   joinToolResultRows,
   shouldVirtualizeToolResult,
   splitToolResultRows,
-  toolResultCopyText,
 } from "./src/lib/toolResultText.ts"
 
 test("short tool results stay a single pre identity", () => {
@@ -42,13 +41,4 @@ test("a 33rd line or an 8193rd character virtualizes", () => {
   assert.equal(shouldVirtualizeToolResult(lines), true)
   assert.equal(shouldVirtualizeToolResult("x".repeat(TOOL_RESULT_CHAR_LIMIT)), false)
   assert.equal(shouldVirtualizeToolResult("x".repeat(TOOL_RESULT_CHAR_LIMIT + 1)), true)
-})
-
-test("select-all of mounted rows copies the full result; partial copy stays exact", () => {
-  const full = `${"payload\n".repeat(40)}tail`
-  const mounted = "payload\npayload\n"
-  assert.equal(toolResultCopyText(full, mounted, mounted), full)
-  assert.equal(toolResultCopyText(full, "payloadpayload", "payload\npayload"), full)
-  assert.equal(toolResultCopyText(full, mounted, "payload"), "payload")
-  assert.equal(toolResultCopyText(full, full, full), full)
 })

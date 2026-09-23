@@ -30,6 +30,10 @@ change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
 
+See [the single-window memory follow-up](single-window-memory-2026-09-24.md)
+for the read-only 485 MiB installed-app process sum, negative full-shell paint
+experiments, and the native open-result before/after comparison.
+
 See [the whole-app follow-up](daily-memory-followup-2026-09-18.md) for the
 842 → 434 MiB initial release-workload reduction and the further matched
 454 → 385 MiB peak reduction from removing the chat card's stacking context.

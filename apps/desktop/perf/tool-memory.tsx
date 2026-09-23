@@ -4,7 +4,6 @@ import { Transcript } from "../src/views/Transcript"
 import { useStore } from "../src/state/store"
 import { emptyThreadState, type Block } from "../src/state/transcript"
 import { ThemeProviderContext } from "../src/components/theme-context"
-import { toolResultCopyText } from "../src/lib/toolResultText"
 import "../src/index.css"
 
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }
@@ -53,7 +52,21 @@ async function run() {
   document.getSelection()!.addRange(range)
   const selected = document.getSelection()!.toString()
   check(selected.length > 0, "Mounted result remains selectable")
-  check(toolResultCopyText(exact, pre.textContent ?? "", selected) === exact, "Copy truncated the result")
+  const wholeClipboard = new DataTransfer()
+  pre.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: wholeClipboard }))
+  check(wholeClipboard.getData("text/plain") === exact, "Select-all copy truncated the result")
+  document.getSelection()!.removeAllRanges()
+  const firstText = pre.querySelector("[data-tool-result-row]")?.firstChild
+  check(firstText instanceof Text, "The first visible row has selectable text")
+  const partial = firstText.textContent?.slice(0, 12) ?? ""
+  const partialRange = document.createRange()
+  partialRange.setStart(firstText, 0)
+  partialRange.setEnd(firstText, partial.length)
+  document.getSelection()!.addRange(partialRange)
+  const partialClipboard = new DataTransfer()
+  pre.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: partialClipboard }))
+  check(partialClipboard.getData("text/plain") === "", "Partial copy was replaced with the full result")
+  check(document.getSelection()!.toString() === partial, "Partial selection changed")
   document.getSelection()!.removeAllRanges()
   for (let attempt = 0; attempt < 8; attempt++) {
     pre.scrollTop = pre.scrollHeight

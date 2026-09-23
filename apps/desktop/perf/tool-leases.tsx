@@ -25,6 +25,30 @@ function checkExactStream(value: string | null | undefined) {
   for (let offset = streamPrefix.length; offset < value.length; offset += streamChunk.length)
     check(value.startsWith(streamChunk, offset), `Distinct stream differs at ${offset}`)
 }
+async function checkVirtualStream(pre: HTMLPreElement | undefined, value: string) {
+  check(pre?.getAttribute("data-tool-result-chars") === String(value.length), "Mounted stream lost its source length")
+  check(pre.hasAttribute("data-tool-result-virtual"), "Oversized stream did not virtualize")
+  check((pre.textContent?.length ?? 0) < value.length, "Oversized stream mounted every character")
+  pre.scrollTop = 0
+  await sleep(50)
+  check(pre.querySelector('[data-index="0"]')?.textContent === streamPrefix.trimEnd(), "Mounted stream lost its Unicode prefix")
+  const selection = document.getSelection()!
+  const range = document.createRange()
+  range.selectNodeContents(pre)
+  selection.removeAllRanges()
+  selection.addRange(range)
+  const clipboard = new DataTransfer()
+  pre.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: clipboard }))
+  check(clipboard.getData("text/plain") === value, "Copy truncated the distinct stream")
+  selection.removeAllRanges()
+  for (let attempt = 0; attempt < 8; attempt++) {
+    pre.scrollTop = pre.scrollHeight
+    await sleep(50)
+    const lastIndex = Number(pre.querySelector("[data-tool-result-row]:last-child")?.getAttribute("data-index"))
+    if (lastIndex > 2000) return
+  }
+  throw new Error("Distinct stream tail is unreachable")
+}
 const tools = () => useStore.getState().transcripts[threadId]?.blocks.filter(b => b.kind === "tool") ?? []
 async function run() {
   document.documentElement.classList.add("dark")
@@ -88,9 +112,12 @@ async function run() {
     })
     await sleep(500)
     check(calls === 17, `Shared panes fetched ${calls} times instead of 17`)
+    const hydratedStream = streamTool()
+    check(hydratedStream?.kind === "tool", "Distinct stream row disappeared")
+    checkExactStream(hydratedStream.stream)
     for (const pane of document.querySelectorAll('[data-pane]')) {
-      const outputs = [...pane.querySelectorAll("pre")]
-      checkExactStream(outputs[0]?.textContent)
+      const outputs = [...pane.querySelectorAll<HTMLPreElement>("pre")]
+      await checkVirtualStream(outputs[0], hydratedStream.stream)
       for (let i = 0; i < 16; i++) check(outputs[i + 1]?.textContent === expected(i), `Exact output differs at ${i}`)
     }
     const pre = document.querySelectorAll("pre")[1]!
@@ -137,8 +164,11 @@ async function run() {
     releaseResponses!()
     await sleep(300)
     check(tools().every((block, index) => block === settled[index]), "Obsolete hydration replaced reconnected rows")
-    const reconnected = [...document.querySelectorAll("pre")]
-    checkExactStream(reconnected[0]?.textContent)
+    const reconnected = [...document.querySelectorAll<HTMLPreElement>("pre")]
+    const reconnectedStream = streamTool()
+    check(reconnectedStream?.kind === "tool", "Reconnected distinct stream row disappeared")
+    checkExactStream(reconnectedStream.stream)
+    await checkVirtualStream(reconnected[0], reconnectedStream.stream)
     for (let i = 0; i < 16; i++) check(reconnected[i + 1]?.textContent === expected(i), `Reconnect lost exact output ${i}`)
     w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, mountedResults: 34, uniqueResults: 17, lifecycleCalls, calls, sharedPanes: true, exactUnicodeSelection: true, exactNativeCopy: true, exactDeferredStream: true, oversizedStreamEvicted: true, closeReopen: true, reconnectDuringHydration: true, transport: "real scratch daemon" }))
   } finally {

@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent } from "react"
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual"
-import { estimateToolResultRow, splitToolResultRows, toolResultCopyText, toolResultRowText } from "@/lib/toolResultText"
+import { estimateToolResultRow, splitToolResultRows, toolResultRowText } from "@/lib/toolResultText"
 
 /** Open tool-result text in the existing max-h-72 scroller. Offscreen lines
  * unmount; on-screen text and clipboard copy stay exact. This is not
@@ -33,7 +33,6 @@ function selectionCoversScroller(owner: HTMLElement): boolean {
   const selection = document.getSelection()
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false
   const range = selection.getRangeAt(0)
-  if (!owner.contains(range.commonAncestorContainer)) return false
   const contents = document.createRange()
   contents.selectNodeContents(owner)
   return range.compareBoundaryPoints(Range.START_TO_START, contents) <= 0
@@ -93,11 +92,6 @@ export function ToolResultText({ text, className }: { text: string; className?: 
       event.clipboardData.setData("text/plain", text)
       return
     }
-    const selected = document.getSelection()?.toString() ?? ""
-    const next = toolResultCopyText(text, owner.textContent ?? "", selected)
-    if (next === selected) return
-    event.preventDefault()
-    event.clipboardData.setData("text/plain", next)
   }
 
   return (

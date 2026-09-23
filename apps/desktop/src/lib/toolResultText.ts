@@ -54,30 +54,6 @@ export function toolResultRowText(text: string, row: ToolResultRow): string {
   return text.slice(row.start, row.end)
 }
 
-/** Select-all of the mounted scroller copies the whole result. A partial
- * selection keeps the browser string so on-screen copy is not rewritten.
- * WebKit joins block rows with newlines while `textContent` does not, so
- * ignore newline-only differences when detecting a full mounted selection. */
-export function toolResultCopyText(full: string, mounted: string, selected: string): string {
-  if (!selected) return selected
-  if (full !== mounted && sameCharsIgnoringNewlines(selected, mounted)) return full
-  return selected
-}
-
-function sameCharsIgnoringNewlines(left: string, right: string): boolean {
-  if (left === right) return true
-  let i = 0
-  let j = 0
-  for (;;) {
-    while (i < left.length && (left.charCodeAt(i) === 10 || left.charCodeAt(i) === 13)) i++
-    while (j < right.length && (right.charCodeAt(j) === 10 || right.charCodeAt(j) === 13)) j++
-    if (i >= left.length || j >= right.length) return i >= left.length && j >= right.length
-    if (left.charCodeAt(i) !== right.charCodeAt(j)) return false
-    i++
-    j++
-  }
-}
-
 export function estimateToolResultRow(row: ToolResultRow): number {
   const chars = row.end - row.start || 1
   return Math.max(22, Math.ceil(chars / 72) * 22)
