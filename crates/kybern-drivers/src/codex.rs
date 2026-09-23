@@ -69,6 +69,7 @@ fn parse_codex_model(item: &Value) -> Option<ProviderModel> {
     Some(ProviderModel {
         id,
         display_name,
+        resolved_id: None,
         provider: None,
         efforts,
         default_effort: item.get("defaultReasoningEffort").and_then(Value::as_str).map(str::to_string),

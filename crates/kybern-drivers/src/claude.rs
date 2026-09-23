@@ -203,6 +203,7 @@ impl ClaudeDriver {
                 ProviderModel {
                     id: "sonnet".into(),
                     display_name: "Sonnet".into(),
+                    resolved_id: None,
                     provider: None,
                     efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
                     default_effort: None,
@@ -211,6 +212,7 @@ impl ClaudeDriver {
                 ProviderModel {
                     id: "opus".into(),
                     display_name: "Opus".into(),
+                    resolved_id: None,
                     provider: None,
                     efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
                     default_effort: None,
@@ -273,10 +275,11 @@ impl ClaudeDriver {
                                 .map(String::as_str)
                                 .or_else(|| (id == config.model).then_some(config.alias_target.as_deref()).flatten());
                             let display_name = claude_model_name(&id, target);
+                            let resolved_id = target.map(|target| resolved_model_id(&id, target));
                             let is_default = id == config.model;
                             let default_effort = Some(config.effort_for(&id));
                             let efforts = status.supported_efforts.clone();
-                            ProviderModel { display_name, is_default, default_effort, id, provider: None, efforts }
+                            ProviderModel { display_name, resolved_id, is_default, default_effort, id, provider: None, efforts }
                         })
                         .collect();
                 }
@@ -293,6 +296,7 @@ impl ClaudeDriver {
                     ProviderModel {
                         id: config.model.clone(),
                         display_name: claude_model_name(&config.model, target),
+                        resolved_id: target.map(|target| resolved_model_id(&config.model, target)),
                         provider: None,
                         efforts: status.supported_efforts.clone(),
                         default_effort: Some(config.effort.clone()),
@@ -553,6 +557,14 @@ fn claude_model_name(selector: &str, alias_target: Option<&str>) -> String {
         Some(suffix) if !suffix.is_empty() => format!("{label} · {suffix}"),
         _ => label,
     }
+}
+
+/// The concrete id a selector runs as: the alias's resolved target, keeping a
+/// context suffix such as `[1m]` from the selector (`opus[1m]` →
+/// `claude-opus-5-5[1m]`). A selector that is already concrete stays itself.
+fn resolved_model_id(selector: &str, target: &str) -> String {
+    let suffix = selector.find('[').map_or("", |index| &selector[index..]);
+    if suffix.is_empty() || target.contains('[') { target.to_string() } else { format!("{target}{suffix}") }
 }
 
 /// Concrete model ids Claude Code resolves each family alias to, cached per CLI
@@ -1484,6 +1496,13 @@ impl AgentSession for SessionHandle {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolved_model_id_keeps_the_selector_context_suffix() {
+        use super::resolved_model_id;
+        assert_eq!(resolved_model_id("opus", "claude-opus-5-5"), "claude-opus-5-5");
+        assert_eq!(resolved_model_id("opus[1m]", "claude-opus-5-5"), "claude-opus-5-5[1m]");
+        assert_eq!(resolved_model_id("opus[1m]", "claude-opus-5-5[1m]"), "claude-opus-5-5[1m]");
+    }
 
     #[tokio::test]
     async fn notification_result_does_not_finish_a_queued_user_request() {

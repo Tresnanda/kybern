@@ -110,6 +110,11 @@ pub struct ProviderModel {
     /// Model selector accepted by the provider (for example `gpt-5.6-sol` or `openai/gpt-5.6-sol`).
     pub id: String,
     pub display_name: String,
+    /// Concrete model id the selector currently resolves to, when `id` is an
+    /// alias (Claude's `opus` → `claude-opus-5-5`). Sessions report the concrete
+    /// id, so clients match a thread's model against either field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_id: Option<String>,
     /// Upstream model provider. Harnesses that aggregate providers use this to build a paged picker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,

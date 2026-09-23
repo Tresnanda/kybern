@@ -178,7 +178,15 @@ async fn omp_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Provid
                 .filter_map(Value::as_str)
                 .map(str::to_string)
                 .collect();
-            Some(ProviderModel { is_default: id.ends_with("/default"), id, display_name, provider, efforts, default_effort: None })
+            Some(ProviderModel {
+                is_default: id.ends_with("/default"),
+                id,
+                display_name,
+                resolved_id: None,
+                provider,
+                efforts,
+                default_effort: None,
+            })
         })
         .collect();
     models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)));

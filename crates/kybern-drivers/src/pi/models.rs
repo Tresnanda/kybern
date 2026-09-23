@@ -162,7 +162,15 @@ fn parse_model(model: &Value, default_model: Option<&str>, configured_effort: Op
     let display_name = model.get("name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()).unwrap_or(&id).to_string();
     let efforts = model_supported_efforts(model);
     let default_effort = effective_effort(configured_effort, &efforts);
-    Some(ProviderModel { display_name, is_default: default_model == Some(id.as_str()), id, provider, efforts, default_effort })
+    Some(ProviderModel {
+        display_name,
+        is_default: default_model == Some(id.as_str()),
+        id,
+        resolved_id: None,
+        provider,
+        efforts,
+        default_effort,
+    })
 }
 
 fn model_selector(model: &Value) -> Option<String> {

@@ -13,6 +13,18 @@ export function customModelId(value: string): string | null {
   return id && !/[\s\p{Cc}]/u.test(id) ? id : null;
 }
 
+/**
+ * The catalog entry for a thread's model. A running session reports the
+ * concrete id (`claude-opus-5-5`), so an alias entry (`opus`) claims it too.
+ */
+export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id">>(
+  catalog: readonly T[],
+  id: string | null | undefined,
+): T | undefined {
+  if (!id) return undefined;
+  return catalog.find((model) => model.id === id) ?? catalog.find((model) => model.resolved_id === id);
+}
+
 /** A discovered catalog is a set of suggestions, not an allowlist. */
 export function modelChoices(
   catalog: readonly ProviderModel[],
@@ -23,7 +35,7 @@ export function modelChoices(
     { id: "", display_name: "Agent default", default_effort: "" },
     ...catalog,
   ];
-  if (selected && !catalog.some((model) => model.id === selected)) {
+  if (selected && !findModel(catalog, selected)) {
     choices.splice(1, 0, {
       id: selected,
       display_name: selected,
