@@ -12,6 +12,7 @@ pub mod claude_integrations;
 pub mod codex;
 pub mod codex_integrations;
 pub mod cursor;
+pub mod models;
 mod ndjson;
 pub mod omp_profile;
 pub mod opencode;

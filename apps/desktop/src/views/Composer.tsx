@@ -273,6 +273,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue")
   const steering = running && !!onSteer && promptMode === "steer"
   const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
+  // Throttles the silent catalog refresh fired whenever the picker opens, so
+  // rapid re-opens don't re-probe every agent CLI. Matches the daemon's cache window.
+  const lastModelRefresh = useRef(0)
   const [customModel, setCustomModel] = useState<string | null>(null)
   const [changingModel, setChangingModel] = useState(false)
   const customModelFieldId = useId()
@@ -657,7 +660,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const effortLabel = effort ?? current?.default_effort ?? null
   const canPickModel = !!onModelChange
   const customId = customModelId(customModel ?? "")
-  const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch && models.length === 0
+  const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange
   const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
   const menuLoading = mention ? fileResult.query !== mention.query || threadResult.query !== mention.query : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
@@ -701,11 +704,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }
 
-  const reloadModels = async () => {
+  // Re-probe the daemon for the current agent's catalog. `silent` is the
+  // background refresh fired on picker open — it never toasts; the explicit
+  // "Reload models" action reports an empty result or a failure.
+  const refreshModelCatalog = async (silent: boolean) => {
     if (!provider || modelCatalogLoading) return
+    lastModelRefresh.current = Date.now()
     setModelCatalogLoading(true)
     try {
       const refreshed = await refreshProviders(projectId)
+      if (silent) return
       const count = refreshed.find((item) => item.kind === provider.kind)?.models?.length ?? 0
       if (count === 0) {
         const description = provider.kind === "omp"
@@ -714,11 +722,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         toast.error("Models are still unavailable", { description })
       }
     } catch (error) {
-      toast.error("Unable to reload models", { description: errorText(error) })
+      if (!silent) toast.error("Unable to reload models", { description: errorText(error) })
     } finally {
       setModelCatalogLoading(false)
     }
   }
+  const reloadModels = () => refreshModelCatalog(false)
 
   return (
     <ComposerColumnFrame className={cn(className, surfaceMode === "split" && "split-chat-composer")}>
@@ -1013,7 +1022,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 )}
                 {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
-                  <Menu onOpenChange={(open) => open && canReloadModels && void reloadModels()}>
+                  <Menu
+                    onOpenChange={(open) => {
+                      if (!open || !canReloadModels) return
+                      // Self-heal against a stale catalog (e.g. models shipped mid-session)
+                      // without re-probing on every open.
+                      if (Date.now() - lastModelRefresh.current < 60_000) return
+                      void refreshModelCatalog(true)
+                    }}
+                  >
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -1064,17 +1081,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       </TooltipPopup>
                     </Tooltip>
                     <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
-                      {canReloadModels && (
-                        <MenuGroup>
-                          <MenuGroupLabel>Model</MenuGroupLabel>
-                          <MenuItem onClick={() => void reloadModels()} disabled={modelCatalogLoading}>
-                            {modelCatalogLoading ? <Spinner size={12} /> : <RefreshCwIcon className="size-3" />}
-                            <span>{modelCatalogLoading ? "Loading models…" : "Reload models"}</span>
-                          </MenuItem>
-                        </MenuGroup>
-                      )}
                       {efforts.length > 0 && canPickModel && (
-                        <MenuGroup className={canReloadModels ? "mt-1" : undefined}>
+                        <MenuGroup>
                           <MenuGroupLabel>Effort</MenuGroupLabel>
                           <MenuRadioGroup value={effortLabel ?? ""} onValueChange={(v) => void changeModel(current?.id ?? model ?? undefined, v as string)}>
                             {efforts.map((e) => (
@@ -1115,7 +1123,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       )}
                       {canPickProvider && (
                         <>
-                          {(canPickModel || efforts.length > 0 || canReloadModels) && <MenuSeparator />}
+                          {(canPickModel || efforts.length > 0) && <MenuSeparator />}
                           <MenuGroup>
                             <MenuGroupLabel>Agent</MenuGroupLabel>
                             <MenuRadioGroup value={provider.kind} onValueChange={(v) => void changeProvider({ kind: v as ProviderStatus["kind"], instance: "default" })}>
@@ -1127,6 +1135,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 </MenuRadioItem>
                               ))}
                             </MenuRadioGroup>
+                          </MenuGroup>
+                        </>
+                      )}
+                      {canReloadModels && (
+                        <>
+                          {(canPickModel || efforts.length > 0 || canPickProvider) && <MenuSeparator />}
+                          <MenuGroup>
+                            <MenuItem onClick={() => void reloadModels()} disabled={modelCatalogLoading}>
+                              {modelCatalogLoading ? <Spinner size={12} /> : <RefreshCwIcon className="size-3" />}
+                              <span>{modelCatalogLoading ? "Reloading…" : "Reload models"}</span>
+                            </MenuItem>
                           </MenuGroup>
                         </>
                       )}
