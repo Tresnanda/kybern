@@ -29,7 +29,7 @@ import { ProviderMark } from "../ui/ProviderMark";
 import { useLayout } from "../state/layout";
 import { useTheme } from "../ui/theme";
 import type { ThreadState } from "../state/transcript";
-import { modelChoices } from "../../../../packages/kybern-client/src/models";
+import { findModel, modelChoices } from "../../../../packages/kybern-client/src/models";
 const selectUsage = (state: ThreadState) => state.providerUsage;
 
 const modes: { value: PermissionMode; label: string; detail: string }[] = [
@@ -74,7 +74,7 @@ export function ComposerControls({
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
   const mode = thread?.permission_mode ?? draft.permission;
-  const selectedModel = provider?.models?.find((m) => m.id === model);
+  const selectedModel = findModel(provider?.models ?? [], model);
   const modelLabel =
     selectedModel?.display_name || model || PROVIDER_DISPLAY_NAME[kind];
   const context = usage?.context;
@@ -197,7 +197,7 @@ export function ComposerOptions({
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
   const mode = thread?.permission_mode ?? draft.permission;
-  const selectedModel = provider?.models?.find((m) => m.id === model);
+  const selectedModel = findModel(provider?.models ?? [], model);
   const context = usage?.context;
   const fraction =
     context && context.window_tokens > 0
@@ -489,7 +489,7 @@ export function ComposerOptions({
                       key={m.id}
                       label={m.display_name}
                       disabled={busy}
-                      selected={(model ?? "") === m.id}
+                      selected={(selectedModel?.id ?? model ?? "") === m.id}
                       onPress={() =>
                         void update({
                           model: m.id,
@@ -513,7 +513,7 @@ export function ComposerOptions({
                       <T variant="label" style={{ flex: 1 }}>
                         {m.display_name}
                       </T>
-                      {(model ?? "") === m.id && (
+                      {(selectedModel?.id ?? model ?? "") === m.id && (
                         <Icon name="checkmark" size={12} />
                       )}
                     </Tap>

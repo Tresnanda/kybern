@@ -1,6 +1,12 @@
 import type { ContentPart, SkillInfo } from "./types.ts"
 import { formatThreadReference, type ComposerThreadReference } from "./threadReferences.ts"
 
+/** A composer attachment addressable inline as `@image1` or `@file1`. */
+export interface AttachmentReference {
+  token: string
+  part: Extract<ContentPart, { type: "attachment" }>
+}
+
 export interface StructuredToken {
   start: number
   end: number
@@ -23,13 +29,25 @@ export function pluginMentionNames(item: SkillInfo): string[] {
  * catalog and may contain spaces, punctuation, or plugin namespaces.
  * Catalog entries scoped `plugin` are `@` mentions; everything else is a `$` skill.
  */
-export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = []): ContentPart[] {
+export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = [], attachmentReferences: readonly AttachmentReference[] = []): ContentPart[] {
   const value = text.trim()
   if (!value) return []
   const parts: ContentPart[] = []
-  for (const segment of structuredSegments(value, mentionedPaths, skillItems, threadReferences)) {
-    if (segment.kind === "token") parts.push(segment.part)
-    else if (segment.text) parts.push({ type: "text", text: segment.text })
+  const pushText = (text: string) => {
+    const previous = parts.at(-1)
+    if (previous?.type === "text") parts[parts.length - 1] = { type: "text", text: previous.text + text }
+    else parts.push({ type: "text", text })
+  }
+  // An attachment rides directly after its first `@image1`, so the agent sees
+  // the file where the prompt refers to it. Later mentions stay plain text.
+  const placed = new Set<string>()
+  for (const segment of structuredSegments(value, mentionedPaths, skillItems, threadReferences, attachmentReferences)) {
+    if (segment.kind === "token" && segment.part.type === "attachment") {
+      pushText(segment.text)
+      if (!placed.has(segment.part.asset_id)) parts.push(segment.part)
+      placed.add(segment.part.asset_id)
+    } else if (segment.kind === "token") parts.push(segment.part)
+    else if (segment.text) pushText(segment.text)
   }
   if (parts.length === 0) parts.push({ type: "text", text: value })
   return parts
@@ -39,10 +57,10 @@ export function buildStructuredTextParts(text: string, mentionedPaths: ReadonlyS
  * Split text into plain runs and recognised tokens, in order, without trimming,
  * so the composer can paint the same tokens it will send exactly where they sit.
  */
-export function structuredSegments(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = []): StructuredSegment[] {
+export function structuredSegments(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = [], attachmentReferences: readonly AttachmentReference[] = []): StructuredSegment[] {
   const segments: StructuredSegment[] = []
   let last = 0
-  for (const token of structuredTokens(value, mentionedPaths, skillItems, threadReferences)) {
+  for (const token of structuredTokens(value, mentionedPaths, skillItems, threadReferences, attachmentReferences)) {
     if (token.start < last) continue
     const before = value.slice(last, token.start)
     if (before) segments.push({ kind: "text", text: before })
@@ -54,9 +72,17 @@ export function structuredSegments(value: string, mentionedPaths: ReadonlySet<st
   return segments
 }
 
-/** Every recognised `@file`, `@plugin` and `$skill` token in `value`, sorted by position. */
-export function structuredTokens(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = []): StructuredToken[] {
+/** Every recognised `@attachment`, `@file`, `@plugin` and `$skill` token in `value`, sorted by position. */
+export function structuredTokens(value: string, mentionedPaths: ReadonlySet<string>, skillItems: readonly SkillInfo[], threadReferences: readonly ComposerThreadReference[] = [], attachmentReferences: readonly AttachmentReference[] = []): StructuredToken[] {
   const tokens: StructuredToken[] = []
+  for (const reference of attachmentReferences) {
+    const pattern = new RegExp(`(^|\\s)${escapeRegExp(reference.token)}(?=[\\s,.;:!?]|$)`, "g")
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(value))) {
+      const start = match.index + match[1]!.length
+      tokens.push({ start, end: start + reference.token.length, part: reference.part })
+    }
+  }
   const references = new Map<string, ComposerThreadReference | null>()
   for (const reference of threadReferences) {
     if (!reference.token || !reference.part.thread_id) continue
@@ -131,4 +157,17 @@ export function partToken(part: ContentPart): string | null {
     default:
       return null
   }
+}
+
+/**
+ * The next free inline label for a new attachment: `image1`, `image2`, … for
+ * images and `file1`, … for everything else. A label stays fixed while its
+ * attachment is in the draft, so removing one never renumbers the others.
+ */
+export function nextAttachmentLabel(mediaType: string, taken: Iterable<string>): string {
+  const prefix = mediaType.startsWith("image/") ? "image" : "file"
+  const used = new Set(taken)
+  let index = 1
+  while (used.has(`${prefix}${index}`)) index++
+  return `${prefix}${index}`
 }

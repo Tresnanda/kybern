@@ -129,6 +129,8 @@ export interface ProviderModel {
   /** Model selector accepted by the provider. */
   id: string;
   display_name: string;
+  /** Concrete id an alias selector resolves to; sessions report this id. */
+  resolved_id?: string | null;
   provider?: string | null;
   efforts?: string[];
   default_effort?: string | null;

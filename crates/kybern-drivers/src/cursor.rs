@@ -46,7 +46,15 @@ fn parse_cursor_models(output: &[u8]) -> Vec<ProviderModel> {
             }
             let is_default = label.ends_with(" (default)");
             let display_name = label.strip_suffix(" (default)").unwrap_or(label).to_string();
-            Some(ProviderModel { id: id.to_string(), display_name, provider: None, efforts: Vec::new(), default_effort: None, is_default })
+            Some(ProviderModel {
+                id: id.to_string(),
+                display_name,
+                resolved_id: None,
+                provider: None,
+                efforts: Vec::new(),
+                default_effort: None,
+                is_default,
+            })
         })
         .collect()
 }

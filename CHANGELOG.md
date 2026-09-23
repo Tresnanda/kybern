@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.17
+
+<!-- kybern-release-title: Point to attachments right in your prompt -->
+<!-- kybern-release-summary: Mention a pasted image as @image1 to place it exactly where your prompt refers to it, model names stay readable during a session, and mid-turn messages get proper spacing. -->
+
+- Mention pasted or attached files inline as @image1 or @file1. Each attachment shows its label, the @ menu lists attachments first, and the agent receives each mentioned file right where the prompt refers to it.
+- Keep the friendly model name, like Claude Opus 5.5, after a Claude session starts instead of switching to the raw model id, and stop adding that id to the picker as a custom model.
+- Give messages sent while the agent is working the same spacing as other messages, so they no longer sit flush against the agent's reply.
+
 ## 0.4.16
 
 <!-- kybern-release-title: Claude models show their version -->

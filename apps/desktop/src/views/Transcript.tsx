@@ -899,7 +899,11 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
     let text = ""
     for (const p of message.parts) {
       if (p.type === "text") text += p.text
-      else {
+      else if (p.type === "attachment" || p.type === "image") {
+        // The composer places a mentioned file right after its `@image1`.
+        const label = /(?:^|\s)(@(?:image|file)\d+)$/.exec(text)?.[1]
+        if (label) tokens.set(label, "attachment")
+      } else {
         const knownThread = p.type === "thread_reference" ? useStore.getState().threads[p.thread_id] : undefined
         const reference = p.type === "thread_reference"
           ? createComposerThreadReference(
@@ -1284,7 +1288,9 @@ const WorkRow = memo(function WorkRow({
 }) {
   switch (block.kind) {
     case "user":
-      return <UserBubble message={block.message} at={block.at} />
+      // A message sent mid-turn sits between work rows; give it the same breathing
+      // room as a turn-opening bubble, including space for its hover timestamp.
+      return <div className="pt-3 pb-4"><UserBubble message={block.message} at={block.at} /></div>
     case "tool":
       return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
     case "image":
