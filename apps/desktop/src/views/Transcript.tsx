@@ -1284,7 +1284,9 @@ const WorkRow = memo(function WorkRow({
 }) {
   switch (block.kind) {
     case "user":
-      return <UserBubble message={block.message} at={block.at} />
+      // A message sent mid-turn sits between work rows; give it the same breathing
+      // room as a turn-opening bubble, including space for its hover timestamp.
+      return <div className="pt-3 pb-4"><UserBubble message={block.message} at={block.at} /></div>
     case "tool":
       return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
     case "image":
