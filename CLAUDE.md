@@ -8,6 +8,23 @@
 - Keep the existing look: reuse `components/kit` and `lib/kit` before
   writing new styles, and screenshot the app window after UI changes.
 
+## Disk usage and cleanup
+
+Follow the **Disk usage and cleanup** rules in `AGENTS.md` for every build and
+temporary worktree. Check free space before/after heavy work; below **30 GiB
+free**, reclaim task-owned generated files before continuing. Inspect growth at
+**10 GiB added** or **15 GiB in a target directory**. Use one checkout-local
+`CARGO_TARGET_DIR` and `CARGO_INCREMENTAL=0` for disposable builds. Clean unused
+task-created targets, native DerivedData, dependency installs, and scratch data
+before finishing; keep deliverables and required validation evidence. This
+cleanup is part of the task, not an optional follow-up.
+
+Check for active processes/open files first. Preserve running binaries, source
+changes, worktrees, chat history, backups, simulator app data, signing assets,
+release archives, and the user's iPadOS 27.0 device support. Do not share the
+running app's build directory across checkouts or thin Time Machine snapshots
+as routine cleanup. Report actual free space and explain large retained outputs.
+
 ## Performance and visual quality
 
 Apply the performance rules in `AGENTS.md` to every desktop UI change. Before

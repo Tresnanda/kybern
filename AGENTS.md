@@ -67,11 +67,53 @@ stopped by the app. `pnpm build` only builds the web frontend; use the Tauri
 wrapper when daemon or driver changes must be included: `pnpm tauri dev` or
 `pnpm tauri build`.
 
-`target/` is disposable but grows without bound (60 GB before the last
-clean). `cargo sweep --time 7` (`cargo install cargo-sweep`) drops artifacts
-unused for a week; the user's `~/.cargo/config.toml` also strips dependency
-debuginfo in dev builds. Do not `cargo clean` or delete `target/` while a
-desktop session is running from `target/debug/kybernd`.
+### Disk usage and cleanup
+
+Disk space is a development budget. Do not leave large build directories in
+every checkout or worktree. On September 19, 2026, unused Rust build output and
+plugin staging alone required a 41 GiB cleanup.
+
+- Before a native build, dependency installation, simulator download, or large
+  test run, check free space on the workspace volume and measure the relevant
+  build/cache directories. Check again after heavy work. Below **30 GiB free**,
+  pause new disk-heavy work, reclaim this task's unused generated files, and
+  recheck. If that is insufficient, report the blocker rather than filling
+  the disk. Do not skip required validation to meet the budget.
+- Reuse one `CARGO_TARGET_DIR` inside the current checkout. Never create a new
+  target directory per command, copy an existing `target/` into a worktree, or
+  point another checkout at the running app's target directory. Use
+  `CARGO_INCREMENTAL=0` for disposable worktree builds and one-off validation;
+  retain incremental compilation only for an actively iterated checkout.
+- Run the checks required for the change; avoid redundant full workspace
+  builds, release builds, native exports, or installations. Research/review
+  worktrees should not install dependencies or compile unless needed. If a
+  task adds **10 GiB** or its target directory exceeds **15 GiB**, inspect and
+  remove obsolete task artifacts before starting another heavy run. These are
+  cleanup checkpoints, not permission to interrupt a running build.
+- Before finishing work in a temporary checkout/worktree, remove its generated
+  Rust targets, task-created native DerivedData, disposable dependency installs,
+  scratch test data, and redundant exports after preserving deliverables and
+  validation evidence. Track custom output paths, including `.cargo/target`.
+  Cleanup of this task's unused generated artifacts is part of the task and
+  does not require a separate confirmation. Keep source changes and worktree
+  registrations intact; never delete a whole worktree merely to reclaim space.
+- Before deleting build output, check running builds, daemons, and open files.
+  Stop only scratch processes owned by this task. Never run `cargo clean`,
+  sweep, or remove output used by an active desktop, daemon, build, or another
+  task. Preserve the user's installed daemon and normal `~/.kybern` data.
+- Keep build outputs, dependency trees, scratch data, and recordings out of
+  commits and handoff copies. Do not create full repository backups or duplicate
+  dependency caches for routine validation. Measure relevant agent snapshot or
+  staging growth when investigating disk pressure; do not automatically delete
+  chat history, recovery snapshots, or backups.
+- Reuse installed mobile runtimes and devices. The user tests on **iPadOS 27.0**;
+  preserve its device support. Do not install extra simulator runtimes without
+  a task requirement or erase simulator app data, signing assets, or release
+  archives as routine cache cleanup.
+- For disk-heavy tasks, report free space before/after and any large generated
+  directories retained with the reason. File deletion may leave blocks held
+  by APFS snapshots; verify actual free space instead of claiming the directory
+  size was reclaimed. Do not thin Time Machine snapshots as routine build cleanup.
 
 ## Mobile app
 
