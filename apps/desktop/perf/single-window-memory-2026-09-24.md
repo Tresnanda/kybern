@@ -27,7 +27,10 @@ WebContent sample was 379.1 MiB current with the same 528.2 MiB lifetime peak.
 
 At the first sample WebContent had about 259 MiB dirty WebKit Malloc and 88 MiB
 dirty owned graphics. Image IO had no resident pages. These regions are parts
-of the footprint, not additional memory to add to it. The current session's
+of the footprint, not additional memory to add to it. About 12 minutes later,
+while this long chat continued, the same WebContent process measured 443.1 MiB
+current with the same 528.2 MiB lifetime peak. This is an uncontrolled active
+session, so the 60 MiB difference is not evidence of an idle leak. The current session's
 excess over the deterministic live-tools fixture is more associated with
 renderer allocation than with decoded images; `vmmap` cannot identify which
 JavaScript objects or DOM nodes are retaining those pages.
@@ -42,7 +45,11 @@ window, 400 saved turns, 800 tools, and 64 live canonical Read results from a
 scratch daemon. It measured 256.8 MiB WebContent lifetime peak and 159.1 MiB
 after the workload. It verifies all 64 outputs remain recoverable and exact.
 These fixtures omit the Tauri shell process and do not reproduce the installed
-app's one-hour renderer allocation.
+app's one-hour renderer allocation. Later repeats of the same full-shell
+closed-result fixture ranged from 273.4 MiB on the control source to 276.1
+and 298.5 MiB on the open-result candidate. The open-result change is outside
+that closed-result path; these noisy peaks provide no evidence of a general
+single-window peak reduction.
 
 The existing store/worker fixture rose from 37.0 MiB startup to 95.8 MiB after
 loading histories, returned to 42.9 MiB when switching environment, and to
