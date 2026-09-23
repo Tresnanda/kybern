@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.15
+
+<!-- kybern-release-title: New models show up without a restart -->
+<!-- kybern-release-summary: The model picker refreshes when you open it and gains a reload control, and Claude model names stay accurate as new versions ship. -->
+
+- Refresh the agent model catalog when the model picker opens, and add a Reload models action, so newly released models appear without relaunching the app.
+- Add a Reload agents control to the sidebar footer to re-probe installed agents and their models on demand.
+- Name Claude models mechanically from the agent instead of a fixed table, so an alias like Opus stays version-accurate as new models ship.
+
 ## 0.4.14
 
 <!-- kybern-release-title: Project switching from free chats -->

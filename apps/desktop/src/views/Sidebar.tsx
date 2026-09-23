@@ -28,7 +28,7 @@ import {
   ArchiveIcon,
   GitPullRequestIcon,
   BookIcon,
-  CircleQuestionIcon,
+  RefreshCwIcon,
   ClockIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -64,7 +64,7 @@ import { primeMarquee } from "@/lib/kit/marquee"
 import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type Project, type ProjectId, type Thread, type ThreadActivityState, type ThreadId } from "@/protocol"
 import { selectAttentionItems, threadAttentionKind } from "@/state/notifications"
 import { newThread } from "@/state/nav"
-import { addProject, archiveThread, errorText, loadThread, removeProject, updateThread } from "@/state/rpc"
+import { addProject, archiveThread, errorText, loadThread, refreshProviders, removeProject, updateThread } from "@/state/rpc"
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
 import { createProjectThreadsSelector, useStore } from "@/state/store"
 
@@ -91,6 +91,22 @@ export function ThreadSidebar() {
   const selected = useStore((s) => s.selected)
   const mac = platform() === "macos"
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
+  const [reloadingAgents, setReloadingAgents] = useState(false)
+  // Re-probe every agent on this Mac (versions, availability, model catalogs)
+  // without waiting for a reconnect. Picks up CLIs and models installed mid-session.
+  const reloadAgents = async () => {
+    if (reloadingAgents) return
+    setReloadingAgents(true)
+    try {
+      const refreshed = await refreshProviders()
+      const available = refreshed.filter((p) => p.available).length
+      toast.success(available === 1 ? "1 agent ready" : `${available} agents ready`)
+    } catch (e) {
+      toast.error("Unable to reload agents", { description: errorText(e) })
+    } finally {
+      setReloadingAgents(false)
+    }
+  }
   const connection = useStore((s) => s.connection)
   const threads = useStore((s) => s.threads)
   const freeThreads = useMemo(
@@ -269,8 +285,25 @@ export function ThreadSidebar() {
                 <span>Settings</span>
               </SidebarMenuButton>
               <Menu>
-                <SidebarIconButton render={<MenuTrigger />} icon={CircleQuestionIcon} label="Help" tooltip="Help" size="md" />
+                <SidebarIconButton
+                  render={<MenuTrigger />}
+                  icon={RefreshCwIcon}
+                  iconClassName={cn("size-[15px] shrink-0", reloadingAgents && "animate-spin")}
+                  label="Reload agents"
+                  tooltip="Reload agents"
+                  size="md"
+                />
                 <ComposerPickerMenuPopup align="end" side="top" className="w-64 min-w-64">
+                  <MenuGroup>
+                    <MenuGroupLabel>Agents</MenuGroupLabel>
+                    <MenuItem onClick={() => void reloadAgents()} disabled={reloadingAgents}>
+                      <RefreshCwIcon /> {reloadingAgents ? "Reloading…" : "Reload models"}
+                    </MenuItem>
+                    <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "agents" })}>
+                      <SettingsIcon /> Agents on this Mac
+                    </MenuItem>
+                  </MenuGroup>
+                  <MenuSeparator />
                   <MenuGroup>
                     <MenuGroupLabel>kybern</MenuGroupLabel>
                     <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "about" })}>
@@ -278,12 +311,6 @@ export function ThreadSidebar() {
                     </MenuItem>
                     <MenuItem onClick={() => set({ paletteOpen: true })}>
                       <KeyboardIcon /> Keyboard shortcuts
-                    </MenuItem>
-                  </MenuGroup>
-                  <MenuSeparator />
-                  <MenuGroup>
-                    <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "agents" })}>
-                      <SettingsIcon /> Agents on this Mac
                     </MenuItem>
                   </MenuGroup>
                 </ComposerPickerMenuPopup>

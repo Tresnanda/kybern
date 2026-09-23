@@ -258,15 +258,10 @@ impl ClaudeDriver {
                     if !selectors.iter().any(|selector| selector == &config.model) {
                         selectors.insert(0, config.model.clone());
                     }
-                    let version = status.version.as_deref();
                     status.models = selectors
                         .into_iter()
                         .map(|id| ProviderModel {
-                            display_name: claude_model_name(
-                                &id,
-                                version,
-                                (id == config.model).then_some(config.alias_target.as_deref()).flatten(),
-                            ),
+                            display_name: claude_model_name(&id, (id == config.model).then_some(config.alias_target.as_deref()).flatten()),
                             is_default: id == config.model,
                             default_effort: Some(config.effort_for(&id)),
                             id,
@@ -281,7 +276,7 @@ impl ClaudeDriver {
                     0,
                     ProviderModel {
                         id: config.model.clone(),
-                        display_name: claude_model_name(&config.model, status.version.as_deref(), config.alias_target.as_deref()),
+                        display_name: claude_model_name(&config.model, config.alias_target.as_deref()),
                         provider: None,
                         efforts: status.supported_efforts.clone(),
                         default_effort: Some(config.effort.clone()),
@@ -527,38 +522,20 @@ fn parse_clock(text: &str) -> Option<(u32, u32)> {
     (hour < 24 && minute < 60).then_some((hour, minute))
 }
 
-/// Friendly names follow a CLI-version-gated manifest while the
-/// selector itself remains exactly what Claude Code accepts.
-fn claude_model_name(selector: &str, cli_version: Option<&str>, alias_target: Option<&str>) -> String {
+/// Human label for a Claude selector. The selector itself stays exactly what
+/// Claude Code accepts; the name is derived mechanically so new models format
+/// themselves. A bare family alias (`opus`) always tracks the latest model, so
+/// it shows without a version we'd otherwise have to guess and keep updated.
+/// When the alias resolves to a concrete id (an `ANTHROPIC_DEFAULT_*_MODEL`
+/// override), that id carries the real version.
+fn claude_model_name(selector: &str, alias_target: Option<&str>) -> String {
     let (base, context_suffix) =
         selector.split_once('[').map_or((selector, None), |(base, suffix)| (base, Some(suffix.trim_end_matches(']'))));
-    let label = if let Some(target) = alias_target {
-        friendly_model_id(target)
-    } else {
-        match base.to_ascii_lowercase().as_str() {
-            "fable" if cli_version.is_some_and(|version| at_least(version, (2, 1, 257))) => "Claude Fable 5.1".into(),
-            "fable" => "Claude Fable 5".into(),
-            "opus" if cli_version.is_some_and(|version| at_least(version, (2, 1, 219))) => "Claude Opus 5".into(),
-            "opus" => "Claude Opus".into(),
-            "sonnet" => "Claude Sonnet 5".into(),
-            "haiku" => "Claude Haiku".into(),
-            _ => friendly_model_id(base),
-        }
-    };
+    let label = crate::models::prettify_model_id(alias_target.unwrap_or(base));
     match context_suffix {
         Some(suffix) if suffix.eq_ignore_ascii_case("1m") => format!("{label} · 1M"),
         Some(suffix) if !suffix.is_empty() => format!("{label} · {suffix}"),
         _ => label,
-    }
-}
-
-fn friendly_model_id(model: &str) -> String {
-    match model.to_ascii_lowercase().as_str() {
-        "claude-fable-5-1" | "claude-fable-5.1" => "Claude Fable 5.1".into(),
-        "claude-fable-5" => "Claude Fable 5".into(),
-        "claude-opus-5" | "claude-opus-5-0" | "claude-opus-5.0" => "Claude Opus 5".into(),
-        "claude-sonnet-5" | "claude-sonnet-5-0" | "claude-sonnet-5.0" => "Claude Sonnet 5".into(),
-        _ => model.to_string(),
     }
 }
 
