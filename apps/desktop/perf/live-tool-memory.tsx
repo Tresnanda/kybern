@@ -22,6 +22,7 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const repeatedBursts = Number(import.meta.env.VITE_LIVE_TOOLS_BURSTS ?? "1")
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -70,7 +71,7 @@ async function run() {
     // count each durable completion once here too. Keep the probe bounded while
     // still failing if the workload produces a 65th distinct completion.
     if (completionSeqs.has(event.seq)) return
-    if (completionSeqs.size >= 64) { unexpectedCompletion = true; return }
+    if (completionSeqs.size >= 64 * repeatedBursts) { unexpectedCompletion = true; return }
     completionSeqs.add(event.seq)
     const payload = event.output && typeof event.output === "object" && !Array.isArray(event.output) ? event.output.content : event.output
     if (typeof payload === "string") deliveredOutputChars += payload.length
@@ -134,6 +135,32 @@ async function run() {
       }
     }
     await mark("live-startup")
+    if (repeatedBursts > 1) {
+      check(Number.isInteger(repeatedBursts) && repeatedBursts <= 5, "Repeat count must be 2–5")
+      check(seededHistory && fullThread && fullShell, "Repeated bursts require the full seeded shell")
+      for (let burst = 1; burst <= repeatedBursts; burst++) {
+        await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
+        await until(() => completionSeqs.size === 64 * burst && useStore.getState().threads[threadId]?.status === "idle", `Burst ${burst} did not complete`)
+        const recent = liveTools().slice(-64)
+        check(recent.length === 64 && recent.every(block => block.complete), `Burst ${burst} lost visible tool rows`)
+        check(!unexpectedCompletion && omittedCompletions === 64 * burst && deliveredOutputChars === 0, `Burst ${burst} did not use compact delivery`)
+        const first = recent[0]!
+        const result = await client.call("threads.tool_output", {
+          thread_id: threadId,
+          tool_call_id: first.call.id,
+          start_seq: first.seq,
+          through_seq: useStore.getState().transcripts[threadId]?.lastSeq,
+          include_tool_stream: false,
+        })
+        const content = result.output && typeof result.output === "object" && !Array.isArray(result.output) && "content" in result.output ? result.output.content : result.output
+        check(content === expected(0), `Burst ${burst} changed its exact Unicode output`)
+        await mark(`live-burst-${burst}-closed`)
+        await sleep(5000)
+        await mark(`live-burst-${burst}-settled`)
+      }
+      w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, repeatedBursts, omittedCompletions, uniqueCompletions: completionSeqs.size, exactOutput: true }))
+      return
+    }
     await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
     await until(() => liveTools().length === 64 && liveTools().every(b => b.complete) && useStore.getState().threads[threadId]?.status === "idle", "Live turn did not complete")
     const bytes = liveTools().reduce((total, block) => total + retainedSize(block.output), 0)

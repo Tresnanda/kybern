@@ -103,6 +103,28 @@ RPC `tool-leases` fixture checks exact 5.25-million-character deferred stream
 source, virtualization in two panes, full-result copy, reconnect, and exact
 ordinary-result native pasteboard copy.
 
+## Repeated visible-shell turns
+
+The full-shell fixture also ran three sequential 64-result turns in one visible
+WKWebView without a reload or forced GC. The same scratch daemon produced 192
+distinct compact completions; the first canonical output of each turn was
+rehydrated and matched exactly. This is a repeated closed-result workload, not
+a mixed multi-hour user session.
+
+| Stage | Current WebContent | Lifetime peak |
+| --- | ---: | ---: |
+| Startup | 179.5 | 192.5 |
+| Burst 1 closed / +5s | 240.2 / 162.8 | 262.2 |
+| Burst 2 closed / +5s | 252.3 / 174.6 | 297.2 |
+| Burst 3 closed / +5s | 257.7 / 165.7 | 297.2 |
+
+Values are MiB physical footprint. The settled marks do not rise monotonically
+over these three turns, while the second burst set a higher lifetime peak. This
+fixture still does not reproduce the installed session's 379–443 MiB current
+WebContent range. It leaves out long navigation, open results, terminals,
+diagrams, images and the installed app's broader runtime history. Run with
+`VITE_LIVE_TOOLS_BURSTS=3` plus the full-shell/history fixture flags.
+
 ## Remaining acceptance
 
 The installed one-window session remains above the 200–300 MB whole-app goal.
