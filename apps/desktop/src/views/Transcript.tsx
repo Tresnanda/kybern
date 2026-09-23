@@ -899,7 +899,11 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
     let text = ""
     for (const p of message.parts) {
       if (p.type === "text") text += p.text
-      else {
+      else if (p.type === "attachment" || p.type === "image") {
+        // The composer places a mentioned file right after its `@image1`.
+        const label = /(?:^|\s)(@(?:image|file)\d+)$/.exec(text)?.[1]
+        if (label) tokens.set(label, "attachment")
+      } else {
         const knownThread = p.type === "thread_reference" ? useStore.getState().threads[p.thread_id] : undefined
         const reference = p.type === "thread_reference"
           ? createComposerThreadReference(

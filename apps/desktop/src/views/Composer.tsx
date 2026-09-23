@@ -44,7 +44,7 @@ import {
 import { Kbd } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
-import { buildStructuredTextParts, structuredSegments } from "@/lib/composerTokens"
+import { buildStructuredTextParts, nextAttachmentLabel, structuredSegments, type AttachmentReference } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
 import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
@@ -55,7 +55,7 @@ import { InlineToken } from "@/components/kybern/InlineToken"
 import { isFreeChatProject, type ContentPart, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderStatus, type SkillInfo, type Thread, type UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import { customModelId, modelChoices } from "../../../../packages/kybern-client/src/models"
+import { customModelId, findModel, modelChoices } from "../../../../packages/kybern-client/src/models"
 
 export interface ComposerHandle {
   focus: () => void
@@ -68,8 +68,23 @@ interface Attachment {
   name: string
   media_type: string
   size: number
+  /** Inline label (`image1`) the prompt can mention as `@image1`. */
+  label: string
   preview?: string
 }
+
+/** Label restored drafts that predate inline attachment mentions. */
+function labelAttachments<T extends { media_type: string; label?: string }>(list: readonly T[]): (T & { label: string })[] {
+  const taken: string[] = list.flatMap((item) => (item.label ? [item.label] : []))
+  return list.map((item) => {
+    if (item.label) return { ...item, label: item.label }
+    const label = nextAttachmentLabel(item.media_type, taken)
+    taken.push(label)
+    return { ...item, label }
+  })
+}
+
+const attachmentPart = (a: Attachment): AttachmentReference["part"] => ({ type: "attachment", asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size })
 
 export interface SlashCommand {
   name: string
@@ -165,6 +180,7 @@ const DEFAULT_PLACEHOLDER = "Ask anything, @ threads or files, $ skills, or / co
 type ComposerMenuItem =
   | { id: string; type: "thread"; thread: Thread; snippet?: string | null }
   | { id: string; type: "file"; path: string }
+  | { id: string; type: "attachment"; attachment: Attachment }
   | { id: string; type: "command"; command: SlashCommand }
   | { id: string; type: "skill"; skill: SkillInfo }
   | { id: string; type: "plugin"; skill: SkillInfo }
@@ -267,7 +283,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const disabled = disabledByParent || !connected
   const [text, setText] = useState(savedDraft?.text ?? "")
   const [caret, setCaret] = useState(0)
-  const [attachments, setAttachments] = useState<Attachment[]>(savedDraft?.attachments ?? [])
+  const [attachments, setAttachments] = useState<Attachment[]>(() => labelAttachments(savedDraft?.attachments ?? []))
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
   const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue")
@@ -304,7 +320,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       const composerDrafts = { ...state.composerDrafts }
       if (text || attachments.length) {
         composerDrafts[key] = {
-          text, attachments: attachments.map(({ id, name, media_type, size }) => ({ id, name, media_type, size })),
+          text, attachments: attachments.map(({ id, name, media_type, size, label }) => ({ id, name, media_type, size, label })),
           mentions: [...mentioned.current], skills: [...selectedSkills.current.values()],
           threadReferences: [...selectedThreadReferences.current],
         }
@@ -347,7 +363,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // ---- @ files, $ skills, and / commands ----
 
   const mention = useMemo(() => {
-    if (!projectId) return null
+    if (!projectId && attachments.length === 0) return null
     const before = text.slice(0, caret)
     const at = before.lastIndexOf("@")
     if (at === -1) return null
@@ -355,7 +371,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const query = before.slice(at + 1)
     if (/\s/.test(query)) return null
     return { start: at, query }
-  }, [text, caret, projectId])
+  }, [text, caret, projectId, attachments.length])
 
   const slash = useMemo(() => {
     const before = text.slice(0, caret)
@@ -429,9 +445,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         : [],
     [currentThreadId, mention?.query, projectId, threadResult, threads],
   )
+  const attachmentReferences = useMemo<AttachmentReference[]>(
+    () => attachments.map((a) => ({ token: `@${a.label}`, part: attachmentPart(a) })),
+    [attachments],
+  )
   const menuItems = useMemo<ComposerMenuItem[]>(() => {
     if (mention)
       return [
+        ...attachments
+          .filter((a) => fuzzyScore(a.label, mention.query) != null || fuzzyScore(a.name, mention.query) != null)
+          .map((attachment) => ({ id: `attachment:${attachment.id}`, type: "attachment" as const, attachment })),
         ...threadHits.map((hit) => ({ id: `thread:${hit.thread.id}`, type: "thread" as const, ...hit })),
         ...rankSkills(skills, mention.query, 6, "plugin").map((item) => ({ id: `plugin:${item.path}`, type: "plugin" as const, skill: item })),
         ...files.map((path) => ({ id: `file:${path}`, type: "file" as const, path })),
@@ -449,7 +472,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           .map(({ command }) => ({ id: `command:${command.name}`, type: "command" as const, command }))
     const skillItems = rankSkills(skills, slash.query).map((item) => ({ id: `skill:${item.name}`, type: "skill" as const, skill: item }))
     return [...commandItems, ...skillItems].slice(0, 16)
-  }, [commands, files, mention, skill, skills, slash, threadHits])
+  }, [attachments, commands, files, mention, skill, skills, slash, threadHits])
   const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? `/${slash.start}` : null
   const menuOpen = !!menuKey && menuDismissed !== menuKey
   const menuSignature = `${menuKey}:${menuItems.map((item) => item.id).join("|")}`
@@ -467,6 +490,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     syncTokenSources()
     const next = `${text.slice(0, mention.start)}@${path} ${text.slice(caret)}`
     setTextAndCaret(next, mention.start + path.length + 2)
+  }
+  const pickAttachment = (attachment: Attachment) => {
+    if (!mention) return
+    const token = `@${attachment.label} `
+    setTextAndCaret(`${text.slice(0, mention.start)}${token}${text.slice(caret)}`, mention.start + token.length)
   }
   const pickThread = (thread: Thread) => {
     if (!mention) return
@@ -510,6 +538,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!item) return
     if (item.type === "thread") pickThread(item.thread)
     else if (item.type === "file") pickMention(item.path)
+    else if (item.type === "attachment") pickAttachment(item.attachment)
     else if (item.type === "command") pickCommand(item.command)
     else if (item.type === "plugin") pickPlugin(item.skill)
     else pickSkill(item.skill)
@@ -537,14 +566,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [hideInput])
 
   const segments = useMemo(
-    () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills], tokenSources.threadReferences),
-    [text, skills, tokenSources],
+    () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills], tokenSources.threadReferences, attachmentReferences),
+    [text, skills, tokenSources, attachmentReferences],
   )
 
   const buildParts = (): ContentPart[] => {
     const skillItems = [...skills, ...selectedSkills.current.values()]
-    const parts = buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current)
-    for (const a of attachments) parts.push({ type: "attachment", asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size })
+    const parts = buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current, attachmentReferences)
+    // Attachments the prompt never mentions keep their old place at the end.
+    const placed = new Set(parts.flatMap((part) => (part.type === "attachment" ? [part.asset_id] : [])))
+    for (const a of attachments) if (!placed.has(a.id)) parts.push(attachmentPart(a))
     return parts
   }
 
@@ -592,7 +623,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         if (ownerStore !== useStore) break
         const preview = f.type.startsWith("image/") ? URL.createObjectURL(f) : undefined
         if (preview) previewUrls.current.add(preview)
-        setAttachments((a) => [...a, { ...info, preview }])
+        setAttachments((a) => [...a, { ...info, preview, label: nextAttachmentLabel(info.media_type, a.map((item) => item.label)) }])
       } catch (e) {
         toast.error(`Unable to attach ${f.name}`, { description: errorText(e) })
       } finally {
@@ -653,7 +684,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
   const models = status?.models ?? []
-  const current = models.find((m) => (model ? m.id === model : m.is_default))
+  const current = model ? findModel(models, model) : models.find((m) => m.is_default)
   const modelLabel = current?.display_name ?? (model || null)
   const modelOptions = modelChoices(models, model).models.filter((m) => m.id)
   const efforts = current?.efforts ?? status?.supported_efforts ?? []
@@ -758,12 +789,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         const active = i === menuIndex
                         const previous = menuItems[i - 1]
                         const sectionOf = (entry: ComposerMenuItem | undefined) =>
-                          !entry ? null : entry.type === "thread" ? "Threads" : entry.type === "file" ? "Files" : entry.type === "command" ? "Commands" : entry.type === "plugin" ? "Plugins" : "Skills"
+                          !entry ? null : entry.type === "thread" ? "Threads" : entry.type === "attachment" ? "Attachments" : entry.type === "file" ? "Files" : entry.type === "command" ? "Commands" : entry.type === "plugin" ? "Plugins" : "Skills"
                         const section = sectionOf(item)
                         const previousSection = sectionOf(previous)
                         const title =
                           item.type === "thread"
                             ? item.thread.title || "Untitled thread"
+                            : item.type === "attachment"
+                            ? `@${item.attachment.label}`
                             : item.type === "file"
                             ? basename(item.path)
                             : item.type === "command"
@@ -771,7 +804,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               : item.type === "plugin"
                                 ? item.skill.display_name ?? titleCase(item.skill.name)
                                 : item.skill.display_name ?? titleCase(item.skill.name)
-                        const description = item.type === "thread" ? item.snippet : item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
+                        const description = item.type === "thread" ? item.snippet : item.type === "attachment" ? item.attachment.name : item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
                         return (
                           <Fragment key={item.id}>
                             {section !== previousSection && (
@@ -792,6 +825,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               <span className={cn("flex size-4 shrink-0 items-center justify-center [&_[stroke]]:[stroke-width:2]", active ? "text-foreground" : "text-foreground/85")}>
                                 {item.type === "thread" ? (
                                   <MessageCircleIcon className="size-4" />
+                                ) : item.type === "attachment" ? (
+                                  <FileEntryIcon pathValue={item.attachment.name} kind="file" mimeType={item.attachment.media_type} className="size-4" />
                                 ) : item.type === "file" ? (
                                   <FileEntryIcon pathValue={item.path} kind="file" className="size-4" />
                                 ) : item.type === "skill" ? (
@@ -816,7 +851,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                   <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{isFreeChatProject(item.thread.project_id) ? "Free chat" : projects[item.thread.project_id]?.name ?? "Project"}</span>
                                 ) : item.type === "file" ? (
                                   <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
-                                ) : item.type === "command" ? (
+                                ) : item.type === "attachment" ? null : item.type === "command" ? (
                                   <span className="shrink-0 text-end font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/40">/{item.command.name}</span>
                                 ) : (
                                   <span className="shrink-0 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/55">
@@ -840,6 +875,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   a.media_type.startsWith("image/") ? (
                     <div key={a.id} className="t-pop group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                         <ComposerImageAttachment id={a.id} name={a.name} preview={a.preview} />
+                      <span aria-hidden className="pointer-events-none absolute bottom-1 left-1 rounded-md bg-black/55 px-1 font-system-ui text-[10px] leading-4 font-medium text-white">@{a.label}</span>
                       <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </div>
                   ) : (
@@ -849,7 +885,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 leading-tight">
                         <span className="truncate text-[13px] font-medium text-foreground">{a.name}</span>
-                        <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground uppercase">{a.name.split(".").pop()}</span>
+                        <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground"><span>@{a.label}</span><span className="uppercase">{a.name.split(".").pop()}</span></span>
                       </span>
                       <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </span>
@@ -875,7 +911,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             <div ref={backdrop} aria-hidden className={cn(EDITOR_BACKDROP_CLASS, disabled && "opacity-60")}>
               {segments.map((segment, i) =>
                 segment.kind === "token" ? (
-                  <InlineToken key={i} plain kind={segment.part.type === "thread_reference" ? "thread" : segment.part.type === "skill" ? "skill" : segment.part.type === "mention" ? "plugin" : "file"} text={segment.text} />
+                  <InlineToken key={i} plain kind={segment.part.type === "thread_reference" ? "thread" : segment.part.type === "skill" ? "skill" : segment.part.type === "mention" ? "plugin" : segment.part.type === "attachment" ? "attachment" : "file"} text={segment.text} />
                 ) : (
                   <Fragment key={i}>{segment.text}</Fragment>
                 ),
@@ -1104,7 +1140,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 <span className="truncate">{modelLabel ?? "Model"}</span>
                               </MenuSubTrigger>
                               <ComposerPickerMenuSubPopup fixedWidth className="[--available-height:min(20rem,55vh)]">
-                                <MenuRadioGroup value={model ?? current?.id ?? ""} onValueChange={(v) => void changeModel(v as string, models.find((m) => m.id === v)?.default_effort ?? undefined)}>
+                                <MenuRadioGroup value={current?.id ?? model ?? ""} onValueChange={(v) => void changeModel(v as string, models.find((m) => m.id === v)?.default_effort ?? undefined)}>
                                   {modelOptions.map((m) => (
                                     <MenuRadioItem key={m.id} value={m.id}>
                                       <span className="truncate">{m.display_name}</span>
