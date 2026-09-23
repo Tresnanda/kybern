@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.16
+
+<!-- kybern-release-title: Claude models show their version -->
+<!-- kybern-release-summary: The model picker shows the concrete Claude model an alias resolves to, like Claude Opus 5, read from the agent itself. -->
+
+- Show the concrete Claude model behind each alias in the picker, so Opus reads as Claude Opus 5 and Fable as Claude Fable 5.1. The version is read from Claude Code at no cost and cached per version, and stays accurate as new models ship.
+
 ## 0.4.15
 
 <!-- kybern-release-title: New models show up without a restart -->
