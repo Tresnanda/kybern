@@ -258,25 +258,41 @@ impl ClaudeDriver {
                     if !selectors.iter().any(|selector| selector == &config.model) {
                         selectors.insert(0, config.model.clone());
                     }
+                    let resolved = match status.version.as_deref() {
+                        Some(version) => resolve_alias_models(&bin, context, version, &selectors).await,
+                        None => HashMap::new(),
+                    };
                     status.models = selectors
                         .into_iter()
-                        .map(|id| ProviderModel {
-                            display_name: claude_model_name(&id, (id == config.model).then_some(config.alias_target.as_deref()).flatten()),
-                            is_default: id == config.model,
-                            default_effort: Some(config.effort_for(&id)),
-                            id,
-                            provider: None,
-                            efforts: status.supported_efforts.clone(),
+                        .map(|id| {
+                            let base = id.split('[').next().unwrap_or(&id).to_string();
+                            // The concrete resolved id carries the version; fall back to a
+                            // configured alias override, then to the alias's own name.
+                            let target = resolved
+                                .get(&base)
+                                .map(String::as_str)
+                                .or_else(|| (id == config.model).then_some(config.alias_target.as_deref()).flatten());
+                            let display_name = claude_model_name(&id, target);
+                            let is_default = id == config.model;
+                            let default_effort = Some(config.effort_for(&id));
+                            let efforts = status.supported_efforts.clone();
+                            ProviderModel { display_name, is_default, default_effort, id, provider: None, efforts }
                         })
                         .collect();
                 }
             }
             if !status.models.iter().any(|model| model.is_default) {
+                let resolved = match status.version.as_deref() {
+                    Some(version) => resolve_alias_models(&bin, context, version, std::slice::from_ref(&config.model)).await,
+                    None => HashMap::new(),
+                };
+                let base = config.model.split('[').next().unwrap_or(&config.model).to_string();
+                let target = resolved.get(&base).map(String::as_str).or(config.alias_target.as_deref());
                 status.models.insert(
                     0,
                     ProviderModel {
                         id: config.model.clone(),
-                        display_name: claude_model_name(&config.model, config.alias_target.as_deref()),
+                        display_name: claude_model_name(&config.model, target),
                         provider: None,
                         efforts: status.supported_efforts.clone(),
                         default_effort: Some(config.effort.clone()),
@@ -537,6 +553,100 @@ fn claude_model_name(selector: &str, alias_target: Option<&str>) -> String {
         Some(suffix) if !suffix.is_empty() => format!("{label} · {suffix}"),
         _ => label,
     }
+}
+
+/// Concrete model ids Claude Code resolves each family alias to, cached per CLI
+/// version. The alias→id mapping only changes when Claude Code is upgraded, so
+/// the (free) resolution runs at most once per installed version.
+static ALIAS_MODEL_CACHE: std::sync::LazyLock<Mutex<HashMap<(String, String), String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Map bare family aliases (`opus`, `fable`, …) in `selectors` to the concrete
+/// versioned id Claude Code uses, so the picker can show "Claude Opus 5" rather
+/// than a version-free "Opus". Concrete ids and unknown selectors are skipped
+/// (they already carry a version). Best effort: a failed lookup is simply
+/// omitted and the caller falls back to the alias's own name.
+async fn resolve_alias_models(
+    bin: &std::path::Path,
+    context: &ProbeContext,
+    version: &str,
+    selectors: &[String],
+) -> HashMap<String, String> {
+    let bases: Vec<String> = selectors
+        .iter()
+        .map(|selector| selector.split('[').next().unwrap_or(selector).to_string())
+        .filter(|base| !base.is_empty() && base.chars().all(|character| character.is_ascii_alphabetic()))
+        .collect();
+    let mut out = HashMap::new();
+    let mut missing = Vec::new();
+    {
+        let cache = ALIAS_MODEL_CACHE.lock().await;
+        for base in &bases {
+            match cache.get(&(version.to_string(), base.clone())) {
+                Some(id) => {
+                    out.insert(base.clone(), id.clone());
+                }
+                None => missing.push(base.clone()),
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    let resolved = futures::future::join_all(missing.into_iter().map(|base| {
+        let bin = bin.to_path_buf();
+        let context = context.clone();
+        async move {
+            let id = resolve_one_alias(&bin, &context, &base).await;
+            (base, id)
+        }
+    }))
+    .await;
+    let mut cache = ALIAS_MODEL_CACHE.lock().await;
+    for (base, id) in resolved {
+        if let Some(id) = id {
+            cache.insert((version.to_string(), base.clone()), id.clone());
+            out.insert(base, id);
+        }
+    }
+    out
+}
+
+/// Read the concrete model id Claude Code maps `alias` to from the `system`
+/// init frame of a zero-turn stream-json session. No model turn runs — we kill
+/// the process the instant the init frame arrives — so this costs nothing, the
+/// same technique [`read_account_limits`] uses. `None` on any failure.
+async fn resolve_one_alias(bin: &std::path::Path, context: &ProbeContext, alias: &str) -> Option<String> {
+    let mut cmd = contextual_command(bin, context);
+    cmd.args([
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--input-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--model",
+        alias,
+    ]);
+    let child = NdjsonChild::spawn(cmd).ok()?;
+    // A slash command drives the session to initialize; we kill before it runs.
+    let _ = child.write(&json!({ "type": "user", "message": { "role": "user", "content": "/usage" } })).await;
+    let model = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let frame = {
+                let mut lines = child.lines.lock().await;
+                lines.recv().await?
+            };
+            if frame.get("type").and_then(Value::as_str) == Some("system") && frame.get("subtype").and_then(Value::as_str) == Some("init") {
+                return frame.get("model").and_then(Value::as_str).map(str::to_string);
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+    child.kill().await;
+    model.filter(|model| !model.is_empty())
 }
 
 #[derive(Default)]
