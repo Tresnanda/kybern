@@ -52,6 +52,9 @@ See [thumbnail decode budget](thumbnail-decode-2026-09-18.md) for 64px
 composer/user-attachment chips. This Linux environment cannot reproduce the
 macOS whole-app physical-footprint coalition.
 
+See [native attachment thumbnail memory](thumbnail-memory-2026-09-24.md) for
+the matched twelve-image WebContent comparison on Apple M1.
+
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,
 primary-source research, and the remaining 200–300 MB whole-app acceptance work.
@@ -189,6 +192,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
 | Combined composer panels, shared seams, constrained pane height | `node scripts/check-rendering.mjs composer-stack` |
 | Attached-image controls, user line breaks, environment menu, thumbnail original identity | `node scripts/check-rendering.mjs chat-fixes` |
+| Attachment thumbnail decode footprint and original dialog | `node scripts/check-rendering.mjs image-memory` |
 | Deferred tool output, open oversized result text | `node scripts/check-rendering.mjs tool-memory` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
 | Provider catalogs, sign-in terminals, native artifact preview and publication controls | `node scripts/check-rendering.mjs integrations` |
