@@ -95,7 +95,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   return (
     <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-col">
       <SurfaceHeader minimal showSidebarControls={!paneId} />
-      <div className={cn("chat-pane-enter flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER)}>
+      <div className={cn("flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER)}>
         <div className="flex min-h-0 flex-1 items-center justify-center">
           <div className="t-stagger flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]">
             <Logo size={40} className="text-foreground" />

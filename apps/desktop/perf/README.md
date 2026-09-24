@@ -25,12 +25,17 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Visible-thread turn diffs | Completed turns auto-loaded `threads.diff` summaries that retention never evicted while the thread stayed open. | Keep 16 newest per-turn diffs per visible thread plus the whole-thread `:all` card; reconstruct on remount. Native A/B: `KYBERN_PERF_LIVE_UNBOUND_TURN_DIFFS=1`. |
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 | Oversized open tool results | A visible open `ToolResult` `<pre className="max-h-72 overflow-auto">` mounted the full string with no row virtualization. | Virtualize offscreen lines in that scroller; keep on-screen text and clipboard copy exact. No paint hosts on the result scroller. |
+| Idle shell layers | An always-mounted opacity-0 drag preview with `backdrop-filter`, a permanent sidebar `will-change`, and a whole-pane blur entry kept pane-sized layers or boot spikes with ~1,000 DOM nodes. | Mount drag previews only during a drag; no persistent `will-change` or forwards fill on entry animations; do not blur a pane whose children already animate. `real-session` asserts the idle thread view. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
 and motion cadence. Inspect the existing modules before tuning them; justify a
 change with the affected workload rather than copying a historical constant.
 
 ## Evidence and scope
+
+See [real-session memory](real-session-memory-2026-09-24.md) for the shipped
+app over a real store snapshot and a recorded-session replay, the idle-layer
+fixes with interleaved A/B, and why the inactive-transcript budget is not a lever.
 
 See [the single-window memory follow-up](single-window-memory-2026-09-24.md)
 for the read-only 485 MiB installed-app process sum, negative full-shell paint
@@ -201,6 +206,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Saved-session picker, search, pagination, keyboard navigation | `node scripts/check-rendering.mjs sessions` |
 | Earlier-history prefetch, retry, prepend anchoring | `node scripts/check-rendering.mjs history` |
 | Claude background continuation and final-answer grouping | `node scripts/check-rendering.mjs continuation` |
+| Shipped app over a store snapshot or recorded-session replay; idle shell layers | `KYBERN_PERF_SESSION_STORE=… node scripts/check-rendering.mjs real-session` (or `KYBERN_PERF_REPLAY_JSONL=…`); see `real-session-memory-2026-09-24.md` |
 | Occluded or minimized second environment window | Two-window `vmmap` on macOS 27; do not treat blur as compact permission. See `hidden-window-compact-2026-09-18.md`. |
 
 For indicator changes, also run the matrix appearance/visibility comparison

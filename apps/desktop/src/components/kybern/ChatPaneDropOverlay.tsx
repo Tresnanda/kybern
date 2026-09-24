@@ -26,6 +26,8 @@ import {
 } from "./chatPaneDrag"
 
 const ALLOW_EVERY_DIRECTION = () => true
+/** Covers the overlay's 150ms fade-out before it unmounts. */
+const DISARM_DELAY_MS = 200
 
 const ZONE_CLASS: Record<DropZone, string> = {
   top: "inset-x-2 top-2 h-[calc(50%_-_0.75rem)]",
@@ -71,6 +73,12 @@ export function ChatPaneDropOverlay({
   const ref = useRef<HTMLDivElement>(null)
   const [zone, setZone] = useState<DropZone | null>(null)
   const [lastZone, setLastZone] = useState<DropZone>("right")
+  // The preview's backdrop blur keeps a pane-sized compositing layer alive even
+  // at opacity 0, so it only mounts while a thread drag is in progress.
+  const [armed, setArmed] = useState(false)
+  const disarmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => clearTimeout(disarmTimer.current), [])
 
   const showZone = useCallback((next: DropZone | null) => {
     if (next) setLastZone(next)
@@ -88,6 +96,9 @@ export function ChatPaneDropOverlay({
   useEffect(
     () =>
       subscribeThreadPointerDrag((drag) => {
+        clearTimeout(disarmTimer.current)
+        if (drag) setArmed(true)
+        else disarmTimer.current = setTimeout(() => setArmed(false), DISARM_DELAY_MS)
         showZone(drag ? zoneFor(drag) : null)
       }),
     [showZone, zoneFor]
@@ -111,7 +122,7 @@ export function ChatPaneDropOverlay({
       className={cn("relative flex min-h-0 min-w-0 flex-1", className)}
     >
       {children}
-      <div
+      {armed && <div
         data-active={zone !== null}
         data-thread-drop-preview={zone ?? undefined}
         className="thread-drop-overlay pointer-events-none absolute inset-0 z-50 overflow-hidden"
@@ -144,7 +155,7 @@ export function ChatPaneDropOverlay({
             <span>{wholePaneDrop ? "Open here" : DROP_LABEL[lastZone]}</span>
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
