@@ -659,7 +659,16 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   }, [group, imageTools])
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
-  const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
+  const storedDiff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
+  // Keep a summary while its turn is mounted. The store may evict older
+  // visible-thread summaries; requesting them again on every eviction would
+  // make several short mounted turns churn through the cache indefinitely.
+  const mountedDiffKey = diffKey(threadId, group.turnId)
+  const [mountedDiff, setMountedDiff] = useState<{ key: string; value: NonNullable<typeof storedDiff> } | null>(null)
+  if (storedDiff && (mountedDiff?.key !== mountedDiffKey || mountedDiff.value !== storedDiff)) {
+    setMountedDiff({ key: mountedDiffKey, value: storedDiff })
+  }
+  const diff = storedDiff ?? (mountedDiff?.key === mountedDiffKey ? mountedDiff.value : undefined)
   const canLoadDiff = useStore((s) => s.connection.state === "open")
   useEffect(() => {
     if (canLoadDiff && group.end && !diff) void loadDiff(threadId, group.turnId)

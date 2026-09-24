@@ -125,6 +125,19 @@ WebContent range. It leaves out long navigation, open results, terminals,
 diagrams, images and the installed app's broader runtime history. Run with
 `VITE_LIVE_TOOLS_BURSTS=3` plus the full-shell/history fixture flags.
 
+## Visible-thread diff retention
+
+The active thread could retain every completed turn's `threads.diff` summary.
+The visible-thread cache now keeps 16 per-turn summaries plus the whole-thread
+summary. A mounted older turn reloads its summary through the existing RPC
+path. State tests cover the cap, eviction order, split panes, and unbounded
+control. The native production-CSP full-shell fixture passed after this change
+with 64 exact compact completions, but its scratch workspace is not a Git
+repository and has no turn diffs. Its WebContent footprint (140.5 MiB at
+startup, 206.9 MiB lifetime peak, 135.7 MiB after idle) is therefore a
+regression check, **not** a measured saving from the diff cap. A Git-backed
+long-thread A/B is still needed to quantify that saving.
+
 ## Remaining acceptance
 
 The installed one-window session remains above the 200–300 MB whole-app goal.
