@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+<!-- kybern-release-title: Kybern uses far less memory -->
+<!-- kybern-release-summary: The desktop app holds much less RAM: hidden windows release their transcripts, long tool results and attachment thumbnails stay small, and idle screens and startup no longer keep extra graphics layers. -->
+
+- Release a window's transcript, highlighting and Markdown caches when the window is minimized, fully covered, or hidden, and restore reading position, drafts, attachments, queued prompts, approvals, and terminals when it comes back.
+- Keep open tool results light: very long outputs mount only the lines on screen, and copying the whole result still copies all of it exactly.
+- Keep only the 16 most recent per-turn change summaries loaded in an open thread; older turns reload theirs when you scroll back to them.
+- Decode attachment thumbnails at thumbnail size instead of full resolution. Opening an attachment still shows the original image.
+- Stop idle screens from holding extra graphics memory: the split-pane drop preview now appears only while you drag a thread, and sidebar titles and the project list no longer keep their own layers.
+- Show the sidebar and home screen already in place when the app launches, and show connection spinners only when connecting takes a moment, which lowers the memory spike at startup. Switching projects keeps its motion.
+
 ## 0.4.17
 
 <!-- kybern-release-title: Point to attachments right in your prompt -->
