@@ -63,4 +63,10 @@ export function parseMarkdown(input: MarkdownInput, signal: AbortSignal) {
   return queue.request(input, signal).finally(() => idle.settle())
 }
 export function releaseMarkdown(consumer: number) { worker?.postMessage({ release: consumer }); idle.settle() }
+/** Drop parsed Markdown trees when a hidden window releases its transcript. */
+export function releaseMarkdownCaches() {
+  cache.clear()
+  cacheBytes = 0
+  idle.settle()
+}
 if (import.meta.hot) import.meta.hot.dispose(() => { idle.dispose(); queue.dispose(); worker?.terminate(); cache.clear(); cacheBytes = 0 })

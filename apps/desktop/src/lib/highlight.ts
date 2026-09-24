@@ -60,6 +60,12 @@ export function highlightToHtml(code: string, lang: string | null, dark: boolean
   }).finally(() => idle.settle())
 }
 
+/** Drop settled highlight markup when a hidden window releases its transcript. */
+export function releaseHighlightCaches() {
+  cache.clear()
+  idle.settle()
+}
+
 if (import.meta.hot) import.meta.hot.dispose(() => {
   idle.dispose()
   queue.dispose()

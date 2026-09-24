@@ -10,6 +10,7 @@ import { ThemeProvider } from "../src/components/theme-provider"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { EVENT_NOTIFICATION, type EventNotification, type EventsSubscribeParams } from "../src/protocol"
 import { retainedSize } from "../src/lib/retainedSize"
+import { VISIBLE_TURN_DIFFS } from "../src/state/retention"
 import "../src/index.css"
 
 declare const __TOOL_LEASE_ENDPOINT__: { url: string; token: string; http_base: string; environmentId: string }
@@ -22,9 +23,16 @@ const fullShell = import.meta.env.VITE_LIVE_TOOLS_SHELL === "1"
 const emptySidebar = import.meta.env.VITE_LIVE_TOOLS_EMPTY_SIDEBAR === "1"
 const importApp = import.meta.env.VITE_LIVE_TOOLS_IMPORT_APP === "1"
 const stackedContentCard = import.meta.env.VITE_LIVE_TOOLS_STACKED_CONTENT_CARD === "1"
+const repeatedBursts = Number(import.meta.env.VITE_LIVE_TOOLS_BURSTS ?? "1")
+const unboundTurnDiffs = import.meta.env.VITE_LIVE_TOOLS_UNBOUND_TURN_DIFFS === "1"
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function checkVisibleTurnDiffs() {
+  const ids = Object.keys(useStore.getState().diffs).filter((id) => id.startsWith(`${threadId}:`) && !id.endsWith(":all"))
+  if (unboundTurnDiffs) return
+  check(ids.length <= VISIBLE_TURN_DIFFS, `Visible turn diffs grew to ${ids.length}`)
+}
 async function until(test: () => boolean, message: string) {
   for (let i = 0; i < 1200; i++) { if (test()) return; await sleep(25) }
   throw new Error(message)
@@ -70,7 +78,7 @@ async function run() {
     // count each durable completion once here too. Keep the probe bounded while
     // still failing if the workload produces a 65th distinct completion.
     if (completionSeqs.has(event.seq)) return
-    if (completionSeqs.size >= 64) { unexpectedCompletion = true; return }
+    if (completionSeqs.size >= 64 * repeatedBursts) { unexpectedCompletion = true; return }
     completionSeqs.add(event.seq)
     const payload = event.output && typeof event.output === "object" && !Array.isArray(event.output) ? event.output.content : event.output
     if (typeof payload === "string") deliveredOutputChars += payload.length
@@ -127,6 +135,7 @@ async function run() {
     }
     if (seededHistory) {
       check(useStore.getState().transcripts[threadId]?.nextBeforeSeq != null, "Seeded history was not paged")
+      checkVisibleTurnDiffs()
       if (!fullThread) {
         await until(() => document.querySelector("[data-earlier-history-status]") !== null, "Earlier-history status row did not mount")
         const earlier = document.querySelector<HTMLElement>("[data-earlier-history-status]")
@@ -134,8 +143,35 @@ async function run() {
       }
     }
     await mark("live-startup")
+    if (repeatedBursts > 1) {
+      check(Number.isInteger(repeatedBursts) && repeatedBursts <= 5, "Repeat count must be 2–5")
+      check(seededHistory && fullThread && fullShell, "Repeated bursts require the full seeded shell")
+      for (let burst = 1; burst <= repeatedBursts; burst++) {
+        await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
+        await until(() => completionSeqs.size === 64 * burst && useStore.getState().threads[threadId]?.status === "idle", `Burst ${burst} did not complete`)
+        const recent = liveTools().slice(-64)
+        check(recent.length === 64 && recent.every(block => block.complete), `Burst ${burst} lost visible tool rows`)
+        check(!unexpectedCompletion && omittedCompletions === 64 * burst && deliveredOutputChars === 0, `Burst ${burst} did not use compact delivery`)
+        const first = recent[0]!
+        const result = await client.call("threads.tool_output", {
+          thread_id: threadId,
+          tool_call_id: first.call.id,
+          start_seq: first.seq,
+          through_seq: useStore.getState().transcripts[threadId]?.lastSeq,
+          include_tool_stream: false,
+        })
+        const content = result.output && typeof result.output === "object" && !Array.isArray(result.output) && "content" in result.output ? result.output.content : result.output
+        check(content === expected(0), `Burst ${burst} changed its exact Unicode output`)
+        await mark(`live-burst-${burst}-closed`)
+        await sleep(5000)
+        await mark(`live-burst-${burst}-settled`)
+      }
+      w.webkit.messageHandlers.bench.postMessage(JSON.stringify({ pass: true, repeatedBursts, omittedCompletions, uniqueCompletions: completionSeqs.size, exactOutput: true }))
+      return
+    }
     await client.call("threads.send", { thread_id: threadId, message: { parts: [{ type: "text", text: "PROFILE_LIVE_TOOLS" }] } })
     await until(() => liveTools().length === 64 && liveTools().every(b => b.complete) && useStore.getState().threads[threadId]?.status === "idle", "Live turn did not complete")
+    checkVisibleTurnDiffs()
     const bytes = liveTools().reduce((total, block) => total + retainedSize(block.output), 0)
     check(calls === 0, "Closed live output was unnecessarily fetched")
     if (!baseline) check(bytes <= 8 * 1024 * 1024, `Closed live payloads exceed budget: ${bytes}`)
@@ -175,12 +211,20 @@ async function run() {
     await until(() => openFirst().length === 2, "Early live result not reachable in both panes")
     for (const button of openFirst()) button.click()
     await until(() => document.querySelectorAll("pre").length === 2, "Shared live result did not hydrate").catch(error => { throw new Error(`${error}; ${JSON.stringify({ calls, pre: document.querySelectorAll("pre").length, first: liveTools()[0] && { omitted: liveTools()[0]!.outputOmitted, stream: liveTools()[0]!.stream.slice(0, 80), output: String(liveTools()[0]!.output).slice(0, 80) }, buttons: openFirst().map(b => ({ text: b.textContent, open: b.getAttribute("aria-expanded") })), text: document.body.innerText.slice(0, 1500) })}`) })
-    for (const pre of document.querySelectorAll("pre")) check(pre.textContent === expected(0), "Exact Unicode live output changed on reload")
+    for (const pre of document.querySelectorAll("pre")) {
+      check(pre.getAttribute("data-tool-result-chars") === String(expected(0).length), "Exact Unicode live output changed on reload")
+      check(pre.hasAttribute("data-tool-result-virtual"), "Opened live result did not virtualize")
+      check(pre.textContent?.includes("é😀") && pre.textContent?.includes("000 exact payload"), "Shared live result lost its visible Unicode")
+      check((pre.textContent?.length ?? 0) < expected(0).length, "Opened live result still mounted the full string")
+      check(!pre.classList.contains("chat-paint-host") && !pre.querySelector(".chat-paint-host"), "Result scroller promoted paint hosts")
+    }
     check(calls === (baseline ? 0 : 1), `Shared live result fetched ${calls} times`)
     await mark("live-result-open-shared")
     render(1)
     await sleep(400)
-    check(document.querySelector("pre")?.textContent === expected(0), "Closing one pane discarded the other's result")
+    const remaining = document.querySelector("pre")
+    check(remaining?.getAttribute("data-tool-result-chars") === String(expected(0).length), "Closing one pane discarded the other's result")
+    check(remaining?.textContent?.includes("é😀"), "Closing one pane discarded the other's result")
     for (const button of openFirst()) if (button.getAttribute("aria-expanded") === "true") button.click()
     await until(() => !document.querySelector("pre"), "Closed live result stayed mounted")
     await sleep(3000)

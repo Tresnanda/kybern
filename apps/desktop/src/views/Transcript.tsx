@@ -11,7 +11,7 @@ import { connectorApproval, isUserInput } from "@/lib/userInput"
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -39,6 +39,7 @@ import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtim
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel, type MessageScrollerController } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
+import { ToolResultText } from "@/components/kybern/ToolResultText"
 import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
@@ -73,6 +74,7 @@ import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { activeRuntime, errorText, hydrateToolOutput, retainToolOutput, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
+import { consumeTranscriptAnchor, peekTranscriptAnchor, registerTranscriptAnchor, windowHoldsTranscript } from "@/state/windowSurfaceState"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
 
 const TEXT = getChatTranscriptTextStyle()
@@ -353,6 +355,10 @@ export function Transcript({
   }, [groups, navigationItems])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
+  const restored = useRef(false)
+  if (!state?.loaded) restored.current = false
+  const pendingAnchor = !restored.current && state?.loaded ? peekTranscriptAnchor(threadId) : undefined
+  if (pendingAnchor && pendingAnchor.following !== following) setFollowing(pendingAnchor.following)
   const scroller = useRef<MessageScrollerController>(null)
   useFollowingHistory(threadId, state, scrollElement, following && connected && !agentActivityDetail)
   const busy = groups.some((g) => g.running)
@@ -360,9 +366,47 @@ export function Transcript({
     scroller.current?.scrollToEnd()
   }
 
+  useEffect(() => registerTranscriptAnchor(threadId, () => {
+    const scroll = viewport.current
+    const messageId = scroll && !following ? navigationModel.activeId(scroll) : undefined
+    const item = messageId ? navigationItems.find((entry) => entry.id === messageId) : undefined
+    const group = item ? groups[item.turnIndex] : following ? undefined : groups.at(-1)
+    return {
+      following,
+      messageId,
+      turnId: group?.turnId || group?.user?.id,
+      seq: group?.user?.seq ?? group?.answer?.seq,
+    }
+  }), [threadId, following, groups, navigationItems, navigationModel])
+
+  useLayoutEffect(() => {
+    if (!state?.loaded || restored.current) return
+    const saved = peekTranscriptAnchor(threadId)
+    if (!saved || saved.following) {
+      consumeTranscriptAnchor(threadId)
+      restored.current = true
+      return
+    }
+    const index = saved.turnId
+      ? groups.findIndex((group, index) => turnKey(group, index) === saved.turnId || group.turnId === saved.turnId || group.user?.id === saved.turnId)
+      : saved.messageId
+        ? navigationItems.find((item) => item.id === saved.messageId)?.turnIndex ?? -1
+        : -1
+    if (index < 0 && groups.length === 0) return
+    restored.current = true
+    consumeTranscriptAnchor(threadId)
+    if (index < 0) return
+    const item = navigationItems.find((entry) => entry.turnIndex === index)
+    if (item) navigationModel.scrollToItem(item.id)
+    else rows.current?.scrollToIndex(index, { align: "center" })
+  }, [state?.loaded, threadId, groups, navigationItems, navigationModel])
+
   if (!state?.loaded) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-foreground [contain:layout_style_paint]">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-foreground [contain:layout_style_paint]"
+        data-hidden-window-placeholder={windowHoldsTranscript() ? undefined : ""}
+      >
         <div className="opacity-0 [animation:chat-mount-loader-in_200ms_ease-out_150ms_forwards] motion-reduce:animate-none motion-reduce:opacity-100">
           <MatrixLoader variant="twinkle" dot={3} gap={3} className="text-muted-foreground" label="Loading thread" />
         </div>
@@ -387,6 +431,7 @@ export function Transcript({
           navigationLabel="Message navigation"
           navigationSide="left"
           followOutput
+          restoreFollowing={following}
           followKey={latestUserMessageId}
           followThreshold={56}
           onFollowChange={setFollowing}
@@ -614,7 +659,16 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
   }, [group, imageTools])
   const expanded = useStore((s) => s.expandedWork[group.turnId])
   const toggle = useStore((s) => s.toggleWork)
-  const diff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
+  const storedDiff = useStore((s) => s.diffs[diffKey(threadId, group.turnId)])
+  // Keep a summary while its turn is mounted. The store may evict older
+  // visible-thread summaries; requesting them again on every eviction would
+  // make several short mounted turns churn through the cache indefinitely.
+  const mountedDiffKey = diffKey(threadId, group.turnId)
+  const [mountedDiff, setMountedDiff] = useState<{ key: string; value: NonNullable<typeof storedDiff> } | null>(null)
+  if (storedDiff && (mountedDiff?.key !== mountedDiffKey || mountedDiff.value !== storedDiff)) {
+    setMountedDiff({ key: mountedDiffKey, value: storedDiff })
+  }
+  const diff = storedDiff ?? (mountedDiff?.key === mountedDiffKey ? mountedDiff.value : undefined)
   const canLoadDiff = useStore((s) => s.connection.state === "open")
   useEffect(() => {
     if (canLoadDiff && group.end && !diff) void loadDiff(threadId, group.turnId)
@@ -1448,14 +1502,13 @@ function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface
           ))}
         </div>
       )}
-      {out.trim() && <pre
+      {out.trim() && <ToolResultText
+        text={out}
         className={cn(
           "selectable max-h-72 overflow-auto rounded-lg bg-[var(--app-chat-code-surface)] px-3 py-2.5 font-chat-code text-[length:var(--app-font-size-chat-code,13px)] leading-relaxed whitespace-pre-wrap break-words outline -outline-offset-1 outline-black/6 dark:outline-white/8",
           block.isError ? "text-destructive/90" : "text-foreground/92",
         )}
-      >
-        {out}
-      </pre>}
+      />}
     </>
   )
 }

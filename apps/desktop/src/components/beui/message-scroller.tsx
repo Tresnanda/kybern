@@ -118,6 +118,8 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
   followOutput?: boolean;
   /** Changing this value resumes following and jumps to the live edge. */
   followKey?: string | number | null;
+  /** Restored follow state after the scroller remounts. `false` skips one live-edge jump. */
+  restoreFollowing?: boolean;
   /** Distance from the end that still counts as following the output. */
   followThreshold?: number;
   /** Smoothly follow growing content. */
@@ -154,6 +156,7 @@ export function MessageScroller({
   controllerRef,
   followOutput = true,
   followKey,
+  restoreFollowing,
   followThreshold = 56,
   smooth = true,
   onFollowChange,
@@ -178,7 +181,8 @@ export function MessageScroller({
   useLayoutEffect(() => { navigationModelRef.current = navigationModel; }, [navigationModel]);
   const viewportRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const followingRef = useRef(followOutput);
+  const followingRef = useRef(restoreFollowing ?? followOutput);
+  const skipRestoreJump = useRef(restoreFollowing === false);
   const lastScrollTopRef = useRef(0);
   const lastScrollSizeRef = useRef({ height: 0, client: 0 });
   const resumeFollowingRef = useRef(true);
@@ -428,6 +432,11 @@ export function MessageScroller({
 
   useLayoutEffect(() => {
     if (!followOutput) {
+      followingRef.current = false;
+      return;
+    }
+    if (skipRestoreJump.current) {
+      skipRestoreJump.current = false;
       followingRef.current = false;
       return;
     }

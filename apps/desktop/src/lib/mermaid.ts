@@ -88,6 +88,13 @@ export function renderMermaid(code: string, dark: boolean, signal: AbortSignal):
     return svg
   }).finally(() => idle.settle())
 }
+/** Drop diagram markup and idle the isolated renderer for a hidden window. */
+export function releaseMermaidCaches() {
+  cache.clear()
+  cacheBytes = 0
+  idle.settle()
+}
+
 if (import.meta.hot) import.meta.hot.dispose(() => {
   idle.dispose()
   releaseFrame()
