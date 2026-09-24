@@ -130,6 +130,10 @@ async function run() {
   store = await import("../src/state/store")
   await until(() => store.useStore.getState().connection.state === "open" && Object.keys(store.useStore.getState().threads).length > 0, "App did not connect")
   await mark("boot")
+  // Surfaces mounted during launch appear settled (lib/launch.ts): nothing
+  // should be animating once the first connected paint has landed.
+  const launchMotion = document.getAnimations().map(animation => (animation as CSSAnimation).animationName).filter(name => ["sidebar-surface-enter", "t-stagger-in", "spin-stepped"].includes(name))
+  check(launchMotion.length === 0, `Launch still animates: ${launchMotion.join(", ")}`)
   await sleep(8000)
   await mark("home-idle")
   const replay = /^replay:(\d+)$/.exec(__SCROLL_SCENARIO__)

@@ -26,6 +26,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 | Oversized open tool results | A visible open `ToolResult` `<pre className="max-h-72 overflow-auto">` mounted the full string with no row virtualization. | Virtualize offscreen lines in that scroller; keep on-screen text and clipboard copy exact. No paint hosts on the result scroller. |
 | Idle shell layers | An always-mounted opacity-0 drag preview with `backdrop-filter`, a permanent sidebar `will-change`, and a whole-pane blur entry kept pane-sized layers or boot spikes with ~1,000 DOM nodes. | Mount drag previews only during a drag; no persistent `will-change` or forwards fill on entry animations; do not blur a pane whose children already animate. `real-session` asserts the idle thread view. |
+| Launch motion | Sidebar, home-screen and connecting-spinner animations running during the first connected paint compounded into a ~60 MiB boot peak. | Surfaces first mounted during launch appear settled (`lib/launch.ts`, read once at mount); delay connecting spinners 400 ms. Later navigation keeps its motion. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
 and motion cadence. Inspect the existing modules before tuning them; justify a

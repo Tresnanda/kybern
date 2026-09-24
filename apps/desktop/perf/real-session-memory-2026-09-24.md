@@ -95,7 +95,8 @@ the visible "This Mac" window plus **three offscreen "Os-kdi" environment
 windows** (two 1280×820, one 1×1), all served by that one WebContent process.
 Each window runs a separate app instance, which the single-window fixtures
 above do not reproduce. The replay does not explain the installed live heap;
-the extra environment windows are the leading hypothesis and are unverified.
+a later dev-build repro showed those leftover windows hold no web view (see
+below), so they do not explain it.
 
 ## Follow-up: sidebar marquee and thread-open spikes
 
@@ -121,6 +122,37 @@ Removing it (the pan transition still promotes the label while it runs):
 The fixture now also fails if an idle marquee label keeps a layer. The sidebar
 scroll-fade mask, the preview-rail container and table display changes had no
 repeatable effect.
+
+## Follow-up: launch motion, lazy views, environment windows
+
+**Launch motion.** At launch the sidebar list entrance, the home screen's
+logo/headline/composer stagger, and the "Connecting to …" spinners (home and
+environment switcher) all ran during the first connected paint. They compound:
+any one alone trimmed the boot peak by 15–25 MiB, all together by about 60.
+Surfaces first mounted in the first 1.5 s now appear settled (`lib/launch.ts`,
+read once at mount); later mounts still animate. Connecting spinners appear
+only after 400 ms (`DelayedSpinner`), so a local connect never shows one.
+Three interleaved pairs, boot lifetime peak: control 247.6 / 271.8 / 247.8,
+candidate 227.1 / 233.7 / 232.8 MiB; boot footprint 130–172 → ~107. A sampled
+launch recorded no running animations. Across all runs on this build the boot
+peak ranged 189–234; thread-open peaks (≈260–275) now set the lifetime peak.
+The fixture fails if a launch surface still animates at the boot sample.
+
+**Lazy views (rejected).** Loading the dock's terminal/collaboration/explorer
+panes, Settings and Pull requests on demand cut startup JavaScript from 1,876
+to ~1,455 KiB (xterm alone is ~330 KiB). Three interleaved pairs showed no
+memory change: home idle 86.6–109.3 vs 104.5–106.6 MiB, live WebKit Malloc
+42.9–53.9 vs 48.5–50.0, boot peaks overlapping. JavaScriptCore compiles
+functions lazily, so unexecuted code costs little. Not shipped.
+
+**Environment windows.** An isolated dev build (scratch daemon and
+`KYBERN_CLIENT_CONFIG_DIR`) opened a "This Mac" window three times and closed
+each through the close-request path. All three native windows remained in
+`CGWindowList`, but `heap` showed one live web view: the page is destroyed and
+only the empty `TaoView`/window shell is retained. Removing Kybern's
+traffic-light and window-surface hooks did not change it, so the retention is
+in Tauri/tao or AppKit. It does not explain the installed app's WebContent
+footprint; the earlier "leading hypothesis" above is disproved.
 
 ## Limits
 

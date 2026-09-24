@@ -36,7 +36,7 @@ import {
   SettingsIcon,
   Trash2,
 } from "@/lib/kit/icons"
-import { Spinner } from "@/components/kybern/bits"
+import { DelayedSpinner, Spinner } from "@/components/kybern/bits"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
 import { SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
@@ -85,6 +85,7 @@ export function EnvironmentSwitcher() {
   const connection = useStore((s) => s.connection)
   const info = useStore((s) => s.info)
   const profile = profiles.find((p) => p.id === selectedId)
+  const environmentIcon = profile?.local ? <DeviceLaptopIcon className="size-3.5 shrink-0 text-foreground" /> : <GlobeIcon className="size-3.5 shrink-0 text-foreground" />
   const [dialog, setDialogContent] = useState<"add" | "manage" | "access">(
     "add"
   )
@@ -120,11 +121,7 @@ export function EnvironmentSwitcher() {
               />
             }
           >
-            {switching ? (
-              <Spinner size={14} />
-            ) : (
-              profile?.local ? <DeviceLaptopIcon className="size-3.5 shrink-0 text-foreground" /> : <GlobeIcon className="size-3.5 shrink-0 text-foreground" />
-            )}
+            {switching ? <DelayedSpinner size={14} fallback={environmentIcon} /> : environmentIcon}
             <span className="min-w-0 flex-1 truncate text-foreground">
               {profile?.name ?? "Connecting"}
             </span>

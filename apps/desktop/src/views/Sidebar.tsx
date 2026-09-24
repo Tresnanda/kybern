@@ -58,6 +58,7 @@ import {
 } from "@/lib/kit/sidebarRowStyles"
 import { pickFolder, platform } from "@/lib/tauri"
 import { activeEnvironment } from "@/state/environments"
+import { isLaunching } from "@/lib/launch"
 import { cn } from "@/lib/utils"
 import { TextSwap } from "@/components/kybern/motion"
 import { primeMarquee } from "@/lib/kit/marquee"
@@ -91,6 +92,7 @@ export function ThreadSidebar() {
   const selected = useStore((s) => s.selected)
   const mac = platform() === "macos"
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
+  const [enterSurface] = useState(() => !isLaunching())
   const [reloadingAgents, setReloadingAgents] = useState(false)
   // Re-probe every agent on this Mac (versions, availability, model catalogs)
   // without waiting for a reconnect. Picks up CLIs and models installed mid-session.
@@ -200,7 +202,7 @@ export function ThreadSidebar() {
         </div>
 
         <EnvironmentSwitcher />
-        <div className="sidebar-surface-enter">
+        <div className={enterSurface ? "sidebar-surface-enter" : undefined}>
           <SidebarGroup className="px-1.5 pt-1 pb-1.5">
             <SidebarMenu className="gap-0.5">
               <PrimaryAction
