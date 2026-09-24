@@ -97,6 +97,31 @@ Each window runs a separate app instance, which the single-window fixtures
 above do not reproduce. The replay does not explain the installed live heap;
 the extra environment windows are the leading hypothesis and are unverified.
 
+## Follow-up: sidebar marquee and thread-open spikes
+
+A 40-thread run on the branch rested at 200–258 MiB with two peak-setting
+moments: boot (282) and one thread whose visit added 60 MiB of lifetime peak.
+`KYBERN_PERF_SESSION_THREADS=<control>,<target>` reproduced it (+68 to +77 MiB
+in two runs). Hiding its one 736×921 table removed the increase. The table
+block is already its own layer (~11 MiB per backing store). Removing its
+scroller, borders, table layout or paint host did not change it. With a 6 s
+settle the same visit measured 168–188 MiB instead of 237–254 at 1.5 s, so
+most of the spike is transient first-paint graphics. RSS does not see those
+surfaces.
+
+Every sidebar title carried a permanent `will-change: transform` for the hover
+marquee (29 layers), which also promoted ~40 overlapping hover-action overlays.
+Removing it (the pan transition still promotes the label while it runs):
+
+| Run | Home idle | Target visit settled | Lifetime peak |
+| --- | ---: | ---: | ---: |
+| Control 1 / 2 | 114.1 / 114.2 | — | 336.7 / 335.6 |
+| Marquee fix 1 / 2 | 106.8 / 109.1 | 177.7 / 168.1 | 317.9 / 316.9 |
+
+The fixture now also fails if an idle marquee label keeps a layer. The sidebar
+scroll-fade mask, the preview-rail container and table display changes had no
+repeatable effect.
+
 ## Limits
 
 WebContent only; the Tauri shell, daemon, GPU/networking processes and

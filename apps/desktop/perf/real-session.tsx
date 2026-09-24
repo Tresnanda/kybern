@@ -9,6 +9,7 @@ import { retainedSize } from "../src/lib/retainedSize"
 
 declare const __TOOL_LEASE_ENDPOINT__: { url: string; token: string; http_base: string }
 declare const __SCROLL_SCENARIO__: string
+declare const __SCROLL_EXTRA_CSS__: string
 const w = window as unknown as { __memoryContinue: () => void; webkit: { messageHandlers: { bench: { postMessage(value: string): void } } } }
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 const visits = Number(new URLSearchParams(location.search).get("history") ?? "12")
@@ -31,6 +32,11 @@ function stats() {
     transcripts: Object.keys(transcripts).length,
     blocks: Object.values(transcripts).reduce((n, t) => n + (t.blocks?.length ?? 0), 0),
     storeKiB,
+    tables: Array.from(document.querySelectorAll("[data-chat-scroll-container] table")).map(table => {
+      const box = table.getBoundingClientRect()
+      const host = table.closest<HTMLElement>(".chat-paint-host")?.getBoundingClientRect()
+      return `${Math.round(box.width)}x${Math.round(box.height)} cells=${table.querySelectorAll("td,th").length} nodes=${table.getElementsByTagName("*").length} host=${host ? `${Math.round(host.width)}x${Math.round(host.height)}` : "none"}`
+    }),
   }
 }
 async function mark(stage: string, extra: Record<string, unknown> = {}) {
@@ -63,6 +69,9 @@ function checkIdleLayers() {
     const style = getComputedStyle(el)
     check(style.willChange === "auto" && style.transform === "none", "Sidebar surface kept its entry layer after the animation")
   }
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(".t-marquee > span"))) {
+    check(getComputedStyle(el).willChange === "auto", "An idle marquee label keeps its own layer")
+  }
 }
 
 async function followReplay(passes: number) {
@@ -84,20 +93,30 @@ async function followReplay(passes: number) {
 }
 
 async function visitRecent() {
-  const recent = Object.values(store.useStore.getState().threads)
-    .filter(thread => !(thread as { archived_at?: string }).archived_at)
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .slice(0, visits)
+  const chosen = /^threads:(.+)$/.exec(__SCROLL_SCENARIO__)?.[1]?.split(",")
+  const threads = store.useStore.getState().threads
+  const recent = chosen
+    ? chosen.map(id => threads[id as keyof typeof threads]).filter(thread => thread !== undefined)
+    : Object.values(threads)
+      .filter(thread => !(thread as { archived_at?: string }).archived_at)
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, visits)
   for (const [index, thread] of recent.entries()) {
+    post({ stage: "event", name: `select-${index}`, t: Date.now() })
     store.useStore.getState().selectThread(thread.id)
     await until(() => !!store.useStore.getState().transcripts[thread.id] && !!document.querySelector("[data-chat-scroll-container]"), `Thread ${thread.id} did not load`)
+    post({ stage: "event", name: `loaded-${index}`, t: Date.now() })
+    if (chosen) await sleep(6000)
     await mark(`visit-${String(index).padStart(2, "0")}`, { lastSeq: thread.last_seq })
     if (index === 0) checkIdleLayers()
   }
   await collect("visits-gc")
-  store.useStore.getState().set({ selected: { kind: "none" } } as never)
-  await sleep(5000)
-  await mark("deselected-idle")
+  if (!chosen) {
+    // Chosen threads stay selected so a held window can be inspected.
+    store.useStore.getState().set({ selected: { kind: "none" } } as never)
+    await sleep(5000)
+    await mark("deselected-idle")
+  }
   post({ pass: true, visited: recent.length })
 }
 
@@ -105,6 +124,8 @@ async function run() {
   const query = new URLSearchParams({ url: __TOOL_LEASE_ENDPOINT__.url, token: __TOOL_LEASE_ENDPOINT__.token })
   history.replaceState(null, "", `${location.pathname}?${query}`)
   localStorage.setItem("kybern.theme", "dark")
+  // Diagnostic A/B stylesheet (KYBERN_SCROLL_EXTRA_CSS); empty for normal runs.
+  if (__SCROLL_EXTRA_CSS__) document.head.appendChild(Object.assign(document.createElement("style"), { textContent: __SCROLL_EXTRA_CSS__ }))
   await import("../src/main")
   store = await import("../src/state/store")
   await until(() => store.useStore.getState().connection.state === "open" && Object.keys(store.useStore.getState().threads).length > 0, "App did not connect")

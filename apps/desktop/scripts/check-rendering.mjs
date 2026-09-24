@@ -46,6 +46,7 @@ try {
       : spawnSync("python3", [path.join(desktop, "scripts/seed-replay-session.py"), dataDir], { encoding: "utf8" })
     if (seed.error || seed.status !== 0) throw new Error(`Could not prepare the scratch store: ${seed.stderr}`)
     if (replay) process.env.KYBERN_SCROLL_SCENARIO = `replay:${process.env.KYBERN_PERF_REPLAY_PASSES ?? "3"}`
+    else if (process.env.KYBERN_PERF_SESSION_THREADS) process.env.KYBERN_SCROLL_SCENARIO = `threads:${process.env.KYBERN_PERF_SESSION_THREADS}`
     daemon = spawn(binary, ["--data-dir", dataDir, "--port", "0"], { stdio: "ignore", env: { ...process.env, ...(replay ? { KYBERN_PERF_REPLAY_JSONL: path.resolve(replay) } : {}) } })
     const until = Date.now() + 10000
     let port
