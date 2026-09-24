@@ -208,9 +208,12 @@ async function run() {
     flushSync(() => view.render(<Composer key={`${variant}-restored`} draftKey="image" mode="full-access" onModeChange={() => {}} provider={null} providers={[]} onSend={() => {}} />))
     await waitFor(() => document.querySelector<HTMLImageElement>('[aria-label="Preview Screenshot.png"] img')?.complete, "Returning to the draft lost its image thumbnail")
     check(assets.reads === reads + 1, "Draft preview fetched repeatedly")
-    const restored = document.querySelector<HTMLImageElement>('[aria-label="Preview Screenshot.png"] img')!.src
-    check(restored !== url, "Draft reused a revoked preview URL")
-    await openPreview(document.querySelector<HTMLButtonElement>('[aria-label="Preview Screenshot.png"]')!, restored)
+    const restoredButton = document.querySelector<HTMLButtonElement>('[aria-label="Preview Screenshot.png"]')!
+    const restoredThumb = restoredButton.querySelector("img")
+    const restored = restoredButton.getAttribute("data-image-original") || restoredThumb?.src || ""
+    check(restored && restored !== url, "Draft reused a revoked preview URL")
+    check(restoredThumb?.src && restoredThumb.src !== url, "Draft reused a revoked preview URL")
+    await openPreview(restoredButton, restored)
     document.querySelector<HTMLButtonElement>('[aria-label="Remove Screenshot.png"]')!.click()
     await sleep(100)
     check(!document.querySelector('[aria-label="Preview Screenshot.png"]'), "Preview interfered with removing an attachment")

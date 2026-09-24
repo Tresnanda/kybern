@@ -17,6 +17,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Earlier-history paging | A retry at the top could reuse old scroll intent and download every remaining page. | Consume intent per request; require further reading input before another automatic page, while preserving the anchor. |
 | Markdown and code | Full parsing and highlighting competed with input and scrolling on the renderer thread; serialized equality signatures duplicated retained trees. | Separate module workers, incremental tail parsing, exact structural comparison, bounded queues/caches, cancellation, and source-size limits. Retain prior formatting during updates and readable text on failure. |
 | Diagrams | DOM-based diagram engines and image URLs can outlive visible content. | Load Mermaid only for settled diagrams, bound queued work/cache/output, release its rendering document at idle, and revoke replaced/unmounted image URLs. |
+| Thumbnail decode | Composer and user-attachment chips displayed full-resolution `blob:` / `data:` sources in a 64px box. | Fit thumbnail rasters to 128px (2×) without changing the dialog original. Tiny data URLs keep src identity. |
 | Stream scheduling | Frame-driven reveal and repeated highlighting did more React work than presentation needed. | Reuse the existing reveal cadence and size-aware highlighting interval; allow in-progress prefixes to finish; catch up exactly at completion. |
 | Message navigation | Mutation handlers rebuilt historical previews and scrolling scanned every message rectangle. | Data-driven rail entries, bounded cached previews, virtual ticks, and geometry reads coalesced to a frame and limited to visible content. |
 | Glass surfaces | An opaque wrapper concealed translucent content; stacked tints and duplicate blur layers added cost or muddy color. | Check the entire surface hierarchy; use shared role tokens, one blur layer per floating surface, and all opaque/accessibility fallbacks. |
@@ -46,6 +47,13 @@ exceeded it.
 See [hidden environment-window compact](hidden-window-compact-2026-09-18.md)
 for visibility-gated transcript release (occlusion/miniaturize, not blur) and
 the macOS two-window `vmmap` check this Linux checkout cannot run.
+
+See [thumbnail decode budget](thumbnail-decode-2026-09-18.md) for 64px
+composer/user-attachment chips. This Linux environment cannot reproduce the
+macOS whole-app physical-footprint coalition.
+
+See [native attachment thumbnail memory](thumbnail-memory-2026-09-24.md) for
+the matched twelve-image WebContent comparison on Apple M1.
 
 See [the daily-use memory investigation](daily-memory-2026-09-18.md) for compact
 live/replayed result delivery, assistant-settlement allocation reduction,
@@ -183,7 +191,8 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Scroll position corrections, cold history, scrolling during work | `node scripts/check-rendering.mjs scrolling` |
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
 | Combined composer panels, shared seams, constrained pane height | `node scripts/check-rendering.mjs composer-stack` |
-| Attached-image controls, user line breaks, environment menu | `node scripts/check-rendering.mjs chat-fixes` |
+| Attached-image controls, user line breaks, environment menu, thumbnail original identity | `node scripts/check-rendering.mjs chat-fixes` |
+| Attachment thumbnail decode footprint and original dialog | `node scripts/check-rendering.mjs image-memory` |
 | Deferred tool output, open oversized result text | `node scripts/check-rendering.mjs tool-memory` |
 | Image previews, local links, image recovery | `node scripts/check-rendering.mjs artifacts` |
 | Provider catalogs, sign-in terminals, native artifact preview and publication controls | `node scripts/check-rendering.mjs integrations` |
