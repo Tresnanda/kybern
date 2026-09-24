@@ -110,6 +110,15 @@ final class Bench: NSObject, WKScriptMessageHandler {
     finishCopy()
     return
    }
+   if result?["gc"] as? Bool == true {
+    // Diagnostic only: WebKit's per-pool JavaScript GC SPI (no cache purge).
+    let pool = web.configuration.processPool
+    let selector = NSSelectorFromString("_garbageCollectJavaScriptObjectsForTesting")
+    print("{\"gcAvailable\":\(pool.responds(to: selector))}")
+    if pool.responds(to: selector) { pool.perform(selector) }
+    web.evaluateJavaScript("window.__memoryContinue()")
+    fflush(stdout); return
+   }
    if result?["process"] as? Bool == true, web.responds(to: NSSelectorFromString("_webProcessIdentifier")), let pid = web.value(forKey: "_webProcessIdentifier") as? Int {
     print("{\"webPid\":\(pid)}")
    }
@@ -158,5 +167,5 @@ final class Bench: NSObject, WKScriptMessageHandler {
 }
 let bench = Bench()
 bench.run()
-DispatchQueue.main.asyncAfter(deadline: .now() + (ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" ? 180 : 120)) { print("Rendering check timed out"); exit(2) }
+DispatchQueue.main.asyncAfter(deadline: .now() + (Double(ProcessInfo.processInfo.environment["KYBERN_PERF_TIMEOUT"] ?? "") ?? (ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" ? 180 : 120))) { print("Rendering check timed out"); exit(2) }
 app.run()

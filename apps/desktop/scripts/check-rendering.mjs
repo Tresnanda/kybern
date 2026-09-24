@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["theme-provider", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["theme-provider", "real-session", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 let daemon
 try {
@@ -29,6 +29,32 @@ try {
     }
     if (!port) throw new Error("Scratch lease daemon did not start")
     process.env.KYBERN_TOOL_LEASE_ENDPOINT = JSON.stringify({ url: `ws://127.0.0.1:${port}/ws`, http_base: `http://127.0.0.1:${port}`, token: readFileSync(path.join(dataDir, "daemon.token"), "utf8").trim(), environmentId: seed.stdout.trim() })
+  }
+  if (fixture === "real-session") {
+    // Diagnostic: the shipped app over a snapshot of a real store (never the
+    // live file) or over a fresh thread fed by the recorded-session replay.
+    const repo = path.resolve(desktop, "../..")
+    const binary = process.env.KYBERN_PERF_DAEMON_BINARY ?? path.join(process.env.CARGO_TARGET_DIR ?? path.join(repo, "target"), "release/kybernd")
+    const dataDir = path.join(scratch, "daemon")
+    const replay = process.env.KYBERN_PERF_REPLAY_JSONL
+    const store = process.env.KYBERN_PERF_SESSION_STORE
+    if (!replay === !store) throw new Error("Set exactly one of KYBERN_PERF_SESSION_STORE or KYBERN_PERF_REPLAY_JSONL")
+    const initialize = spawnSync(binary, ["--data-dir", dataDir, "--print-token"], { stdio: "ignore" })
+    if (initialize.error || initialize.status !== 0) throw new Error("Build the release daemon before the real-session fixture")
+    const seed = store
+      ? spawnSync("sqlite3", [store, `.backup '${path.join(dataDir, "state.sqlite").replaceAll("'", "''")}'`], { encoding: "utf8" })
+      : spawnSync("python3", [path.join(desktop, "scripts/seed-replay-session.py"), dataDir], { encoding: "utf8" })
+    if (seed.error || seed.status !== 0) throw new Error(`Could not prepare the scratch store: ${seed.stderr}`)
+    if (replay) process.env.KYBERN_SCROLL_SCENARIO = `replay:${process.env.KYBERN_PERF_REPLAY_PASSES ?? "3"}`
+    else if (process.env.KYBERN_PERF_SESSION_THREADS) process.env.KYBERN_SCROLL_SCENARIO = `threads:${process.env.KYBERN_PERF_SESSION_THREADS}`
+    daemon = spawn(binary, ["--data-dir", dataDir, "--port", "0"], { stdio: "ignore", env: { ...process.env, ...(replay ? { KYBERN_PERF_REPLAY_JSONL: path.resolve(replay) } : {}) } })
+    const until = Date.now() + 10000
+    let port
+    while (!port && Date.now() < until) {
+      try { port = readFileSync(path.join(dataDir, "daemon.port"), "utf8").trim() } catch { await new Promise(resolve => setTimeout(resolve, 50)) }
+    }
+    if (!port) throw new Error("Scratch session daemon did not start")
+    process.env.KYBERN_TOOL_LEASE_ENDPOINT = JSON.stringify({ url: `ws://127.0.0.1:${port}/ws`, http_base: `http://127.0.0.1:${port}`, token: readFileSync(path.join(dataDir, "daemon.token"), "utf8").trim() })
   }
   if (fixture === "integrations") {
     const repo = path.resolve(desktop, "../..")

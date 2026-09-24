@@ -1,6 +1,6 @@
 // Small shared pieces: provider mark, logo, copy button, spinner.
 
-import { useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 
 import { ProviderIcon } from "@/components/kit/ProviderIcon"
 import { IconSwap } from "@/components/kybern/motion"
@@ -55,6 +55,17 @@ export function CopyButton({ text, className, label = "Copy" }: { text: string; 
       <IconSwap active={done ? "b" : "a"} a={<CopyIcon className="size-3.5" />} b={<CheckIcon className="size-3.5 text-success" />} />
     </button>
   )
+}
+
+/** Spinner that appears only when the wait outlasts `delayMs`, so fast work
+ *  (a local connect at launch) never flashes, or animates, an indicator. */
+export function DelayedSpinner({ delayMs = 400, fallback = null, className, size }: { delayMs?: number; fallback?: ReactNode; className?: string; size?: number }) {
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    const timer = setTimeout(() => setShown(true), delayMs)
+    return () => clearTimeout(timer)
+  }, [delayMs])
+  return shown ? <Spinner className={className} size={size} /> : fallback
 }
 
 /** Stepped spinner: 24 steps over 1.3s, drawn with currentColor. */

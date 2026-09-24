@@ -608,13 +608,15 @@
    is constant regardless of how much text is hidden. A short delay keeps
    quick hover passes from starting a pan. Labels that fit get shift 0 and
    never move. */
+/* No persistent will-change: every sidebar title would hold its own layer (and
+   push its overlapping hover actions into layers) just in case it is hovered.
+   WebKit promotes the label for the pan transition itself. */
 .t-marquee > span {
   max-width: 100%;
   transform: translateX(0);
   transition:
     transform var(--duration-slow) var(--ease-out),
     max-width 0s var(--duration-slow);
-  will-change: transform;
 }
 [data-marquee-host]:hover .t-marquee > span,
 [data-marquee-host]:focus-within .t-marquee > span {

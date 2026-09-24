@@ -11,6 +11,7 @@ import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioG
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
 import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
+import { isLaunching } from "@/lib/launch"
 import { cn } from "@/lib/utils"
 import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
@@ -45,6 +46,8 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
   const [branches, setBranches] = useState<GitBranchesResult | null>(null)
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
+  // The launch paint shows the home screen settled; later mounts stagger in.
+  const [enter] = useState(() => !isLaunching())
 
   const mode = modeStored ?? settings?.default_permission_mode ?? "supervised"
   const provider = useMemo<ProviderInstance | null>(() => {
@@ -95,9 +98,9 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   return (
     <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-col">
       <SurfaceHeader minimal showSidebarControls={!paneId} />
-      <div className={cn("chat-pane-enter flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER)}>
+      <div className={cn("flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER)}>
         <div className="flex min-h-0 flex-1 items-center justify-center">
-          <div className="t-stagger flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]">
+          <div className={cn(enter && "t-stagger", "flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]")}>
             <Logo size={40} className="text-foreground" />
             <h2 style={{ "--i": 1 } as CSSProperties} className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
               {freeChat ? "What can I help with?" : <>
@@ -135,7 +138,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
           </div>
         </div>
 
-        <div className="t-stagger w-full shrink-0 pb-3 sm:pb-4">
+        <div className={cn(enter && "t-stagger", "w-full shrink-0 pb-3 sm:pb-4")}>
           <div style={{ "--i": coordinatorDraft ? 3 : 2 } as CSSProperties}>
           <Composer
             surfaceMode={paneId ? "split" : "single"}

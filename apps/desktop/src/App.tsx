@@ -9,7 +9,7 @@ import { toast } from "sonner"
 
 import { ChatPaneDropOverlay } from "@/components/kybern/ChatPaneDropOverlay"
 import { ErrorBoundary } from "@/components/kybern/ErrorBoundary"
-import { Logo, Spinner } from "@/components/kybern/bits"
+import { DelayedSpinner, Logo, Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/kit/button"
 import { Sidebar, SidebarInset, SidebarProvider } from "@/components/kit/sidebar"
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
@@ -280,7 +280,7 @@ function Welcome() {
         <Logo size={40} className="text-foreground/80" />
         {connection.state === "connecting" ? (
           <p className="flex items-center gap-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
-            <Spinner size={13} /> Connecting to {activeEnvironment()?.name ?? "environment"}
+            <DelayedSpinner size={13} fallback={<span className="size-[13px] shrink-0" aria-hidden />} /> Connecting to {activeEnvironment()?.name ?? "environment"}
           </p>
         ) : connection.state !== "open" ? (
           <p className="text-sm text-muted-foreground">This environment is unavailable. Reconnect or choose another machine.</p>
