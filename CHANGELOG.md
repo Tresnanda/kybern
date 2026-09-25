@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.2
+
+<!-- kybern-release-title: Computer use stays connected -->
+<!-- kybern-release-summary: Computer use keeps working after a quiet stretch, steps that visibly worked are reported as working, and the live view shows each step as a clear caption. -->
+
+- Keep computer use working after it has been idle for a while. Agents were refused with "session has ended" until Kybern restarted.
+- Report a step as done when the app visibly changed, instead of marking every step unconfirmed and suggesting a foreground retry that was not needed.
+- Show the current step in the live view as a caption on the picture, with the target in bold, shortcuts as keys such as ⌘S, and a check when the agent finishes.
+
 ## 0.5.1
 
 <!-- kybern-release-title: Let agents use apps on your Mac -->
