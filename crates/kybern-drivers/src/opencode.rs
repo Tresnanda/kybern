@@ -57,6 +57,7 @@ async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<P
                 id: id.to_string(),
                 display_name: name.to_string(),
                 resolved_id: None,
+                description: None,
                 provider: (!provider.is_empty()).then(|| provider.to_string()),
                 efforts: Vec::new(),
                 default_effort: None,

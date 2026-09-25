@@ -279,7 +279,8 @@ thread-specific artifact guidance when Kybern provides the exact folder.
 ## Data directory
 
 `~/.kybern/`: `state.sqlite`, `settings.json`, `keybindings.json`, `themes/`,
-`daemon.token` (0600), `daemon.port`, `worktrees/`, `assets/`.
+`daemon.token` (0600), `daemon.port`, `worktrees/`, `assets/`, `cache/` (harness model
+catalogs, safe to delete).
 
 ### Branded image backgrounds
 

@@ -131,6 +131,8 @@ export interface ProviderModel {
   display_name: string;
   /** Concrete id an alias selector resolves to; sessions report this id. */
   resolved_id?: string | null;
+  /** The harness's own one-line description, shown under the name. */
+  description?: string | null;
   provider?: string | null;
   efforts?: string[];
   default_effort?: string | null;

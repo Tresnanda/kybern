@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use kybern_protocol::ProviderKind;
@@ -12,8 +13,18 @@ pub struct DriverRegistry {
 
 impl DriverRegistry {
     pub fn with_defaults() -> Self {
+        Self::with_claude(crate::claude::ClaudeDriver::default())
+    }
+
+    /// The default drivers, keeping harness model catalogs in `cache_dir` so a
+    /// restarted daemon lists models without waiting on the harness.
+    pub fn with_cache_dir(cache_dir: &Path) -> Self {
+        Self::with_claude(crate::claude::ClaudeDriver::with_catalog_file(cache_dir.join("claude-models.json")))
+    }
+
+    fn with_claude(claude: crate::claude::ClaudeDriver) -> Self {
         let mut r = Self::default();
-        r.register(Arc::new(crate::claude::ClaudeDriver));
+        r.register(Arc::new(claude));
         r.register(Arc::new(crate::codex::CodexDriver));
         r.register(Arc::new(crate::opencode::OpencodeDriver));
         r.register(Arc::new(crate::pi::PiDriver::pi()));

@@ -31,6 +31,18 @@ pub(super) struct ClaudeConfig {
 }
 
 impl ClaudeConfig {
+    /// A config with no settings files or environment behind it.
+    #[cfg(test)]
+    pub fn for_model(model: &str) -> Self {
+        Self {
+            model: model.into(),
+            effort: model_default_effort(model).into(),
+            alias_target: None,
+            preferences: ClaudePreferences::default(),
+            environment_effort: None,
+        }
+    }
+
     pub fn effort_for(&self, model: &str) -> String {
         self.environment_effort
             .clone()
@@ -68,13 +80,19 @@ impl ClaudePreferences {
     }
 }
 
-pub(super) async fn resolve(context: &ProbeContext, binary: &Path) -> ClaudeConfig {
+/// `catalog_default` is the selector Claude Code's own catalog marks as the
+/// account default. Without it, the default is inferred from `auth status`.
+pub(super) async fn resolve(context: &ProbeContext, binary: &Path, catalog_default: Option<String>) -> ClaudeConfig {
     let preferences = load_preferences(context);
     let environment_model = environment_value(context, MODEL_ENV).and_then(non_empty_owned);
     let default_model = environment_value(context, DEFAULT_MODEL_ENV).and_then(non_empty_owned);
     let configured_model = environment_model.or_else(|| preferences.model.clone());
     let needs_account_default = configured_model.as_deref().is_none_or(is_default_selector) && default_model.is_none();
-    let account_default = if needs_account_default { account_default_model(context, binary).await } else { None };
+    let account_default = match catalog_default {
+        Some(selector) if needs_account_default => Some(selector),
+        _ if needs_account_default => account_default_model(context, binary).await,
+        _ => None,
+    };
     let model = match configured_model {
         Some(model) if !is_default_selector(&model) => model,
         _ => default_model.or(account_default).unwrap_or_else(|| "sonnet".to_string()),
@@ -99,7 +117,7 @@ fn load_preferences(context: &ProbeContext) -> ClaudePreferences {
     preferences
 }
 
-fn settings_paths(context: &ProbeContext) -> Vec<PathBuf> {
+pub(super) fn settings_paths(context: &ProbeContext) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let config_dir =
         environment_value(context, "CLAUDE_CONFIG_DIR").filter(|value| !value.trim().is_empty()).map(PathBuf::from).or_else(|| {

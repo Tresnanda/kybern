@@ -115,6 +115,10 @@ pub struct ProviderModel {
     /// id, so clients match a thread's model against either field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_id: Option<String>,
+    /// The harness's own one-line description (Claude Code: `Opus 5.5 · Best
+    /// for everyday, complex tasks`), shown under the name in pickers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Upstream model provider. Harnesses that aggregate providers use this to build a paged picker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,

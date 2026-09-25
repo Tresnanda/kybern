@@ -70,6 +70,7 @@ fn parse_codex_model(item: &Value) -> Option<ProviderModel> {
         id,
         display_name,
         resolved_id: None,
+        description: item.get("description").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_string),
         provider: None,
         efforts,
         default_effort: item.get("defaultReasoningEffort").and_then(Value::as_str).map(str::to_string),
