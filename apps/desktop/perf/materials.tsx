@@ -128,7 +128,7 @@ async function run() {
   // The thread ellipsis uses the picker primitive, not the sidebar context menu.
   flushSync(() => view.render(<div style={{ padding: 24 }}>
     <Menu><MenuTrigger id="thread-actions-trigger">Thread actions</MenuTrigger>
-      <ComposerPickerMenuPopup align="start" className="thread-actions-menu">
+      <ComposerPickerMenuPopup align="start" className="action-menu">
         <MenuGroup>
           <MenuItem><SquareSplitVertical /> Split right<MenuShortcut>⌘\</MenuShortcut></MenuItem>
           <MenuItem disabled><SquareSplitHorizontal /> Split down<MenuShortcut>⌘⇧\</MenuShortcut></MenuItem>
@@ -145,7 +145,7 @@ async function run() {
   </div>))
   document.getElementById("thread-actions-trigger")!.click()
   await sleep(300)
-  const actions = document.querySelector<HTMLElement>(".thread-actions-menu")!
+  const actions = document.querySelector<HTMLElement>(".action-menu")!
   const rows = Array.from(actions.querySelectorAll<HTMLElement>('[data-slot="menu-item"]'))
   const geometry = () => ({
     width: actions.getBoundingClientRect().width,
@@ -155,11 +155,11 @@ async function run() {
     shortcutTracking: getComputedStyle(rows[0]!.querySelector("kbd")!).letterSpacing,
     overflow: actions.scrollWidth > actions.clientWidth,
   })
-  actions.classList.remove("thread-actions-menu")
+  actions.classList.remove("action-menu")
   actions.style.width = "14rem"
   results.threadActionsBefore = geometry()
   actions.style.removeProperty("width")
-  actions.classList.add("thread-actions-menu")
+  actions.classList.add("action-menu")
   for (const variant of ["dark", "light"] as const) {
     theme(variant)
     await sleep(80)
@@ -183,11 +183,11 @@ async function run() {
   pass &&= !!results.threadActionsKeyboardFocus
   rows[2]!.click()
   await sleep(200)
-  results.threadActionsCloses = selected === "thread-rename" && !document.querySelector(".thread-actions-menu")
+  results.threadActionsCloses = selected === "thread-rename" && !document.querySelector(".action-menu")
   pass &&= !!results.threadActionsCloses
   document.getElementById("thread-actions-trigger")!.click()
   await sleep(600)
-  const settledMenu = document.querySelector<HTMLElement>(".thread-actions-menu")!
+  const settledMenu = document.querySelector<HTMLElement>(".action-menu")!
   results.threadActionsSettled = { filter: getComputedStyle(settledMenu).filter, opacity: getComputedStyle(settledMenu).opacity, starting: settledMenu.hasAttribute("data-starting-style") }
   pass &&= getComputedStyle(settledMenu).filter === "none" && getComputedStyle(settledMenu).opacity === "1"
   const native = window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }

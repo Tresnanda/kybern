@@ -3,6 +3,7 @@ import { readProviderCache } from "./providerCache"
 
 import { create, type UseBoundStore, type StoreApi } from "zustand"
 import { reloadOnHotUpdate } from "@/lib/hot"
+import { DEFAULT_SIDEBAR_FILTER, type SidebarFilter } from "./sidebarOrganize"
 
 import type {
   DaemonInfo,
@@ -149,6 +150,10 @@ export interface AppState {
   settingsOpen: boolean
   settingsTab: "general" | "agents" | "integrations" | "appearance" | "notifications" | "background" | "usage" | "about"
   collapsedProjects: Record<ProjectId, boolean>
+  /** Project order the user dragged into place. Empty means alphabetical. */
+  projectOrder: ProjectId[]
+  /** Which threads the sidebar lists. */
+  sidebarFilter: SidebarFilter
   /** Messages waiting for the current turn to finish, per thread. */
   queued: Record<ThreadId, QueuedMessage[]>
   composerDrafts: Record<
@@ -209,6 +214,8 @@ export interface AppActions {
   reconcileSplitThreads: (threadIds: readonly ThreadId[]) => void
   toggleWork: (turnId: TurnId) => void
   toggleProject: (id: ProjectId) => void
+  setProjectOrder: (order: ProjectId[]) => void
+  setSidebarFilter: (filter: Partial<SidebarFilter>) => void
 }
 
 export type Store = AppState & AppActions
@@ -306,6 +313,8 @@ export function createEnvironmentStore(
     settingsOpen: false,
     settingsTab: "general",
     collapsedProjects: {},
+    projectOrder: [],
+    sidebarFilter: DEFAULT_SIDEBAR_FILTER,
     queued: {},
     composerDrafts: {},
     handoffThread: null,
@@ -673,6 +682,8 @@ export function createEnvironmentStore(
           [id]: !s.collapsedProjects[id],
         },
       })),
+    setProjectOrder: (projectOrder) => set({ projectOrder }),
+    setSidebarFilter: (filter) => set((s) => ({ sidebarFilter: { ...s.sidebarFilter, ...filter } })),
   }))
   // Only persist workspace changes, never every streaming token.
   store.subscribe((next, previous) => {
@@ -680,6 +691,8 @@ export function createEnvironmentStore(
       [
         "selected",
         "collapsedProjects",
+        "projectOrder",
+        "sidebarFilter",
         "explorerFile",
         "expandedWork",
         "composerDrafts",

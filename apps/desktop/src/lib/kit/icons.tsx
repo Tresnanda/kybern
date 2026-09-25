@@ -79,6 +79,7 @@ import {
   Robot01Icon as HiRobot,
   Book02Icon as HcBook,
   HelpCircleIcon as HcQuestion,
+  CommandIcon as HcCommand,
   CircleArrowUp01Icon as HcArrowUpCircle,
   CloudSyncIcon as HcCloudSync,
   Edit02Icon as HcChanges,
@@ -219,6 +220,7 @@ export const CheckCircle2Icon: LucideIcon = hugeIcon(HiCircleCheck);
 // User-input rows: a question-mark circle while the agent waits for an answer,
 // and an up-arrow circle once the answer is submitted.
 export const CircleQuestionIcon: LucideIcon = hugeIcon(HcQuestion);
+export const CommandIcon: LucideIcon = hugeIcon(HcCommand);
 export const ArrowUpCircleIcon: LucideIcon = hugeIcon(HcArrowUpCircle);
 export const CloudSyncIcon = hugeIcon(HcCloudSync);
 export const Columns2Icon = hugeIcon(HiColumns2);

@@ -89,6 +89,19 @@ html[data-thread-pointer-dragging="true"] * {
 [data-thread-drag-source="true"] {
   opacity: 0.58;
 }
+html[data-project-reordering="true"],
+html[data-project-reordering="true"] * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+/* A project being dragged lifts above the rows it passes. */
+[data-project-reorder="lifted"] {
+  position: relative;
+  z-index: 20;
+  border-radius: 10px;
+  background-color: var(--color-background-surface);
+  box-shadow: 0 8px 24px #0003, 0 0 0 1px var(--color-border);
+}
 .thread-drop-scrim {
   background: color-mix(
     in srgb,
