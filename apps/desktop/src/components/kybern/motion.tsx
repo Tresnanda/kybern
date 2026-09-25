@@ -110,9 +110,22 @@ export function StreamWords({ text, live = true }: { text: string; live?: boolea
 /**
  * Swaps a short label in place: the old one rises out with a blur while the
  * new one rises in from below. Keyed on the text itself; identical text never
- * re-animates. The first paint renders without motion.
+ * re-animates. The first paint renders without motion. `render` formats a
+ * label (both the leaving and the shown one) without changing what it is keyed on.
  */
-export function TextSwap({ text, className, as: Tag = "span", shimmer = false }: { text: string; className?: string; as?: "span" | "div"; shimmer?: boolean }) {
+export function TextSwap({
+  text,
+  className,
+  as: Tag = "span",
+  shimmer = false,
+  render = (value) => value,
+}: {
+  text: string
+  className?: string
+  as?: "span" | "div"
+  shimmer?: boolean
+  render?: (text: string) => ReactNode
+}) {
   const [state, setState] = useState<{ shown: string; leaving: string | null }>({ shown: text, leaving: null })
   // Adjust state during render (not in an effect) so the swap starts on the
   // same frame the text changes.
@@ -126,11 +139,11 @@ export function TextSwap({ text, className, as: Tag = "span", shimmer = false }:
     <Tag className={cn("t-text-swap min-w-0 max-w-full", className)}>
       {state.leaving !== null && (
         <span key={`out:${state.leaving}`} data-swap="out" aria-hidden className="truncate">
-          {state.leaving}
+          {render(state.leaving)}
         </span>
       )}
       <span key={`in:${state.shown}`} data-swap={state.leaving !== null ? "in" : undefined} className={cn("truncate", shimmer && "t-shimmer")} data-text={shimmer ? state.shown : undefined}>
-        {state.shown}
+        {render(state.shown)}
       </span>
     </Tag>
   )

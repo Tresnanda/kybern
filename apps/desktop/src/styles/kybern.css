@@ -255,7 +255,7 @@ button.chat-inline-token:hover {
 }
 
 /* Computer-use live view. The picture is the card: no header or footer, one
-   status chip on a scrim, controls only on hover. It rises in from its corner
+   caption on its lower edge, controls only on hover. It rises in from its corner
    and leaves faster than it arrives; each frame fades over the last. */
 .computer-live-view {
   touch-action: none;
@@ -311,50 +311,92 @@ button.chat-inline-token:hover {
     opacity: 0;
   }
 }
+/* The caption sits on a soft edge of the picture rather than in a chip: shade
+   and blur both fade in toward the bottom, like a scroll edge effect. */
+.computer-live-view {
+  --shimmer-base: rgb(255 255 255 / 0.62);
+  --shimmer-highlight: white;
+}
 .computer-live-scrim {
   position: absolute;
   inset-inline: 0;
   bottom: 0;
-  height: 44px;
-  background: linear-gradient(to top, rgb(0 0 0 / 0.55), transparent);
+  height: 56px;
+  background: linear-gradient(to top, rgb(0 0 0 / 0.66), rgb(0 0 0 / 0.4) 50%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  mask-image: linear-gradient(to top, black 50%, transparent);
+  -webkit-mask-image: linear-gradient(to top, black 50%, transparent);
   pointer-events: none;
 }
-.computer-live-chip {
+.computer-live-scrim[data-tall] {
+  height: 76px;
+}
+.computer-live-caption {
   position: absolute;
-  bottom: 8px;
-  inset-inline-start: 8px;
+  inset-inline: 12px;
+  bottom: 10px;
   display: flex;
-  max-width: calc(100% - 16px);
-  align-items: center;
-  gap: 5px;
-  border: 1px solid rgb(255 255 255 / 0.15);
-  border-radius: 999px;
-  background: rgb(0 0 0 / 0.55);
-  padding: 3px 9px 3px 8px;
+  flex-direction: column;
+  gap: 1px;
+  color: white;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+}
+.computer-live-app {
+  overflow: hidden;
   font-size: 11px;
   font-weight: 500;
-  line-height: 16px;
+  line-height: 14px;
+  color: rgb(255 255 255 / 0.72);
+  text-overflow: ellipsis;
   white-space: nowrap;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
-.computer-live-dot {
-  width: 6px;
-  height: 6px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 0.5);
+.computer-live-action {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 16px;
 }
-.computer-live-dot[data-running] {
-  background: var(--success);
-  animation: computer-live-dot 1.6s ease-in-out infinite;
+.computer-live-verb {
+  color: rgb(255 255 255 / 0.62);
 }
-.computer-live-view[data-loop-paused] .computer-live-dot {
+.computer-live-subject {
+  font-weight: 500;
+}
+.computer-live-caption .t-shimmer::before {
+  text-shadow: none;
+}
+.computer-live-view[data-loop-paused] .t-shimmer::before {
   animation-play-state: paused;
 }
-@keyframes computer-live-dot {
-  50% {
-    opacity: 0.35;
+/* A pressed shortcut reads as a key, not as a quoted word. */
+.computer-live-keys {
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.16);
+  padding: 0 4px;
+  font-family: inherit;
+  font-weight: 500;
+  text-shadow: none;
+}
+.computer-live-done {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .computer-live-view {
+    --shimmer-base: rgb(255 255 255 / 0.8);
+  }
+  .computer-live-scrim {
+    background: linear-gradient(to top, rgb(0 0 0 / 0.8), rgb(0 0 0 / 0.5) 60%, transparent);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .computer-live-app,
+  .computer-live-verb {
+    color: rgb(255 255 255 / 0.8);
   }
 }
 .computer-live-controls {
@@ -448,8 +490,7 @@ button.chat-inline-token:hover {
       scale: 1;
     }
   }
-  .computer-live-marker::after,
-  .computer-live-dot[data-running] {
+  .computer-live-marker::after {
     animation: none;
   }
 }

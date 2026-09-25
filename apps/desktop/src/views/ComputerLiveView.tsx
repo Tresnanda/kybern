@@ -3,9 +3,11 @@
 // view is polling), so the picture updates step by step rather than as video.
 // Polling runs only while the turn runs and the window is on screen.
 
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 
-import { Maximize2, Minimize2, XIcon } from "@/lib/kit/icons"
+import { TextSwap } from "@/components/kybern/motion"
+import { CheckIcon, Maximize2, Minimize2, XIcon } from "@/lib/kit/icons"
+import { cn } from "@/lib/utils"
 import type { ComputerFrame, ThreadId } from "@/protocol"
 import { rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
@@ -41,6 +43,69 @@ function project(velocity: number, rate = 0.998): number {
 
 function frameSource(frame: ComputerFrame): string {
   return `data:${frame.media_type};base64,${frame.data}`
+}
+
+const KEY_GLYPHS: Record<string, string> = {
+  cmd: "⌘",
+  command: "⌘",
+  shift: "⇧",
+  option: "⌥",
+  opt: "⌥",
+  alt: "⌥",
+  ctrl: "⌃",
+  control: "⌃",
+  return: "↩",
+  enter: "↩",
+  tab: "⇥",
+  escape: "esc",
+  esc: "esc",
+  delete: "⌫",
+  backspace: "⌫",
+  space: "Space",
+  up: "↑",
+  down: "↓",
+  left: "←",
+  right: "→",
+}
+
+/** `cmd+shift+s` reads as `⌘⇧S`, the way macOS menus write shortcuts. */
+function keyGlyphs(chord: string): string {
+  return chord
+    .split("+")
+    .map((key) => KEY_GLYPHS[key.toLowerCase()] ?? (key.length === 1 ? key.toUpperCase() : key))
+    .join("")
+}
+
+type ActionPart = { text: string; subject: boolean; keys?: boolean }
+
+/** The daemon's step sentence as quiet wording around bright subjects: `Pressed “2”` becomes `Pressed` + `2`. */
+function actionParts(action: string): ActionPart[] {
+  const pieces = action.split(/“([^”]*)”/)
+  if (pieces.length > 1) return pieces.map((text, index) => ({ text: text.trim(), subject: index % 2 === 1 })).filter((part) => part.text)
+  const chord = /^Pressed (\S+)$/.exec(action)
+  if (chord) return [{ text: "Pressed", subject: false }, { text: keyGlyphs(chord[1]!), subject: true, keys: true }]
+  return [{ text: action, subject: true }]
+}
+
+/** While the agent works, the leading verb shimmers; that is the live cue. */
+function ActionText({ action, live }: { action: string; live: boolean }) {
+  const parts = actionParts(action)
+  const lead = Math.max(0, parts.findIndex((part) => !part.subject))
+  return parts.map((part, index) => {
+    const shimmer = live && index === lead
+    return (
+      <Fragment key={index}>
+        {index > 0 && " "}
+        {part.keys ? (
+          <kbd className="computer-live-keys">{part.text}</kbd>
+        ) : (
+          <span className={cn(part.subject ? "computer-live-subject" : "computer-live-verb", shimmer && "t-shimmer")} data-text={shimmer ? part.text : undefined}>
+            {part.text}
+          </span>
+        )}
+      </Fragment>
+    )
+  })
 }
 
 function ago(from: string, now: number): string {
@@ -180,7 +245,7 @@ export function ComputerLiveView({ threadId, running, insetEnd = 0, insetBottom 
     return () => clearTimeout(id)
   }, [running, run])
 
-  // The working dot pulses only while the card is actually visible.
+  // The working shimmer runs only while the card is actually visible.
   const mounted = !!frame
   useEffect(() => {
     const element = card.current
@@ -244,13 +309,14 @@ export function ComputerLiveView({ threadId, running, insetEnd = 0, insetBottom 
           style={{ left: `${current.point[0] * 100}%`, top: `${current.point[1] * 100}%` }}
         />
       )}
-      <div aria-hidden className="computer-live-scrim" />
-      <p className="computer-live-chip" title={`${current.app} · ${action} · ${ago(current.captured_at, now)}`}>
-        <span aria-hidden className="computer-live-dot" data-running={running || undefined} />
-        {showApp && <span className="shrink-0 text-white">{current.app}</span>}
-        {showApp && <span aria-hidden className="text-white/45">·</span>}
-        <span className={showApp ? "min-w-0 truncate text-white/75" : "min-w-0 truncate text-white"}>{action}</span>
-      </p>
+      <div aria-hidden className="computer-live-scrim" data-tall={showApp || undefined} />
+      <div className="computer-live-caption" title={`${current.app} · ${action} · ${ago(current.captured_at, now)}`}>
+        {showApp && <p className="computer-live-app">{current.app}</p>}
+        <p className="computer-live-action">
+          {!running && <CheckIcon aria-label="Finished" className="computer-live-done" />}
+          <TextSwap text={action} className="min-w-0" render={(value) => <ActionText action={value} live={running} />} />
+        </p>
+      </div>
       <div className="computer-live-controls">
         <button type="button" aria-label={expanded ? "Show smaller" : "Show larger"} onClick={() => setExpanded((value) => !value)}>
           {expanded ? <Minimize2 /> : <Maximize2 />}

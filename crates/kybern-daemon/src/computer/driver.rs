@@ -178,6 +178,14 @@ pub(crate) struct DriverClient {
     stdin: Mutex<ChildStdin>,
     pending: Pending,
     next_id: AtomicU64,
+    /// Driver-side names for the caller's session labels. CuaDriver binds a
+    /// named session to the process that created it, ends it with that
+    /// process, and never lets another process revive the name. Each client
+    /// therefore adds its own suffix, and picks a new name when a session it
+    /// cannot revive ends under it.
+    sessions: Mutex<HashMap<String, String>>,
+    tag: String,
+    renames: AtomicU64,
 }
 
 impl DriverClient {
@@ -194,10 +202,19 @@ impl DriverClient {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         let mut child = command.spawn().with_context(|| format!("start {}", installation.binary.display()))?;
+        let tag = child.id().map_or_else(|| "0".to_owned(), |id| id.to_string());
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("CuaDriver stdin is unavailable"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("CuaDriver stdout is unavailable"))?;
         let pending: Pending = Arc::default();
-        let client = Self { child: Mutex::new(child), stdin: Mutex::new(stdin), pending: pending.clone(), next_id: AtomicU64::new(1) };
+        let client = Self {
+            child: Mutex::new(child),
+            stdin: Mutex::new(stdin),
+            pending: pending.clone(),
+            next_id: AtomicU64::new(1),
+            sessions: Mutex::default(),
+            tag,
+            renames: AtomicU64::new(0),
+        };
         tokio::spawn(read_loop(stdout, pending));
         let init = client
             .request(
@@ -222,7 +239,41 @@ impl DriverClient {
         matches!(self.child.lock().await.try_wait(), Ok(None))
     }
 
-    pub(crate) async fn call(&self, tool: &str, arguments: Value) -> Result<CallResult> {
+    /// Call a tool. A `session` argument is the caller's label; it is sent
+    /// under this client's name for it, and a session that has ended is
+    /// revived or replaced once before the call is sent again. The driver
+    /// rejects calls on an ended session before acting, so the retry cannot
+    /// run a step twice.
+    pub(crate) async fn call(&self, tool: &str, mut arguments: Value) -> Result<CallResult> {
+        let Some(label) = arguments.get("session").and_then(Value::as_str).map(str::to_owned) else {
+            return self.call_raw(tool, arguments).await;
+        };
+        arguments["session"] = json!(self.session_name(&label).await);
+        let result = self.call_raw(tool, arguments.clone()).await?;
+        if !session_ended(&result) {
+            return Ok(result);
+        }
+        arguments["session"] = json!(self.renew_session(&label).await);
+        self.call_raw(tool, arguments).await
+    }
+
+    async fn session_name(&self, label: &str) -> String {
+        self.sessions.lock().await.entry(label.to_owned()).or_insert_with(|| format!("{label}-{}", self.tag)).clone()
+    }
+
+    async fn renew_session(&self, label: &str) -> String {
+        let current = self.session_name(label).await;
+        if self.call_raw("start_session", json!({ "session": current })).await.is_ok_and(|result| !result.is_error) {
+            tracing::debug!(target: "kybern::computer", session = current, "revived ended CuaDriver session");
+            return current;
+        }
+        let renamed = format!("{label}-{}-{}", self.tag, self.renames.fetch_add(1, Ordering::Relaxed) + 1);
+        tracing::debug!(target: "kybern::computer", from = current, to = renamed, "replaced ended CuaDriver session");
+        self.sessions.lock().await.insert(label.to_owned(), renamed.clone());
+        renamed
+    }
+
+    async fn call_raw(&self, tool: &str, arguments: Value) -> Result<CallResult> {
         let started = std::time::Instant::now();
         let value = self.request("tools/call", json!({ "name": tool, "arguments": arguments }), CALL_TIMEOUT).await;
         tracing::debug!(target: "kybern::computer", tool, elapsed_ms = started.elapsed().as_millis() as u64, ok = value.is_ok(), "CuaDriver call");
@@ -268,6 +319,11 @@ impl DriverClient {
         stdin.flush().await?;
         Ok(())
     }
+}
+
+/// `session 'x' has ended; tool call 'y' was rejected. Call start_session …`
+fn session_ended(result: &CallResult) -> bool {
+    result.is_error && result.text.contains("has ended") && result.text.contains("start_session")
 }
 
 async fn read_loop(stdout: tokio::process::ChildStdout, pending: Pending) {
@@ -325,5 +381,21 @@ mod tests {
         assert!(result.is_error);
         assert_eq!(result.images, vec![("image/png".to_owned(), "AAAA".to_owned())]);
         assert_eq!(result.error_message(), "stale_element_token: Take a new snapshot.");
+    }
+
+    #[test]
+    fn recognizes_ended_sessions() {
+        let ended = CallResult::from_value(&json!({
+            "isError": true,
+            "content": [{"type":"text","text":"session 'kybern-01a0d8351002' has ended; tool call 'hotkey' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}],
+            "structuredContent": {"code": "tool_invocation_failed", "exit_code": 1}
+        }));
+        assert!(session_ended(&ended));
+        let other = CallResult::from_value(&json!({
+            "isError": true,
+            "content": [{"type":"text","text":"session is not available to this transport"}],
+            "structuredContent": {"code": "session_unavailable"}
+        }));
+        assert!(!session_ended(&other));
     }
 }
