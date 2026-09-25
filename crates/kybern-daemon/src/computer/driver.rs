@@ -27,6 +27,10 @@ pub(crate) const MIN_VERSION: (u64, u64, u64) = (0, 28, 2);
 pub(crate) const TESTED_MINOR: (u64, u64) = (0, 28);
 pub(crate) const INSTALL_VERSION: &str = "0.28.2";
 const CALL_TIMEOUT: Duration = Duration::from_secs(45);
+/// CuaDriver's automatic glide takes about 1.2 s per click, and the call
+/// waits for it even with the cursor hidden. A short glide keeps the cursor
+/// visible and legible while halving each click (0 means automatic).
+const CURSOR_GLIDE_MS: u64 = 120;
 const MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Where the installed app lives and what it claims to be.
@@ -248,7 +252,11 @@ impl DriverClient {
         let Some(label) = arguments.get("session").and_then(Value::as_str).map(str::to_owned) else {
             return self.call_raw(tool, arguments).await;
         };
-        arguments["session"] = json!(self.session_name(&label).await);
+        let (name, fresh) = self.session_name(&label).await;
+        if fresh {
+            self.prepare_session(&name).await;
+        }
+        arguments["session"] = json!(name);
         let result = self.call_raw(tool, arguments.clone()).await?;
         if !session_ended(&result) {
             return Ok(result);
@@ -257,20 +265,38 @@ impl DriverClient {
         self.call_raw(tool, arguments).await
     }
 
-    async fn session_name(&self, label: &str) -> String {
-        self.sessions.lock().await.entry(label.to_owned()).or_insert_with(|| format!("{label}-{}", self.tag)).clone()
+    /// This client's name for `label`, and whether it was just made.
+    async fn session_name(&self, label: &str) -> (String, bool) {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(name) = sessions.get(label) {
+            return (name.clone(), false);
+        }
+        let name = format!("{label}-{}", self.tag);
+        sessions.insert(label.to_owned(), name.clone());
+        (name, true)
     }
 
     async fn renew_session(&self, label: &str) -> String {
-        let current = self.session_name(label).await;
+        let (current, _) = self.session_name(label).await;
         if self.call_raw("start_session", json!({ "session": current })).await.is_ok_and(|result| !result.is_error) {
             tracing::debug!(target: "kybern::computer", session = current, "revived ended CuaDriver session");
+            self.prepare_session(&current).await;
             return current;
         }
         let renamed = format!("{label}-{}-{}", self.tag, self.renames.fetch_add(1, Ordering::Relaxed) + 1);
         tracing::debug!(target: "kybern::computer", from = current, to = renamed, "replaced ended CuaDriver session");
         self.sessions.lock().await.insert(label.to_owned(), renamed.clone());
+        self.prepare_session(&renamed).await;
         renamed
+    }
+
+    /// Session settings Kybern relies on. Best effort: an older driver
+    /// without the tool still works, only slower.
+    async fn prepare_session(&self, name: &str) {
+        let motion = json!({ "session": name, "glide_duration_ms": CURSOR_GLIDE_MS, "dwell_after_click_ms": 0 });
+        if let Err(error) = self.call_raw("set_agent_cursor_motion", motion).await {
+            tracing::debug!(target: "kybern::computer", session = name, %error, "could not set the cursor motion");
+        }
     }
 
     async fn call_raw(&self, tool: &str, arguments: Value) -> Result<CallResult> {

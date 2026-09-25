@@ -767,7 +767,7 @@ impl ComputerUse {
         if mode == Mode::Foreground {
             self.require_consent(ctx, &app, bundle_id, Mode::Foreground, &steps[0].summary()).await?;
         }
-        let before_windows = self.list_windows(&client, Some(pid)).await.unwrap_or_default();
+        let before_windows = self.list_windows(&client, Some(pid)).await.ok();
         let before = {
             let threads = self.inner.threads.lock().await;
             threads.get(&ctx.thread_id).and_then(|state| state.windows.get(&window_id)).and_then(|window| window.last.clone())
@@ -842,20 +842,24 @@ impl ComputerUse {
         // the evidence for steps the driver could not verify on its own.
         let mut observed = Output::default();
         let mut changed = None;
-        let after_windows = self.list_windows(&client, Some(pid)).await.unwrap_or_default();
+        let after_windows = self.list_windows(&client, Some(pid)).await.ok();
         let mut window_changes = Vec::new();
-        for window in after_windows.iter().filter(|window| !before_windows.iter().any(|before| before.window_id == window.window_id)) {
-            window_changes.push(format!("new window {}", window_line(window)));
-            self.remember_window(ctx.thread_id, window, None).await;
-        }
-        for window in before_windows.iter().filter(|window| !after_windows.iter().any(|after| after.window_id == window.window_id)) {
-            window_changes.push(format!("closed window w{} \"{}\"", window.window_id, window.title));
+        // Compare only two successful listings; a failed one says nothing.
+        if let (Some(before_windows), Some(after_windows)) = (&before_windows, &after_windows) {
+            for window in after_windows.iter().filter(|window| !before_windows.iter().any(|before| before.window_id == window.window_id)) {
+                window_changes.push(format!("new window {}", window_line(window)));
+                self.remember_window(ctx.thread_id, window, None).await;
+            }
+            for window in before_windows.iter().filter(|window| !after_windows.iter().any(|after| after.window_id == window.window_id)) {
+                window_changes.push(format!("closed window w{} \"{}\"", window.window_id, window.title));
+            }
         }
         if !window_changes.is_empty() {
             observed.push_text(window_changes.join("\n"));
             changed = Some(true);
         }
-        let window_open = after_windows.iter().any(|window| window.window_id == window_id) || after_windows.is_empty();
+        // An app that quit lists no windows; only a failed listing leaves the window's fate unknown.
+        let window_open = after_windows.as_ref().is_none_or(|windows| windows.iter().any(|window| window.window_id == window_id));
         let observe = args.observe.as_deref().unwrap_or("diff");
         if window_open && observe != "none" {
             tokio::time::sleep(Duration::from_millis(120)).await;
@@ -947,8 +951,9 @@ impl ComputerUse {
         Ok(output)
     }
 
-    /// A fresh snapshot with a picture: refreshes element state for the next
-    /// step and gives the live view a frame.
+    /// A picture for the live view between steps. It skips the accessibility
+    /// walk, the slow part, and leaves the snapshot and its element tokens
+    /// in place, so later steps resolve exactly as they would unwatched.
     #[allow(clippy::too_many_arguments)]
     async fn capture_between_steps(
         &self,
@@ -961,14 +966,20 @@ impl ComputerUse {
         action: &str,
         point: Option<[f64; 2]>,
     ) {
-        let request = json!({ "pid": pid, "window_id": window_id, "include_screenshot": true, "max_image_dimension": SCREENSHOT_EDGE, "session": session });
+        let request = json!({
+            "pid": pid,
+            "window_id": window_id,
+            "include_screenshot": true,
+            "include_accessibility_tree": false,
+            "max_image_dimension": SCREENSHOT_EDGE,
+            "session": session,
+        });
         let Ok(result) = client.call_ok("get_window_state", request).await else { return };
-        let snapshot = Snapshot::parse(&result.structured);
-        self.record_frame(thread_id, window_id, app, snapshot.title.clone(), Some(action.to_owned()), point, &result.images);
+        let title = result.structured.get("window_title").and_then(Value::as_str).filter(|title| !title.is_empty()).map(str::to_owned);
+        self.record_frame(thread_id, window_id, app, title, Some(action.to_owned()), point, &result.images);
+        // A new capture replaces the picture a zoom was taken from.
         let mut threads = self.inner.threads.lock().await;
-        let window = window_state(&mut threads, thread_id, window_id, pid, app);
-        window.last = Some(snapshot);
-        window.zoomed = false;
+        window_state(&mut threads, thread_id, window_id, pid, app).zoomed = false;
     }
 
     /// Where a step's target sits in the window, for the live view's marker.
@@ -2162,6 +2173,11 @@ mod live {
             .find_map(|line| line.split_whitespace().next().filter(|word| word.starts_with('w')).map(str::to_owned))
             .unwrap();
 
+        // Start from a cleared display (Esc), so the first batch always
+        // changes it and the clear button reads "All Clear".
+        let clear = json!({"window": window, "steps": [{"key": "escape"}, {"key": "escape"}], "observe": "none"});
+        computer.execute(ctx(), "kybern_computer_act", clear).await.unwrap();
+
         let started = Instant::now();
         let observed = computer.execute(ctx(), "kybern_computer_observe", json!({"window": window})).await.unwrap();
         timed("observe", started);
@@ -2210,6 +2226,26 @@ mod live {
         let blocks = content_blocks(&shot);
         let image = blocks.iter().find(|block| block["type"] == "image").expect("a screenshot");
         eprintln!("screenshot {} base64 bytes, {}", image["data"].as_str().unwrap().len(), image["mimeType"]);
+
+        // With the live view watching, each step adds a picture but keeps
+        // the element tokens, so the whole batch still lands. (A screenshot
+        // call drops the snapshot, so look at the window first.)
+        computer.execute(ctx(), "kybern_computer_observe", json!({"window": window})).await.unwrap();
+        let _ = computer.frame(thread_id, None);
+        let steps: Vec<Value> =
+            ["All Clear", "7", "Multiply", "6", "Equals"].iter().map(|label| json!({"press": reference(label)})).collect();
+        let started = Instant::now();
+        let watched = text(&computer.execute(ctx(), "kybern_computer_act", json!({"window": window, "steps": steps})).await.unwrap());
+        timed("watched act", started);
+        eprintln!("{watched}");
+        assert!(watched.contains("\"42\""), "Calculator should show 42 while watched");
+        assert!(computer.frame(thread_id, None).and_then(|frame| frame.action).is_some(), "the live view should have a frame");
+
+        // Quitting closes the window; the report says so instead of trying to read it.
+        let quit =
+            text(&computer.execute(ctx(), "kybern_computer_act", json!({"window": window, "steps": [{"key": "cmd+q"}]})).await.unwrap());
+        eprintln!("{quit}");
+        assert!(quit.contains("closed window") && !quit.contains("Could not read"), "a quit app should read as closed");
         let _ = std::fs::remove_dir_all(root);
     }
 }
