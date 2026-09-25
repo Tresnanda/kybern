@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1
+
+<!-- kybern-release-title: Let agents use apps on your Mac -->
+<!-- kybern-release-summary: Type @Computer and Claude, OpenCode, Cursor, or Pi can read and use the apps on your Mac, with your approval and a live view of each step. Claude model names load reliably on slow machines, and the sidebar can reorder projects and filter threads. -->
+
+- Let Claude, OpenCode, Cursor, and Pi agents use apps on your Mac. Turn it on in Settings → Computer use, which installs CuaDriver and walks you through granting access, then type @Computer in a chat. You approve each app the first time, a floating live view shows what the agent sees, and password managers, Keychain, and System Settings are always off limits. Codex keeps its own computer-use plugin.
+- Show @ and $ mentions in the composer as icons and labels, the same as in sent messages, with undo, redo, and plain-text copy and paste.
+- Read Claude models from Claude Code's own model list and keep it on disk, so the picker shows full names like Claude Opus 5.5 even on slow or busy machines, and running threads keep the friendly name. Model descriptions now appear under each name on desktop and mobile.
+- Reorder projects by dragging their headers, or with Move up and Move down in the project menu. The order is saved per environment.
+- Filter sidebar threads to pinned, working, or a single agent from the button next to Add project.
+- Open commands, About, Reload agents, and agent settings from a new help menu in the sidebar footer.
+
 ## 0.5.0
 
 <!-- kybern-release-title: Kybern uses far less memory -->
