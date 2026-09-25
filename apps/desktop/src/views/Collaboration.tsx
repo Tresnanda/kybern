@@ -625,7 +625,7 @@ export function CollaborationPane({
     selectThread(target)
     requestAnimationFrame(() =>
       document
-        .querySelector<HTMLTextAreaElement>("[data-testid='composer-editor']")
+        .querySelector<HTMLElement>("[data-testid='composer-editor']")
         ?.focus()
     )
   }
@@ -1174,7 +1174,7 @@ function AgentsEmpty({
         )}
         <Button className="mt-6" onClick={() => {
           set({ rightOpen: false })
-          requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>("[data-testid='composer-editor']")?.focus())
+          requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-testid='composer-editor']")?.focus())
         }}>
           Return to chat
         </Button>

@@ -131,6 +131,9 @@ fn main() {
     method::<TerminalsUnsubscribe>(&mut methods);
     method::<SettingsGet>(&mut methods);
     method::<SettingsUpdate>(&mut methods);
+    method::<ComputerStatusGet>(&mut methods);
+    method::<ComputerSetup>(&mut methods);
+    method::<ComputerFrameGet>(&mut methods);
     method::<UsageSummary>(&mut methods);
     method::<UsageLimits>(&mut methods);
     method::<PairingCreate>(&mut methods);

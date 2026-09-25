@@ -268,7 +268,7 @@ export function humanizeToolName(name: string): string {
   if (parts.length > 1) {
     const tool = titleCaseWords(parts.at(-1)!)
     if (lower.includes("github")) return `GitHub · ${tool}`
-    if (/computer[_ -]?use|(^|[:/_])cua([_:/]|$)/.test(lower)) return "Computer use"
+    if (/computer[_ -]?use|(^|[:/_])cua([_:/]|$)|kybern_computer_/.test(lower)) return "Computer use"
     if (/browser|playwright/.test(lower)) return `Browser · ${tool}`
     const server = titleCaseWords(parts.at(-2)!.replace(/^codex[_-]apps?$/, "apps"))
     return `${server} · ${tool}`

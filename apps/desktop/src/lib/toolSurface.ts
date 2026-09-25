@@ -19,6 +19,8 @@ export interface ToolSurface {
   app: string | null
   /** Screenshots the action returned, as data URLs, in order. */
   screenshots: string[]
+  /** Which of Kybern's own computer tools ran, for a specific row label. */
+  kybernTool?: "apps" | "launch" | "observe" | "act" | "screenshot" | "help"
 }
 
 const APP_NAMES: Record<string, string> = {
@@ -68,7 +70,7 @@ const string = (value: unknown): string => (typeof value === "string" ? value : 
 /** The name Codex gives its screen-control server, and the generic shapes other harnesses use. */
 function surfaceFromName(name: string): ToolSurfaceKind | null {
   const lower = name.toLowerCase()
-  if (/(^|[:/_])cua([_:/]|$)|computer[_ -]?use/.test(lower)) return "computer"
+  if (/(^|[:/_])cua([_:/]|$)|computer[_ -]?use|kybern_computer_/.test(lower)) return "computer"
   if (/browser[_ -]?use/.test(lower)) return "browser"
   return null
 }
@@ -91,12 +93,29 @@ function screenshotsFrom(output: JsonValue | null): string[] {
   const out: string[] = []
   for (const item of content) {
     const block = record(item)
-    const mime = string(block.mimeType ?? block.media_type ?? block.mime)
-    if (block.type !== "image" || typeof block.data !== "string" || !mime.startsWith("image/")) continue
-    const source = `data:${mime};base64,${block.data}`
+    // MCP puts data on the block; Claude's tool results nest it under `source`.
+    const raw = block.source && typeof block.source === "object" ? record(block.source) : block
+    const mime = string(raw.mimeType ?? raw.media_type ?? raw.mime)
+    if (block.type !== "image" || typeof raw.data !== "string" || !mime.startsWith("image/")) continue
+    const source = `data:${mime};base64,${raw.data}`
     if (imageSource(source)) out.push(source)
   }
   return out
+}
+
+function kybernComputerTool(call: ToolCall): ToolSurface["kybernTool"] {
+  const tool = /kybern_computer_(apps|observe|act|screenshot|help)/.exec(call.name.toLowerCase())?.[1] as ToolSurface["kybernTool"] | undefined
+  if (tool === "apps" && string(record(call.input).launch)) return "launch"
+  return tool
+}
+
+/** Kybern's own computer tools name the app in their first line: `w1234 Notes "Title" · …`. */
+function kybernComputerApp(call: ToolCall, output: JsonValue | null): string {
+  if (!/kybern_computer_(observe|act|screenshot)/.test(call.name.toLowerCase())) return ""
+  const outer = record(output)
+  const content = record(outer.result).content ?? outer.content
+  const first = Array.isArray(content) ? string(record(content.find((item) => record(item).type === "text")).text) : ""
+  return /^w\d+ ([^"·\n]*?)\s*(?:"|·|$)/.exec(first)?.[1]?.trim() ?? ""
 }
 
 /** Detect a screen-control call from its name (while it runs) or its result (once settled). */
@@ -111,8 +130,10 @@ export function toolSurface(call: ToolCall, output: JsonValue | null = null): To
     string(app.bundleId) ||
     (/getApp\(\s*["']([^"']+)["']\s*\)/.exec(code)?.[1] ?? "") ||
     null
-  const name = string(app.displayName) || (appId ? appDisplayName(appId) : "")
-  return { kind, appId, app: name || null, screenshots: screenshotsFrom(output) }
+  const tool = kybernComputerTool(call)
+  const launch = tool === "launch" ? string(record(call.input).launch) : ""
+  const name = string(app.displayName) || (appId ? appDisplayName(appId) : "") || launch || kybernComputerApp(call, output)
+  return { kind, appId, app: name || null, screenshots: screenshotsFrom(output), ...(tool ? { kybernTool: tool } : {}) }
 }
 
 /** The action's textual result without the inline image payloads or JSON scaffolding. */

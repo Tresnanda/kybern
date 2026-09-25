@@ -4,6 +4,7 @@ import { flushSync } from "react-dom"
 import { ThreadView } from "../src/views/Thread"
 import { Draft } from "../src/views/Draft"
 import { RightPanel } from "../src/views/RightPanel"
+import { composerEditorValue } from "../src/components/kit/chat/ComposerEditor"
 import { ThreadSidebar } from "../src/views/Sidebar"
 import { Sidebar, SidebarProvider } from "../src/components/kit/sidebar"
 import { ThemeProviderContext } from "../src/components/theme-context"
@@ -53,11 +54,10 @@ const visible = (element: HTMLElement) => element.getClientRects().length > 0 &&
 function findButton(label: string) { return Array.from(document.querySelectorAll<HTMLElement>('button,[role="button"],[role="menuitem"],[role="menuitemradio"]')).find((element) => visible(element) && (element.getAttribute("aria-label") === label || element.title === label || element.textContent?.trim() === label)) }
 async function click(label: string) { const element = findButton(label); if (!element) throw new Error(`Missing button ${label}`); element.click(); await sleep(220) }
 function write(value: string) {
-  const editor = document.querySelector<HTMLTextAreaElement>('[data-testid="composer-editor"]')!
+  const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!
   editor.focus()
-  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(editor, value)
-  editor.setSelectionRange(value.length, value.length)
-  editor.dispatchEvent(new Event("input", { bubbles: true }))
+  getSelection()!.selectAllChildren(editor)
+  document.execCommand("insertText", false, value)
   editor.dispatchEvent(new KeyboardEvent("keyup", { key: value.slice(-1), bubbles: true }))
   return editor
 }
@@ -84,7 +84,7 @@ async function run() {
   await sleep(650)
   if (preview === "composer-caret-before") {
     const baseline = document.createElement("style")
-    baseline.textContent = '[data-composer-editor-frame]{min-height:0!important}[data-testid="composer-editor"],.chat-composer-backdrop,[data-composer-editor-frame]{line-height:1.625!important}[data-testid="composer-editor"]{min-height:var(--app-density-composer-editor-min-height,2lh)!important}'
+    baseline.textContent = '[data-composer-editor-frame]{min-height:0!important}[data-testid="composer-editor"],[data-composer-editor-frame]{line-height:1.625!important}[data-testid="composer-editor"]{min-height:var(--app-density-composer-editor-min-height,2lh)!important}'
     document.head.append(baseline)
   }
   if (preview === "composer-caret-before" || preview === "composer-caret-after") {
@@ -104,7 +104,7 @@ async function run() {
     return results({ preview, pass: document.querySelectorAll(".t-pane").length === 6 && document.querySelectorAll('.t-pane[data-active="false"]').length === 5 })
   }
   const initialHasNoSetup = !document.body.textContent?.includes("Let agent start helpers") && !!document.querySelector('[data-testid="composer-editor"]')
-  const initialEditor = document.querySelector<HTMLTextAreaElement>('[data-testid="composer-editor"]')!
+  const initialEditor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!
   const initialEditorFrame = initialEditor.closest<HTMLElement>('[data-composer-editor-frame]')!
   const editorLineHeight = parseFloat(getComputedStyle(initialEditor).lineHeight)
   const composerSingleLineEditorInTwoLineFrame = initialEditor.clientHeight <= editorLineHeight + 1 && initialEditorFrame.clientHeight >= editorLineHeight * 1.9
@@ -193,8 +193,9 @@ async function run() {
   if (options.length < 2) throw new Error("Existing-thread picker did not expose both matching threads")
   if (preview === "references") return results({ preview, pass: true })
   options[0].click(); await sleep(150)
-  const editor = document.querySelector<HTMLTextAreaElement>('[data-testid="composer-editor"]')!
-  const titleOnlyReference = editor.value.includes("Authentication decisions") && !editor.value.includes("@thread[")
+  const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!
+  const editorText = composerEditorValue(editor)
+  const titleOnlyReference = editorText.includes("Authentication decisions") && !editorText.includes("@thread[")
   const referenceDidNotWake = chatFixture.sent.length === 0 && !chatFixture.calls.some((call) => call.method === "threads.send")
   editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(200)
   const typedReferenceSent = chatFixture.sent[0]?.message.parts.some((part) => part.type === "thread_reference" && part.thread_id === "previous")

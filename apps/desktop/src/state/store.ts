@@ -148,7 +148,7 @@ export interface AppState {
   sessionsProjectId: ProjectId | null
   paletteOpen: boolean
   settingsOpen: boolean
-  settingsTab: "general" | "agents" | "integrations" | "appearance" | "notifications" | "background" | "usage" | "about"
+  settingsTab: "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "usage" | "about"
   collapsedProjects: Record<ProjectId, boolean>
   /** Project order the user dragged into place. Empty means alphabetical. */
   projectOrder: ProjectId[]

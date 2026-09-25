@@ -2149,6 +2149,17 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed)
                 .map(|turn| turn.id)
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
+            if crate::computer::ComputerUse::is_tool(name) {
+                let consent = ComputerConsent { orchestrator: self, thread_id, turn_id, live: live.clone() };
+                let ctx = crate::computer::CallContext {
+                    thread_id,
+                    permission_mode: thread.permission_mode,
+                    session_instance_id,
+                    turn_id,
+                    consent: &consent,
+                };
+                return self.inner.computer.execute(ctx, name, arguments).await;
+            }
             if name.starts_with("kybern_collaboration_") || name == "kybern_thread_send" {
                 let object = arguments.as_object_mut().ok_or_else(|| anyhow!("tool arguments must be a JSON object"))?;
                 let existing_group = self.inner.store.collaboration_group_for_thread(thread_id)?;
@@ -2671,6 +2682,7 @@ struct Inner {
     provider_catalogs: Arc<crate::state::ProviderCatalogCache>,
     app_tools: crate::app_tools::AppTools,
     native_tools: Option<crate::native_tools_mcp::NativeToolsGateway>,
+    computer: crate::computer::ComputerUse,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
     releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
@@ -2709,10 +2721,49 @@ struct LiveSession {
     deferred_checkpoints: Mutex<HashSet<TurnId>>,
     /// Approval id -> provider request id, for pending permission requests.
     pending: Mutex<HashMap<ApprovalId, String>>,
+    /// Approvals the daemon asks for itself (computer use). They resolve here
+    /// instead of in the provider, and keep their answer until the turn ends
+    /// so a tool call retried after a slow answer sees it.
+    daemon_approvals: Mutex<HashMap<ApprovalId, DaemonApproval>>,
     /// In-flight internal tool request ids. A bounded semaphore prevents one
     /// provider session from monopolizing daemon read work.
     app_tool_requests: Mutex<HashSet<String>>,
     app_tool_permits: Arc<Semaphore>,
+}
+
+struct DaemonApproval {
+    turn_id: TurnId,
+    key: String,
+    decision: tokio::sync::watch::Sender<Option<ApprovalDecision>>,
+}
+
+/// The copy of a user message a provider receives. Kybern-only mentions
+/// become instructions; everything else passes through unchanged.
+fn provider_message(message: &UserMessage) -> std::borrow::Cow<'_, UserMessage> {
+    match crate::computer::ComputerUse::expand_mention(message) {
+        Some(expanded) => std::borrow::Cow::Owned(expanded),
+        None => std::borrow::Cow::Borrowed(message),
+    }
+}
+
+/// Computer-use consent for one tool call, bound to its owning turn.
+struct ComputerConsent<'a> {
+    orchestrator: &'a Orchestrator,
+    thread_id: ThreadId,
+    turn_id: TurnId,
+    live: Arc<LiveSession>,
+}
+
+impl crate::computer::ConsentGate for ComputerConsent<'_> {
+    fn ask(&self, request: crate::computer::ConsentRequest) -> futures::future::BoxFuture<'_, Result<crate::computer::ConsentAnswer>> {
+        Box::pin(self.orchestrator.ask_computer_consent(self.thread_id, self.turn_id, &self.live, request))
+    }
+
+    fn cancelled(&self) -> futures::future::BoxFuture<'_, bool> {
+        Box::pin(async move {
+            self.live.is_released() || self.live.turn.lock().await.as_ref().is_none_or(|turn| turn.id != self.turn_id || turn.completed)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2842,6 +2893,7 @@ impl Orchestrator {
         settings: SettingsStore,
     ) -> Self {
         let app_tools = crate::app_tools::AppTools::new(store.clone(), crate::terminal::TerminalManager::default());
+        let computer = crate::computer::ComputerUse::new(settings.clone());
         Self {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
@@ -2857,6 +2909,7 @@ impl Orchestrator {
                 provider_catalogs: Arc::new(crate::state::ProviderCatalogCache::default()),
                 app_tools,
                 native_tools: None,
+                computer,
                 sessions: Mutex::new(HashMap::new()),
                 releasing: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
@@ -2880,6 +2933,10 @@ impl Orchestrator {
         Arc::get_mut(&mut self.inner).expect("native tools must be installed before cloning the orchestrator").native_tools =
             Some(native_tools);
         self
+    }
+
+    pub(crate) fn computer(&self) -> &crate::computer::ComputerUse {
+        &self.inner.computer
     }
 
     fn revoke_native_session(&self, live: &LiveSession) {
@@ -3818,7 +3875,7 @@ impl Orchestrator {
             .filter(|turn| !turn.completed)
             .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
         live.touch();
-        live.session.steer(&params.id.to_string(), &params.message).await?;
+        live.session.steer(&params.id.to_string(), &provider_message(&params.message)).await?;
         self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
         if let Err(error) = self.record_user_redirect(params.thread_id, &redirect_summary) {
             tracing::warn!(thread_id = %params.thread_id, %error, "could not notify collaboration coordinator of direct user steering");
@@ -4018,7 +4075,7 @@ impl Orchestrator {
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            live.session.send_message(&message_id.to_string(), &message).await
+            live.session.send_message(&message_id.to_string(), &provider_message(&message)).await
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -4262,7 +4319,7 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed)
                 .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
             live.touch();
-            live.session.steer(&message_id.to_string(), &message).await?;
+            live.session.steer(&message_id.to_string(), &provider_message(&message)).await?;
             active.id
         } else {
             self.send_with_id(params.thread_id, message_id, message.clone(), false, false).await?.0
@@ -4283,6 +4340,26 @@ impl Orchestrator {
         approval.validate_decision(&decision).map_err(|message| anyhow!(message))?;
         let live =
             self.inner.sessions.lock().await.get(&approval.thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
+        // Release the map before touching other state; restoring the thread
+        // status reads it again.
+        let daemon_owned = {
+            let approvals = live.daemon_approvals.lock().await;
+            match approvals.get(&approval_id) {
+                Some(entry) if entry.decision.borrow().is_some() => return Err(anyhow!("approval already resolved")),
+                Some(entry) => {
+                    entry.decision.send_replace(Some(decision.clone()));
+                    true
+                }
+                None => false,
+            }
+        };
+        if daemon_owned {
+            live.touch();
+            self.inner.store.approval_resolve(approval_id, &decision)?;
+            self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
+            self.restore_running_after_approval(approval.thread_id, &live).await?;
+            return Ok(());
+        }
         let mut pending = live.pending.lock().await;
         let request_id = pending.get(&approval_id).cloned().ok_or_else(|| anyhow!("approval no longer pending"))?;
         live.touch();
@@ -4291,8 +4368,15 @@ impl Orchestrator {
         drop(pending);
         self.inner.store.approval_resolve(approval_id, &decision)?;
         self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
+        self.restore_running_after_approval(approval.thread_id, &live).await?;
+        Ok(())
+    }
+
+    async fn restore_running_after_approval(&self, thread_id: ThreadId, live: &LiveSession) -> Result<()> {
+        let daemon_waiting = live.daemon_approvals.lock().await.values().any(|entry| entry.decision.borrow().is_none());
         if live.pending.lock().await.is_empty()
-            && let Some(mut t) = self.inner.store.thread_get(approval.thread_id)?
+            && !daemon_waiting
+            && let Some(mut t) = self.inner.store.thread_get(thread_id)?
             && t.status == ThreadStatus::AwaitingApproval
         {
             t.status = ThreadStatus::Running;
@@ -4301,7 +4385,94 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Ask the user, through a normal approval card, to let this chat control
+    /// an app. A retry of the same request in the same turn reuses the card
+    /// and its answer.
+    async fn ask_computer_consent(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &Arc<LiveSession>,
+        request: crate::computer::ConsentRequest,
+    ) -> Result<crate::computer::ConsentAnswer> {
+        use crate::computer::{ConsentAnswer, Mode};
+        let key = format!("{}:{:?}", request.bundle_id.as_deref().unwrap_or(&request.app.to_lowercase()), request.mode);
+        let mut receiver = {
+            let mut approvals = live.daemon_approvals.lock().await;
+            match approvals.values().find(|entry| entry.turn_id == turn_id && entry.key == key) {
+                Some(entry) => entry.decision.subscribe(),
+                None => {
+                    let foreground = request.mode == Mode::Foreground;
+                    let approval = ApprovalRequest {
+                        id: Uuid::now_v7(),
+                        thread_id,
+                        turn_id,
+                        tool_call_id: None,
+                        tool_name: crate::computer::APPROVAL_TOOL.into(),
+                        input: serde_json::json!({
+                            "app": request.app,
+                            "bundle_id": request.bundle_id,
+                            "mode": if foreground { "foreground" } else { "background" },
+                            "action": request.first_action,
+                        }),
+                        summary: if foreground {
+                            format!("Let this chat use your cursor and keyboard in {}", request.app)
+                        } else {
+                            format!("Let this chat control {} in the background", request.app)
+                        },
+                        suggestions: Vec::new(),
+                        created_at: Utc::now(),
+                    };
+                    let (sender, receiver) = tokio::sync::watch::channel(None);
+                    approvals.insert(approval.id, DaemonApproval { turn_id, key, decision: sender });
+                    drop(approvals);
+                    if let Some(turn) = live.turn.lock().await.as_mut() {
+                        turn.active_messages.remove(&EventOrigin::Root);
+                    }
+                    self.inner.store.approval_insert(&approval)?;
+                    self.emit(thread_id, Some(turn_id), EventPayload::ApprovalRequested { approval })?;
+                    let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
+                    if t.status != ThreadStatus::AwaitingApproval {
+                        t.status = ThreadStatus::AwaitingApproval;
+                        self.update_thread(t)?;
+                    }
+                    receiver
+                }
+            }
+        };
+        let decision = tokio::time::timeout(crate::computer::CONSENT_WAIT, receiver.wait_for(Option::is_some)).await;
+        Ok(match decision {
+            Ok(Ok(decision)) => match decision.clone() {
+                Some(ApprovalDecision::AllowAlways) => ConsentAnswer::Session,
+                Some(ApprovalDecision::Submit { response })
+                    if response.get("scope").and_then(serde_json::Value::as_str) == Some("always") =>
+                {
+                    ConsentAnswer::Always
+                }
+                Some(ApprovalDecision::Deny { reason }) => ConsentAnswer::Denied(reason),
+                Some(_) => ConsentAnswer::Turn,
+                None => ConsentAnswer::Pending,
+            },
+            Ok(Err(_)) => ConsentAnswer::Denied(Some("the turn ended".into())),
+            Err(_) => ConsentAnswer::Pending,
+        })
+    }
+
     async fn resolve_finished_requests(&self, thread_id: ThreadId, turn_id: TurnId, live: &LiveSession) -> Result<()> {
+        let finished: Vec<(ApprovalId, DaemonApproval)> = {
+            let mut approvals = live.daemon_approvals.lock().await;
+            let ids = approvals.iter().filter(|(_, entry)| entry.turn_id == turn_id).map(|(id, _)| *id).collect::<Vec<_>>();
+            ids.into_iter().filter_map(|id| approvals.remove(&id).map(|entry| (id, entry))).collect()
+        };
+        for (id, entry) in finished {
+            if entry.decision.borrow().is_some() {
+                continue;
+            }
+            let decision = ApprovalDecision::Deny { reason: Some("turn ended".into()) };
+            entry.decision.send_replace(Some(decision.clone()));
+            self.inner.store.approval_resolve(id, &decision)?;
+            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision })?;
+        }
         let mut pending = live.pending.lock().await;
         let ids = pending.keys().copied().collect::<Vec<_>>();
         for id in ids {
@@ -4609,13 +4780,11 @@ impl Orchestrator {
             .native_tools
             .as_ref()
             .map(|gateway| {
-                gateway.register_coordinator(
-                    thread.id,
-                    session_instance_id,
-                    crate::app_tools::native_tool_definitions(),
-                    restrictions,
-                    coordinator_instructions,
-                )
+                let mut tools = crate::app_tools::native_tool_definitions();
+                if self.inner.computer.offered_to(thread.provider.kind) {
+                    tools.extend(crate::computer::ComputerUse::tool_definitions());
+                }
+                gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions)
             })
             .transpose()?;
         let config = SessionConfig {
@@ -4662,6 +4831,7 @@ impl Orchestrator {
             tasks: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
+            daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
@@ -5064,7 +5234,11 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if name == "kybern_collaboration_wait" { Duration::from_secs(65) } else { crate::app_tools::REQUEST_TIMEOUT };
+                let timeout = if name == "kybern_collaboration_wait" || crate::computer::ComputerUse::is_tool(&name) {
+                    Duration::from_secs(65)
+                } else {
+                    crate::app_tools::REQUEST_TIMEOUT
+                };
                 match tokio::time::timeout(
                     timeout,
                     this.execute_native_app_tool_call(thread_id, live.session_instance_id, &request_id, &name, arguments),
@@ -6047,6 +6221,7 @@ mod tests {
             tasks: Mutex::new(HashMap::from([(task.id.clone(), task)])),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
+            daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
@@ -6382,6 +6557,7 @@ mod tests {
                 tasks: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
                 pending: Mutex::new(HashMap::new()),
+                daemon_approvals: Mutex::new(HashMap::new()),
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             });
@@ -6404,6 +6580,7 @@ mod tests {
                 tasks: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
                 pending: Mutex::new(HashMap::new()),
+                daemon_approvals: Mutex::new(HashMap::new()),
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             });
@@ -6444,6 +6621,49 @@ mod tests {
             duration_ms: 1,
             anchors: TurnAnchors::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn computer_consent_resolves_in_the_daemon_and_is_reused_on_retry() {
+        use crate::computer::{ConsentAnswer, ConsentRequest, Mode};
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.active_app_tool_session(&thread).await;
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+        let request = || ConsentRequest {
+            app: "Notes".into(),
+            bundle_id: Some("com.apple.Notes".into()),
+            mode: Mode::Background,
+            first_action: "press @1".into(),
+        };
+        let asking = {
+            let (orchestrator, live, thread_id) = (fixture.orchestrator.clone(), live.clone(), thread.id);
+            tokio::spawn(async move { orchestrator.ask_computer_consent(thread_id, turn_id, &live, request()).await })
+        };
+        let approval_id = loop {
+            if let Some(id) = live.daemon_approvals.lock().await.keys().next().copied() {
+                break id;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::AwaitingApproval);
+        tokio::time::timeout(Duration::from_secs(2), fixture.orchestrator.respond_approval(approval_id, ApprovalDecision::AllowAlways))
+            .await
+            .expect("answering a daemon approval must not deadlock")
+            .unwrap();
+        assert_eq!(asking.await.unwrap().unwrap(), ConsentAnswer::Session);
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+        // A retry in the same turn reuses the answer instead of opening a new card.
+        let retry =
+            tokio::time::timeout(Duration::from_secs(2), fixture.orchestrator.ask_computer_consent(thread.id, turn_id, &live, request()))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(retry, ConsentAnswer::Session);
+        assert_eq!(live.daemon_approvals.lock().await.len(), 1);
+        assert!(fixture.orchestrator.respond_approval(approval_id, ApprovalDecision::AllowOnce).await.is_err());
+        fixture.orchestrator.resolve_finished_requests(thread.id, turn_id, &live).await.unwrap();
+        assert!(live.daemon_approvals.lock().await.is_empty());
     }
 
     #[tokio::test]

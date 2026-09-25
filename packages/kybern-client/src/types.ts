@@ -1152,6 +1152,73 @@ export interface Settings {
   auto_update_daemon: boolean;
   background: BackgroundSettings;
   access: AccessSettings;
+  computer_use: ComputerUseSettings;
+}
+
+/** Whether an agent may ask to use the real cursor and focus. */
+export type ComputerForeground = "ask" | "never";
+
+/** Agents drive apps on this Mac through a separately installed CuaDriver. Codex keeps its own plugin. */
+export interface ComputerUseSettings {
+  enabled: boolean;
+  foreground: ComputerForeground;
+  /** Apps agents may use in the background without asking. */
+  always_allowed_apps?: string[];
+}
+
+export type ComputerPermission = "granted" | "missing" | "unknown";
+
+export interface ComputerCheck {
+  name: string;
+  ok: boolean;
+  message: string;
+  fix?: string | null;
+}
+
+export interface ComputerStatus {
+  supported: boolean;
+  enabled: boolean;
+  installed: boolean;
+  app_path?: string | null;
+  version?: string | null;
+  required_version: string;
+  signed: boolean;
+  accessibility: ComputerPermission;
+  screen_recording: ComputerPermission;
+  ready: boolean;
+  checks: ComputerCheck[];
+}
+
+/** What an agent last saw while using an app. Transient: never stored in the transcript. */
+export interface ComputerFrame {
+  seq: number;
+  window_id: number;
+  app: string;
+  title?: string | null;
+  /** The step that led to this frame, e.g. `Pressed “Equals”`. */
+  action?: string | null;
+  /** Where that step acted, from 0 to 1 across and down the picture. */
+  point?: [number, number] | null;
+  media_type: string;
+  data: string;
+  width: number;
+  height: number;
+  captured_at: string;
+}
+
+export interface ComputerFrameParams {
+  thread_id: ThreadId;
+  after?: number | null;
+}
+
+export interface ComputerFrameResult {
+  frame?: ComputerFrame | null;
+}
+
+export type ComputerSetupAction = "install" | "grant_permissions";
+
+export interface ComputerSetupParams {
+  action: ComputerSetupAction;
 }
 
 export interface SettingsUpdateParams {
@@ -1483,6 +1550,9 @@ export interface Methods {
   "events.range": [EventsRangeParams, EventsRangeResult];
   "settings.get": [Empty, Settings];
   "settings.update": [SettingsUpdateParams, Settings];
+  "computer.status": [Empty, ComputerStatus];
+  "computer.setup": [ComputerSetupParams, ComputerStatus];
+  "computer.frame": [ComputerFrameParams, ComputerFrameResult];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
   "usage.limits": [UsageLimitsParams, UsageLimitsResult];
   "git.status": [GitStatusParams, GitStatus];

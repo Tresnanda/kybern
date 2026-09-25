@@ -29,7 +29,9 @@ const LEGACY_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 const SUPPORTED_VERSIONS: &[&str] = &[CURRENT_VERSION, "2025-11-25", "2025-06-18", "2025-03-26"];
 const MAX_SESSIONS: usize = 1024;
 const MAX_REQUEST_BYTES: usize = 128 * 1024;
-const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+/// Room for one computer-use screenshot; text results stay under MAX_TEXT_BYTES.
+const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TEXT_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Default)]
 pub(crate) struct NativeToolsGateway {
@@ -130,6 +132,9 @@ fn mcp_instructions(bridge: &NativeToolBridge) -> Option<String> {
     }
     if bridge.has_tool("kybern_collaboration_spawn") {
         parts.push("Create managed Kybern child chats with kybern_collaboration_spawn.");
+    }
+    if bridge.has_tool("kybern_computer_act") {
+        parts.push("Use and open apps on the user's Mac with kybern_computer_apps, observe and act, not shell commands.");
     }
     parts.push("See individual tool descriptions for details. Respect explicit plugin or provider-native choices.");
     Some(parts.join(" "))
@@ -277,7 +282,7 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             )
             .await;
             match response {
-                Ok(Ok(value)) => tool_result(value.to_string(), false),
+                Ok(Ok(value)) => content_result(crate::computer::content_blocks(&value)),
                 Ok(Err(error)) => tool_result(bounded_text(&error.to_string(), 4096), true),
                 Err(_) => tool_result("The tool request timed out. Inspect its operation ID before retrying.".into(), true),
             }
@@ -316,10 +321,19 @@ fn request_version(headers: &HeaderMap, method: &str, params: &Value) -> std::re
 }
 
 fn tool_result(text: String, is_error: bool) -> Value {
-    if text.len() > MAX_RESPONSE_BYTES / 2 {
+    content_result_with(vec![json!({ "type": "text", "text": text })], is_error)
+}
+
+fn content_result(blocks: Vec<Value>) -> Value {
+    content_result_with(blocks, false)
+}
+
+fn content_result_with(blocks: Vec<Value>, is_error: bool) -> Value {
+    let text: usize = blocks.iter().filter_map(|block| block.get("text").and_then(Value::as_str)).map(str::len).sum();
+    if text > MAX_TEXT_BYTES {
         return json!({ "isError": true, "content": [{ "type": "text", "text": "Tool result is too large. Narrow the request and retry." }] });
     }
-    json!({ "isError": is_error, "content": [{ "type": "text", "text": text }] })
+    json!({ "isError": is_error, "content": blocks })
 }
 
 fn server_info() -> Value {

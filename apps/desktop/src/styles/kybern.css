@@ -209,45 +209,249 @@ html[data-project-reordering="true"] * {
    sent bubble they carry an icon and a little padding. Inside the composer's
    highlight layer (`[data-plain]`) they must not change the text advance at
    all, so the pill is painted with a spread box-shadow instead of padding. */
+/* Inline tokens read as linked text: an icon and accent-colored label, no box.
+   Sent bubbles and the composer render the same markup, so they match. */
 .chat-inline-token {
+  --token-color: var(--color-accent-blue, var(--foreground));
   display: inline-flex;
-  align-items: center;
-  gap: 0.3em;
-  vertical-align: baseline;
-  margin: 0 0.05em;
-  padding: 0.05em 0.4em;
-  border-radius: 0.5em;
-  background: color-mix(in srgb, var(--foreground) 10%, transparent);
-  color: var(--foreground);
+  align-items: baseline;
+  gap: 0.25em;
+  color: var(--token-color);
   font-weight: 500;
-  line-height: 1.3;
   white-space: nowrap;
+  border-radius: 0.25em;
 }
 .chat-inline-token > svg {
   width: 0.95em;
   height: 0.95em;
   flex-shrink: 0;
-  opacity: 0.75;
+  align-self: center;
+  translate: 0 0.02em;
 }
-.chat-inline-token[data-plain] {
-  display: inline;
-  margin: 0;
-  padding: 0;
-  gap: 0;
-  line-height: inherit;
-  white-space: inherit;
-  font-weight: inherit;
-  border-radius: 0.35em;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--foreground) 10%, transparent);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+button.chat-inline-token:hover {
+  text-decoration: underline;
+  text-decoration-thickness: from-font;
+  text-underline-position: from-font;
 }
-.chat-inline-token[data-kind="skill"] {
-  color: var(--color-accent-blue, var(--foreground));
-  background: color-mix(in srgb, var(--color-accent-blue, var(--foreground)) 12%, transparent);
+/* The composer's rich input. Tokens inside it are atomic: arrows step over
+   them and Backspace removes one whole. */
+.composer-editor {
+  position: relative;
 }
-.chat-inline-token[data-plain][data-kind="skill"] {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent-blue, var(--foreground)) 12%, transparent);
+.composer-editor[data-empty]::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  color: color-mix(in srgb, var(--muted-foreground) 40%, transparent);
+  pointer-events: none;
+}
+.composer-editor .chat-inline-token {
+  cursor: default;
+  user-select: all;
+}
+.composer-editor[aria-disabled] {
+  cursor: default;
+}
+
+/* Computer-use live view. The picture is the card: no header or footer, one
+   status chip on a scrim, controls only on hover. It rises in from its corner
+   and leaves faster than it arrives; each frame fades over the last. */
+.computer-live-view {
+  touch-action: none;
+  cursor: grab;
+  background-size: cover;
+  background-position: center;
+  box-shadow:
+    0 16px 56px -16px rgb(0 0 0 / 0.5),
+    0 2px 12px -2px rgb(0 0 0 / 0.3),
+    0 0 0 1px rgb(255 255 255 / 0.1);
+  transform-origin: top right;
+  transition:
+    opacity 280ms var(--ease-out),
+    scale 280ms var(--ease-out),
+    translate 320ms var(--ease-out),
+    width 200ms var(--ease-out),
+    height 200ms var(--ease-out);
+}
+@starting-style {
+  .computer-live-view {
+    opacity: 0;
+    scale: 0.97;
+  }
+}
+.computer-live-view::after {
+  /* Hides the capture's edge fringe against the dark backing. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.45);
+  pointer-events: none;
+}
+.computer-live-view[data-corner="top-start"] { transform-origin: top left; }
+.computer-live-view[data-corner="bottom-end"] { transform-origin: bottom right; }
+.computer-live-view[data-corner="bottom-start"] { transform-origin: bottom left; }
+.computer-live-view[data-dragging] {
+  cursor: grabbing;
+  transition-property: opacity, scale;
+}
+.computer-live-view[data-closing] {
+  opacity: 0;
+  scale: 0.98;
+  transition-duration: 160ms;
+  pointer-events: none;
+}
+.computer-live-frame-image {
+  animation: computer-frame-in var(--duration-quick) var(--ease-out) both;
+  user-select: none;
+}
+@keyframes computer-frame-in {
+  from {
+    opacity: 0;
+  }
+}
+.computer-live-scrim {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 44px;
+  background: linear-gradient(to top, rgb(0 0 0 / 0.55), transparent);
+  pointer-events: none;
+}
+.computer-live-chip {
+  position: absolute;
+  bottom: 8px;
+  inset-inline-start: 8px;
+  display: flex;
+  max-width: calc(100% - 16px);
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgb(255 255 255 / 0.15);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.55);
+  padding: 3px 9px 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.computer-live-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.5);
+}
+.computer-live-dot[data-running] {
+  background: var(--success);
+  animation: computer-live-dot 1.6s ease-in-out infinite;
+}
+.computer-live-view[data-loop-paused] .computer-live-dot {
+  animation-play-state: paused;
+}
+@keyframes computer-live-dot {
+  50% {
+    opacity: 0.35;
+  }
+}
+.computer-live-controls {
+  position: absolute;
+  top: 8px;
+  inset-inline-end: 8px;
+  display: flex;
+  gap: 2px;
+  border: 1px solid rgb(255 255 255 / 0.15);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.45);
+  padding: 2px;
+  opacity: 0;
+  translate: 0 4px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition:
+    opacity 200ms var(--ease-out),
+    translate 200ms var(--ease-out);
+}
+.computer-live-view:hover .computer-live-controls,
+.computer-live-view:focus-within .computer-live-controls {
+  opacity: 1;
+  translate: 0 0;
+}
+@media (hover: none) {
+  .computer-live-controls {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+.computer-live-controls > button {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: rgb(255 255 255 / 0.85);
+  cursor: default;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.computer-live-controls > button:hover {
+  background: rgb(255 255 255 / 0.15);
+  color: white;
+}
+.computer-live-controls > button:focus-visible {
+  outline: 1.5px solid white;
+  outline-offset: -1.5px;
+}
+.computer-live-controls > button > svg {
+  width: 13px;
+  height: 13px;
+}
+/* Where the last step acted: a dot with one ring that widens and fades. */
+.computer-live-marker {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  translate: -50% -50%;
+  border-radius: 999px;
+  background: white;
+  box-shadow: 0 0 0 1.5px rgb(0 0 0 / 0.45), 0 1px 4px rgb(0 0 0 / 0.4);
+  pointer-events: none;
+}
+.computer-live-marker::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 1.5px solid white;
+  border-radius: inherit;
+  opacity: 0;
+  animation: computer-live-ripple 480ms var(--ease-out) both;
+}
+@keyframes computer-live-ripple {
+  from {
+    opacity: 0.85;
+    scale: 1;
+  }
+  to {
+    opacity: 0;
+    scale: 3.2;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .computer-live-view {
+    transition: opacity var(--duration-quick) ease-out;
+  }
+  @starting-style {
+    .computer-live-view {
+      scale: 1;
+    }
+  }
+  .computer-live-marker::after,
+  .computer-live-dot[data-running] {
+    animation: none;
+  }
 }
 
 /* Focused runtime activity replaces the transcript without a jarring panel jump. */

@@ -645,6 +645,12 @@ impl ApprovalRequest {
                     validate_form_value(schema, content)?;
                 }
             }
+            // Kybern's computer-use consent: `{"scope":"always"}` remembers the app.
+            "kybern_computer_use" => {
+                if response.get("scope").and_then(Value::as_str) != Some("always") {
+                    return Err(invalid());
+                }
+            }
             _ => return Err("This request needs a permission decision.".into()),
         }
         Ok(())
@@ -904,6 +910,33 @@ pub struct Settings {
     pub background: BackgroundSettings,
     /// Which networks other devices can reach this daemon on.
     pub access: AccessSettings,
+    /// Desktop control through CuaDriver for non-Codex harnesses.
+    pub computer_use: ComputerUseSettings,
+}
+
+/// Agents drive apps on this Mac through a separately installed CuaDriver.
+/// Codex keeps OpenAI's own computer-use plugin.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ComputerUseSettings {
+    /// Offer the computer tools to new agent sessions.
+    pub enabled: bool,
+    /// Whether an agent may ask to use the real cursor and focus.
+    pub foreground: ComputerForeground,
+    /// Apps (display names) agents may control in the background without
+    /// asking. Filled by "Always allow" on the approval card.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub always_allowed_apps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputerForeground {
+    /// Background by default; foreground after the user approves it per app.
+    #[default]
+    Ask,
+    /// Background only.
+    Never,
 }
 
 /// Extra listeners the daemon opens besides its loopback port. Persisted so
@@ -930,6 +963,7 @@ impl Default for Settings {
             auto_update_daemon: false,
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
+            computer_use: ComputerUseSettings::default(),
         }
     }
 }

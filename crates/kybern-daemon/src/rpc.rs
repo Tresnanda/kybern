@@ -513,6 +513,15 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(Empty {})
         }
         SettingsGet::NAME => ok(state.settings.get()),
+        ComputerStatusGet::NAME => ok(crate::computer::status(state.orchestrator.computer()).await),
+        ComputerFrameGet::NAME => {
+            let p: ComputerFrameParams = parse(params)?;
+            ok(ComputerFrameResult { frame: state.orchestrator.computer().frame(p.thread_id, p.after) })
+        }
+        ComputerSetup::NAME => {
+            let p: ComputerSetupParams = parse(params)?;
+            ok(crate::computer::setup(state.orchestrator.computer(), p.action).await.map_err(internal)?)
+        }
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
             ok(state.settings.set(p.settings).map_err(internal)?)
@@ -655,6 +664,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 }
                 _ => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
             };
+            let mut skills = skills;
+            if state.orchestrator.computer().offered_to(p.provider) {
+                skills.insert(0, crate::computer::ComputerUse::mention_skill());
+            }
             ok(SkillsListResult { skills })
         }
         GitStatusMethod::NAME => {
