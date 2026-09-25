@@ -4,6 +4,19 @@ A fresh Expo client for the Kybern daemon, with an Ink palette, platform-aware n
 light/dark appearance, SF Symbols, responsive text, touch feedback, and motion that
 respects Reduce Motion. The computer runs the agents; the phone controls their work.
 
+## Download
+
+**[Download Android APK — 0.1.1, build 7 (preview)](https://github.com/Tresnanda/kybern/releases/download/android-build-7/kybern-0.1.1-android-build-7.apk)**
+
+1. Open the downloaded APK on your Android phone. Allow installation from your
+   browser when Android asks. No Expo Go or Metro required.
+2. On desktop, open **Pair a device**, then scan the invitation in Kybern mobile.
+   Keep the computer awake and reachable over your LAN or Tailscale.
+
+[Release notes and SHA-256 checksum](https://github.com/Tresnanda/kybern/releases/tag/android-build-7).
+This is an Android preview, not a Google Play release. iOS requires a signed
+development build; there is no public App Store download yet.
+
 ## Run
 
 Requires Node, pnpm 11.25.0, and Xcode for iOS or Android Studio for Android.
@@ -390,3 +403,57 @@ The Android release manifest explicitly allows direct LAN/Tailscale HTTP and
 WebSocket endpoints through `plugins/withAndroidLocalNetworking.js`. Expo Go's
 network defaults are not sufficient to verify a standalone APK. Preview and
 production builds auto-increment the remotely managed native build number.
+
+## Publish an Android preview
+
+EAS remains the build and signing service. Publish the existing signed APK to
+GitHub Releases without rebuilding or changing its update channel or fingerprint.
+Run EAS commands from `apps/mobile`, using the personal `treshnanda/kybern-mobile`
+project. Use a CLI version satisfying `eas.json`.
+
+1. Inspect a finished Android `preview` build:
+
+   ```sh
+   npx eas-cli@latest build:list --platform android --build-profile preview --status finished --limit 5 --json --non-interactive
+   npx eas-cli@latest build:view <build-id> --json
+   ```
+
+2. Download its `artifacts.applicationArchiveUrl`. Verify the APK's signature with
+   Android SDK `apksigner verify --verbose --print-certs`, and inspect its package,
+   version name, and version code with `aapt dump badging`. They must match
+   `dev.kybern.mobile`, the EAS mobile version, and the EAS build number. Retain
+   the original signing key. Name the asset
+   `kybern-<mobile-version>-android-build-<versionCode>.apk` and create a SHA-256
+   checksum file with `shasum -a 256 <apk> > <apk>.sha256` from its directory.
+
+3. Write release notes with a direct APK link, install and pairing instructions,
+   the EAS build URL, source commit, mobile version, build number, and runtime
+   fingerprint. State that this is a preview and that agents run on the computer.
+
+4. Create a draft release with both assets, targeting the build's exact source
+   commit. Use an `android-build-<versionCode>` tag, never a dotted mobile version
+   tag: the existing daemon workflow also matches dotted versions on older commits.
+   The Android tag must not already belong to another build.
+
+   ```sh
+   gh release create android-build-<versionCode> <apk> <apk>.sha256 \
+     --repo Tresnanda/kybern --target <build-source-commit> \
+     --title 'Android preview <mobile-version> (build <versionCode>)' \
+     --notes-file <release-notes.md> --draft --prerelease --latest=false
+   ```
+
+5. Check the uploaded assets and checksum, then publish:
+
+   ```sh
+   gh release edit android-build-<versionCode> --repo Tresnanda/kybern \
+     --draft=false --prerelease --latest=false
+   ```
+
+6. Update the APK links in the root README and this README's **Download** section.
+   Confirm the public download works and `/releases/latest` still resolves to the
+   desktop release. Desktop release notes link to this stable Download section;
+   they do not need a new version-specific link each time Android changes.
+
+Keep published Android tags and binaries unchanged. A new binary gets a new EAS
+version code and GitHub release. Compatible JavaScript changes continue through
+the existing preview EAS Update channel; native changes require a new APK.

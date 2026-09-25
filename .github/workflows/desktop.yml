@@ -240,9 +240,22 @@ jobs:
           cat dist/latest.json
       - name: Upload to the GitHub Release and publish it
         if: steps.release.outputs.tag != ''
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh dist/kybern-mac-install.sh --clobber
-          gh release edit "${{ steps.release.outputs.tag }}" --draft=false --latest
+          notes="$RUNNER_TEMP/release-notes.md"
+          gh release view "$RELEASE_TAG" --json body --jq .body > "$notes"
+          if ! grep -Fq 'https://github.com/Tresnanda/kybern/blob/main/apps/mobile/README.md#download' "$notes"; then
+            cat >> "$notes" <<'EOF'
+
+          ## Android preview
+
+          Also available on Android: [Download Android APK](https://github.com/Tresnanda/kybern/blob/main/apps/mobile/README.md#download).
+          Install the APK, then pair with a running Kybern daemon. No Expo Go or Metro required.
+          EOF
+          fi
+          gh release upload "$RELEASE_TAG" dist/latest.json dist/kybern-remote-install.sh dist/kybern-mac-install.sh --clobber
+          gh release edit "$RELEASE_TAG" --notes-file "$notes" --draft=false --latest
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-manifest
