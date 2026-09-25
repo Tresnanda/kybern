@@ -717,7 +717,7 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
             <MenuTrigger render={<ChatHeaderIconButton label="Thread actions" />}>
               <EllipsisIcon className="size-3.5" />
             </MenuTrigger>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="thread-actions-menu">
+            <ComposerPickerMenuPopup align="end" side="bottom" className="action-menu">
               <MenuGroup>
                 <MenuItem disabled={!canSplitRight} onClick={() => split("horizontal")}>
                   <SquareSplitVertical /> Split right

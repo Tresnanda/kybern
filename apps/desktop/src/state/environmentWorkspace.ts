@@ -1,6 +1,7 @@
 // Persist only client workspace state. Credentials and provider settings never
 // enter browser storage. Every key belongs to the verified daemon identity.
 import type { AppState, RightTab } from "./store"
+import { readSidebarFilter } from "./sidebarOrganize"
 
 const rightTabIds: RightTab[] = ["collaboration", "activity", "changes", "terminal", "explorer", "artifacts"]
 
@@ -57,6 +58,10 @@ export function readWorkspace(environmentId: string): Partial<AppState> {
     if (typeof stored.rightOpen === "boolean")
       result.rightOpen = stored.rightOpen
     if (typeof stored.envOpen === "boolean") result.envOpen = stored.envOpen
+    if (Array.isArray(stored.projectOrder))
+      result.projectOrder = stored.projectOrder.filter((id: unknown) => typeof id === "string")
+    const sidebarFilter = readSidebarFilter(stored.sidebarFilter)
+    if (sidebarFilter) result.sidebarFilter = sidebarFilter
     return result
   } catch {
     return {}
@@ -67,6 +72,8 @@ export function persistWorkspace(environmentId: string, state: AppState): void {
   const {
     selected,
     collapsedProjects,
+    projectOrder,
+    sidebarFilter,
     explorerFile,
     expandedWork,
     composerDrafts,
@@ -85,6 +92,8 @@ export function persistWorkspace(environmentId: string, state: AppState): void {
         state: {
           selected,
           collapsedProjects,
+          projectOrder,
+          sidebarFilter,
           explorerFile,
           expandedWork,
           composerDrafts,

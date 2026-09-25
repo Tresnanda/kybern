@@ -3013,9 +3013,10 @@ diffs-container {
   padding: var(--picker-menu-body-p);
 }
 
-/* Thread actions keep one icon column and let labels determine the width.
-   The row radius nests inside the existing 0.65rem shell and 0.25rem inset. */
-.thread-actions-menu {
+/* Action menus (thread actions, sidebar help): one 16px icon column beside
+   the label, a trailing column for shortcuts and details, and labels that set
+   the width. The row radius nests inside the 0.65rem shell and 0.25rem inset. */
+.action-menu {
   width: max-content;
   min-width: min(13rem, 92vw);
   --picker-option-min-h: 1.75rem;
@@ -3025,21 +3026,25 @@ diffs-container {
   --picker-option-icon-size: 1rem;
 }
 
-.thread-actions-menu [data-slot="menu-item"] {
+.action-menu [data-slot="menu-item"] {
   border-radius: 0.375rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
-.thread-actions-menu [data-slot="menu-item"] > svg {
+.action-menu [data-slot="menu-item"] > svg {
   margin-inline: 0;
 }
 
-.thread-actions-menu [data-slot="menu-shortcut"] {
+/* Shortcuts and details (a version, a status) share one trailing style. */
+.action-menu [data-slot="menu-shortcut"],
+.action-menu [data-slot="menu-detail"] {
   flex-shrink: 0;
+  margin-inline-start: auto;
   padding-inline-start: 1rem;
   letter-spacing: 0;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Permission mode picker: wider, calmer rows matching the native approval menu. */

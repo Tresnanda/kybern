@@ -12,29 +12,37 @@ import {
   beginThreadPointerDrag,
   consumeThreadPointerDragClick,
 } from "@/components/kybern/chatPaneDrag"
+import { beginProjectReorder, consumeProjectDragClick } from "@/components/kybern/projectReorder"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { SidebarIconButton } from "@/components/kit/SidebarIconButton"
 import { ThreadRunningSpinner } from "@/components/kit/ThreadRunningSpinner"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Kbd, KbdGroup } from "@/components/kit/kbd"
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/kit/menu"
 import { SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/kit/sidebar"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
-import { mod } from "@/lib/format"
+import { mod, PROVIDER_LABEL } from "@/lib/format"
+import { useAppUpdate } from "@/lib/appUpdate"
 import {
   AddPlusIcon,
   AnalyticsIcon,
   ArchiveIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   GitPullRequestIcon,
-  BookIcon,
+  CircleCheckIcon,
+  CircleQuestionIcon,
   RefreshCwIcon,
   ClockIcon,
+  FilterIcon,
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
   HandoffIcon,
-  KeyboardIcon,
+  CommandIcon,
+  InfoIcon,
+  LoaderCircleIcon,
   NewThreadIcon,
   PencilIcon,
   PinFilledIcon,
@@ -60,13 +68,14 @@ import { pickFolder, platform } from "@/lib/tauri"
 import { activeEnvironment } from "@/state/environments"
 import { isLaunching } from "@/lib/launch"
 import { cn } from "@/lib/utils"
-import { TextSwap } from "@/components/kybern/motion"
+import { IconSwap, TextSwap } from "@/components/kybern/motion"
 import { primeMarquee } from "@/lib/kit/marquee"
-import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type Project, type ProjectId, type Thread, type ThreadActivityState, type ThreadId } from "@/protocol"
+import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type Project, type ProjectId, type ProviderKind, type Thread, type ThreadActivityState, type ThreadId } from "@/protocol"
 import { selectAttentionItems, threadAttentionKind } from "@/state/notifications"
 import { newThread } from "@/state/nav"
 import { addProject, archiveThread, errorText, loadThread, refreshProviders, removeProject, updateThread } from "@/state/rpc"
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
+import { DEFAULT_SIDEBAR_FILTER, isFiltering, moveProject, orderProjects, threadMatchesFilter, type SidebarFilter } from "@/state/sidebarOrganize"
 import { createProjectThreadsSelector, useStore } from "@/state/store"
 
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
@@ -83,32 +92,46 @@ const HOVER_HIDE_THREAD =
   "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0"
 const REVEAL_TOOLBAR =
   "t-reveal flex items-center gap-1.5 absolute top-1 right-1.5 pointer-events-none opacity-100 md:translate-x-1 md:opacity-0 md:group-hover/project-header:translate-x-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 md:has-[[data-state=open]]:pointer-events-auto md:has-[[data-state=open]]:opacity-100"
+// A filter that hides threads keeps its control in view, so the list never
+// looks mysteriously short.
+const TOOLBAR_SHOWN = "pointer-events-auto md:translate-x-0 md:pointer-events-auto md:opacity-100"
+const NO_ACTIVITY: Record<ThreadId, { state?: ThreadActivityState } | undefined> = {}
+
+/** Save a project's new place in the sidebar. */
+function commitProjectMove(id: ProjectId, targetIndex: number, visible: ProjectId[]) {
+  const state = useStore.getState()
+  const order = orderProjects(Object.values(state.projects), state.projectOrder).map((project) => project.id)
+  state.setProjectOrder(moveProject(order, visible, id, targetIndex))
+}
+
+/** "Pinned", "Codex", or "Pinned Codex": what the sidebar is showing. */
+function filterSummary(filter: SidebarFilter): string {
+  const agent = filter.agent ? PROVIDER_LABEL[filter.agent] ?? filter.agent : null
+  const threads = filter.threads === "pinned" ? "Pinned" : filter.threads === "working" ? "Working" : null
+  return [threads, agent].filter(Boolean).join(" ")
+}
+
+function filterEmptyText(filter: SidebarFilter): string {
+  const agent = filter.agent ? `${PROVIDER_LABEL[filter.agent] ?? filter.agent} ` : ""
+  if (filter.threads === "pinned") return `No pinned ${agent}threads`
+  if (filter.threads === "working") return `No ${agent}threads are working`
+  return `No ${agent}threads`
+}
 
 export function ThreadSidebar() {
   const projects = useStore((s) => s.projects)
-  const projectList = useMemo(() => Object.values(projects).sort((a, b) => a.name.localeCompare(b.name)), [projects])
+  const projectOrder = useStore((s) => s.projectOrder)
+  const projectList = useMemo(() => orderProjects(Object.values(projects), projectOrder), [projects, projectOrder])
+  const sidebarFilter = useStore((s) => s.sidebarFilter)
+  const filtering = isFiltering(sidebarFilter)
+  // Activity only matters to the Working filter; skip the subscription otherwise.
+  const threadActivity = useStore((s) => (sidebarFilter.threads === "working" ? s.threadActivity : NO_ACTIVITY))
   const set = useStore((s) => s.set)
   const pullsActive = useStore((s) => s.selected.kind === "pulls")
   const selected = useStore((s) => s.selected)
   const mac = platform() === "macos"
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
   const [enterSurface] = useState(() => !isLaunching())
-  const [reloadingAgents, setReloadingAgents] = useState(false)
-  // Re-probe every agent on this Mac (versions, availability, model catalogs)
-  // without waiting for a reconnect. Picks up CLIs and models installed mid-session.
-  const reloadAgents = async () => {
-    if (reloadingAgents) return
-    setReloadingAgents(true)
-    try {
-      const refreshed = await refreshProviders()
-      const available = refreshed.filter((p) => p.available).length
-      toast.success(available === 1 ? "1 agent ready" : `${available} agents ready`)
-    } catch (e) {
-      toast.error("Unable to reload agents", { description: errorText(e) })
-    } finally {
-      setReloadingAgents(false)
-    }
-  }
   const connection = useStore((s) => s.connection)
   const threads = useStore((s) => s.threads)
   const freeThreads = useMemo(
@@ -126,22 +149,42 @@ export function ThreadSidebar() {
     if (!notificationFilter) return null
     return new Set<ThreadId>(selectAttentionItems({ threads, notifications, notificationDismissals }).map((item) => item.thread.id))
   }, [notificationFilter, threads, notifications, notificationDismissals])
+  // Threads the bell and the filter both allow; null when neither is on.
+  const shownIds = useMemo(() => {
+    if (!attentionIds && !filtering) return null
+    const ids = new Set<ThreadId>()
+    for (const thread of Object.values(threads)) {
+      if (thread.status === "archived") continue
+      if (attentionIds && !attentionIds.has(thread.id)) continue
+      if (filtering && !threadMatchesFilter(thread, sidebarFilter, threadActivity[thread.id]?.state ?? undefined)) continue
+      ids.add(thread.id)
+    }
+    return ids
+  }, [attentionIds, filtering, sidebarFilter, threadActivity, threads])
   const visibleFreeThreads = useMemo(
-    () => freeThreads.filter((thread) => !attentionIds || attentionIds.has(thread.id)),
-    [attentionIds, freeThreads],
+    () => freeThreads.filter((thread) => !shownIds || shownIds.has(thread.id)),
+    [shownIds, freeThreads],
   )
   const recentsCollapsed = useStore((s) => !!s.collapsedProjects[FREE_CHAT_PROJECT_ID])
-  const recentsOpen = attentionIds ? true : !recentsCollapsed
+  const recentsOpen = shownIds ? true : !recentsCollapsed
   const toggleRecents = useStore((s) => s.toggleProject)
   const visibleProjects = useMemo(() => {
-    if (!attentionIds) return projectList
-    const withAttention = new Set<ProjectId>()
-    for (const id of attentionIds) {
+    if (!shownIds) return projectList
+    const withShown = new Set<ProjectId>()
+    for (const id of shownIds) {
       const thread = threads[id]
-      if (thread) withAttention.add(thread.project_id)
+      if (thread) withShown.add(thread.project_id)
     }
-    return projectList.filter((p) => withAttention.has(p.id))
-  }, [attentionIds, projectList, threads])
+    return projectList.filter((p) => withShown.has(p.id))
+  }, [shownIds, projectList, threads])
+  const visibleProjectIds = useMemo(() => visibleProjects.map((project) => project.id), [visibleProjects])
+  // Agents to filter by: the ones that have threads here, plus the chosen one.
+  const threadAgents = useMemo(() => {
+    const kinds = new Set<ProviderKind>()
+    for (const thread of Object.values(threads)) if (thread.status !== "archived") kinds.add(thread.provider.kind)
+    if (sidebarFilter.agent) kinds.add(sidebarFilter.agent)
+    return [...kinds].sort((a, b) => (PROVIDER_LABEL[a] ?? a).localeCompare(PROVIDER_LABEL[b] ?? b))
+  }, [sidebarFilter.agent, threads])
 
   const onAddProject = async () => {
     if (connection.state !== "open") { toast("Connect to this environment before adding a project"); return }
@@ -221,21 +264,48 @@ export function ThreadSidebar() {
 
           <SidebarGroup className="px-1.5 py-1.5">
             <div className="group/project-header relative my-1">
-              <div className={cn("flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]", SIDEBAR_SECTION_LABEL_CLASS_NAME)}>
-                <span className="truncate">Projects</span>
+              <div className={cn("flex h-7 w-full min-w-0 items-center gap-1.5 px-2 py-0.5 pr-[4.75rem]", SIDEBAR_SECTION_LABEL_CLASS_NAME)}>
+                <span className="shrink-0">Projects</span>
+                {filtering && (
+                  <>
+                    <span aria-hidden="true" className="shrink-0">·</span>
+                    <span className="t-pop min-w-0 truncate text-foreground/70" title={`Showing ${filterSummary(sidebarFilter).toLowerCase()} threads`}>
+                      {filterSummary(sidebarFilter)}
+                    </span>
+                  </>
+                )}
               </div>
-              <div className={REVEAL_TOOLBAR}>
+              <div className={cn(REVEAL_TOOLBAR, filtering && TOOLBAR_SHOWN)}>
+                <SidebarFilterMenu filter={sidebarFilter} agents={threadAgents} />
                 <SidebarIconButton icon={AddPlusIcon} label="Add project" size="md" tooltip="Add project" onClick={onAddProject} />
               </div>
             </div>
-            {attentionIds && attentionIds.size === 0 ? (
-              <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">You're all caught up. No threads need attention.</div>
-            ) : projectList.length === 0 ? (
+            {projectList.length === 0 ? (
               <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">No projects yet. Add a folder to see its threads here.</div>
+            ) : shownIds && shownIds.size === 0 && attentionIds && !filtering ? (
+              <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">You're all caught up. No threads need attention.</div>
+            ) : filtering && visibleProjects.length === 0 ? (
+              <div className="flex flex-wrap items-baseline gap-x-1.5 px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/60">
+                <span>{filterEmptyText(sidebarFilter)}{visibleFreeThreads.length > 0 ? " in projects" : ""}.</span>
+                <button
+                  type="button"
+                  onClick={() => useStore.getState().setSidebarFilter(DEFAULT_SIDEBAR_FILTER)}
+                  className="cursor-pointer rounded-sm text-foreground/85 underline decoration-foreground/25 underline-offset-2 outline-hidden transition-colors hover:text-foreground hover:decoration-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Show all threads
+                </button>
+              </div>
             ) : (
               <SidebarMenu className="gap-3">
-                {visibleProjects.map((p) => (
-                  <ProjectItem key={p.id} project={p} filterThreadIds={attentionIds ?? undefined} />
+                {visibleProjects.map((p, index) => (
+                  <ProjectItem
+                    key={p.id}
+                    project={p}
+                    filterThreadIds={shownIds ?? undefined}
+                    onMove={visibleProjects.length > 1 ? (offset) => commitProjectMove(p.id, index + offset, visibleProjectIds) : undefined}
+                    canMoveUp={index > 0}
+                    canMoveDown={index < visibleProjects.length - 1}
+                  />
                 ))}
               </SidebarMenu>
             )}
@@ -286,37 +356,7 @@ export function ThreadSidebar() {
                 </span>
                 <span>Settings</span>
               </SidebarMenuButton>
-              <Menu>
-                <SidebarIconButton
-                  render={<MenuTrigger />}
-                  icon={RefreshCwIcon}
-                  iconClassName={cn("size-[15px] shrink-0", reloadingAgents && "animate-spin")}
-                  label="Reload agents"
-                  tooltip="Reload agents"
-                  size="md"
-                />
-                <ComposerPickerMenuPopup align="end" side="top" className="w-64 min-w-64">
-                  <MenuGroup>
-                    <MenuGroupLabel>Agents</MenuGroupLabel>
-                    <MenuItem onClick={() => void reloadAgents()} disabled={reloadingAgents}>
-                      <RefreshCwIcon /> {reloadingAgents ? "Reloading…" : "Reload models"}
-                    </MenuItem>
-                    <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "agents" })}>
-                      <SettingsIcon /> Agents on this Mac
-                    </MenuItem>
-                  </MenuGroup>
-                  <MenuSeparator />
-                  <MenuGroup>
-                    <MenuGroupLabel>kybern</MenuGroupLabel>
-                    <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "about" })}>
-                      <BookIcon /> About
-                    </MenuItem>
-                    <MenuItem onClick={() => set({ paletteOpen: true })}>
-                      <KeyboardIcon /> Keyboard shortcuts
-                    </MenuItem>
-                  </MenuGroup>
-                </ComposerPickerMenuPopup>
-              </Menu>
+              <HelpMenu />
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -355,7 +395,135 @@ function PrimaryAction({ icon, label, shortcut, trailing, onClick, active }: { i
   )
 }
 
-function ProjectItem({ project, filterThreadIds }: { project: Project; filterThreadIds?: Set<ThreadId> }) {
+function SidebarFilterMenu({ filter, agents }: { filter: SidebarFilter; agents: ProviderKind[] }) {
+  const setFilter = useStore((s) => s.setSidebarFilter)
+  const active = isFiltering(filter)
+  const summary = filterSummary(filter)
+  return (
+    <Menu>
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={FilterIcon}
+        label={active ? `Filter threads, showing ${summary.toLowerCase()}` : "Filter threads"}
+        tooltip="Filter threads"
+        size="md"
+        aria-pressed={active}
+        className={active ? "bg-[var(--sidebar-accent-active)] text-foreground" : undefined}
+      />
+      <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-48">
+        <MenuGroup>
+          <MenuGroupLabel>Show</MenuGroupLabel>
+          <MenuRadioGroup value={filter.threads} onValueChange={(threads) => setFilter({ threads: threads as SidebarFilter["threads"] })}>
+            <MenuRadioItem value="all" closeOnClick>All threads</MenuRadioItem>
+            <MenuRadioItem value="pinned" closeOnClick>Pinned</MenuRadioItem>
+            <MenuRadioItem value="working" closeOnClick>Working</MenuRadioItem>
+          </MenuRadioGroup>
+        </MenuGroup>
+        {agents.length > 1 && (
+          <>
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuGroupLabel>Agent</MenuGroupLabel>
+              <MenuRadioGroup value={filter.agent ?? ""} onValueChange={(agent) => setFilter({ agent: (agent as ProviderKind) || null })}>
+                <MenuRadioItem value="" closeOnClick>All agents</MenuRadioItem>
+                {agents.map((kind) => (
+                  <MenuRadioItem key={kind} value={kind} closeOnClick>
+                    {PROVIDER_LABEL[kind] ?? kind}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
+        )}
+        {active && (
+          <>
+            <MenuSeparator />
+            <MenuItem onClick={() => setFilter(DEFAULT_SIDEBAR_FILTER)}>Clear filters</MenuItem>
+          </>
+        )}
+      </ComposerPickerMenuPopup>
+    </Menu>
+  )
+}
+
+/** Trailing detail in an action menu row, styled like a shortcut hint. */
+function MenuDetail(props: React.ComponentProps<"span">) {
+  return <span data-slot="menu-detail" className="font-medium text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/72" {...props} />
+}
+
+type AgentCheck = { state: "idle" } | { state: "checking" } | { state: "done"; ready: number }
+
+/**
+ * Footer help menu. Reloading agents reports its result in place, so the menu
+ * stays open while it checks and the answer appears where it was asked for.
+ */
+function HelpMenu() {
+  const set = useStore((s) => s.set)
+  const version = useAppUpdate((s) => s.appVersion)
+  const [check, setCheck] = useState<AgentCheck>({ state: "idle" })
+  const reloadAgents = async () => {
+    if (check.state === "checking") return
+    setCheck({ state: "checking" })
+    try {
+      const refreshed = await refreshProviders()
+      setCheck({ state: "done", ready: refreshed.filter((p) => p.available).length })
+    } catch (e) {
+      setCheck({ state: "idle" })
+      toast.error("Unable to reload agents", { description: errorText(e) })
+    }
+  }
+  return (
+    <Menu onOpenChange={(open) => !open && check.state === "done" && setCheck({ state: "idle" })}>
+      <SidebarIconButton render={<MenuTrigger />} icon={CircleQuestionIcon} iconClassName="size-[15px] shrink-0" label="Help and agents" tooltip="Help and agents" size="md" />
+      <ComposerPickerMenuPopup align="end" side="top" className="action-menu">
+        <MenuGroup>
+          <MenuItem onClick={() => set({ paletteOpen: true })}>
+            <CommandIcon /> Commands and shortcuts
+            <MenuShortcut>{mod}K</MenuShortcut>
+          </MenuItem>
+          <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "about" })}>
+            <InfoIcon /> About kybern
+            {version && <MenuDetail>{version}</MenuDetail>}
+          </MenuItem>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuGroup>
+          <MenuItem closeOnClick={false} onClick={() => void reloadAgents()} aria-busy={check.state === "checking"}>
+            {/* Sized like the menu's plain icons so every label starts on one edge. */}
+            <IconSwap
+              active={check.state === "idle" ? "a" : "b"}
+              className="size-[var(--picker-option-icon-size)] shrink-0 opacity-80"
+              a={<RefreshCwIcon className="size-full" />}
+              b={check.state === "checking" ? <LoaderCircleIcon className="size-full animate-spin" /> : <CircleCheckIcon className="size-full" />}
+            />
+            Reload agents
+            <MenuDetail aria-live="polite">
+              {check.state === "checking" ? "Checking…" : check.state === "done" ? (check.ready === 1 ? "1 ready" : `${check.ready} ready`) : ""}
+            </MenuDetail>
+          </MenuItem>
+          <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "agents" })}>
+            <SettingsIcon /> Agent settings
+          </MenuItem>
+        </MenuGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  )
+}
+
+function ProjectItem({
+  project,
+  filterThreadIds,
+  onMove,
+  canMoveUp,
+  canMoveDown,
+}: {
+  project: Project
+  filterThreadIds?: Set<ThreadId>
+  /** Move this project by one place among the listed projects. */
+  onMove?: (offset: -1 | 1) => void
+  canMoveUp?: boolean
+  canMoveDown?: boolean
+}) {
   const selectThreads = useMemo(() => createProjectThreadsSelector(project.id), [project.id])
   const threads = useStore(useShallow(selectThreads))
   const filtering = !!filterThreadIds
@@ -395,13 +563,18 @@ function ProjectItem({ project, filterThreadIds }: { project: Project; filterThr
   const visible = showAll || filtering ? orderedRows : orderedRows.slice(0, MAX_PROJECT_THREADS)
 
   return (
-    <SidebarMenuItem className="rounded-md">
+    <SidebarMenuItem className="rounded-md" data-project-id={project.id}>
       <div className="group/collapsible">
         <ContextMenu>
           <ContextMenuTrigger render={<div className="group/project-header relative" />}>
             <SidebarMenuButton
               size="sm"
-              onClick={() => (isDraftHere ? toggle(project.id) : useStore.getState().selectDraft(project.id))}
+              onPointerDown={onMove ? (event) => beginProjectReorder({ event, id: project.id, onDrop: commitProjectMove }) : undefined}
+              onClick={() => {
+                if (consumeProjectDragClick(project.id)) return
+                if (isDraftHere) toggle(project.id)
+                else useStore.getState().selectDraft(project.id)
+              }}
               className={cn(
                 SIDEBAR_HEADER_ROW_CLASS_NAME,
                 "cursor-pointer hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
@@ -417,7 +590,7 @@ function ProjectItem({ project, filterThreadIds }: { project: Project; filterThr
                 aria-label={open ? "Collapse" : "Expand"}
                 onClick={(e) => {
                   e.stopPropagation()
-                  toggle(project.id)
+                  if (!consumeProjectDragClick(project.id)) toggle(project.id)
                 }}
                 className="sidebar-icon-button pointer-events-none absolute top-1/2 left-2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-foreground/95 opacity-0 transition-opacity hover:text-foreground md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100"
               >
@@ -450,6 +623,19 @@ function ProjectItem({ project, filterThreadIds }: { project: Project; filterThr
                 <ClockIcon /> Resume session
               </ContextMenuItem>
             </ContextMenuGroup>
+            {onMove && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuGroup>
+                  <ContextMenuItem disabled={!canMoveUp} onClick={() => onMove(-1)}>
+                    <ArrowUpIcon /> Move up
+                  </ContextMenuItem>
+                  <ContextMenuItem disabled={!canMoveDown} onClick={() => onMove(1)}>
+                    <ArrowDownIcon /> Move down
+                  </ContextMenuItem>
+                </ContextMenuGroup>
+              </>
+            )}
             <ContextMenuSeparator />
             <ContextMenuGroup>
               <ContextMenuItem variant="destructive" onClick={() => removeProject(project.id).catch((e) => toast.error("Unable to remove project", { description: errorText(e) }))}>
