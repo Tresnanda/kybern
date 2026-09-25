@@ -775,35 +775,34 @@ impl ComputerUse {
         let session = session_label(ctx.thread_id);
         let mut lines = Vec::new();
         let mut stopped = false;
-        let mut unconfirmed = Vec::new();
         let mut last_action: Option<String> = None;
         let mut last_point: Option<[f64; 2]> = None;
         let pixel_batch = steps.iter().any(|step| step.click_at.is_some());
         for (index, step) in steps.iter().enumerate() {
             let number = index + 1;
             if ctx.consent.cancelled().await {
-                lines.push(format!("{number} stopped: the turn was interrupted"));
+                lines.push(StepLine::Note(format!("{number} stopped: the turn was interrupted")));
                 stopped = true;
                 break;
             }
             if started.elapsed() > CALL_BUDGET - Duration::from_secs(8) {
-                lines.push(format!("{number} not run: this call used its time budget; continue in a new call"));
+                lines.push(StepLine::Note(format!("{number} not run: this call used its time budget; continue in a new call")));
                 stopped = true;
                 break;
             }
             if let Some(condition) = step.condition() {
                 let present = self.label_present(&client, pid, window_id, condition.label, &session).await?;
                 if present != condition.want_present {
-                    lines.push(format!("{number} {} skipped ({})", step.summary(), condition.describe()));
+                    lines.push(StepLine::Note(format!("{number} {} skipped ({})", step.summary(), condition.describe())));
                     continue;
                 }
             }
             let signature = format!("{window_id}:{}", serde_json::to_string(&step.raw).unwrap_or_default());
             if self.repeated(ctx.thread_id, &signature).await {
-                lines.push(format!(
+                lines.push(StepLine::Note(format!(
                     "{number} {} refused: it already ran {REPEAT_LIMIT} times without a confirmed effect. Observe the window or take a screenshot, then try a different approach.",
                     step.summary()
-                ));
+                )));
                 stopped = true;
                 break;
             }
@@ -819,32 +818,30 @@ impl ComputerUse {
                     }
                     last_action = Some(action);
                     last_point = point;
-                    lines.push(format!("{number} {} {}", step.summary(), verdict.describe(mode)));
                     if verdict.confirmed() {
                         self.clear_repeat(ctx.thread_id, &signature).await;
-                    } else if step.mutates() {
-                        unconfirmed.push(signature);
                     }
-                    if verdict.stops() {
+                    let stops = verdict.stops();
+                    let signature = (!verdict.confirmed() && step.mutates()).then_some(signature);
+                    lines.push(StepLine::Ran { number, summary: step.summary(), verdict, signature });
+                    if stops {
                         stopped = true;
                         break;
                     }
                 }
                 Err(error) => {
-                    lines.push(format!("{number} {} failed: {error}", step.summary()));
+                    lines.push(StepLine::Note(format!("{number} {} failed: {error}", step.summary())));
                     stopped = true;
                     break;
                 }
             }
         }
-        if stopped && lines.len() < steps.len() {
-            lines.push(format!("Remaining {} step(s) were not run.", steps.len() - lines.len()));
-        }
-        self.note_unconfirmed(ctx.thread_id, unconfirmed).await;
+        let remaining = steps.len() - lines.len();
 
-        let mut output = Output::default();
-        output.push_text(format!("w{window_id} {app} · {} mode", mode.as_str()));
-        output.push_text(lines.join("\n"));
+        // Look at the window before reporting the steps: a changed window is
+        // the evidence for steps the driver could not verify on its own.
+        let mut observed = Output::default();
+        let mut changed = None;
         let after_windows = self.list_windows(&client, Some(pid)).await.unwrap_or_default();
         let mut window_changes = Vec::new();
         for window in after_windows.iter().filter(|window| !before_windows.iter().any(|before| before.window_id == window.window_id)) {
@@ -855,7 +852,8 @@ impl ComputerUse {
             window_changes.push(format!("closed window w{} \"{}\"", window.window_id, window.title));
         }
         if !window_changes.is_empty() {
-            output.push_text(window_changes.join("\n"));
+            observed.push_text(window_changes.join("\n"));
+            changed = Some(true);
         }
         let window_open = after_windows.iter().any(|window| window.window_id == window_id) || after_windows.is_empty();
         let observe = args.observe.as_deref().unwrap_or("diff");
@@ -883,10 +881,13 @@ impl ComputerUse {
                     }
                     let mut threads = self.inner.threads.lock().await;
                     let window = window_state(&mut threads, ctx.thread_id, window_id, pid, &app);
-                    match (&before, observe) {
-                        (Some(before), "diff") => {
-                            let changes = digest::diff(before, &snapshot, &mut window.refs);
-                            output.push_text(if changes.is_empty() {
+                    let changes = before.as_ref().map(|before| digest::diff(before, &snapshot, &mut window.refs));
+                    if let Some(changes) = &changes {
+                        changed = Some(changed.unwrap_or(false) || !changes.is_empty());
+                    }
+                    match (changes, observe) {
+                        (Some(changes), "diff") => {
+                            observed.push_text(if changes.is_empty() {
                                 "No accessibility changes in this window.".into()
                             } else {
                                 format!("changes:\n{}", changes.join("\n"))
@@ -899,20 +900,50 @@ impl ComputerUse {
                             if omitted > 0 {
                                 header.push_str(&format!(", {omitted} more"));
                             }
-                            output.push_text(format!("{header}\n{}", lines.join("\n")));
+                            observed.push_text(format!("{header}\n{}", lines.join("\n")));
                         }
                     }
                     window.last = Some(snapshot);
                     window.zoomed = false;
                     if screenshot {
-                        self.attach_image(&mut output, window, &result.images)?;
+                        self.attach_image(&mut observed, window, &result.images)?;
                     }
                 }
-                Err(error) => output.push_text(format!("Could not read the window after acting: {error}")),
+                Err(error) => observed.push_text(format!("Could not read the window after acting: {error}")),
             }
         } else if !window_open {
-            output.push_text(format!("w{window_id} is no longer open."));
+            observed.push_text(format!("w{window_id} is no longer open."));
         }
+
+        let window_changed = changed == Some(true);
+        let unverified =
+            lines.iter().filter(|line| matches!(line, StepLine::Ran { verdict, signature: Some(_), .. } if verdict.unverifiable())).count();
+        let mut report = Vec::new();
+        let mut unconfirmed = Vec::new();
+        for line in lines {
+            match line {
+                StepLine::Note(text) => report.push(text),
+                StepLine::Ran { number, summary, verdict, signature } => {
+                    report.push(format!("{number} {summary} {}", verdict.describe(mode, window_changed, unverified == 1)));
+                    if let Some(signature) = signature {
+                        if window_changed && verdict.unverifiable() {
+                            self.clear_repeat(ctx.thread_id, &signature).await;
+                        } else {
+                            unconfirmed.push(signature);
+                        }
+                    }
+                }
+            }
+        }
+        if stopped && remaining > 0 {
+            report.push(format!("Remaining {remaining} step(s) were not run."));
+        }
+        self.note_unconfirmed(ctx.thread_id, unconfirmed).await;
+
+        let mut output = Output::default();
+        output.push_text(format!("w{window_id} {app} · {} mode", mode.as_str()));
+        output.push_text(report.join("\n"));
+        output.append(observed);
         Ok(output)
     }
 
@@ -1235,6 +1266,15 @@ impl Output {
         self.blocks.push(json!({ "type": "text", "text": text }));
     }
 
+    fn append(&mut self, other: Output) {
+        for block in other.blocks {
+            match block["text"].as_str() {
+                Some(text) if block["type"] == "text" => self.push_text(text.to_owned()),
+                _ => self.blocks.push(block),
+            }
+        }
+    }
+
     fn push_image(&mut self, mime: String, data: String) {
         self.blocks.push(json!({ "type": "image", "mimeType": mime, "data": data }));
     }
@@ -1251,6 +1291,19 @@ pub(crate) fn content_blocks(value: &Value) -> Vec<Value> {
         Some(blocks) => blocks.clone(),
         None => vec![json!({ "type": "text", "text": value.to_string() })],
     }
+}
+
+/// One line of an `act` report, rendered once the window has been observed.
+enum StepLine {
+    Note(String),
+    /// A step the driver ran. `signature` is set when it mutates and the
+    /// driver did not confirm it, for the repeat guard.
+    Ran {
+        number: usize,
+        summary: String,
+        verdict: Verdict,
+        signature: Option<String>,
+    },
 }
 
 struct Verdict {
@@ -1290,13 +1343,22 @@ impl Verdict {
         self.effect == "confirmed"
     }
 
+    fn unverifiable(&self) -> bool {
+        self.effect == "unverifiable"
+    }
+
     fn stops(&self) -> bool {
         matches!(self.effect.as_str(), "refused" | "suspected_noop" | "timeout" | "partial")
     }
 
-    fn describe(&self, mode: Mode) -> String {
+    /// `window_changed`: the window's accessibility state or its windows
+    /// changed during this call, which confirms an unverified step when it
+    /// was the only one (`sole`) and supports it otherwise.
+    fn describe(&self, mode: Mode, window_changed: bool, sole: bool) -> String {
         let mut text = match self.effect.as_str() {
             "confirmed" => "✓".to_owned(),
+            "unverifiable" if window_changed && sole => "✓ the window changed".to_owned(),
+            "unverifiable" if window_changed => "~ sent; the window changed".to_owned(),
             "unverifiable" => "~ sent; effect not confirmed".to_owned(),
             "partial" => "! only partly delivered; observe before repairing".to_owned(),
             "suspected_noop" => "? no visible effect".to_owned(),
@@ -1311,6 +1373,7 @@ impl Verdict {
             text.push_str(" (used the real cursor)");
         }
         match self.escalation.as_deref() {
+            _ if window_changed && self.unverifiable() => {}
             Some("foreground") if mode == Mode::Background && self.effect != "confirmed" => {
                 text.push_str(". Background delivery may not reach this control; if it matters, retry this step with mode \"foreground\" (the user approves it)")
             }
@@ -1906,12 +1969,36 @@ mod tests {
     fn verdicts_stop_on_refusals_and_suggest_foreground_only_in_background() {
         let refused = Verdict::refused("background_unavailable".into(), &json!({"escalation":{"target":"foreground"}}));
         assert!(refused.stops());
-        assert!(refused.describe(Mode::Background).contains("mode \"foreground\""));
-        assert!(!refused.describe(Mode::Foreground).contains("mode \"foreground\""));
+        assert!(refused.describe(Mode::Background, false, true).contains("mode \"foreground\""));
+        assert!(!refused.describe(Mode::Foreground, false, true).contains("mode \"foreground\""));
         let confirmed = Verdict::from_structured(&json!({"effect":"confirmed","route":"accessibility"}));
         assert!(confirmed.confirmed() && !confirmed.stops());
         let unverified = Verdict::from_structured(&json!({"effect":"unverifiable"}));
         assert!(!unverified.stops());
+    }
+
+    #[test]
+    fn a_changed_window_backs_unverified_steps() {
+        let typed = Verdict::from_structured(&json!({"effect":"unverifiable","escalation":{"target":"foreground"}}));
+        let quiet = typed.describe(Mode::Background, false, true);
+        assert!(quiet.contains("effect not confirmed") && quiet.contains("mode \"foreground\""));
+        assert_eq!(typed.describe(Mode::Background, true, true), "✓ the window changed");
+        assert_eq!(typed.describe(Mode::Background, true, false), "~ sent; the window changed");
+        // A refusal is not rescued by an unrelated change.
+        let refused = Verdict::refused("background_unavailable".into(), &json!({"escalation":{"target":"foreground"}}));
+        assert!(refused.describe(Mode::Background, true, true).contains("mode \"foreground\""));
+    }
+
+    #[test]
+    fn appended_output_joins_text_and_keeps_images() {
+        let mut output = Output::text("w1 Notes · background mode".into());
+        let mut observed = Output::text("changes:\n~statictext = \"15\"".into());
+        observed.push_image("image/jpeg".into(), "AAAA".into());
+        output.append(observed);
+        let blocks = content_blocks(&output.into_value());
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["text"], "w1 Notes · background mode\nchanges:\n~statictext = \"15\"");
+        assert_eq!(blocks[1]["type"], "image");
     }
 
     #[test]
@@ -2095,6 +2182,20 @@ mod live {
         timed("act", started);
         let acted = text(&acted);
         eprintln!("{acted}\n({} chars)", acted.len());
+
+        assert!(!acted.contains("effect not confirmed"), "a changed display should back the presses");
+
+        // CuaDriver ends named sessions with the process that made them and
+        // never revives the name for another; end ours behind Kybern's back.
+        let client = computer.client().await.unwrap();
+        client.call_ok("end_session", json!({"session": session_label(thread_id)})).await.unwrap();
+        let started = Instant::now();
+        let steps: Vec<Value> =
+            ["All Clear", "1", "2", "Multiply", "3", "4", "Equals"].iter().map(|label| json!({"press": reference(label)})).collect();
+        let again = text(&computer.execute(ctx(), "kybern_computer_act", json!({"window": window, "steps": steps})).await.unwrap());
+        timed("act after the session ended", started);
+        eprintln!("{again}");
+        assert!(!again.contains("has ended") && !again.contains("failed") && !again.contains("refused"), "the session should renew");
 
         let started = Instant::now();
         let read =
