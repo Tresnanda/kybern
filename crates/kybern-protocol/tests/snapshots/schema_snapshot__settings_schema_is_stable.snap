@@ -94,6 +94,14 @@ expression: schema_for!(Settings)
       "default": {
         "tailscale": false
       }
+    },
+    "computer_use": {
+      "description": "Desktop control through CuaDriver for non-Codex harnesses.",
+      "$ref": "#/$defs/ComputerUseSettings",
+      "default": {
+        "enabled": false,
+        "foreground": "ask"
+      }
     }
   },
   "$defs": {
@@ -217,6 +225,43 @@ expression: schema_for!(Settings)
           "default": false
         }
       }
+    },
+    "ComputerUseSettings": {
+      "description": "Agents drive apps on this Mac through a separately installed CuaDriver.\nCodex keeps OpenAI's own computer-use plugin.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Offer the computer tools to new agent sessions.",
+          "type": "boolean",
+          "default": false
+        },
+        "foreground": {
+          "description": "Whether an agent may ask to use the real cursor and focus.",
+          "$ref": "#/$defs/ComputerForeground",
+          "default": "ask"
+        },
+        "always_allowed_apps": {
+          "description": "Apps (display names) agents may control in the background without\nasking. Filled by \"Always allow\" on the approval card.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ComputerForeground": {
+      "oneOf": [
+        {
+          "description": "Background by default; foreground after the user approves it per app.",
+          "type": "string",
+          "const": "ask"
+        },
+        {
+          "description": "Background only.",
+          "type": "string",
+          "const": "never"
+        }
+      ]
     }
   }
 }

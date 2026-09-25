@@ -1121,6 +1121,105 @@ pub struct SettingsUpdateParams {
 }
 method!(SettingsUpdate, "settings.update", Some(Scope::OrchestrationOperate), SettingsUpdateParams, Settings);
 
+// ---- computer use ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputerPermission {
+    Granted,
+    Missing,
+    Unknown,
+}
+
+/// One line of `kybern computer doctor`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerCheck {
+    pub name: String,
+    pub ok: bool,
+    pub message: String,
+    /// What the user should do next, when the check fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerStatus {
+    /// This daemon runs on macOS.
+    pub supported: bool,
+    pub enabled: bool,
+    pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The CuaDriver release Kybern installs and requires at minimum.
+    pub required_version: String,
+    /// Signed by Cua AI with the expected bundle identifier.
+    pub signed: bool,
+    pub accessibility: ComputerPermission,
+    pub screen_recording: ComputerPermission,
+    /// Agents can use computer tools now.
+    pub ready: bool,
+    pub checks: Vec<ComputerCheck>,
+}
+method!(ComputerStatusGet, "computer.status", Some(Scope::OrchestrationRead), Empty, ComputerStatus);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputerSetupAction {
+    /// Install or update CuaDriver into /Applications with its pinned installer.
+    Install,
+    /// Start CuaDriver's own permission prompts.
+    GrantPermissions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerSetupParams {
+    pub action: ComputerSetupAction,
+}
+/// What an agent last saw while using an app, for a live view. Transient:
+/// frames are kept in memory and never written to the transcript.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerFrame {
+    /// Increases with every new frame across the daemon.
+    pub seq: u64,
+    pub window_id: u64,
+    pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The step that led to this frame, e.g. `Pressed “Equals”`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// Where that step acted, from 0 to 1 across and down the picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<[f64; 2]>,
+    pub media_type: String,
+    /// Base64 image bytes.
+    pub data: String,
+    pub width: u32,
+    pub height: u32,
+    pub captured_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerFrameParams {
+    pub thread_id: ThreadId,
+    /// Return a frame only if it is newer than this `seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerFrameResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<ComputerFrame>,
+}
+// Polling also tells the daemon someone is watching, which turns capture on.
+method!(ComputerFrameGet, "computer.frame", Some(Scope::OrchestrationRead), ComputerFrameParams, ComputerFrameResult);
+
+// Installs software on the daemon machine, so paired devices cannot call it.
+method!(ComputerSetup, "computer.setup", Some(Scope::AccessWrite), ComputerSetupParams, ComputerStatus);
+
 // ---- usage ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -1698,6 +1797,9 @@ registry!(
     TerminalsUnsubscribe,
     SettingsGet,
     SettingsUpdate,
+    ComputerStatusGet,
+    ComputerSetup,
+    ComputerFrameGet,
     UsageSummary,
     UsageLimits,
     PairingCreate,

@@ -10,6 +10,9 @@ const PERMISSION_PREFIX = "kybern_permission_request:";
 const APP_TOOL_PREFIX = "kybern_app_tool_request:";
 const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000;
 const APP_TOOL_TIMEOUT_MS = 30 * 1000;
+// Computer use can wait for the user's approval card.
+const COMPUTER_TOOL_TIMEOUT_MS = 70 * 1000;
+const CONTENT_KEY = "_kybern_content";
 const COORDINATOR_BOOTSTRAP_TYPE = "kybern-coordinator-bootstrap-v1";
 const MAX_EXACT_CALL_GRANTS = 256;
 const MAX_APP_ARGUMENT_BYTES = 64 * 1024;
@@ -40,6 +43,11 @@ const APP_TOOL_NAMES = new Set([
   "kybern_collaboration_cancel",
   "kybern_collaboration_context_read",
   "kybern_collaboration_context_put",
+  "kybern_computer_apps",
+  "kybern_computer_observe",
+  "kybern_computer_act",
+  "kybern_computer_screenshot",
+  "kybern_computer_help",
 ]);
 function configuredToolSet(environmentName) {
   if (process.env[environmentName] === undefined) return new Set();
@@ -222,6 +230,20 @@ const appTools = [
   },
 ];
 
+// Computer results carry text and screenshots as ready-made content blocks.
+function resultContent(data) {
+  const blocks = data && typeof data === "object" && !Array.isArray(data) ? data[CONTENT_KEY] : undefined;
+  if (!Array.isArray(blocks)) return [{ type: "text", text: JSON.stringify(data ?? null, null, 2) }];
+  const content = [];
+  for (const block of blocks) {
+    if (block?.type === "text" && typeof block.text === "string") content.push({ type: "text", text: block.text });
+    else if (block?.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string") {
+      content.push({ type: "image", data: block.data, mimeType: block.mimeType });
+    }
+  }
+  return content.length ? content : [{ type: "text", text: "" }];
+}
+
 async function executeAppTool(name, toolCallId, args, signal, ctx) {
   if (signal?.aborted) throw new Error("Kybern app tool was cancelled.");
   if (ctx.mode !== "rpc" || !ctx.hasUI) {
@@ -245,7 +267,7 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
 
   const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", {
     signal,
-    timeout: APP_TOOL_TIMEOUT_MS,
+    timeout: name.startsWith("kybern_computer_") ? COMPUTER_TOOL_TIMEOUT_MS : APP_TOOL_TIMEOUT_MS,
   });
   if (encodedResult === undefined) {
     throw new Error(signal?.aborted ? "Kybern app tool was cancelled." : "Kybern app tool timed out.");
@@ -260,7 +282,7 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
       throw new Error(typeof result.error === "string" && result.error ? result.error : "Kybern app tool failed.");
     }
     return {
-      content: [{ type: "text", text: JSON.stringify(result.data ?? null, null, 2) }],
+      content: resultContent(result.data),
       details: { requestId: id, source: "kybern" },
     };
   } catch (error) {

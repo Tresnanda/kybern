@@ -5,7 +5,7 @@ import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
 import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
-import { connectorApproval, isUserInput } from "@/lib/userInput"
+import { COMPUTER_MENTION_PATH, computerConsent, connectorApproval, isUserInput } from "@/lib/userInput"
 // Transcript pane:
 // centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
@@ -975,7 +975,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
         if (!token) continue
         tokens.set(token, p.type === "thread_reference"
           ? { kind: "thread", label: `Open ${p.title || "referenced thread"}`, onClick: () => void openThreadReference(p.thread_id) }
-          : p.type === "skill" ? "skill" : p.type === "mention" ? "plugin" : "file")
+          : p.type === "skill" ? "skill" : p.type === "mention" ? (p.path === COMPUTER_MENTION_PATH ? "computer" : "plugin") : "file")
         text += token
       }
     }
@@ -1099,6 +1099,14 @@ function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean,
   const target = surface.app ?? (surface.kind === "browser" ? "the browser" : "your computer")
   if (isError) return title ? `Failed to ${title.charAt(0).toLowerCase()}${title.slice(1)}` : `Failed to use ${target}`
   if (title) return title
+  const app = surface.app
+  switch (surface.kybernTool) {
+    case "apps": return complete ? "Listed open windows" : "Listing open windows"
+    case "launch": return complete ? `Opened ${app ?? "an app"}` : `Opening ${app ?? "an app"}`
+    case "observe": return complete ? `Read ${app ?? "an app window"}` : `Reading ${app ?? "an app window"}`
+    case "screenshot": return complete ? (app ? `Took a screenshot of ${app}` : "Took a screenshot") : (app ? `Taking a screenshot of ${app}` : "Taking a screenshot")
+    case "help": return complete ? "Read computer use help" : "Reading computer use help"
+  }
   return complete ? `Used ${target}` : `Using ${target}`
 }
 
@@ -1107,6 +1115,11 @@ function approvalRowText(approval: ApprovalRequest, decision: { decision: string
   const connector = connectorApproval(approval)
   if (connector) {
     const target = connector.app ? `${connector.connector} to use ${connector.app}` : connector.connector
+    return decision ? (decision.decision === "deny" ? `Declined ${target}` : `Allowed ${target}`) : `Waiting to allow ${target}`
+  }
+  const computer = computerConsent(approval)
+  if (computer) {
+    const target = computer.foreground ? `foreground control of ${computer.app}` : `control of ${computer.app}`
     return decision ? (decision.decision === "deny" ? `Declined ${target}` : `Allowed ${target}`) : `Waiting to allow ${target}`
   }
   if (isUserInput(approval))

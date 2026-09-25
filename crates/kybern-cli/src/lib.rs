@@ -255,6 +255,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<SettingsCmd>,
     },
+    /// Set up and check computer use (CuaDriver).
+    Computer {
+        #[command(subcommand)]
+        cmd: Option<ComputerCmd>,
+    },
     /// Token usage and cost.
     Usage {
         #[arg(long, value_parser = ["provider", "model", "day", "thread"], default_value = "provider")]
@@ -398,6 +403,25 @@ enum SettingsCmd {
     Show,
     /// Replace settings from a JSON file (or stdin with `-`).
     Set { file: String },
+}
+
+#[derive(Subcommand)]
+enum ComputerCmd {
+    /// Print computer-use status as JSON.
+    Status,
+    /// Check each requirement and say how to fix what is missing.
+    Doctor,
+    /// Install or update CuaDriver into /Applications.
+    Install,
+    /// Start CuaDriver's Accessibility and Screen Recording prompts.
+    Grant,
+    /// Save what a thread's agent last saw while using an app.
+    Frame {
+        thread: String,
+        /// JPEG destination.
+        #[arg(long, default_value = "frame.jpg")]
+        out: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -867,6 +891,55 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
         },
+        Cmd::Computer { cmd } => {
+            let status = match cmd.unwrap_or(ComputerCmd::Doctor) {
+                ComputerCmd::Status => {
+                    println!("{}", serde_json::to_string_pretty(&client.call::<ComputerStatusGet>(Empty {}).await?)?);
+                    return Ok(());
+                }
+                ComputerCmd::Doctor => client.call::<ComputerStatusGet>(Empty {}).await?,
+                ComputerCmd::Frame { thread, out } => {
+                    use base64::Engine;
+                    let result = client.call::<ComputerFrameGet>(ComputerFrameParams { thread_id: thread.parse()?, after: None }).await?;
+                    let Some(frame) = result.frame else {
+                        println!(
+                            "No frame yet. Frames are captured while Kybern shows the live view, or when the agent takes a screenshot."
+                        );
+                        return Ok(());
+                    };
+                    std::fs::write(&out, base64::engine::general_purpose::STANDARD.decode(frame.data)?)?;
+                    println!(
+                        "{} · {}{} → {out}",
+                        frame.app,
+                        frame.action.as_deref().unwrap_or("frame"),
+                        frame.title.map(|title| format!(" · {title}")).unwrap_or_default()
+                    );
+                    return Ok(());
+                }
+                ComputerCmd::Install => {
+                    eprintln!("Installing CuaDriver; this can take a few minutes…");
+                    client.call::<ComputerSetup>(ComputerSetupParams { action: ComputerSetupAction::Install }).await?
+                }
+                ComputerCmd::Grant => {
+                    eprintln!("Follow CuaDriver's prompts to allow Accessibility and Screen Recording.");
+                    client.call::<ComputerSetup>(ComputerSetupParams { action: ComputerSetupAction::GrantPermissions }).await?
+                }
+            };
+            for check in &status.checks {
+                println!("{} {}", if check.ok { "✓" } else { "✗" }, check.message);
+                if let Some(fix) = check.fix.as_deref().filter(|_| !check.ok) {
+                    println!("  → {fix}");
+                }
+            }
+            println!(
+                "{}",
+                if status.ready {
+                    "Computer use is ready for new Claude, OpenCode, Cursor, and Pi conversations."
+                } else {
+                    "Computer use is not ready yet."
+                }
+            );
+        }
         Cmd::Usage { by, days, limits } => {
             if limits {
                 let r = client.call::<UsageLimits>(UsageLimitsParams {}).await?;

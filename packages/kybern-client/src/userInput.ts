@@ -63,6 +63,26 @@ export function connectorApproval(approval: ApprovalRequest): ConnectorApproval 
   }
 }
 
+/** `@Computer`: Kybern's own computer-use mention, offered in the plugin catalog. */
+export const COMPUTER_MENTION_PATH = "kybern://computer"
+
+/** The same catalog entry the daemon lists for project chats, for chats without a project. */
+export const COMPUTER_MENTION_SKILL = {
+  name: "computer",
+  display_name: "Computer",
+  description: "Use apps on this Mac for this request",
+  path: COMPUTER_MENTION_PATH,
+  scope: "plugin",
+  enabled: true,
+} as const
+
+/** Kybern's own consent for computer use, asked by the daemon rather than a harness. */
+export function computerConsent(approval: ApprovalRequest): { app: string; foreground: boolean } | null {
+  if (approval.tool_name !== "kybern_computer_use") return null
+  const input = record(approval.input)
+  return { app: string(input.app) || "this app", foreground: string(input.mode) === "foreground" }
+}
+
 /** The accept reply for a connector approval; `persist` asks the harness not to ask again in that scope. */
 export function connectorApprovalResponse(persist: "session" | null): unknown {
   return persist ? { action: "accept", content: {}, _meta: { persist } } : { action: "accept", content: {} }

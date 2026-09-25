@@ -47,14 +47,15 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { buildStructuredTextParts, nextAttachmentLabel, structuredSegments, type AttachmentReference } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
-import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon,
+import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon, DeviceLaptopIcon,
   HandRaisedIcon, ShieldCheckIcon, ShieldIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
-import { InlineToken } from "@/components/kybern/InlineToken"
+import { ComposerEditor, type ComposerEditorHandle, type EditorSegment } from "@/components/kit/chat/ComposerEditor"
 import { isFreeChatProject, type ContentPart, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderStatus, type SkillInfo, type Thread, type UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
+import { COMPUTER_MENTION_PATH, COMPUTER_MENTION_SKILL } from "@/lib/userInput"
 import { customModelId, findModel, modelChoices } from "../../../../packages/kybern-client/src/models"
 
 export interface ComposerHandle {
@@ -143,37 +144,12 @@ const MODES: { mode: PermissionMode; label: string; description: string; icon: R
 ]
 
 /** "claude-fable-5-1" -> "Claude Fable 5.1" when the catalog has no entry. */
-// The textarea and its highlight layer share these metrics exactly so the
-// painted tokens sit under the same glyphs the user is editing.
-const EDITOR_METRICS_CLASS =
-  cn("block box-border m-0 border-0 p-0 max-h-[200px] w-full font-normal tracking-normal [font-kerning:none] [font-variant-ligatures:none] [tab-size:8] break-words whitespace-pre-wrap", COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME)
-
+// Rich input: text and inline tokens. It grows with its content up to 200px,
+// then scrolls; tokens are real elements sized like sent messages.
 const EDITOR_CLASS = cn(
-  EDITOR_METRICS_CLASS,
-  // Text is painted by the highlight layer underneath; the textarea keeps the
-  // caret, selection, placeholder and all input behaviour.
-  "relative z-[1] resize-none overflow-y-auto bg-transparent text-transparent caret-[var(--foreground)] placeholder:text-muted-foreground/40 focus:outline-none disabled:opacity-60 selectable",
+  "block max-h-[200px] w-full overflow-y-auto break-words whitespace-pre-wrap outline-none selectable",
+  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
 )
-
-const EDITOR_BACKDROP_CLASS = cn(
-  EDITOR_METRICS_CLASS,
-  "chat-composer-backdrop pointer-events-none absolute inset-0 z-0 overflow-hidden text-foreground select-none",
-)
-
-function syncEditorBackdrop(editor: HTMLTextAreaElement, layer: HTMLDivElement | null) {
-  if (!layer) return
-  layer.style.width = `${editor.clientWidth}px`
-  layer.scrollTop = editor.scrollTop
-}
-
-function growEditor(editor: HTMLTextAreaElement, layer: HTMLDivElement | null) {
-  const scrollTop = editor.scrollTop
-  editor.style.height = "0px"
-  editor.style.height = `${Math.min(200, editor.scrollHeight)}px`
-  editor.scrollTop = scrollTop
-  syncEditorBackdrop(editor, layer)
-  requestAnimationFrame(() => syncEditorBackdrop(editor, layer))
-}
 
 const DEFAULT_PLACEHOLDER = "Ask anything, @ threads or files, $ skills, or / commands"
 
@@ -308,7 +284,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // after every pick and send so painted tokens match what buildParts will send.
   const [tokenSources, setTokenSources] = useState(() => ({ mentions: new Set<string>(savedDraft?.mentions ?? []), skills: [...(savedDraft?.skills ?? [])], threadReferences: [...(savedDraft?.threadReferences ?? [])] }))
   const syncTokenSources = () => setTokenSources({ mentions: new Set(mentioned.current), skills: [...selectedSkills.current.values()], threadReferences: [...selectedThreadReferences.current] })
-  const ta = useRef<HTMLTextAreaElement>(null)
+  const editor = useRef<ComposerEditorHandle>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const menuList = useRef<HTMLDivElement>(null)
   const previewUrls = useRef(new Set<string>())
@@ -340,30 +316,29 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const setTextAndCaret = useCallback((next: string, pos?: number) => {
     setText(next)
     requestAnimationFrame(() => {
-      const el = ta.current
+      const el = editor.current
       if (!el) return
       el.focus()
-      const p = pos ?? next.length
-      el.setSelectionRange(p, p)
-      setCaret(p)
-      growEditor(el, backdrop.current)
+      el.setCaret(pos ?? next.length)
     })
   }, [])
 
   useImperativeHandle(ref, () => ({
-    focus: () => ta.current?.focus(),
+    focus: () => editor.current?.focus(),
     setText: (t) => setTextAndCaret(t),
     isEmpty: () => text.trim().length === 0 && attachments.length === 0,
   }))
 
   useEffect(() => {
-    if (autoFocus) ta.current?.focus()
+    if (autoFocus) editor.current?.focus()
   }, [autoFocus])
 
   // ---- @ files, $ skills, and / commands ----
 
+  // Chats without a project have no catalog; they still get `@Computer`.
+  const computerUse = useStore((s) => s.settings?.computer_use?.enabled ?? false) && !!provider && provider.kind !== "codex"
   const mention = useMemo(() => {
-    if (!projectId && attachments.length === 0) return null
+    if (!projectId && attachments.length === 0 && !computerUse) return null
     const before = text.slice(0, caret)
     const at = before.lastIndexOf("@")
     if (at === -1) return null
@@ -371,7 +346,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const query = before.slice(at + 1)
     if (/\s/.test(query)) return null
     return { start: at, query }
-  }, [text, caret, projectId, attachments.length])
+  }, [text, caret, projectId, attachments.length, computerUse])
 
   const slash = useMemo(() => {
     const before = text.slice(0, caret)
@@ -430,7 +405,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }, [needsSkills, projectId, provider, skillCatalog.key, skillCatalogKey])
 
-  const skills = useMemo(() => (skillCatalog.key === skillCatalogKey ? skillCatalog.skills : []), [skillCatalog, skillCatalogKey])
+  const skills = useMemo<SkillInfo[]>(
+    () => (!projectId ? (computerUse ? [{ ...COMPUTER_MENTION_SKILL }] : []) : skillCatalog.key === skillCatalogKey ? skillCatalog.skills : []),
+    [skillCatalog, skillCatalogKey, projectId, computerUse],
+  )
   const files = useMemo(() => (fileResult.query === mention?.query ? fileResult.files : []), [fileResult, mention?.query])
   const currentThreadId = props.draftKey?.startsWith("thread:") ? props.draftKey.slice("thread:".length) : null
   const threadHits = useMemo(
@@ -548,26 +526,29 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const canSend = !disabled && !props.sendDisabled && !sending && uploading === 0 && (text.trim().length > 0 || attachments.length > 0)
 
-  // Tokens the highlight layer paints: the same ones buildParts will send.
-  const backdrop = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    const editor = ta.current
-    const layer = backdrop.current
-    if (!editor) return
-    growEditor(editor, layer)
-    let width = editor.clientWidth
-    const observer = new ResizeObserver(() => {
-      if (editor.clientWidth === width) return
-      width = editor.clientWidth
-      growEditor(editor, layer)
-    })
-    observer.observe(editor)
-    return () => observer.disconnect()
-  }, [hideInput])
-
+  // Tokens the editor shows: the same ones buildParts will send.
   const segments = useMemo(
     () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills], tokenSources.threadReferences, attachmentReferences),
     [text, skills, tokenSources, attachmentReferences],
+  )
+
+  const editorSegments = useMemo<EditorSegment[]>(
+    () =>
+      segments.map((segment) =>
+        segment.kind === "token"
+          ? {
+              kind: "token",
+              text: segment.text,
+              token:
+                segment.part.type === "thread_reference" ? "thread"
+                : segment.part.type === "skill" ? "skill"
+                : segment.part.type === "mention" ? (segment.part.path === COMPUTER_MENTION_PATH ? "computer" : "plugin")
+                : segment.part.type === "attachment" ? "attachment"
+                : "file",
+            }
+          : { kind: "text", text: segment.text },
+      ),
+    [segments],
   )
 
   const buildParts = (): ContentPart[] => {
@@ -601,10 +582,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       selectedSkills.current.clear()
       selectedThreadReferences.current = []
       syncTokenSources()
-      if (ta.current) {
-        ta.current.style.height = "auto"
-        ta.current.focus()
-      }
+      editor.current?.focus()
     } catch (e) {
       toast.error("Unable to send", { description: errorText(e) })
     } finally {
@@ -640,7 +618,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     setAttachments((list) => list.filter((item) => item.id !== attachment.id))
   }
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.nativeEvent.isComposing) return
     const steerShortcut = running && (isMac ? e.metaKey : e.ctrlKey)
     if (menuOpen && menuItems.length > 0) {
@@ -678,7 +656,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }
 
-  const syncCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart ?? el.value.length)
 
   // ---- model picker ----
 
@@ -694,7 +671,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange
   const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
-  const menuLoading = mention ? fileResult.query !== mention.query || threadResult.query !== mention.query : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
+  const menuLoading = mention ? !!projectId && (fileResult.query !== mention.query || threadResult.query !== mention.query) : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
   const menuEmptyText = menuLoading
     ? mention
       ? "Searching project files…"
@@ -832,7 +809,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 ) : item.type === "skill" ? (
                                   <SkillCubeIcon className="size-4" />
                                 ) : item.type === "plugin" ? (
-                                  <PluginIcon className="size-4" />
+                                  item.skill.path === COMPUTER_MENTION_PATH ? <DeviceLaptopIcon className="size-4" /> : <PluginIcon className="size-4" />
                                 ) : (
                                   item.command.icon ?? <TerminalIcon className="size-4" />
                                 )}
@@ -905,51 +882,32 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               onPointerDown={(event) => {
                 if (event.target !== event.currentTarget) return
                 event.preventDefault()
-                ta.current?.focus({ preventScroll: true })
+                editor.current?.focus({ preventScroll: true })
               }}
             >
-            <div ref={backdrop} aria-hidden className={cn(EDITOR_BACKDROP_CLASS, disabled && "opacity-60")}>
-              {segments.map((segment, i) =>
-                segment.kind === "token" ? (
-                  <InlineToken key={i} plain kind={segment.part.type === "thread_reference" ? "thread" : segment.part.type === "skill" ? "skill" : segment.part.type === "mention" ? "plugin" : segment.part.type === "attachment" ? "attachment" : "file"} text={segment.text} />
-                ) : (
-                  <Fragment key={i}>{segment.text}</Fragment>
-                ),
-              )}
-              {"\u200b"}
-            </div>
-            <textarea
-              ref={ta}
+            <ComposerEditor
+              ref={editor}
               data-testid="composer-editor"
               value={text}
-              rows={1}
+              segments={editorSegments}
               placeholder={placeholder}
-              aria-placeholder={placeholder}
               disabled={disabled}
-              spellCheck
-              autoCorrect="off"
-              autoCapitalize="off"
-              onChange={(e) => {
-                setText(e.target.value)
-                syncCaret(e.target)
-                growEditor(e.target, backdrop.current)
+              className={cn(EDITOR_CLASS, disabled && "opacity-60")}
+              onChange={(next, position) => {
+                setText(next)
+                setCaret(position)
                 setMenuSel({ sig: "", index: 0 })
                 setMenuDismissed(null)
               }}
-              onKeyUp={(e) => syncCaret(e.currentTarget)}
-              onClick={(e) => syncCaret(e.currentTarget)}
-              onScroll={(e) => {
-                syncEditorBackdrop(e.currentTarget, backdrop.current)
-              }}
+              onCaret={setCaret}
               onKeyDown={onKeyDown}
-              onPaste={(e) => {
+              onPasteFiles={(e) => {
                 const pasted = clipboardFiles(e.clipboardData)
-                if (pasted.length) {
-                  e.preventDefault()
-                  void addFiles(pasted)
-                }
+                if (!pasted.length) return false
+                e.preventDefault()
+                void addFiles(pasted)
+                return true
               }}
-              className={EDITOR_CLASS}
             />
             </div>
           </div>

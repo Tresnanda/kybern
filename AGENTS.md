@@ -14,7 +14,7 @@ before touching UI.
 | `crates/kybern-git` | Snapshots, diffs, worktrees via the `git` CLI. |
 | `crates/kybern-drivers` | One module per agent: `claude`, `codex`, `opencode`, `pi` (also omp), `cursor`. All implement `AgentDriver` + `AgentSession` from `lib.rs`. |
 | `crates/kybern` | The shipped package: `kybernd` and `kybern` binaries as thin wrappers over the two library crates below. |
-| `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`. |
+| `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`, `computer/` (computer use). |
 | `crates/kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell. |
 | `crates/kybern-cli` | The `kybern` CLI (`lib.rs`). Also the integration harness. |
 | `apps/desktop` | Desktop app. `src-tauri` is the Tauri 2 shell (crate `kybern-desktop`: resolves or spawns `kybernd`, exposes `endpoint`/`data_dir_path`). `src/` is the React app (see below). |
@@ -147,6 +147,24 @@ plugin staging alone required a 41 GiB cleanup.
 - Test with a scratch daemon. Cleanup may stop scratch daemons and Metro and
   remove generated build caches, but preserve the user's normal `~/.kybern`
   data and installed daemon needed by their desktop/mobile sessions.
+
+## Computer use
+
+- `crates/kybern-daemon/src/computer/` exposes `kybern_computer_*` native tools to
+  every harness except Codex, which keeps OpenAI's bundled plugin. The daemon
+  asks per-app consent itself (`kybern_computer_use` approvals) because harness
+  approval of Kybern tools is inconsistent.
+- CuaDriver is installed separately into `/Applications/CuaDriver.app` and owns
+  the Accessibility and Screen Recording grants. Kybern never bundles it; the
+  pinned installer and minimum version live in `computer/driver.rs` and
+  `computer/setup.rs`. `kybern computer doctor` explains each requirement.
+- `@Computer` is a `Mention` with path `kybern://computer`. The daemon lists
+  it in `skills.list` and expands it into an instruction only in the copy a
+  provider receives. `computer.frame` feeds the desktop live view; frames are
+  captured only while a client polls and are never persisted.
+- Keep the contract cheap: accessibility text by default, screenshots only on
+  request, batched `act` steps that return a diff. Run the real-app check with
+  `cargo test -p kybern-daemon computer::live -- --ignored --nocapture`.
 
 ## Release versions
 

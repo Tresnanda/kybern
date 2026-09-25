@@ -137,6 +137,11 @@ impl AgentDriver for ClaudeDriver {
                 let provider_name = claude_tool_name(bridge, tool);
                 cmd.args(["--disallowedTools", &provider_name]);
             }
+            // Kybern asks per-app consent for computer use itself, so a
+            // second harness prompt for the same call would only add noise.
+            for tool in bridge.tools().filter(|tool| tool.name.starts_with("kybern_computer_")) {
+                cmd.args(["--allowedTools", &claude_tool_name(bridge, &tool.name)]);
+            }
             if bridge.restrictions.require_enforcement {
                 // Claude's `--tools` set is the native built-in catalog. An
                 // empty set leaves the session MCP server available while

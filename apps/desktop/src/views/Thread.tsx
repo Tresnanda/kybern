@@ -5,7 +5,7 @@ import { Textarea } from "@/components/kit/textarea"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
 import { Markdown } from "@/components/kybern/Markdown"
-import { connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
+import { computerConsent, connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
 import { UserInputPanel } from "./UserInputPanel"
 import { TextSwap } from "@/components/kybern/motion"
 // Thread route: Header (provider glyph, title, Hand off,
@@ -55,7 +55,9 @@ import {
   WorkflowIcon,
   UsersIcon,
   XIcon,
+  DeviceLaptopIcon,
 } from "@/lib/kit/icons"
+import { ComputerLiveView } from "./ComputerLiveView"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -305,6 +307,7 @@ export function ThreadView({
           <Transcript threadId={threadId} bottomInset={overlayHeight} surfaceMode={splitPaneId ? "split" : "single"} />
         </div>
         <EnvironmentPanel threadId={threadId} open={envOpen} />
+        {thread.provider.kind !== "codex" && <ComputerLiveView threadId={threadId} running={running} insetEnd={envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX : 0} insetBottom={overlayHeight} />}
         <div
           ref={overlay}
           className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-full flex-col pb-3 sm:pb-4", CHAT_COLUMN_GUTTER, ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)}
@@ -353,7 +356,7 @@ export function ThreadView({
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
-                    connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
+                    connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
                   )}
                 </ComposerPanelStack>
               }
@@ -588,7 +591,7 @@ function permissionBody(input: JsonValue): string {
 export function ApprovalPanel({ approval, count, onChoose }: { approval: ApprovalRequest; count: number; onChoose: (n: number) => void }) {
   const { prompt, detail } = approvalPrompt(approval)
   return (
-    <ComposerStackedPanel className="composer-approval-panel t-border-beam t-panel-enter px-3.5 py-3">
+    <ComposerStackedPanel className="composer-approval-panel t-panel-enter px-3.5 py-3">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
           {prompt}
@@ -606,12 +609,48 @@ export function ApprovalPanel({ approval, count, onChoose }: { approval: Approva
   )
 }
 
+/** Kybern's own consent before an agent uses an app. Same actions and digits as other approvals. */
+export function ComputerApprovalPanel({ consent, count, onChoose, onAlways }: { consent: { app: string; foreground: boolean }; count: number; onChoose: (n: number) => void; onAlways: () => void }) {
+  return (
+    <ComposerStackedPanel className="composer-approval-panel t-panel-enter px-3.5 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5">
+        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] text-muted-foreground">
+          <DeviceLaptopIcon className="size-4" />
+        </span>
+        <div className="min-w-48 flex-1">
+          <p className="flex items-start gap-2 text-[13px] leading-snug font-medium text-balance text-foreground/90">
+            {consent.foreground ? `Let this chat take over your cursor in ${consent.app}?` : `Let this chat use ${consent.app}?`}
+            {count > 1 && (
+              <span className="mt-px flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium text-[var(--color-text-foreground-secondary)] tabular-nums">
+                1/{count}
+              </span>
+            )}
+          </p>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-pretty text-muted-foreground/65">
+            {consent.foreground
+              ? `${consent.app} comes to the front while the agent works. Avoid typing until it finishes.`
+              : "It works in the background. Your cursor and keyboard stay yours."}
+          </p>
+        </div>
+        <ApprovalActions
+          className="mt-0 ms-auto"
+          primaryLabel="Allow once"
+          primaryShortcut={1}
+          sessionShortcut={2}
+          onChoose={onChoose}
+          always={consent.foreground ? undefined : { label: `Always allow ${consent.app}`, onChoose: onAlways }}
+        />
+      </div>
+    </ComposerStackedPanel>
+  )
+}
+
 /** Consent for a harness to drive an app on this machine. Same card as other approvals, so the digits work the same. */
 export function ConnectorApprovalPanel({ approval, connector, count, onChoose }: { approval: ApprovalRequest; connector: ConnectorApproval; count: number; onChoose: (n: number) => void }) {
   const canPersist = connector.persist.includes("session")
   const prompt = connector.app ? `Allow ${connector.connector} to use ${connector.app}?` : connector.message || `Allow ${connector.connector}?`
   return (
-    <ComposerStackedPanel className="composer-approval-panel t-border-beam t-panel-enter px-3.5 py-3">
+    <ComposerStackedPanel className="composer-approval-panel t-panel-enter px-3.5 py-3">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] leading-snug font-medium text-foreground/90">
           {prompt}
@@ -632,17 +671,21 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
 }
 
 /** Keep the common decision visible and less frequent scope/stop actions grouped. */
-function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, onChoose }: {
+function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, onChoose, className, always }: {
   primaryLabel: string
   primaryShortcut: number
   sessionShortcut?: number
   onChoose: (choice: number) => void
+  className?: string
+  /** A remembered allowance, e.g. "Always allow Calculator". */
+  always?: { label: string; onChoose: () => void }
 }) {
-  return <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+  return <div className={cn("mt-3 flex flex-wrap items-center justify-end gap-2", className)}>
     <Menu>
       <MenuTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="More approval options"><EllipsisIcon /></Button>} />
       <ComposerPickerMenuPopup align="start" side="top">
         {sessionShortcut !== undefined && <MenuItem onClick={() => onChoose(sessionShortcut)}>Allow for this session<MenuShortcut>{sessionShortcut}</MenuShortcut></MenuItem>}
+        {always && <MenuItem onClick={always.onChoose}>{always.label}</MenuItem>}
         <MenuItem onClick={() => onChoose(4)}>Cancel turn<MenuShortcut>4</MenuShortcut></MenuItem>
       </ComposerPickerMenuPopup>
     </Menu>

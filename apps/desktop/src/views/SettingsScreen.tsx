@@ -13,7 +13,7 @@ import { UsagePage } from "./UsagePage"
 import { ArrowLeftIcon, SearchIcon, PluginIcon, BellIcon, BackgroundTrayIcon } from "@/lib/kit/icons"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
-import { ChevronDownIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
+import { CheckIcon, ChevronDownIcon, XIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
 import { Switch } from "@/components/kit/switch"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/kit/collapsible"
@@ -43,18 +43,19 @@ import { SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
 import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "@/views/chrome"
-import type { BackgroundSettings, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
+import type { BackgroundSettings, ComputerForeground, ComputerPermission, ComputerStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 
-type Tab = "general" | "agents" | "integrations" | "appearance" | "notifications" | "background" | "usage" | "about"
+type Tab = "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "usage" | "about"
 
 const TABS: [Tab, string, string][] = [
   ["general", "General", "Defaults for new threads and workspace behavior."],
   ["agents", "Agent providers", "Manage the coding agents on your connected machine."],
   ["integrations", "Integrations", "Plugins and connectors for your agents."],
+  ["computer", "Computer use", "Let agents read and use apps on this Mac."],
   ["appearance", "Appearance", "Make Kybern feel at home on your desktop."],
   ["notifications", "Notifications", "Choose when Kybern gets your attention."],
   ["background", "Background activity", "Manage idle agents, terminals, and power use."],
@@ -64,7 +65,7 @@ const TABS: [Tab, string, string][] = [
 
 const NAV_GROUPS: { label: string; tabs: Tab[] }[] = [
   { label: "Personal", tabs: ["general", "appearance", "notifications", "usage"] },
-  { label: "Coding", tabs: ["agents", "integrations"] },
+  { label: "Coding", tabs: ["agents", "integrations", "computer"] },
   { label: "System", tabs: ["background", "about"] },
 ]
 
@@ -74,6 +75,7 @@ const SEARCH_TERMS: Record<Tab, string> = {
   background: "idle memory warm shells daemon battery power activity",
   agents: "provider harness install updates claude codex cursor opencode pi omp profiles",
   integrations: "plugins connectors tools mcp skills sign in authentication",
+  computer: "computer use cuadriver screen apps click type accessibility screen recording permissions cursor",
   appearance: "theme light dark system translucent glass window",
   usage: "tokens cost spending activity model day cache history",
   about: "version update protocol host data folder machine",
@@ -138,7 +140,7 @@ export function SettingsScreen({
                 return <Fragment key={group.label}>
                   <li className="settings-nav-category"><h2 className={cn(SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME, "m-0")}>{group.label}</h2></li>
                   {items.map(([id, label]) => {
-                    const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: PluginIcon, appearance: AppearanceIcon, usage: ClockIcon, notifications: BellIcon, background: BackgroundTrayIcon, about: InfoIcon }[id]
+                    const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: PluginIcon, computer: DeviceLaptopIcon, appearance: AppearanceIcon, usage: ClockIcon, notifications: BellIcon, background: BackgroundTrayIcon, about: InfoIcon }[id]
                     return <li key={id} className="relative z-[1]">
                       <button type="button" aria-current={tab === id ? "page" : undefined} data-tab-active={tab === id}
                         onClick={(event) => select(id, event.detail === 0)}
@@ -179,6 +181,7 @@ export function SettingsScreen({
               {tab === "general" && <General />}
               {tab === "agents" && <Agents />}
               {tab === "integrations" && <Integrations />}
+              {tab === "computer" && <ComputerUse />}
               {tab === "appearance" && <Appearance />}
               {tab === "notifications" && <Notifications />}
               {tab === "background" && <Background />}
@@ -295,6 +298,156 @@ function General() {
         <AskBeforeCloseRow />
       </Section>
     </>
+  )
+}
+
+function ComputerUse() {
+  const environmentId = useStore((s) => s.environmentId)
+  return <ComputerUseSettings key={environmentId} />
+}
+
+function ComputerUseSettings() {
+  const { settings, update } = useSettings()
+  const [status, setStatus] = useState<ComputerStatus | null>(null)
+  const [loadError, setLoadError] = useState("")
+  const [busy, setBusy] = useState<"install" | "grant" | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const computer = settings?.computer_use
+  const enabled = computer?.enabled ?? false
+  // "Always allow" on an approval card changes settings in the daemon; read
+  // them fresh so the allowed apps list is current.
+  const setStore = useStore((s) => s.set)
+  useEffect(() => {
+    let live = true
+    rpc()
+      .call("settings.get", {})
+      .then((fresh) => live && setStore({ settings: fresh }))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [setStore])
+  const allowed = computer?.always_allowed_apps ?? []
+  useEffect(() => {
+    const client = rpc()
+    let canceled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const next = await client.call("computer.status", {})
+        if (canceled) return
+        setStatus(next)
+        setLoadError("")
+        // Keep checking while the user works through setup in System Settings.
+        if (next.enabled && next.installed && !next.ready) timer = setTimeout(() => void poll(), 4000)
+      } catch (error) {
+        if (!canceled) setLoadError(errorText(error))
+      }
+    }
+    void poll()
+    return () => { canceled = true; clearTimeout(timer) }
+  }, [enabled, refreshKey])
+  const run = async (action: "install" | "grant_permissions") => {
+    setBusy(action === "install" ? "install" : "grant")
+    try {
+      setStatus(await rpc().call("computer.setup", { action }))
+      if (action === "grant_permissions") toast("Follow CuaDriver’s prompts", { description: "Allow Accessibility and Screen Recording for CuaDriver in System Settings. This page updates when they are on." })
+      setRefreshKey((key) => key + 1)
+    } catch (error) {
+      toast.error(action === "install" ? "Unable to install CuaDriver" : "Unable to open permission setup", { description: errorText(error) })
+    } finally {
+      setBusy(null)
+    }
+  }
+  if (!settings) return null
+  if (loadError && !status) {
+    return <Section title="Computer use"><Row title="Unavailable on this machine" description={`${loadError}. Update Kybern on the connected machine to use computer use.`} /></Section>
+  }
+  if (status && !status.supported) {
+    return <Section title="Computer use"><Row title="Needs a Mac" description="Computer use is available when Kybern runs on macOS." /></Section>
+  }
+  const needsInstall = !!status && (!status.installed || status.checks.some((check) => (check.name === "version" || check.name === "signature") && !check.ok))
+  const permissions = status && status.enabled && status.installed && !needsInstall
+  const missingPermission = !!permissions && (status.accessibility !== "granted" || status.screen_recording !== "granted")
+  const problems = status?.checks.filter((check) => !check.ok && !["installed", "enabled", "version", "signature", "accessibility", "screen_recording"].includes(check.name)) ?? []
+  const readiness = !enabled ? undefined : status?.ready ? "Ready. Ask any agent except Codex to use an app, like “Add milk to my shopping list in Notes.”" : status ? "Finish setup below to start." : undefined
+  return <>
+    <Section title="Access">
+      <Row title="Let agents use apps on this Mac" description="Agents can read an app’s window and click and type in it. You approve each app the first time a conversation uses it." status={readiness}>
+        <Switch aria-label="Let agents use apps on this Mac" checked={enabled} onCheckedChange={(checked) => void update({ computer_use: { foreground: "ask", ...computer, enabled: checked } })} />
+      </Row>
+      <Row title="Your cursor and keyboard" description="Agents work in the background and leave your cursor alone. When a step needs the real cursor, or you ask to watch, they can ask to take over for that app.">
+        <SettingsPicker
+          label="Your cursor and keyboard"
+          value={computer?.foreground ?? "ask"}
+          onChange={(foreground) => void update({ computer_use: { enabled, ...computer, foreground: foreground as ComputerForeground } })}
+          options={[{ value: "ask", label: "Ask first" }, { value: "never", label: "Never" }]}
+        />
+      </Row>
+      <Row
+        title="When agents ask first"
+        description="This follows each chat’s permission mode. Full access never asks. Approve for me asks only before using your cursor. Other modes ask once per app, unless you allow it below."
+      />
+      <Row
+        title="Apps allowed without asking"
+        description={allowed.length ? "Agents use these in the background without asking. They still ask before taking over your cursor." : "None yet. Choose “Always allow” when an agent asks to use an app."}
+      >
+        {allowed.length > 0 && (
+          <ul className="flex max-w-80 flex-wrap justify-end gap-1.5">
+            {allowed.map((app) => (
+              <li key={app} className="flex h-7 items-center gap-1 rounded-md bg-[var(--color-background-elevated-secondary)] ps-2.5 pe-1 text-xs text-foreground/85">
+                {app}
+                <Button type="button" variant="ghost" size="icon-xs" aria-label={`Stop allowing ${app}`} onClick={() => void update({ computer_use: { enabled, foreground: "ask", ...computer, always_allowed_apps: allowed.filter((item) => item !== app) } })}>
+                  <XIcon />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Row>
+      <Row title="" description="Codex uses its own computer use. Password managers, Keychain Access, and System Settings are never available to agents. Changes apply to new conversations." />
+    </Section>
+    <Section title="Setup">
+      <Row
+        title="CuaDriver"
+        description={!status ? "Checking…" : status.installed
+          ? <>
+              <span className="block">{`Version ${status.version ?? "unknown"}`}{status.signed && " · Signed by Cua AI"}</span>
+              {status.app_path && <span title={status.app_path} className="block truncate">{status.app_path}</span>}
+            </>
+          : "The free, open-source app Kybern uses to see and control other apps. It installs into Applications."}
+        status={needsInstall ? status?.checks.find((check) => !check.ok && ["installed", "version", "signature"].includes(check.name))?.message : undefined}
+      >
+        {needsInstall
+          ? <Button size="sm" disabled={busy !== null} onClick={() => void run("install")}>
+              {busy === "install" ? <><MatrixLoader className="size-3" /> Installing…</> : status?.installed ? "Update CuaDriver" : "Install CuaDriver"}
+            </Button>
+          : status?.installed && <PermissionState state="granted" granted="Installed" />}
+      </Row>
+      {permissions && <>
+        <Row title="Accessibility" description="Lets CuaDriver read app windows and click and type in them.">
+          <PermissionState state={status.accessibility} />
+        </Row>
+        <Row title="Screen Recording" description="Lets CuaDriver take screenshots of app windows.">
+          <PermissionState state={status.screen_recording} />
+        </Row>
+        {missingPermission && <Row title="" description="CuaDriver asks macOS for both permissions. This page updates when they’re on.">
+          <Button size="sm" variant="chrome-outline" disabled={busy !== null} onClick={() => void run("grant_permissions")}>Grant access</Button>
+        </Row>}
+      </>}
+      {!enabled && status?.installed && !needsInstall && <Row title="" description="Turn on computer use to check CuaDriver’s permissions." />}
+      {problems.map((check) => <Row key={check.name} title="" description={check.message} status={check.fix ?? undefined} />)}
+    </Section>
+  </>
+}
+
+function PermissionState({ state, granted = "Allowed" }: { state: ComputerPermission; granted?: string }) {
+  const text = state === "granted" ? granted : state === "missing" ? "Not allowed" : "Checking…"
+  return (
+    <span role="status" className={cn("flex items-center gap-1.5 text-xs whitespace-nowrap", state === "missing" ? "text-foreground" : "text-muted-foreground")}>
+      {state === "granted" && <CheckIcon aria-hidden className="size-3.5 text-success" />}
+      <TextSwap text={text} />
+    </span>
   )
 }
 
