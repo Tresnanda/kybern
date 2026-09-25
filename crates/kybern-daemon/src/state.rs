@@ -90,7 +90,7 @@ impl AppState {
             }
         };
         let (events, _) = crate::bounded_broadcast::channel(8192, 8 * 1024 * 1024);
-        let drivers = DriverRegistry::with_defaults();
+        let drivers = DriverRegistry::with_cache_dir(&paths.root.join("cache"));
         let settings = SettingsStore::load(&paths.settings)?;
         let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;
         let daemon_updates = crate::self_update::DaemonUpdates::new(&store)?;

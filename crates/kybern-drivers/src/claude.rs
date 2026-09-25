@@ -22,6 +22,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::binary::{at_least, resolve, version_of};
+use crate::claude_catalog::{CatalogKey, CatalogModel, ModelCatalog};
+use crate::claude_config::ClaudeConfig;
 use crate::ndjson::NdjsonChild;
 use crate::{
     AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, NativeToolBridge, ProbeContext,
@@ -31,7 +33,17 @@ use crate::{
 const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
 
 #[derive(Default)]
-pub struct ClaudeDriver;
+pub struct ClaudeDriver {
+    catalog: Arc<ModelCatalog>,
+}
+
+impl ClaudeDriver {
+    /// A driver that keeps Claude Code's model catalog in `file` across
+    /// daemon restarts.
+    pub fn with_catalog_file(file: PathBuf) -> Self {
+        Self { catalog: Arc::new(ModelCatalog::persistent(file)) }
+    }
+}
 
 #[async_trait]
 impl AgentDriver for ClaudeDriver {
@@ -162,6 +174,23 @@ impl AgentDriver for ClaudeDriver {
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), session_id, "spawning claude");
 
+        // Claude Code lists the session's own `--model` in its catalog in place
+        // of the configured model, so only a session started without one
+        // reports the list a probe sees.
+        let catalog = config
+            .model
+            .is_none()
+            .then(|| {
+                let context = ProbeContext {
+                    binary: config.binary.clone(),
+                    cwd: Some(config.cwd.clone()),
+                    env: config.env.clone().into_iter().collect(),
+                };
+                CatalogKey::new(&bin, &context)
+            })
+            .flatten()
+            .map(|key| (self.catalog.clone(), key));
+
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
         let mut lifetime = crate::ndjson::SessionLifetime::new(child.clone());
         let (tx, rx) = mpsc::channel(1024);
@@ -172,10 +201,11 @@ impl AgentDriver for ClaudeDriver {
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
             session_id: Mutex::new(session_id.clone()),
+            catalog,
             _native_mcp_config: native_mcp_config,
         });
 
-        // Initialize is optional; we send it to get the catalog and to be a well-behaved client.
+        // Initialize is optional; we send it for the command and model catalogs and to be a well-behaved client.
         session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"] })).await?;
 
         let reader = session.clone();
@@ -204,6 +234,7 @@ impl ClaudeDriver {
                     id: "sonnet".into(),
                     display_name: "Sonnet".into(),
                     resolved_id: None,
+                    description: None,
                     provider: None,
                     efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
                     default_effort: None,
@@ -213,6 +244,7 @@ impl ClaudeDriver {
                     id: "opus".into(),
                     display_name: "Opus".into(),
                     resolved_id: None,
+                    description: None,
                     provider: None,
                     efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
                     default_effort: None,
@@ -242,71 +274,146 @@ impl ClaudeDriver {
             None => status.unavailable_reason = Some("could not run `claude --version`".into()),
         }
         if status.available {
-            let config = crate::claude_config::resolve(context, &bin).await;
-            if let Ok(Ok(output)) = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                crate::process_tree::output(contextual_command(&bin, context).arg("--help")),
-            )
-            .await
-            {
-                let help = String::from_utf8_lossy(&output.stdout);
-                let efforts = claude_efforts(&help);
-                if !efforts.is_empty() {
-                    status.supported_efforts = efforts.clone();
-                }
-                let aliases = claude_model_aliases(&help);
-                if !aliases.is_empty() {
-                    let mut selectors = aliases;
-                    if !selectors.iter().any(|selector| selector == &config.model) {
-                        selectors.insert(0, config.model.clone());
+            match self.catalog.models(&bin, context).await {
+                Some(catalog) => {
+                    let config = crate::claude_config::resolve(context, &bin, catalog_default(&catalog)).await;
+                    let efforts = catalog_efforts(&catalog);
+                    if !efforts.is_empty() {
+                        status.supported_efforts = efforts;
                     }
-                    let resolved = match status.version.as_deref() {
-                        Some(version) => resolve_alias_models(&bin, context, version, &selectors).await,
-                        None => HashMap::new(),
-                    };
-                    status.models = selectors
-                        .into_iter()
-                        .map(|id| {
-                            let base = id.split('[').next().unwrap_or(&id).to_string();
-                            // The concrete resolved id carries the version; fall back to a
-                            // configured alias override, then to the alias's own name.
-                            let target = resolved
-                                .get(&base)
-                                .map(String::as_str)
-                                .or_else(|| (id == config.model).then_some(config.alias_target.as_deref()).flatten());
-                            let display_name = claude_model_name(&id, target);
-                            let resolved_id = target.map(|target| resolved_model_id(&id, target));
-                            let is_default = id == config.model;
-                            let default_effort = Some(config.effort_for(&id));
-                            let efforts = status.supported_efforts.clone();
-                            ProviderModel { display_name, resolved_id, is_default, default_effort, id, provider: None, efforts }
-                        })
-                        .collect();
+                    status.models = catalog_models(&catalog, &config, &status.supported_efforts);
+                    insert_configured_model(&mut status, &config, &catalog);
                 }
-            }
-            if !status.models.iter().any(|model| model.is_default) {
-                let resolved = match status.version.as_deref() {
-                    Some(version) => resolve_alias_models(&bin, context, version, std::slice::from_ref(&config.model)).await,
-                    None => HashMap::new(),
-                };
-                let base = config.model.split('[').next().unwrap_or(&config.model).to_string();
-                let target = resolved.get(&base).map(String::as_str).or(config.alias_target.as_deref());
-                status.models.insert(
-                    0,
-                    ProviderModel {
-                        id: config.model.clone(),
-                        display_name: claude_model_name(&config.model, target),
-                        resolved_id: target.map(|target| resolved_model_id(&config.model, target)),
-                        provider: None,
-                        efforts: status.supported_efforts.clone(),
-                        default_effort: Some(config.effort.clone()),
-                        is_default: true,
-                    },
-                );
+                None => {
+                    let config = crate::claude_config::resolve(context, &bin, None).await;
+                    self.probe_help(&mut status, &bin, context, &config).await;
+                    insert_configured_model(&mut status, &config, &[]);
+                }
             }
         }
         status
     }
+
+    /// Fallback when Claude Code reports no catalog (an old CLI, or a first
+    /// read still running): aliases and efforts from `--help`, unversioned.
+    async fn probe_help(&self, status: &mut ProviderStatus, bin: &std::path::Path, context: &ProbeContext, config: &ClaudeConfig) {
+        let Ok(Ok(output)) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::process_tree::output(contextual_command(bin, context).arg("--help")),
+        )
+        .await
+        else {
+            return;
+        };
+        let help = String::from_utf8_lossy(&output.stdout);
+        let efforts = claude_efforts(&help);
+        if !efforts.is_empty() {
+            status.supported_efforts = efforts;
+        }
+        let aliases = claude_model_aliases(&help);
+        if aliases.is_empty() {
+            return;
+        }
+        status.models = aliases
+            .into_iter()
+            .map(|id| {
+                let target = (id == config.model).then_some(config.alias_target.as_deref()).flatten();
+                ProviderModel {
+                    display_name: claude_model_name(&id, target),
+                    resolved_id: target.map(|target| resolved_model_id(&id, target)),
+                    description: None,
+                    is_default: id == config.model,
+                    default_effort: Some(config.effort_for(&id)),
+                    efforts: status.supported_efforts.clone(),
+                    provider: None,
+                    id,
+                }
+            })
+            .collect();
+    }
+}
+
+/// The selector the catalog's `default` entry stands for: the listed entry
+/// that runs the same model (`opus[1m]`), else `default` itself.
+fn catalog_default(catalog: &[CatalogModel]) -> Option<String> {
+    let default = catalog.iter().find(|model| model.value == "default")?;
+    Some(default_twin(catalog, default).map_or_else(|| default.value.clone(), |twin| twin.value.clone()))
+}
+
+/// Another entry that runs the same model as the `default` entry. Older CLIs
+/// omit `resolvedModel`, but give both entries the same description.
+fn default_twin<'a>(catalog: &'a [CatalogModel], default: &CatalogModel) -> Option<&'a CatalogModel> {
+    catalog.iter().filter(|model| model.value != default.value).find(|model| match (&model.resolved_model, &default.resolved_model) {
+        (Some(model), Some(default)) => model == default,
+        _ => model.description.is_some() && model.description == default.description,
+    })
+}
+
+/// Every effort any model accepts, in Claude Code's order.
+fn catalog_efforts(catalog: &[CatalogModel]) -> Vec<String> {
+    let mut efforts: Vec<String> = Vec::new();
+    for effort in catalog.iter().flat_map(|model| &model.efforts) {
+        if !efforts.contains(effort) {
+            efforts.push(effort.clone());
+        }
+    }
+    efforts
+}
+
+fn catalog_models(catalog: &[CatalogModel], config: &ClaudeConfig, fallback_efforts: &[String]) -> Vec<ProviderModel> {
+    catalog
+        .iter()
+        // Kybern offers "Agent default" itself; list the model it runs instead.
+        .filter(|model| model.value != "default" || default_twin(catalog, model).is_none())
+        .map(|model| {
+            let efforts = match (model.supports_effort, model.efforts.is_empty()) {
+                (false, _) => Vec::new(),
+                (true, true) => fallback_efforts.to_vec(),
+                (true, false) => model.efforts.clone(),
+            };
+            ProviderModel {
+                id: model.value.clone(),
+                display_name: match &model.resolved_model {
+                    Some(target) => claude_model_name(&model.value, Some(target)),
+                    None if model.value == "default" => model.display_name.clone(),
+                    None => claude_model_name(&model.value, None),
+                },
+                resolved_id: model.resolved_model.clone(),
+                description: model.description.clone(),
+                provider: None,
+                default_effort: (!efforts.is_empty()).then(|| config.effort_for(&model.value)),
+                efforts,
+                is_default: model.value == config.model,
+            }
+        })
+        .collect()
+}
+
+/// Claude Code runs the configured model even when its catalog omits it (a
+/// project `model` setting, `ANTHROPIC_MODEL`), so list it as the default.
+fn insert_configured_model(status: &mut ProviderStatus, config: &ClaudeConfig, catalog: &[CatalogModel]) {
+    if status.models.iter().any(|model| model.is_default) {
+        return;
+    }
+    let base = config.model.split('[').next().unwrap_or(&config.model);
+    let target = catalog
+        .iter()
+        .find(|model| model.value.split('[').next() == Some(base))
+        .and_then(|model| model.resolved_model.as_deref())
+        .or(config.alias_target.as_deref());
+    status.models.insert(
+        0,
+        ProviderModel {
+            id: config.model.clone(),
+            display_name: claude_model_name(&config.model, target),
+            resolved_id: target.map(|target| resolved_model_id(&config.model, target)),
+            description: None,
+            provider: None,
+            efforts: status.supported_efforts.clone(),
+            default_effort: Some(config.effort.clone()),
+            is_default: true,
+        },
+    );
 }
 
 struct NativeMcpConfig {
@@ -407,7 +514,7 @@ fn claude_efforts(help: &str) -> Vec<String> {
         .collect()
 }
 
-fn contextual_command(binary: &std::path::Path, context: &ProbeContext) -> Command {
+pub(crate) fn contextual_command(binary: &std::path::Path, context: &ProbeContext) -> Command {
     let mut command = Command::new(binary);
     if let Some(cwd) = context.cwd.as_deref() {
         command.current_dir(cwd);
@@ -544,15 +651,17 @@ fn parse_clock(text: &str) -> Option<(u32, u32)> {
 
 /// Human label for a Claude selector. The selector itself stays exactly what
 /// Claude Code accepts; the name is derived mechanically so new models format
-/// themselves. A bare family alias (`opus`) always tracks the latest model, so
-/// it shows without a version we'd otherwise have to guess and keep updated.
-/// When the alias resolves to a concrete id (an `ANTHROPIC_DEFAULT_*_MODEL`
-/// override), that id carries the real version.
-fn claude_model_name(selector: &str, alias_target: Option<&str>) -> String {
-    let (base, context_suffix) =
-        selector.split_once('[').map_or((selector, None), |(base, suffix)| (base, Some(suffix.trim_end_matches(']'))));
-    let label = crate::models::prettify_model_id(alias_target.unwrap_or(base));
-    match context_suffix {
+/// themselves. `target` is the concrete id the selector runs as, from Claude
+/// Code's catalog or an `ANTHROPIC_DEFAULT_*_MODEL` override, and carries the
+/// real version. Without one, a bare alias (`opus`) shows unversioned rather
+/// than with a version we would have to guess.
+fn claude_model_name(selector: &str, target: Option<&str>) -> String {
+    let context_suffix = |id: &str| id.split_once('[').map(|(_, suffix)| suffix.trim_end_matches(']').to_string());
+    let base = selector.split('[').next().unwrap_or(selector);
+    let label = crate::models::prettify_model_id(target.unwrap_or(base));
+    // `default` resolves to `claude-opus-5-5[1m]`: the context size can live
+    // on either side.
+    match context_suffix(selector).or_else(|| target.and_then(context_suffix)) {
         Some(suffix) if suffix.eq_ignore_ascii_case("1m") => format!("{label} · 1M"),
         Some(suffix) if !suffix.is_empty() => format!("{label} · {suffix}"),
         _ => label,
@@ -565,100 +674,6 @@ fn claude_model_name(selector: &str, alias_target: Option<&str>) -> String {
 fn resolved_model_id(selector: &str, target: &str) -> String {
     let suffix = selector.find('[').map_or("", |index| &selector[index..]);
     if suffix.is_empty() || target.contains('[') { target.to_string() } else { format!("{target}{suffix}") }
-}
-
-/// Concrete model ids Claude Code resolves each family alias to, cached per CLI
-/// version. The alias→id mapping only changes when Claude Code is upgraded, so
-/// the (free) resolution runs at most once per installed version.
-static ALIAS_MODEL_CACHE: std::sync::LazyLock<Mutex<HashMap<(String, String), String>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Map bare family aliases (`opus`, `fable`, …) in `selectors` to the concrete
-/// versioned id Claude Code uses, so the picker can show "Claude Opus 5" rather
-/// than a version-free "Opus". Concrete ids and unknown selectors are skipped
-/// (they already carry a version). Best effort: a failed lookup is simply
-/// omitted and the caller falls back to the alias's own name.
-async fn resolve_alias_models(
-    bin: &std::path::Path,
-    context: &ProbeContext,
-    version: &str,
-    selectors: &[String],
-) -> HashMap<String, String> {
-    let bases: Vec<String> = selectors
-        .iter()
-        .map(|selector| selector.split('[').next().unwrap_or(selector).to_string())
-        .filter(|base| !base.is_empty() && base.chars().all(|character| character.is_ascii_alphabetic()))
-        .collect();
-    let mut out = HashMap::new();
-    let mut missing = Vec::new();
-    {
-        let cache = ALIAS_MODEL_CACHE.lock().await;
-        for base in &bases {
-            match cache.get(&(version.to_string(), base.clone())) {
-                Some(id) => {
-                    out.insert(base.clone(), id.clone());
-                }
-                None => missing.push(base.clone()),
-            }
-        }
-    }
-    missing.sort();
-    missing.dedup();
-    let resolved = futures::future::join_all(missing.into_iter().map(|base| {
-        let bin = bin.to_path_buf();
-        let context = context.clone();
-        async move {
-            let id = resolve_one_alias(&bin, &context, &base).await;
-            (base, id)
-        }
-    }))
-    .await;
-    let mut cache = ALIAS_MODEL_CACHE.lock().await;
-    for (base, id) in resolved {
-        if let Some(id) = id {
-            cache.insert((version.to_string(), base.clone()), id.clone());
-            out.insert(base, id);
-        }
-    }
-    out
-}
-
-/// Read the concrete model id Claude Code maps `alias` to from the `system`
-/// init frame of a zero-turn stream-json session. No model turn runs — we kill
-/// the process the instant the init frame arrives — so this costs nothing, the
-/// same technique [`read_account_limits`] uses. `None` on any failure.
-async fn resolve_one_alias(bin: &std::path::Path, context: &ProbeContext, alias: &str) -> Option<String> {
-    let mut cmd = contextual_command(bin, context);
-    cmd.args([
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--input-format",
-        "stream-json",
-        "--verbose",
-        "--no-session-persistence",
-        "--model",
-        alias,
-    ]);
-    let child = NdjsonChild::spawn(cmd).ok()?;
-    // A slash command drives the session to initialize; we kill before it runs.
-    let _ = child.write(&json!({ "type": "user", "message": { "role": "user", "content": "/usage" } })).await;
-    let model = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            let frame = {
-                let mut lines = child.lines.lock().await;
-                lines.recv().await?
-            };
-            if frame.get("type").and_then(Value::as_str) == Some("system") && frame.get("subtype").and_then(Value::as_str) == Some("init") {
-                return frame.get("model").and_then(Value::as_str).map(str::to_string);
-            }
-        }
-    })
-    .await
-    .ok()
-    .flatten();
-    child.kill().await;
-    model.filter(|model| !model.is_empty())
 }
 
 #[derive(Default)]
@@ -690,6 +705,9 @@ struct ClaudeSession {
     pending_permissions: Mutex<HashMap<String, (Value, Vec<Value>)>>,
     state: Mutex<TurnState>,
     session_id: Mutex<String>,
+    /// Where this session's `initialize` catalog is recorded, keeping the
+    /// probe's cached catalog fresh without a separate process.
+    catalog: Option<(Arc<ModelCatalog>, CatalogKey)>,
     _native_mcp_config: Option<NativeMcpConfig>,
 }
 
@@ -761,6 +779,11 @@ impl ClaudeSession {
                 let resp = &v["response"];
                 if let Some(commands) = resp.pointer("/response/commands") {
                     self.emit(DriverEvent::CommandsUpdated(crate::provider_commands(commands))).await;
+                }
+                if let (Some((catalog, key)), Some(models)) =
+                    (&self.catalog, resp.pointer("/response/models").and_then(crate::claude_catalog::parse_models))
+                {
+                    catalog.record(key.clone(), models);
                 }
                 let id = resp.get("request_id").and_then(|r| r.as_str()).unwrap_or("").to_string();
                 if let Some(tx) = self.pending_control.lock().await.remove(&id) {
@@ -1504,6 +1527,62 @@ mod tests {
         assert_eq!(resolved_model_id("opus[1m]", "claude-opus-5-5[1m]"), "claude-opus-5-5[1m]");
     }
 
+    fn parse_catalog(models: serde_json::Value) -> Vec<super::CatalogModel> {
+        crate::claude_catalog::parse_models(&models).unwrap()
+    }
+
+    #[test]
+    fn catalog_models_carry_versions_descriptions_and_the_account_default() {
+        use super::{ClaudeConfig, catalog_default, catalog_models};
+        let catalog = parse_catalog(serde_json::json!([
+            { "value": "default", "resolvedModel": "claude-opus-5-5[1m]", "displayName": "Default (recommended)",
+              "description": "Opus 5.5 with 1M context", "supportsEffort": true, "supportedEffortLevels": ["low", "high"] },
+            { "value": "opus[1m]", "resolvedModel": "claude-opus-5-5[1m]", "displayName": "Opus (1M context)",
+              "description": "Opus 5.5 with 1M context", "supportsEffort": true, "supportedEffortLevels": ["low", "high"] },
+            { "value": "claude-fable-5-1[1m]", "resolvedModel": "claude-fable-5-1", "displayName": "Fable",
+              "supportsEffort": true },
+            { "value": "haiku", "resolvedModel": "claude-haiku-4-5-20251001", "displayName": "Haiku" },
+            { "value": "claude-opus-4-8", "resolvedModel": "claude-opus-4-8", "displayName": "Opus 4.8",
+              "description": "Newer version available · select Opus for Opus 5.5", "supportsEffort": true }
+        ]));
+        assert_eq!(catalog_default(&catalog).as_deref(), Some("opus[1m]"));
+        let models = catalog_models(&catalog, &ClaudeConfig::for_model("opus[1m]"), &["medium".into()]);
+        let summary: Vec<_> = models.iter().map(|model| (model.id.as_str(), model.display_name.as_str(), model.is_default)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("opus[1m]", "Claude Opus 5.5 · 1M", true),
+                ("claude-fable-5-1[1m]", "Claude Fable 5.1 · 1M", false),
+                ("haiku", "Claude Haiku 4.5", false),
+                ("claude-opus-4-8", "Claude Opus 4.8", false),
+            ]
+        );
+        assert_eq!(models[0].resolved_id.as_deref(), Some("claude-opus-5-5[1m]"));
+        assert_eq!(models[0].efforts, ["low", "high"]);
+        assert_eq!(models[1].efforts, ["medium"], "supports effort without listing levels");
+        assert!(models[2].efforts.is_empty() && models[2].default_effort.is_none(), "haiku takes no effort");
+        assert_eq!(models[3].description.as_deref(), Some("Newer version available · select Opus for Opus 5.5"));
+    }
+
+    #[test]
+    fn older_catalogs_match_the_default_by_description_and_stay_unversioned() {
+        use super::{ClaudeConfig, catalog_default, catalog_models};
+        let catalog = parse_catalog(serde_json::json!([
+            { "value": "default", "displayName": "Default (recommended)", "description": "Opus 4.8 · Best for everyday tasks" },
+            { "value": "opus", "displayName": "Opus", "description": "Opus 4.8 · Best for everyday tasks" },
+            { "value": "claude-fable-5[1m]", "displayName": "Fable", "description": "Fable 5" }
+        ]));
+        assert_eq!(catalog_default(&catalog).as_deref(), Some("opus"));
+        let names: Vec<_> =
+            catalog_models(&catalog, &ClaudeConfig::for_model("opus"), &[]).into_iter().map(|model| model.display_name).collect();
+        assert_eq!(names, ["Opus", "Claude Fable 5 · 1M"]);
+
+        let lone_default = parse_catalog(serde_json::json!([{ "value": "default", "displayName": "Default (recommended)" }]));
+        assert_eq!(catalog_default(&lone_default).as_deref(), Some("default"));
+        let models = catalog_models(&lone_default, &ClaudeConfig::for_model("default"), &[]);
+        assert_eq!((models[0].display_name.as_str(), models[0].is_default), ("Default (recommended)", true));
+    }
+
     #[tokio::test]
     async fn notification_result_does_not_finish_a_queued_user_request() {
         use super::*;
@@ -1516,6 +1595,7 @@ mod tests {
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
             session_id: Mutex::new("test".into()),
+            catalog: None,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
@@ -1584,6 +1664,7 @@ mod tests {
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
             session_id: Mutex::new("test".into()),
+            catalog: None,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
@@ -1702,7 +1783,7 @@ mod tests {
                     .collect(),
                 restrictions: Default::default(),
             };
-            let spawned = super::ClaudeDriver
+            let spawned = super::ClaudeDriver::default()
                 .spawn(SessionConfig {
                     cwd: root.path().into(),
                     model: None,

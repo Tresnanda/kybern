@@ -7,6 +7,7 @@
 
 pub mod binary;
 pub mod claude;
+mod claude_catalog;
 mod claude_config;
 pub mod claude_integrations;
 pub mod codex;

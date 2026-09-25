@@ -1142,8 +1142,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               <ComposerPickerMenuSubPopup fixedWidth className="[--available-height:min(20rem,55vh)]">
                                 <MenuRadioGroup value={current?.id ?? model ?? ""} onValueChange={(v) => void changeModel(v as string, models.find((m) => m.id === v)?.default_effort ?? undefined)}>
                                   {modelOptions.map((m) => (
-                                    <MenuRadioItem key={m.id} value={m.id}>
-                                      <span className="truncate">{m.display_name}</span>
+                                    <MenuRadioItem key={m.id} value={m.id} title={m.description ?? undefined}>
+                                      {m.description ? (
+                                        <span className="flex min-w-0 flex-1 flex-col gap-0.5 py-0.5">
+                                          <span className="truncate">{m.display_name}</span>
+                                          <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground/70">{m.description}</span>
+                                        </span>
+                                      ) : (
+                                        <span className="truncate">{m.display_name}</span>
+                                      )}
                                     </MenuRadioItem>
                                   ))}
                                 </MenuRadioGroup>

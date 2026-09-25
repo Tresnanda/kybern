@@ -510,9 +510,14 @@ export function ComposerOptions({
                         },
                       ]}
                     >
-                      <T variant="label" style={{ flex: 1 }}>
-                        {m.display_name}
-                      </T>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <T variant="label">{m.display_name}</T>
+                        {!!m.description && (
+                          <T variant="caption" tone="secondary" numberOfLines={2}>
+                            {m.description}
+                          </T>
+                        )}
+                      </View>
                       {(selectedModel?.id ?? model ?? "") === m.id && (
                         <Icon name="checkmark" size={12} />
                       )}

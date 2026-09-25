@@ -167,6 +167,7 @@ fn parse_model(model: &Value, default_model: Option<&str>, configured_effort: Op
         is_default: default_model == Some(id.as_str()),
         id,
         resolved_id: None,
+        description: None,
         provider,
         efforts,
         default_effort,

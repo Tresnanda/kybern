@@ -183,6 +183,7 @@ async fn omp_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Provid
                 id,
                 display_name,
                 resolved_id: None,
+                description: None,
                 provider,
                 efforts,
                 default_effort: None,
