@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3
+
+<!-- kybern-release-title: Computer use is twice as fast -->
+<!-- kybern-release-summary: Agents click through apps on your Mac about twice as fast, the live view costs less while it watches, and quitting an app no longer reports an error. -->
+
+- Make each computer-use click about twice as fast. The agent's cursor still shows where it acts, but no longer waits out a long glide before every click.
+- Take the live view's pictures between steps without re-reading the app's controls, so watching an agent work adds less time to each step.
+- Report a window as closed when the agent quits its app, instead of an error about a window that could not be read.
+
 ## 0.5.2
 
 <!-- kybern-release-title: Computer use stays connected -->
