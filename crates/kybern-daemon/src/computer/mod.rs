@@ -40,7 +40,9 @@ pub(crate) const APPROVAL_TOOL: &str = "kybern_computer_use";
 pub(crate) const CONSENT_WAIT: Duration = Duration::from_secs(50);
 /// Upper bound for one tool call, below every harness timeout Kybern controls.
 pub(crate) const CALL_BUDGET: Duration = Duration::from_secs(55);
-const IDLE_SHUTDOWN: Duration = Duration::from_secs(10 * 60);
+/// Tests shorten the idle timer so the live check can watch it fire.
+const IDLE_SHUTDOWN: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(10 * 60) };
+const IDLE_CHECK: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(60) };
 const MAX_STEPS: usize = 20;
 const SCREENSHOT_EDGE: u64 = 1280;
 const JPEG_QUALITY: u8 = 72;
@@ -117,6 +119,9 @@ pub(crate) struct ComputerUse {
 struct Inner {
     settings: SettingsStore,
     client: Mutex<Option<Arc<DriverClient>>>,
+    /// Whether Kybern launched CuaDriver's daemon, so it stops it when idle.
+    /// A daemon that was already running belongs to someone else.
+    owns_daemon: std::sync::atomic::AtomicBool,
     last_used: std::sync::Mutex<Instant>,
     threads: Mutex<HashMap<ThreadId, ThreadState>>,
     /// What each chat's agent last saw, for the desktop's live view. Kept in
@@ -163,6 +168,7 @@ impl ComputerUse {
             inner: Arc::new(Inner {
                 settings,
                 client: Mutex::new(None),
+                owns_daemon: std::sync::atomic::AtomicBool::new(false),
                 last_used: std::sync::Mutex::new(Instant::now()),
                 threads: Mutex::new(HashMap::new()),
                 frames: std::sync::Mutex::new(HashMap::new()),
@@ -265,12 +271,12 @@ impl ComputerUse {
         }
     }
 
-    /// Stop the driver process after a quiet period; it restarts on demand.
+    /// Stop the driver after a quiet period; it restarts on demand.
     fn watch_idle(&self) {
         let weak = Arc::downgrade(&self.inner);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                tokio::time::sleep(IDLE_CHECK).await;
                 let Some(inner) = weak.upgrade() else { return };
                 let idle = inner.last_used.lock().unwrap_or_else(|error| error.into_inner()).elapsed() > IDLE_SHUTDOWN;
                 let mut client = inner.client.lock().await;
@@ -278,12 +284,18 @@ impl ComputerUse {
                     return;
                 }
                 if idle {
-                    client.take();
-                    tracing::debug!("stopped idle CuaDriver client");
+                    release(&inner, &mut client).await;
+                    tracing::debug!("stopped idle CuaDriver");
                     return;
                 }
             }
         });
+    }
+
+    /// Stop the driver as the daemon exits.
+    pub(crate) async fn shutdown(&self) {
+        let mut client = self.inner.client.lock().await;
+        release(&self.inner, &mut client).await;
     }
 
     /// Whether this provider session should see the computer tools. Cheap:
@@ -326,6 +338,10 @@ impl ComputerUse {
             "CuaDriver at {} is not signed by Cua AI. Reinstall it from Kybern Settings → Computer use.",
             installation.app.display()
         );
+        // A daemon still running from an earlier client of ours stays ours.
+        if !driver::daemon_running(&installation).await {
+            self.inner.owns_daemon.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let client = Arc::new(DriverClient::start(&installation).await?);
         *slot = Some(client.clone());
         self.watch_idle();
@@ -1226,6 +1242,18 @@ impl ComputerUse {
             return Ok(Verdict::from_structured(&result.structured));
         }
         bail!("the element changed while acting; observe the window again")
+    }
+}
+
+/// Close the `mcp` proxy, then stop CuaDriver's daemon if Kybern launched it.
+/// The caller holds the client slot, so no new client starts in between.
+async fn release(inner: &Inner, client: &mut Option<Arc<DriverClient>>) {
+    client.take();
+    if inner.owns_daemon.swap(false, std::sync::atomic::Ordering::Relaxed)
+        && let Some(installation) = Installation::find()
+        && !driver::stop_daemon(&installation).await
+    {
+        tracing::debug!("CuaDriver daemon did not stop");
     }
 }
 
@@ -2246,6 +2274,39 @@ mod live {
             text(&computer.execute(ctx(), "kybern_computer_act", json!({"window": window, "steps": [{"key": "cmd+q"}]})).await.unwrap());
         eprintln!("{quit}");
         assert!(quit.contains("closed window") && !quit.contains("Could not read"), "a quit app should read as closed");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Kybern stops the CuaDriver daemon it launched, and leaves one it found.
+    #[tokio::test]
+    #[ignore = "starts and stops the real CuaDriver daemon"]
+    async fn stops_only_the_daemon_it_launched() {
+        let root = std::env::temp_dir().join(format!("kybern-computer-daemon-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let installation = Installation::find().expect("CuaDriver is installed");
+        let computer = || ComputerUse::new(SettingsStore::load(&root.join("settings.json")).unwrap());
+
+        driver::stop_daemon(&installation).await;
+        let owner = computer();
+        owner.client().await.unwrap();
+        assert!(driver::daemon_running(&installation).await);
+        owner.shutdown().await;
+        assert!(!driver::daemon_running(&installation).await, "a daemon Kybern launched should stop");
+
+        let guest = computer();
+        owner.client().await.unwrap();
+        guest.client().await.unwrap();
+        guest.shutdown().await;
+        assert!(driver::daemon_running(&installation).await, "a daemon Kybern found should keep running");
+        owner.shutdown().await;
+        assert!(!driver::daemon_running(&installation).await);
+
+        let idle = computer();
+        idle.client().await.unwrap();
+        assert!(driver::daemon_running(&installation).await);
+        tokio::time::sleep(IDLE_SHUTDOWN + IDLE_CHECK * 3).await;
+        assert!(idle.inner.client.lock().await.is_none(), "the idle timer should close the proxy");
+        assert!(!driver::daemon_running(&installation).await, "the idle timer should stop a daemon Kybern launched");
         let _ = std::fs::remove_dir_all(root);
     }
 }

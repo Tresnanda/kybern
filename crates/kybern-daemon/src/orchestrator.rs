@@ -3263,6 +3263,7 @@ impl Orchestrator {
             self.revoke_native_session(live);
         }
         let _ = futures::future::join_all(sessions.iter().map(|(_, live)| live.session.close())).await;
+        self.inner.computer.shutdown().await;
     }
 
     // ---- persistence helpers ----

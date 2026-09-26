@@ -117,6 +117,31 @@ pub(crate) async fn read_signature(app: &Path) -> Signature {
     Signature { valid, identifier: field("Identifier="), team: field("TeamIdentifier=") }
 }
 
+/// Whether CuaDriver's own daemon (`cua-driver serve`) is running. `status`
+/// asks the daemon's socket and never starts it.
+pub(crate) async fn daemon_running(installation: &Installation) -> bool {
+    run_quietly(installation, "status").await
+}
+
+/// Stop CuaDriver's daemon. It outlives the `mcp` proxy and keeps its capture
+/// buffers until it exits; the next proxy launches it again.
+pub(crate) async fn stop_daemon(installation: &Installation) -> bool {
+    run_quietly(installation, "stop").await
+}
+
+async fn run_quietly(installation: &Installation, subcommand: &str) -> bool {
+    let status = Command::new(&installation.binary)
+        .arg(subcommand)
+        .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "0")
+        .env("CUA_TELEMETRY_ENABLED", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    matches!(tokio::time::timeout(Duration::from_secs(10), status).await, Ok(Ok(status)) if status.success())
+}
+
 pub(crate) fn allow_unsigned() -> bool {
     std::env::var_os("KYBERN_CUA_DRIVER_ALLOW_UNSIGNED").is_some_and(|value| value == "1")
 }
