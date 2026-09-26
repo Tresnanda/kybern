@@ -40,9 +40,8 @@ pub(crate) const APPROVAL_TOOL: &str = "kybern_computer_use";
 pub(crate) const CONSENT_WAIT: Duration = Duration::from_secs(50);
 /// Upper bound for one tool call, below every harness timeout Kybern controls.
 pub(crate) const CALL_BUDGET: Duration = Duration::from_secs(55);
-/// Tests shorten the idle timer so the live check can watch it fire.
-const IDLE_SHUTDOWN: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(10 * 60) };
-const IDLE_CHECK: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(60) };
+const IDLE_SHUTDOWN: Duration = Duration::from_secs(10 * 60);
+const IDLE_CHECK: Duration = Duration::from_secs(60);
 const MAX_STEPS: usize = 20;
 const SCREENSHOT_EDGE: u64 = 1280;
 const JPEG_QUALITY: u8 = 72;
@@ -122,6 +121,8 @@ struct Inner {
     /// Whether Kybern launched CuaDriver's daemon, so it stops it when idle.
     /// A daemon that was already running belongs to someone else.
     owns_daemon: std::sync::atomic::AtomicBool,
+    /// Quiet period before the driver stops, and how often to check.
+    idle: (Duration, Duration),
     last_used: std::sync::Mutex<Instant>,
     threads: Mutex<HashMap<ThreadId, ThreadState>>,
     /// What each chat's agent last saw, for the desktop's live view. Kept in
@@ -169,6 +170,7 @@ impl ComputerUse {
                 settings,
                 client: Mutex::new(None),
                 owns_daemon: std::sync::atomic::AtomicBool::new(false),
+                idle: (IDLE_SHUTDOWN, IDLE_CHECK),
                 last_used: std::sync::Mutex::new(Instant::now()),
                 threads: Mutex::new(HashMap::new()),
                 frames: std::sync::Mutex::new(HashMap::new()),
@@ -276,9 +278,10 @@ impl ComputerUse {
         let weak = Arc::downgrade(&self.inner);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(IDLE_CHECK).await;
+                let check = weak.upgrade().map_or(IDLE_CHECK, |inner| inner.idle.1);
+                tokio::time::sleep(check).await;
                 let Some(inner) = weak.upgrade() else { return };
-                let idle = inner.last_used.lock().unwrap_or_else(|error| error.into_inner()).elapsed() > IDLE_SHUTDOWN;
+                let idle = inner.last_used.lock().unwrap_or_else(|error| error.into_inner()).elapsed() > inner.idle.0;
                 let mut client = inner.client.lock().await;
                 if client.is_none() {
                     return;
@@ -2301,10 +2304,11 @@ mod live {
         owner.shutdown().await;
         assert!(!driver::daemon_running(&installation).await);
 
-        let idle = computer();
+        let mut idle = computer();
+        Arc::get_mut(&mut idle.inner).unwrap().idle = (Duration::from_secs(2), Duration::from_secs(1));
         idle.client().await.unwrap();
         assert!(driver::daemon_running(&installation).await);
-        tokio::time::sleep(IDLE_SHUTDOWN + IDLE_CHECK * 3).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
         assert!(idle.inner.client.lock().await.is_none(), "the idle timer should close the proxy");
         assert!(!driver::daemon_running(&installation).await, "the idle timer should stop a daemon Kybern launched");
         let _ = std::fs::remove_dir_all(root);
