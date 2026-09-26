@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.4
+
+<!-- kybern-release-title: Computer use stays light on memory -->
+<!-- kybern-release-summary: CuaDriver now uses about 25 MB instead of hundreds of megabytes or more, and stops on its own when agents are done with it. -->
+
+- Keep CuaDriver's memory use to about 25 MB during computer use. Its on-screen agent cursor could hold over a gigabyte of screen images, so it is now off by default; turn on Show the agent’s cursor in Settings → Computer use to bring it back.
+- Stop CuaDriver 10 minutes after agents last use it, and when Kybern quits, instead of leaving it running in the background. A CuaDriver another app started is left alone.
+
 ## 0.5.3
 
 <!-- kybern-release-title: Computer use is twice as fast -->
