@@ -136,7 +136,7 @@ pub(crate) async fn setup(computer: &ComputerUse, action: ComputerSetupAction) -
     ensure!(cfg!(target_os = "macos"), "Computer use needs macOS.");
     match action {
         ComputerSetupAction::Install => install(computer).await?,
-        ComputerSetupAction::GrantPermissions => grant().await?,
+        ComputerSetupAction::GrantPermissions => grant(computer).await?,
     }
     Ok(status(computer).await)
 }
@@ -213,9 +213,11 @@ async fn install(computer: &ComputerUse) -> Result<()> {
 
 /// Launch the driver's own grant flow through LaunchServices so macOS
 /// attributes the dialogs to CuaDriver. It waits for the user, so Kybern
-/// leaves it running and Settings polls the status.
-async fn grant() -> Result<()> {
+/// leaves it running and Settings polls the status. A daemon the flow
+/// started becomes Kybern's once it finishes.
+async fn grant(computer: &ComputerUse) -> Result<()> {
     let installation = Installation::find().context("Install CuaDriver first.")?;
+    let was_running = driver::daemon_running(&installation).await;
     let mut child = Command::new(&installation.binary)
         .args(["permissions", "grant"])
         .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "0")
@@ -225,9 +227,13 @@ async fn grant() -> Result<()> {
         .kill_on_drop(true)
         .spawn()
         .context("Could not start CuaDriver's permission setup")?;
+    let computer = computer.clone();
     tokio::spawn(async move {
         if tokio::time::timeout(GRANT_TIMEOUT, child.wait()).await.is_err() {
             let _ = child.kill().await;
+        }
+        if !was_running {
+            computer.adopt_setup_daemon(&installation).await;
         }
     });
     Ok(())

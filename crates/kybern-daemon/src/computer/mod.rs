@@ -121,6 +121,9 @@ struct Inner {
     /// Whether Kybern launched CuaDriver's daemon, so it stops it when idle.
     /// A daemon that was already running belongs to someone else.
     owns_daemon: std::sync::atomic::AtomicBool,
+    /// Whether the daemon Kybern launched draws the agent cursor, so a change
+    /// to `show_cursor` restarts it.
+    daemon_cursor: std::sync::atomic::AtomicBool,
     /// Quiet period before the driver stops, and how often to check.
     idle: (Duration, Duration),
     last_used: std::sync::Mutex<Instant>,
@@ -170,6 +173,7 @@ impl ComputerUse {
                 settings,
                 client: Mutex::new(None),
                 owns_daemon: std::sync::atomic::AtomicBool::new(false),
+                daemon_cursor: std::sync::atomic::AtomicBool::new(false),
                 idle: (IDLE_SHUTDOWN, IDLE_CHECK),
                 last_used: std::sync::Mutex::new(Instant::now()),
                 threads: Mutex::new(HashMap::new()),
@@ -295,6 +299,18 @@ impl ComputerUse {
         });
     }
 
+    /// Treat a daemon started by CuaDriver's finished permission setup as
+    /// Kybern's. It draws the cursor, so the next client restarts it without
+    /// one unless the setting asks for it.
+    pub(crate) async fn adopt_setup_daemon(&self, installation: &Installation) {
+        use std::sync::atomic::Ordering;
+        let _client = self.inner.client.lock().await;
+        if !self.inner.owns_daemon.load(Ordering::Relaxed) && driver::daemon_running(installation).await {
+            self.inner.owns_daemon.store(true, Ordering::Relaxed);
+            self.inner.daemon_cursor.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// Stop the driver as the daemon exits.
     pub(crate) async fn shutdown(&self) {
         let mut client = self.inner.client.lock().await;
@@ -319,8 +335,13 @@ impl ComputerUse {
     }
 
     async fn client(&self) -> Result<Arc<DriverClient>> {
+        use std::sync::atomic::Ordering;
         *self.inner.last_used.lock().unwrap_or_else(|error| error.into_inner()) = Instant::now();
+        let show_cursor = self.inner.settings.get().computer_use.show_cursor;
         let mut slot = self.inner.client.lock().await;
+        if self.inner.owns_daemon.load(Ordering::Relaxed) && self.inner.daemon_cursor.load(Ordering::Relaxed) != show_cursor {
+            release(&self.inner, &mut slot).await;
+        }
         if let Some(client) = slot.as_ref()
             && client.alive().await
         {
@@ -342,8 +363,13 @@ impl ComputerUse {
             installation.app.display()
         );
         // A daemon still running from an earlier client of ours stays ours.
+        // Without the cursor Kybern starts it; with it, `mcp` does.
         if !driver::daemon_running(&installation).await {
-            self.inner.owns_daemon.store(true, std::sync::atomic::Ordering::Relaxed);
+            if !show_cursor {
+                driver::launch_daemon_without_cursor(&installation).await?;
+            }
+            self.inner.owns_daemon.store(true, Ordering::Relaxed);
+            self.inner.daemon_cursor.store(show_cursor, Ordering::Relaxed);
         }
         let client = Arc::new(DriverClient::start(&installation).await?);
         *slot = Some(client.clone());
@@ -2289,10 +2315,44 @@ mod live {
         let installation = Installation::find().expect("CuaDriver is installed");
         let computer = || ComputerUse::new(SettingsStore::load(&root.join("settings.json")).unwrap());
 
+        // The daemon's command line once exactly one is running.
+        let daemon_command = || async {
+            for _ in 0..50 {
+                let output = std::process::Command::new("/bin/ps").args(["-axo", "command="]).output().unwrap();
+                let text = String::from_utf8_lossy(&output.stdout).into_owned();
+                let daemons: Vec<&str> = text.lines().filter(|line| line.contains("cua-driver serve")).collect();
+                if let [daemon] = daemons.as_slice() {
+                    return Some((*daemon).to_owned());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            None
+        };
+        let show_cursor = |computer: &ComputerUse, show: bool| {
+            let mut current = computer.inner.settings.get();
+            current.computer_use.show_cursor = show;
+            computer.inner.settings.set(current).unwrap();
+        };
+
         driver::stop_daemon(&installation).await;
         let owner = computer();
         owner.client().await.unwrap();
-        assert!(driver::daemon_running(&installation).await);
+        assert!(
+            daemon_command().await.is_some_and(|command| command.contains("--no-overlay")),
+            "Kybern starts CuaDriver without its cursor"
+        );
+        show_cursor(&owner, true);
+        owner.client().await.unwrap();
+        assert!(
+            daemon_command().await.is_some_and(|command| !command.contains("--no-overlay")),
+            "showing the cursor restarts CuaDriver with it"
+        );
+        show_cursor(&owner, false);
+        owner.client().await.unwrap();
+        assert!(
+            daemon_command().await.is_some_and(|command| command.contains("--no-overlay")),
+            "hiding the cursor restarts CuaDriver without it"
+        );
         owner.shutdown().await;
         assert!(!driver::daemon_running(&installation).await, "a daemon Kybern launched should stop");
 

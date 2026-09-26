@@ -100,7 +100,8 @@ expression: schema_for!(Settings)
       "$ref": "#/$defs/ComputerUseSettings",
       "default": {
         "enabled": false,
-        "foreground": "ask"
+        "foreground": "ask",
+        "show_cursor": false
       }
     }
   },
@@ -239,6 +240,11 @@ expression: schema_for!(Settings)
           "description": "Whether an agent may ask to use the real cursor and focus.",
           "$ref": "#/$defs/ComputerForeground",
           "default": "ask"
+        },
+        "show_cursor": {
+          "description": "Draw CuaDriver's agent cursor where agents act. Off by default: the\ncursor overlay in CuaDriver 0.28 can hold over a gigabyte of\nscreen-sized frames.",
+          "type": "boolean",
+          "default": false
         },
         "always_allowed_apps": {
           "description": "Apps (display names) agents may control in the background without\nasking. Filled by \"Always allow\" on the approval card.",

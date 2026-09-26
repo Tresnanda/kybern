@@ -1162,6 +1162,8 @@ export type ComputerForeground = "ask" | "never";
 export interface ComputerUseSettings {
   enabled: boolean;
   foreground: ComputerForeground;
+  /** Draw CuaDriver's agent cursor where agents act. Off by default; it uses much more memory. */
+  show_cursor?: boolean;
   /** Apps agents may use in the background without asking. */
   always_allowed_apps?: string[];
 }
