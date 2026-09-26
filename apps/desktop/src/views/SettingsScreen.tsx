@@ -384,6 +384,9 @@ function ComputerUseSettings() {
           options={[{ value: "ask", label: "Ask first" }, { value: "never", label: "Never" }]}
         />
       </Row>
+      <Row title="Show the agent’s cursor" description="Draws a second cursor on screen where agents click. CuaDriver can use over a gigabyte of memory while it’s on. The preview in each chat shows every step either way.">
+        <Switch aria-label="Show the agent’s cursor" checked={computer?.show_cursor ?? false} onCheckedChange={(checked) => void update({ computer_use: { enabled, foreground: "ask", ...computer, show_cursor: checked } })} />
+      </Row>
       <Row
         title="When agents ask first"
         description="This follows each chat’s permission mode. Full access never asks. Approve for me asks only before using your cursor. Other modes ask once per app, unless you allow it below."

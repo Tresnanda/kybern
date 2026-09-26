@@ -27,6 +27,7 @@ pub(crate) const MIN_VERSION: (u64, u64, u64) = (0, 28, 2);
 pub(crate) const TESTED_MINOR: (u64, u64) = (0, 28);
 pub(crate) const INSTALL_VERSION: &str = "0.28.2";
 const CALL_TIMEOUT: Duration = Duration::from_secs(45);
+const DAEMON_START: Duration = Duration::from_secs(15);
 /// CuaDriver's automatic glide takes about 1.2 s per click, and the call
 /// waits for it even with the cursor hidden. A short glide keeps the cursor
 /// visible and legible while halving each click (0 means automatic).
@@ -115,6 +116,71 @@ pub(crate) async fn read_signature(app: &Path) -> Signature {
             .map(str::to_owned)
     };
     Signature { valid, identifier: field("Identifier="), team: field("TeamIdentifier=") }
+}
+
+/// Whether CuaDriver's own daemon (`cua-driver serve`) is running. `status`
+/// asks the daemon's socket and never starts it.
+pub(crate) async fn daemon_running(installation: &Installation) -> bool {
+    run_quietly(installation, "status").await
+}
+
+/// Stop CuaDriver's daemon. It outlives the `mcp` proxy and keeps its capture
+/// buffers until it exits; the next proxy launches it again.
+pub(crate) async fn stop_daemon(installation: &Installation) -> bool {
+    if !run_quietly(installation, "stop").await {
+        return false;
+    }
+    // `stop` returns before the daemon has let go of its socket.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if !daemon_running(installation).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// Start CuaDriver's daemon without its agent cursor, through LaunchServices
+/// so CuaDriver's own permission grants apply. The cursor overlay renders a
+/// full-display frame on every tick and queues each one to a main thread that
+/// can fall behind: in Kybern's live runs CuaDriver 0.28.2 held 0.9-1.6 GB with
+/// it and under 30 MB without. Only `serve` can turn the overlay off.
+pub(crate) async fn launch_daemon_without_cursor(installation: &Installation) -> Result<()> {
+    let launched = Command::new("/usr/bin/open")
+        .args(["-n", "-g", "-a"])
+        .arg(&installation.app)
+        .args(["--args", "serve", "--no-overlay"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("start CuaDriver")?;
+    if !launched.success() {
+        bail!("macOS could not open {}", installation.app.display());
+    }
+    let deadline = std::time::Instant::now() + DAEMON_START;
+    while std::time::Instant::now() < deadline {
+        if daemon_running(installation).await {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    bail!("CuaDriver did not start within {} seconds", DAEMON_START.as_secs())
+}
+
+async fn run_quietly(installation: &Installation, subcommand: &str) -> bool {
+    let status = Command::new(&installation.binary)
+        .arg(subcommand)
+        .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "0")
+        .env("CUA_TELEMETRY_ENABLED", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    matches!(tokio::time::timeout(Duration::from_secs(10), status).await, Ok(Ok(status)) if status.success())
 }
 
 pub(crate) fn allow_unsigned() -> bool {

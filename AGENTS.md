@@ -158,6 +158,10 @@ plugin staging alone required a 41 GiB cleanup.
   the Accessibility and Screen Recording grants. Kybern never bundles it; the
   pinned installer and minimum version live in `computer/driver.rs` and
   `computer/setup.rs`. `kybern computer doctor` explains each requirement.
+- Kybern starts CuaDriver's daemon itself with `serve --no-overlay` unless
+  `computer_use.show_cursor` is on; its cursor overlay held 0.9–1.6 GB in
+  live runs. Kybern stops a daemon it launched when idle and on exit, and
+  leaves one it found running. Measure the daemon with `footprint`, not RSS.
 - `@Computer` is a `Mention` with path `kybern://computer`. The daemon lists
   it in `skills.list` and expands it into an instruction only in the copy a
   provider receives. `computer.frame` feeds the desktop live view; frames are

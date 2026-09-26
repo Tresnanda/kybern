@@ -923,6 +923,10 @@ pub struct ComputerUseSettings {
     pub enabled: bool,
     /// Whether an agent may ask to use the real cursor and focus.
     pub foreground: ComputerForeground,
+    /// Draw CuaDriver's agent cursor where agents act. Off by default: the
+    /// cursor overlay in CuaDriver 0.28 can hold over a gigabyte of
+    /// screen-sized frames.
+    pub show_cursor: bool,
     /// Apps (display names) agents may control in the background without
     /// asking. Filled by "Always allow" on the approval card.
     #[serde(skip_serializing_if = "Vec::is_empty")]
