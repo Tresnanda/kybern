@@ -156,16 +156,28 @@ jobs:
         if: steps.release.outputs.tag != ''
         shell: bash
         run: |
+          # dist creates the release as a draft, uploads to it, then publishes
+          # it. Editing it before that finishes detaches it from its tag, so
+          # wait for the whole release.yml run on this commit, not the release.
           for _ in $(seq 1 80); do
-            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
-              # Hide it from "latest" until latest.json and the desktop assets are
-              # attached, so installed apps never see a half-published release.
-              gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
-              exit 0
-            fi
+            dist=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" --event push --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+            case "$dist" in
+              "completed success")
+                if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
+                  # Hide it from "latest" until latest.json and the desktop assets are
+                  # attached, so installed apps never see a half-published release.
+                  gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
+                  exit 0
+                fi
+                ;;
+              "completed "*)
+                echo "::error::release.yml finished without success ($dist); not uploading to ${{ steps.release.outputs.tag }}" >&2
+                exit 1
+                ;;
+            esac
             sleep 15
           done
-          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 20 minutes" >&2
+          echo "::error::release ${{ steps.release.outputs.tag }} was not finished by release.yml within 20 minutes" >&2
           exit 1
       - name: Upload to the GitHub Release
         if: steps.release.outputs.tag != ''
@@ -210,16 +222,28 @@ jobs:
         if: steps.release.outputs.tag != ''
         shell: bash
         run: |
+          # dist creates the release as a draft, uploads to it, then publishes
+          # it. Editing it before that finishes detaches it from its tag, so
+          # wait for the whole release.yml run on this commit, not the release.
           for _ in $(seq 1 80); do
-            if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
-              # Hide it from "latest" until latest.json and the desktop assets are
-              # attached, so installed apps never see a half-published release.
-              gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
-              exit 0
-            fi
+            dist=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" --event push --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+            case "$dist" in
+              "completed success")
+                if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
+                  # Hide it from "latest" until latest.json and the desktop assets are
+                  # attached, so installed apps never see a half-published release.
+                  gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
+                  exit 0
+                fi
+                ;;
+              "completed "*)
+                echo "::error::release.yml finished without success ($dist); not uploading to ${{ steps.release.outputs.tag }}" >&2
+                exit 1
+                ;;
+            esac
             sleep 15
           done
-          echo "::error::release ${{ steps.release.outputs.tag }} was not created by release.yml within 20 minutes" >&2
+          echo "::error::release ${{ steps.release.outputs.tag }} was not finished by release.yml within 20 minutes" >&2
           exit 1
       - name: Read GitHub release notes
         shell: bash
