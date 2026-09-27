@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.7
+
+<!-- kybern-release-title: Agents remember how to use your apps -->
+<!-- kybern-release-summary: When an app needs a trick, agents save a short note, and the next conversation starts from it. See and edit the notes in Settings → Computer use. -->
+
+- Let agents keep notes on how to use each app. When an app needs a non-obvious approach, like WhatsApp's message box ignoring background typing, the agent saves a short note, and later conversations see it the first time they use that app. Review, edit or delete notes in Settings → Computer use → App notes, or with `kybern computer notes`.
+- Get WhatsApp messages and mentions right the first time with a built-in note on how its message box works.
+- Fix apps opened moments earlier being treated as unknown during computer use.
+
 ## 0.5.6
 
 <!-- kybern-release-title: Computer use is about four times faster -->
