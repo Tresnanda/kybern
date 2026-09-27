@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.5
+
+<!-- kybern-release-title: OMP works again -->
+<!-- kybern-release-summary: OMP threads send normally again with OMP 18.3, instead of stopping with an error about collaboration tools. -->
+
+- Fix OMP threads failing with "OMP did not load Kybern's configured collaboration tools" after updating to OMP 18.3. OMP now hides tools from extensions behind on-demand lookups by default; Kybern's tools stay in its normal tool list.
+
 ## 0.5.4
 
 <!-- kybern-release-title: Computer use stays light on memory -->
