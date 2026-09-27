@@ -2698,6 +2698,8 @@ struct LiveSession {
     /// Daemon-local identity for one spawned process. Native tool credentials bind to it.
     session_instance_id: Uuid,
     session: Box<dyn AgentSession>,
+    /// Whether this process was spawned with the computer-use tools.
+    computer_tools: bool,
     /// Last moment the user or the provider touched this session. Idle
     /// release is measured from here.
     last_activity: std::sync::Mutex<SessionActivityTime>,
@@ -2739,8 +2741,8 @@ struct DaemonApproval {
 
 /// The copy of a user message a provider receives. Kybern-only mentions
 /// become instructions; everything else passes through unchanged.
-fn provider_message(message: &UserMessage) -> std::borrow::Cow<'_, UserMessage> {
-    match crate::computer::ComputerUse::expand_mention(message) {
+fn provider_message<'a>(message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
+    match crate::computer::ComputerUse::expand_mention(message, live.computer_tools) {
         Some(expanded) => std::borrow::Cow::Owned(expanded),
         None => std::borrow::Cow::Borrowed(message),
     }
@@ -3876,7 +3878,7 @@ impl Orchestrator {
             .filter(|turn| !turn.completed)
             .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
         live.touch();
-        live.session.steer(&params.id.to_string(), &provider_message(&params.message)).await?;
+        live.session.steer(&params.id.to_string(), &provider_message(&params.message, &live)).await?;
         self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
         if let Err(error) = self.record_user_redirect(params.thread_id, &redirect_summary) {
             tracing::warn!(thread_id = %params.thread_id, %error, "could not notify collaboration coordinator of direct user steering");
@@ -4013,6 +4015,7 @@ impl Orchestrator {
         message: UserMessage,
         startup_started: std::time::Instant,
     ) -> Result<()> {
+        self.prepare_for_computer(&thread, &message).await;
         let (live, session_reused) = match self.ensure_session(&thread).await {
             Ok(live) => live,
             Err(error) => {
@@ -4076,7 +4079,7 @@ impl Orchestrator {
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            live.session.send_message(&message_id.to_string(), &provider_message(&message)).await
+            live.session.send_message(&message_id.to_string(), &provider_message(&message, &live)).await
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -4320,7 +4323,7 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed)
                 .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
             live.touch();
-            live.session.steer(&message_id.to_string(), &provider_message(&message)).await?;
+            live.session.steer(&message_id.to_string(), &provider_message(&message, &live)).await?;
             active.id
         } else {
             self.send_with_id(params.thread_id, message_id, message.clone(), false, false).await?.0
@@ -4737,6 +4740,39 @@ impl Orchestrator {
         Ok((c.before, conversation_rewound))
     }
 
+    /// `@Computer`: warm the driver, and in a chat whose process started before
+    /// computer use was available, close the idle process so this turn resumes
+    /// with the tools.
+    /// The thread is already Running for this turn, so only the process's own
+    /// work counts as busy.
+    async fn prepare_for_computer(&self, thread: &Thread, message: &UserMessage) {
+        if !crate::computer::ComputerUse::mentions(message)
+            || !self.native_tool_restrictions(thread).is_ok_and(|restrictions| self.computer_tools_offered(thread, &restrictions))
+        {
+            return;
+        }
+        self.inner.computer.prewarm();
+        let live = {
+            let mut sessions = self.inner.sessions.lock().await;
+            let Some(live) = sessions.get(&thread.id).cloned() else { return };
+            if live.computer_tools
+                || live.turn.lock().await.is_some()
+                || live.tasks.lock().await.values().any(|task| task.status.is_active())
+                || !live.pending.lock().await.is_empty()
+            {
+                return;
+            }
+            sessions.remove(&thread.id);
+            live
+        };
+        live.mark_released();
+        self.revoke_native_session(&live);
+        if let Err(error) = live.session.close().await {
+            tracing::debug!(%error, thread_id = %thread.id, "closing a session without computer tools failed");
+        }
+        let _ = self.emit(thread.id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual });
+    }
+
     async fn ensure_session(&self, thread: &Thread) -> Result<(Arc<LiveSession>, bool)> {
         let waiting = {
             let sessions = self.inner.sessions.lock().await;
@@ -4776,6 +4812,7 @@ impl Orchestrator {
         let session_instance_id = Uuid::now_v7();
         let restrictions = self.native_tool_restrictions(thread)?;
         let coordinator_instructions = self.coordinator_instructions(thread)?;
+        let computer_tools = self.computer_tools_offered(thread, &restrictions);
         let native_tool_bridge = self
             .inner
             .native_tools
@@ -4822,6 +4859,7 @@ impl Orchestrator {
         let live = Arc::new(LiveSession {
             session_instance_id,
             session,
+            computer_tools,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
@@ -4842,6 +4880,15 @@ impl Orchestrator {
         let pump_live = live.clone();
         tokio::spawn(async move { this.pump(thread_id, pump_live, events).await });
         Ok(live)
+    }
+
+    /// Whether a session spawned now would expose the computer-use tools.
+    fn computer_tools_offered(&self, thread: &Thread, restrictions: &kybern_drivers::NativeToolRestrictions) -> bool {
+        const PROBE: &str = "kybern_computer_act";
+        self.inner.native_tools.is_some()
+            && self.inner.computer.offered_to(thread.provider.kind)
+            && (restrictions.allowed_tools.is_empty() || restrictions.allowed_tools.iter().any(|tool| tool == PROBE))
+            && !restrictions.denied_tools.iter().any(|tool| tool == PROBE)
     }
 
     fn native_tool_restrictions(&self, thread: &Thread) -> Result<kybern_drivers::NativeToolRestrictions> {
@@ -6199,6 +6246,7 @@ mod tests {
         let live = Arc::new(LiveSession {
             session_instance_id: Uuid::now_v7(),
             session: Box::new(TestSession::default()),
+            computer_tools: false,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
@@ -6548,6 +6596,7 @@ mod tests {
             let live = Arc::new(LiveSession {
                 session_instance_id: Uuid::now_v7(),
                 session: Box::new(TestSession { closes: closes.clone(), messages: messages.clone(), ..Default::default() }),
+                computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime { monotonic: last_activity, wall: SystemTime::now() }),
                 released: AtomicBool::new(false),
                 stop_cleanup: AtomicBool::new(false),
@@ -6571,6 +6620,7 @@ mod tests {
             let live = Arc::new(LiveSession {
                 session_instance_id: Uuid::now_v7(),
                 session: Box::new(TestSession { app_tool_responses: responses.clone(), ..Default::default() }),
+                computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
                 released: AtomicBool::new(false),
                 stop_cleanup: AtomicBool::new(false),

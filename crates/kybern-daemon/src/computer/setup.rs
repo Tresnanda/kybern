@@ -56,7 +56,20 @@ pub(crate) async fn status(computer: &ComputerUse) -> ComputerStatus {
     status.app_path = Some(installation.app.display().to_string());
     status.version = installation.version.clone();
     let supported = installation.version_supported();
-    status.checks.push(if supported {
+    let slow = installation.parsed_version().is_some_and(|version| version < driver::FAST_VERSION);
+    status.checks.push(if supported && slow {
+        // Still usable; failing the check is what makes Settings offer the update.
+        check(
+            "version",
+            false,
+            &format!(
+                "CuaDriver {} works, but {} makes each action about four times faster.",
+                installation.version.as_deref().unwrap_or("?"),
+                driver::INSTALL_VERSION
+            ),
+            Some("Update it from Settings → Computer use, or run `kybern computer install`.".into()),
+        )
+    } else if supported {
         let newer = installation.parsed_version().is_some_and(|(major, minor, _)| (major, minor) > driver::TESTED_MINOR);
         check(
             "version",

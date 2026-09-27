@@ -24,14 +24,35 @@ pub(crate) const TEAM_ID: &str = "YCK386LBJ7";
 /// Oldest release with the element-token contract and a notarized macOS build.
 pub(crate) const MIN_VERSION: (u64, u64, u64) = (0, 28, 2);
 /// Newest minor line Kybern was tested against. Newer versions still run.
-pub(crate) const TESTED_MINOR: (u64, u64) = (0, 28);
-pub(crate) const INSTALL_VERSION: &str = "0.28.2";
+pub(crate) const TESTED_MINOR: (u64, u64) = (0, 30);
+/// Older supported versions work but wait a full second after each action;
+/// Settings offers the update below this.
+pub(crate) const FAST_VERSION: (u64, u64, u64) = (0, 29, 0);
+/// Notarized, and the first line whose post-action window watch can be
+/// shortened (`CUA_DRIVER_WINDOW_CHANGE_TIMEOUT_MS`, 0.29+).
+pub(crate) const INSTALL_VERSION: &str = "0.30.1";
 const CALL_TIMEOUT: Duration = Duration::from_secs(45);
 const DAEMON_START: Duration = Duration::from_secs(15);
-/// CuaDriver's automatic glide takes about 1.2 s per click, and the call
-/// waits for it even with the cursor hidden. A short glide keeps the cursor
-/// visible and legible while halving each click (0 means automatic).
+/// CuaDriver's automatic glide takes about 1.1 s per click, and the call
+/// waits for it even with the cursor hidden (0 means automatic). A short
+/// glide keeps a shown cursor legible; a hidden one moves instantly.
 const CURSOR_GLIDE_MS: u64 = 120;
+const HIDDEN_GLIDE_MS: u64 = 1;
+/// After every action CuaDriver watches for new windows, 1000 ms by default,
+/// and a change inside the window does not end the watch early: it was most
+/// of each 1.1 s click. A short watch keeps its focus-restore for links that
+/// open another app while a press lands in about 0.2 s.
+const WINDOW_CHANGE_TIMEOUT_MS: &str = "150";
+const WINDOW_CHANGE_POLL_MS: &str = "25";
+/// The daemon reads these from its own environment; the `mcp` proxy's do not
+/// reach it. Update checks and telemetry cost a network call per spawn.
+const DAEMON_ENV: &[(&str, &str)] = &[
+    ("CUA_DRIVER_WINDOW_CHANGE_TIMEOUT_MS", WINDOW_CHANGE_TIMEOUT_MS),
+    ("CUA_DRIVER_WINDOW_CHANGE_POLL_MS", WINDOW_CHANGE_POLL_MS),
+    ("CUA_DRIVER_RS_UPDATE_CHECK", "0"),
+    ("CUA_DRIVER_RS_TELEMETRY_ENABLED", "0"),
+    ("CUA_TELEMETRY_ENABLED", "0"),
+];
 const MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Where the installed app lives and what it claims to be.
@@ -141,22 +162,23 @@ pub(crate) async fn stop_daemon(installation: &Installation) -> bool {
     false
 }
 
-/// Start CuaDriver's daemon without its agent cursor, through LaunchServices
-/// so CuaDriver's own permission grants apply. The cursor overlay renders a
-/// full-display frame on every tick and queues each one to a main thread that
-/// can fall behind: in Kybern's live runs CuaDriver 0.28.2 held 0.9-1.6 GB with
-/// it and under 30 MB without. Only `serve` can turn the overlay off.
-pub(crate) async fn launch_daemon_without_cursor(installation: &Installation) -> Result<()> {
-    let launched = Command::new("/usr/bin/open")
-        .args(["-n", "-g", "-a"])
-        .arg(&installation.app)
-        .args(["--args", "serve", "--no-overlay"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .context("start CuaDriver")?;
+/// Start CuaDriver's daemon through LaunchServices so CuaDriver's own
+/// permission grants apply, with Kybern's settings in its environment. The
+/// cursor overlay renders a full-display frame on every tick and queues each
+/// one to a main thread that can fall behind: in Kybern's live runs CuaDriver
+/// 0.28.2 held 0.9-1.6 GB with it and under 30 MB without, so it is off unless
+/// the user asks for it. Only `serve` can turn the overlay off.
+pub(crate) async fn launch_daemon(installation: &Installation, show_cursor: bool) -> Result<()> {
+    let mut command = Command::new("/usr/bin/open");
+    command.args(["-n", "-g"]);
+    for (name, value) in DAEMON_ENV {
+        command.arg("--env").arg(format!("{name}={value}"));
+    }
+    command.arg("-a").arg(&installation.app).args(["--args", "serve"]);
+    if !show_cursor {
+        command.arg("--no-overlay");
+    }
+    let launched = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().await.context("start CuaDriver")?;
     if !launched.success() {
         bail!("macOS could not open {}", installation.app.display());
     }
@@ -173,8 +195,7 @@ pub(crate) async fn launch_daemon_without_cursor(installation: &Installation) ->
 async fn run_quietly(installation: &Installation, subcommand: &str) -> bool {
     let status = Command::new(&installation.binary)
         .arg(subcommand)
-        .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "0")
-        .env("CUA_TELEMETRY_ENABLED", "0")
+        .envs(DAEMON_ENV.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -256,15 +277,15 @@ pub(crate) struct DriverClient {
     sessions: Mutex<HashMap<String, String>>,
     tag: String,
     renames: AtomicU64,
+    glide_ms: u64,
 }
 
 impl DriverClient {
-    pub(crate) async fn start(installation: &Installation) -> Result<Self> {
+    pub(crate) async fn start(installation: &Installation, show_cursor: bool) -> Result<Self> {
         let mut command = Command::new(&installation.binary);
         command
             .arg("mcp")
-            .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "0")
-            .env("CUA_TELEMETRY_ENABLED", "0")
+            .envs(DAEMON_ENV.iter().copied())
             .env_remove("CUA_DRIVER_PERMISSION_MODE")
             .env_remove("CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS")
             .stdin(Stdio::piped())
@@ -284,6 +305,7 @@ impl DriverClient {
             sessions: Mutex::default(),
             tag,
             renames: AtomicU64::new(0),
+            glide_ms: if show_cursor { CURSOR_GLIDE_MS } else { HIDDEN_GLIDE_MS },
         };
         tokio::spawn(read_loop(stdout, pending));
         let init = client
@@ -359,7 +381,7 @@ impl DriverClient {
     /// Session settings Kybern relies on. Best effort: an older driver
     /// without the tool still works, only slower.
     async fn prepare_session(&self, name: &str) {
-        let motion = json!({ "session": name, "glide_duration_ms": CURSOR_GLIDE_MS, "dwell_after_click_ms": 0 });
+        let motion = json!({ "session": name, "glide_duration_ms": self.glide_ms, "dwell_after_click_ms": 0 });
         if let Err(error) = self.call_raw("set_agent_cursor_motion", motion).await {
             tracing::debug!(target: "kybern::computer", session = name, %error, "could not set the cursor motion");
         }

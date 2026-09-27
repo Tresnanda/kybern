@@ -158,14 +158,22 @@ plugin staging alone required a 41 GiB cleanup.
   the Accessibility and Screen Recording grants. Kybern never bundles it; the
   pinned installer and minimum version live in `computer/driver.rs` and
   `computer/setup.rs`. `kybern computer doctor` explains each requirement.
-- Kybern starts CuaDriver's daemon itself with `serve --no-overlay` unless
-  `computer_use.show_cursor` is on; its cursor overlay held 0.9–1.6 GB in
-  live runs. Kybern stops a daemon it launched when idle and on exit, and
-  leaves one it found running. Measure the daemon with `footprint`, not RSS.
+- Kybern starts CuaDriver's daemon itself (`open --env … serve`), with
+  `--no-overlay` unless `computer_use.show_cursor` is on; its cursor overlay
+  held 0.9–1.6 GB in live runs. The daemon reads its speed settings from its
+  own environment: the post-action window watch (1000 ms by default, most of
+  each click) is 150 ms. Kybern stops a daemon it launched when idle and on
+  exit, and leaves one it found running. Measure the daemon with `footprint`,
+  not RSS, and per-call timings with `RUST_LOG=kybern::computer=debug`.
 - `@Computer` is a `Mention` with path `kybern://computer`. The daemon lists
   it in `skills.list` and expands it into an instruction only in the copy a
-  provider receives. `computer.frame` feeds the desktop live view; frames are
-  captured only while a client polls and are never persisted.
+  provider receives. An idle session spawned without the tools is resumed
+  with them at turn start; otherwise the agent is told the tools are missing.
+  `computer.frame` feeds the desktop live view; frames are captured only
+  while a client polls and are never persisted.
+- Claude Code defers MCP tools, so `kybern_computer_help` is rarely read. Put
+  must-know guidance in the @Computer instruction or tool descriptions, and
+  app-specific quirks seen in real runs in `quirk_note` (shown once per session).
 - Keep the contract cheap: accessibility text by default, screenshots only on
   request, batched `act` steps that return a diff. Run the real-app check with
   `cargo test -p kybern-daemon computer::live -- --ignored --nocapture`.
