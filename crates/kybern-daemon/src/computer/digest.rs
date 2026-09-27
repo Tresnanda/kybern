@@ -15,6 +15,9 @@ const LONG_VALUE_CHARS: usize = 200;
 pub(crate) const DEFAULT_LIMIT: usize = 80;
 pub(crate) const MAX_LIMIT: usize = 400;
 const MAX_DIFF_LINES: usize = 40;
+/// Past this many, removed elements are counted rather than listed: a page
+/// that navigated or a window that closed says little through what it lost.
+const MAX_REMOVED_LINES: usize = 8;
 const DEFAULT_TEXT_ROWS: usize = 12;
 
 /// Roles the model can act on. Static text is listed only with `text:true`.
@@ -355,6 +358,10 @@ impl RefTable {
     pub(crate) fn lookup(&self, identity: &Identity) -> Option<u32> {
         self.by_identity.get(identity).copied()
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.by_ref.is_empty()
+    }
 }
 
 /// Parse `@12` or `12`.
@@ -430,6 +437,11 @@ pub(crate) fn diff(before: &Snapshot, after: &Snapshot, refs: &mut RefTable) -> 
     let mut lines = Vec::new();
     changes(&before.elements, &after.elements, Some(refs), &mut lines);
     changes(&before.texts, &after.texts, None, &mut lines);
+    let removed = lines.iter().filter(|line| line.starts_with('-')).count();
+    if removed > MAX_REMOVED_LINES {
+        lines.retain(|line| !line.starts_with('-'));
+        lines.push(format!("-{removed} elements gone"));
+    }
     if lines.len() > MAX_DIFF_LINES {
         let extra = lines.len() - MAX_DIFF_LINES;
         lines.truncate(MAX_DIFF_LINES);
@@ -597,6 +609,15 @@ mod tests {
             lines,
             vec!["~@1 textfield \"Name\" = \"Report\"", "+@3 sheet \"Save As\"", "+@4 button \"Cancel\"", "-@2 button \"Save\""]
         );
+    }
+
+    #[test]
+    fn many_removals_are_counted_not_listed() {
+        let before = snapshot(Value::Array((0..12).map(|i| json!({"role":"AXLink","label":format!("Result {i}")})).collect()));
+        let after = snapshot(json!([{"role":"AXButton","label":"Reload"}]));
+        let mut refs = RefTable::default();
+        render(&before, &mut refs, &options(None, DEFAULT_LIMIT));
+        assert_eq!(diff(&before, &after, &mut refs), vec!["+@13 button \"Reload\"", "-12 elements gone"]);
     }
 
     #[test]
