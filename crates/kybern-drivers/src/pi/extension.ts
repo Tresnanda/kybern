@@ -359,6 +359,8 @@ export default function kybernExtension(pi) {
       ...tool,
       label: tool.label || tool.name,
       executionMode: "parallel",
+      // OMP 18.3 mounts extension tools under xd:// by default; keep ours top-level.
+      loadMode: "essential",
       async execute(toolCallId, args, signal, _onUpdate, ctx) {
         return executeAppTool(tool.name, toolCallId, args, signal, ctx);
       },
