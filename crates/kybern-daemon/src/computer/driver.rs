@@ -25,6 +25,9 @@ pub(crate) const TEAM_ID: &str = "YCK386LBJ7";
 pub(crate) const MIN_VERSION: (u64, u64, u64) = (0, 28, 2);
 /// Newest minor line Kybern was tested against. Newer versions still run.
 pub(crate) const TESTED_MINOR: (u64, u64) = (0, 30);
+/// Older supported versions work but wait a full second after each action;
+/// Settings offers the update below this.
+pub(crate) const FAST_VERSION: (u64, u64, u64) = (0, 29, 0);
 /// Notarized, and the first line whose post-action window watch can be
 /// shortened (`CUA_DRIVER_WINDOW_CHANGE_TIMEOUT_MS`, 0.29+).
 pub(crate) const INSTALL_VERSION: &str = "0.30.1";
