@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.6
+
+<!-- kybern-release-title: Computer use is about four times faster -->
+<!-- kybern-release-summary: Agents click and type in your apps about four times faster, and waste fewer steps in browsers and after screenshots. Update CuaDriver in Settings → Computer use to get the speedup. -->
+
+- Make computer use about four times faster. A click now takes about a quarter of a second instead of over one, because Kybern shortens CuaDriver's one-second wait after every action. Kybern now installs CuaDriver 0.30.1; Settings → Computer use offers the update when you have an older one.
+- Start computer use sooner: mentioning @Computer gets CuaDriver ready while the agent reads your request.
+- Help agents finish browser tasks: they now open pages by URL instead of clicking page content, which often ignores background clicks.
+- Fix screenshots missing from `act` results when the agent skipped the window report, and element references failing after a screenshot.
+- Let agents open apps inside other apps, such as DeviceHub inside Xcode, and explain when a window is on another Space.
+- Let @Computer work in a chat that started before computer use was turned on. If computer use is off, the agent says so instead of trying shell commands.
+
 ## 0.5.5
 
 <!-- kybern-release-title: OMP works again -->
