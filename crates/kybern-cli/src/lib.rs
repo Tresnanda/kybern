@@ -422,6 +422,17 @@ enum ComputerCmd {
         #[arg(long, default_value = "frame.jpg")]
         out: String,
     },
+    /// List what agents learned about apps, or show, replace or clear one app's notes.
+    Notes {
+        /// App name or bundle id.
+        app: Option<String>,
+        /// Replace the notes with this UTF-8 file (`-` reads stdin).
+        #[arg(long, conflicts_with = "clear", requires = "app")]
+        set: Option<String>,
+        /// Delete the notes.
+        #[arg(long, requires = "app")]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -914,6 +925,43 @@ pub async fn run() -> Result<()> {
                         frame.action.as_deref().unwrap_or("frame"),
                         frame.title.map(|title| format!(" · {title}")).unwrap_or_default()
                     );
+                    return Ok(());
+                }
+                ComputerCmd::Notes { app, set, clear } => {
+                    let notes = client.call::<ComputerNotesList>(Empty {}).await?.notes;
+                    let Some(app) = app else {
+                        if notes.is_empty() {
+                            println!("No app notes yet. Agents save them when an app needs a non-obvious approach.");
+                        }
+                        for note in &notes {
+                            let lines = note.text.lines().count();
+                            println!("{} ({}) · {lines} line{}", note.app, note.bundle_id, if lines == 1 { "" } else { "s" });
+                        }
+                        return Ok(());
+                    };
+                    let found = notes.iter().find(|note| note.bundle_id == app || note.app.eq_ignore_ascii_case(&app));
+                    if set.is_none() && !clear {
+                        match found {
+                            Some(note) => println!("# {} ({})\n\n{}", note.app, note.bundle_id, note.text),
+                            None => println!("No notes on {app}."),
+                        }
+                        return Ok(());
+                    }
+                    // A new note needs the bundle id; an existing one can be named.
+                    let bundle_id = found.map(|note| note.bundle_id.clone()).unwrap_or(app.clone());
+                    let text = match set.as_deref() {
+                        Some("-") => {
+                            let mut text = String::new();
+                            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+                            text
+                        }
+                        Some(path) => std::fs::read_to_string(path)?,
+                        None => String::new(),
+                    };
+                    client
+                        .call::<ComputerNoteSet>(ComputerNoteSetParams { bundle_id: bundle_id.clone(), text: text.clone(), app: None })
+                        .await?;
+                    println!("{} the notes on {bundle_id}.", if text.trim().is_empty() { "Cleared" } else { "Replaced" });
                     return Ok(());
                 }
                 ComputerCmd::Install => {

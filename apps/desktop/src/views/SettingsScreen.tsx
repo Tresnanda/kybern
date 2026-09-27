@@ -15,6 +15,7 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { CheckIcon, ChevronDownIcon, XIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
 import { Switch } from "@/components/kit/switch"
+import { Textarea } from "@/components/kit/textarea"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/kit/collapsible"
 import { MatrixLoader, TextSwap } from "@/components/kybern/motion"
@@ -43,7 +44,7 @@ import { SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
 import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "@/views/chrome"
-import type { BackgroundSettings, ComputerForeground, ComputerPermission, ComputerStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
+import type { BackgroundSettings, ComputerForeground, ComputerNote, ComputerPermission, ComputerStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
@@ -441,7 +442,77 @@ function ComputerUseSettings() {
       {!enabled && status?.installed && !needsInstall && <Row title="" description="Turn on computer use to check CuaDriver’s permissions." />}
       {problems.map((check) => <Row key={check.name} title="" description={check.message} status={check.fix ?? undefined} />)}
     </Section>
+    <AppNotes />
   </>
+}
+
+/** Mirrors the daemon's per-app limit (`computer/notes.rs`). */
+const APP_NOTE_MAX_CHARS = 1500
+
+function AppNotes() {
+  const [notes, setNotes] = useState<ComputerNote[] | null>(null)
+  const [editing, setEditing] = useState<{ bundleId: string; text: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let live = true
+    rpc().call("computer.notes.list", {}).then((result) => live && setNotes(result.notes)).catch(() => live && setNotes([]))
+    return () => { live = false }
+  }, [])
+  const save = async (note: ComputerNote, text: string) => {
+    setBusy(true)
+    try {
+      setNotes((await rpc().call("computer.notes.set", { bundle_id: note.bundle_id, text, app: note.app })).notes)
+      setEditing(null)
+      if (!text.trim()) {
+        toast(`Deleted the notes on ${note.app}`, { action: { label: "Undo", onClick: () => void save(note, note.text) } })
+      }
+    } catch (error) {
+      toast.error(`Unable to save the notes on ${note.app}`, { description: errorText(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (notes === null) return null
+  return (
+    <Section title="App notes">
+      <Row title="" description="When an app needs a non-obvious approach, agents note what worked. A later conversation sees an app’s notes the first time it uses that app." />
+      {notes.length === 0 && <Row title="" description="No notes yet." />}
+      {notes.map((note) => editing?.bundleId === note.bundle_id
+        ? <div key={note.bundle_id} className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "settings-row space-y-2 py-4!")}>
+            <h3 className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{note.app}</h3>
+            <Textarea
+              aria-label={`Notes on ${note.app}`}
+              size="sm"
+              value={editing.text}
+              disabled={busy}
+              className="[&_textarea]:min-h-28 [&_textarea]:max-h-64 [&_textarea]:overflow-y-auto"
+              onChange={(event) => setEditing({ bundleId: note.bundle_id, text: event.target.value })}
+            />
+            <div className="flex items-center justify-between gap-2">
+              <span className={cn("text-xs tabular-nums", editing.text.length > APP_NOTE_MAX_CHARS ? "text-destructive" : "text-muted-foreground")}>
+                {`${editing.text.length} of ${APP_NOTE_MAX_CHARS} characters`}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button size="chip" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</Button>
+                <Button
+                  size="chip"
+                  variant="subtle"
+                  disabled={busy || editing.text === note.text || editing.text.length > APP_NOTE_MAX_CHARS}
+                  onClick={() => void save(note, editing.text)}
+                >
+                  Save notes
+                </Button>
+              </div>
+            </div>
+          </div>
+        : <Row key={note.bundle_id} title={note.app} description={<span className="line-clamp-4 whitespace-pre-line">{note.text}</span>}>
+            <Button size="sm" variant="chrome-outline" disabled={busy} onClick={() => setEditing({ bundleId: note.bundle_id, text: note.text })}>Edit</Button>
+            <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete the notes on ${note.app}`} disabled={busy} onClick={() => void save(note, "")}>
+              <XIcon />
+            </Button>
+          </Row>)}
+    </Section>
+  )
 }
 
 function PermissionState({ state, granted = "Allowed" }: { state: ComputerPermission; granted?: string }) {

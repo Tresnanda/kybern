@@ -522,6 +522,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ComputerSetupParams = parse(params)?;
             ok(crate::computer::setup(state.orchestrator.computer(), p.action).await.map_err(internal)?)
         }
+        ComputerNotesList::NAME => ok(ComputerNotesResult { notes: state.orchestrator.computer().notes().list() }),
+        ComputerNoteSet::NAME => {
+            let p: ComputerNoteSetParams = parse(params)?;
+            let notes = state.orchestrator.computer().notes();
+            let app = match p.app {
+                Some(app) => Some(app),
+                None if notes.get(&p.bundle_id).is_none() => crate::computer::app_name(&p.bundle_id).await,
+                None => None,
+            };
+            notes.set(&p.bundle_id, app.as_deref(), &p.text).map_err(bad)?;
+            ok(ComputerNotesResult { notes: notes.list() })
+        }
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
             ok(state.settings.set(p.settings).map_err(internal)?)

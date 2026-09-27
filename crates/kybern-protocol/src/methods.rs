@@ -1220,6 +1220,34 @@ method!(ComputerFrameGet, "computer.frame", Some(Scope::OrchestrationRead), Comp
 // Installs software on the daemon machine, so paired devices cannot call it.
 method!(ComputerSetup, "computer.setup", Some(Scope::AccessWrite), ComputerSetupParams, ComputerStatus);
 
+/// What agents learned about using one app, shown to later sessions the first
+/// time they use it. Stored as Markdown under `<data dir>/computer-notes/`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerNote {
+    pub bundle_id: String,
+    pub app: String,
+    pub text: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerNotesResult {
+    pub notes: Vec<ComputerNote>,
+}
+method!(ComputerNotesList, "computer.notes.list", Some(Scope::OrchestrationRead), Empty, ComputerNotesResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComputerNoteSetParams {
+    pub bundle_id: String,
+    /// The whole note. Empty deletes it.
+    pub text: String,
+    /// The app's display name, for a note that does not exist yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+// Notes reach every later agent session, like settings do.
+method!(ComputerNoteSet, "computer.notes.set", Some(Scope::OrchestrationOperate), ComputerNoteSetParams, ComputerNotesResult);
+
 // ---- usage ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -1800,6 +1828,8 @@ registry!(
     ComputerStatusGet,
     ComputerSetup,
     ComputerFrameGet,
+    ComputerNotesList,
+    ComputerNoteSet,
     UsageSummary,
     UsageLimits,
     PairingCreate,

@@ -134,6 +134,8 @@ fn main() {
     method::<ComputerStatusGet>(&mut methods);
     method::<ComputerSetup>(&mut methods);
     method::<ComputerFrameGet>(&mut methods);
+    method::<ComputerNotesList>(&mut methods);
+    method::<ComputerNoteSet>(&mut methods);
     method::<UsageSummary>(&mut methods);
     method::<UsageLimits>(&mut methods);
     method::<PairingCreate>(&mut methods);
