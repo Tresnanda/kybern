@@ -1223,6 +1223,26 @@ export interface ComputerSetupParams {
   action: ComputerSetupAction;
 }
 
+/** What agents learned about using one app, shown to later sessions. */
+export interface ComputerNote {
+  bundle_id: string;
+  app: string;
+  text: string;
+  updated_at: string;
+}
+
+export interface ComputerNotesResult {
+  notes: ComputerNote[];
+}
+
+export interface ComputerNoteSetParams {
+  bundle_id: string;
+  /** The whole note. Empty deletes it. */
+  text: string;
+  /** The app's display name, for a note that does not exist yet. */
+  app?: string | null;
+}
+
 export interface SettingsUpdateParams {
   settings: Settings;
 }
@@ -1555,6 +1575,8 @@ export interface Methods {
   "computer.status": [Empty, ComputerStatus];
   "computer.setup": [ComputerSetupParams, ComputerStatus];
   "computer.frame": [ComputerFrameParams, ComputerFrameResult];
+  "computer.notes.list": [Empty, ComputerNotesResult];
+  "computer.notes.set": [ComputerNoteSetParams, ComputerNotesResult];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
   "usage.limits": [UsageLimitsParams, UsageLimitsResult];
   "git.status": [GitStatusParams, GitStatus];

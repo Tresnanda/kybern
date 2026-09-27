@@ -174,6 +174,11 @@ plugin staging alone required a 41 GiB cleanup.
 - Claude Code defers MCP tools, so `kybern_computer_help` is rarely read. Put
   must-know guidance in the @Computer instruction or tool descriptions, and
   app-specific quirks seen in real runs in `quirk_note` (shown once per session).
+- App notes (`computer/notes.rs`) are what agents learned about one app, saved
+  with `kybern_computer_note` as `<data dir>/computer-notes/<bundle id>.md` and
+  shown with the quirk note the first time a session uses the app. They reach
+  later prompts, so they stay small (1500 characters), are framed as hints, and
+  are editable in Settings → Computer use and `kybern computer notes`.
 - Keep the contract cheap: accessibility text by default, screenshots only on
   request, batched `act` steps that return a diff. Run the real-app check with
   `cargo test -p kybern-daemon computer::live -- --ignored --nocapture`.

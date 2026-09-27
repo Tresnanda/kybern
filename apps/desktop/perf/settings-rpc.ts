@@ -5,7 +5,18 @@ import { useStore } from "../src/state/store"
 import type { UsageRow } from "../src/protocol"
 export const settingsFixture = { fail: false, empty: false, delay: 20, calls: [] as any[] }
 const row = (key: string, n: number): UsageRow => ({ key, turns: n * 8, usage: { input_tokens: n * 72000, output_tokens: n * 18000, cache_read_tokens: n * 42000, cache_write_tokens: n * 2000 }, cost_usd: n * 1.47 })
+let appNotes = [
+  { bundle_id: "net.whatsapp.WhatsApp", app: "WhatsApp", updated_at: "2026-09-28T02:40:00Z", text: "- Set the compose box; background typing does not reach it.\n- To mention someone, set \"@Name\", press the suggested contact, then set the whole message starting with that full name." },
+  { bundle_id: "com.apple.dt.Devices", app: "DeviceHub", updated_at: "2026-09-27T14:30:00Z", text: "- Tap with click_at on a screenshot; typing arrives as repeated keys." },
+]
+const computerStatus = { supported: true, enabled: true, installed: true, app_path: "/Applications/CuaDriver.app", version: "0.30.1", required_version: "0.30.1", signed: true, accessibility: "granted", screen_recording: "granted", ready: true, checks: [] }
 export function rpc() { return { call: async (method: string, params: any): Promise<any> => {
+  if (method === "computer.status") return computerStatus
+  if (method === "computer.notes.list") return { notes: appNotes }
+  if (method === "computer.notes.set") {
+    appNotes = params.text.trim() ? appNotes.map(note => note.bundle_id === params.bundle_id ? { ...note, text: params.text.trim() } : note) : appNotes.filter(note => note.bundle_id !== params.bundle_id)
+    return { notes: appNotes }
+  }
   if (method === "usage.summary") {
     settingsFixture.calls.push(params)
     const { fail, empty, delay } = settingsFixture

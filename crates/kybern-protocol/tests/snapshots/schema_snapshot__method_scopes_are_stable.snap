@@ -158,6 +158,10 @@ expression: scopes
   - "access:write"
 - - computer.frame
   - "orchestration:read"
+- - computer.notes.list
+  - "orchestration:read"
+- - computer.notes.set
+  - "orchestration:operate"
 - - usage.summary
   - "orchestration:read"
 - - usage.limits

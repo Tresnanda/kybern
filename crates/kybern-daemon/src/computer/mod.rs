@@ -9,6 +9,7 @@
 
 mod digest;
 mod driver;
+mod notes;
 mod policy;
 mod setup;
 
@@ -54,7 +55,7 @@ const FRAME_EDGE: u32 = 720;
 const FRAME_QUALITY: u8 = 70;
 /// `@Computer` in a message: a Kybern plugin mention, not a provider one.
 pub(crate) const MENTION_PATH: &str = "kybern://computer";
-const MENTION_INSTRUCTION: &str = "[@Computer] For this request, use Kybern's computer tools (kybern_computer_*) on the user's Mac, not shell commands or other computer-use skills. kybern_computer_apps {} lists windows, or {\"launch\":\"Notes\"} opens an app. kybern_computer_observe {\"window\":\"w12\"} lists controls as @refs. kybern_computer_act {\"window\":\"w12\",\"steps\":[{\"type\":\"hi\",\"into\":\"@5\"},{\"press\":\"@3\"}]} runs steps and reports what changed; type with into focuses the field itself. In a browser, open pages by URL instead of clicking page controls: {\"key\":\"cmd+t\"},{\"type\":\"https://example.com/search?q=term\"},{\"key\":\"return\"}. kybern_computer_screenshot is for canvas or custom UI, and kybern_computer_help has tips for web apps, pixels and foreground control.";
+const MENTION_INSTRUCTION: &str = "[@Computer] For this request, use Kybern's computer tools (kybern_computer_*) on the user's Mac, not shell commands or other computer-use skills. kybern_computer_apps {} lists windows, or {\"launch\":\"Notes\"} opens an app. kybern_computer_observe {\"window\":\"w12\"} lists controls as @refs. kybern_computer_act {\"window\":\"w12\",\"steps\":[{\"type\":\"hi\",\"into\":\"@5\"},{\"press\":\"@3\"}]} runs steps and reports what changed; type with into focuses the field itself. In a browser, open pages by URL instead of clicking page controls: {\"key\":\"cmd+t\"},{\"type\":\"https://example.com/search?q=term\"},{\"key\":\"return\"}. kybern_computer_screenshot is for canvas or custom UI, and kybern_computer_help has tips for web apps, pixels and foreground control. If an app needed a non-obvious approach, save it with kybern_computer_note before you finish.";
 const MENTION_UNAVAILABLE: &str = "[@Computer] The user asked you to use apps on their Mac, but Kybern's computer tools are not in this session. Do not substitute shell commands or other automation. Tell the user to check Kybern Settings → Computer use (it must be on, with CuaDriver installed), then send the request again.";
 const MAX_TRACKED_THREADS: usize = 64;
 /// CuaDriver's `list_apps` scans every installed app, about 1 s a call.
@@ -142,6 +143,10 @@ struct Inner {
     apps: std::sync::Mutex<Option<AppCache>>,
     /// Held while scanning, so a call arriving mid-prewarm waits for that scan.
     app_scan: Mutex<()>,
+    /// Pids `list_apps` did not know, looked up in LaunchServices: `None` for
+    /// helpers and agents. Cleared with each scan.
+    pid_bundles: std::sync::Mutex<HashMap<i64, Option<String>>>,
+    notes: notes::NoteStore,
 }
 
 /// One `list_apps` result. `misses` are pids that owned windows but were not
@@ -189,6 +194,7 @@ struct WindowInfo {
 
 impl ComputerUse {
     pub(crate) fn new(settings: SettingsStore) -> Self {
+        let notes = notes::NoteStore::new(settings.dir());
         Self {
             inner: Arc::new(Inner {
                 settings,
@@ -203,6 +209,8 @@ impl ComputerUse {
                 frame_seq: std::sync::atomic::AtomicU64::new(0),
                 apps: std::sync::Mutex::new(None),
                 app_scan: Mutex::new(()),
+                pid_bundles: std::sync::Mutex::new(HashMap::new()),
+                notes,
             }),
         }
     }
@@ -440,6 +448,7 @@ impl ComputerUse {
             "kybern_computer_act" => self.act(&ctx, parse(forgiving(arguments, true), STEPS_HELP)?, started).await?,
             "kybern_computer_screenshot" => self.screenshot(&ctx, parse(forgiving(arguments, false), SCREENSHOT_USAGE)?).await?,
             "kybern_computer_help" => Output::text(help(parse::<HelpArgs>(arguments, "")?.topic.as_deref())),
+            "kybern_computer_note" => self.note(&ctx, parse(forgiving(arguments, false), NOTE_USAGE)?).await?,
             _ => bail!("unknown computer tool: {name}"),
         };
         Ok(output.into_value())
@@ -492,7 +501,7 @@ impl ComputerUse {
                 self.remember_window(ctx.thread_id, window, bundle_id.clone()).await;
             }
             if let Some(note) = self.app_note(ctx.thread_id, bundle_id.as_deref()).await {
-                lines.push(note.into());
+                lines.push(note);
             }
             return Ok(Output::text(lines.join("\n")));
         }
@@ -560,12 +569,61 @@ impl ComputerUse {
         (requested.to_owned(), bundle.then(|| requested.to_owned()))
     }
 
-    /// A known quirk of this app, the first time this session uses it.
-    async fn app_note(&self, thread_id: ThreadId, bundle_id: Option<&str>) -> Option<&'static str> {
+    /// Known quirks of this app and what earlier sessions noted about it, the
+    /// first time this session uses it.
+    async fn app_note(&self, thread_id: ThreadId, bundle_id: Option<&str>) -> Option<String> {
         let bundle_id = bundle_id?;
-        let note = quirk_note(bundle_id)?;
+        {
+            let threads = self.inner.threads.lock().await;
+            if threads.get(&thread_id).is_some_and(|state| state.noted_apps.contains(bundle_id)) {
+                return None;
+            }
+        }
+        let learned = self.inner.notes.get(bundle_id).map(|note| notes::render(&note));
+        let note = match (quirk_note(bundle_id), learned) {
+            (Some(quirk), Some(learned)) => format!("{quirk}\n{learned}"),
+            (Some(quirk), None) => quirk.to_owned(),
+            (None, Some(learned)) => learned,
+            (None, None) => return None,
+        };
         let mut threads = self.inner.threads.lock().await;
         threads.entry(thread_id).or_default().noted_apps.insert(bundle_id.to_owned()).then_some(note)
+    }
+
+    pub(crate) fn notes(&self) -> &notes::NoteStore {
+        &self.inner.notes
+    }
+
+    // ---- note ----
+
+    async fn note(&self, ctx: &CallContext<'_>, args: NoteArgs) -> Result<Output> {
+        let client = self.client().await?;
+        let (app, bundle_id) = match (&args.window, args.app.as_deref().map(str::trim).filter(|app| !app.is_empty())) {
+            (Some(window), _) => {
+                let (_, _, app, bundle_id) = self.target(ctx, &client, window).await?;
+                (app, bundle_id)
+            }
+            (None, Some(app)) => self.resolve_app(&client, app).await,
+            (None, None) => bail!("Name the app with window or app.\n\n{NOTE_USAGE}"),
+        };
+        let bundle_id = bundle_id.ok_or_else(|| anyhow!("Kybern could not tell which app {app} is; pass its window instead."))?;
+        let app = notes::display_name(&app);
+        let note = match (args.add.as_deref(), args.replace.as_deref()) {
+            (Some(line), None) => self.inner.notes.add(&bundle_id, &app, line)?,
+            (None, Some(text)) => match self.inner.notes.set(&bundle_id, Some(&app), text)? {
+                Some(note) => note,
+                None => return Ok(Output::text(format!("Cleared the notes on {app}."))),
+            },
+            _ => bail!("Pass exactly one of add or replace.\n\n{NOTE_USAGE}"),
+        };
+        // This session has what it learned; later ones get the note on first use.
+        self.inner.threads.lock().await.entry(ctx.thread_id).or_default().noted_apps.insert(bundle_id);
+        Ok(Output::text(format!(
+            "Saved. Later sessions see the notes on {} ({} of {} characters) the first time they use it.",
+            note.app,
+            note.text.chars().count(),
+            notes::MAX_NOTE_CHARS
+        )))
     }
 
     async fn list_windows(&self, client: &DriverClient, pid: Option<i64>) -> Result<Vec<WindowInfo>> {
@@ -577,13 +635,34 @@ impl ComputerUse {
         Ok(parse_windows(result.structured.get("windows")))
     }
 
-    /// Bundle ids by pid, for the pids about to be used.
+    /// Bundle ids by pid, for the pids about to be used. Only regular apps
+    /// have one; helpers, agents and overlays do not.
     async fn bundle_ids(&self, client: &DriverClient, pids: &[i64]) -> HashMap<i64, String> {
-        self.app_list(client, pids)
+        let mut bundles: HashMap<i64, String> = self
+            .app_list(client, pids)
             .await
             .iter()
             .filter_map(|app| Some((app.get("pid")?.as_i64().filter(|pid| *pid > 0)?, app.get("bundle_id")?.as_str()?.to_owned())))
-            .collect()
+            .collect();
+        // `list_apps` can lag a launch by seconds; LaunchServices knows at once.
+        let missing = pids.iter().copied().filter(|pid| *pid > 0 && !bundles.contains_key(pid)).collect::<HashSet<_>>();
+        let found =
+            futures::future::join_all(missing.into_iter().map(|pid| async move { (pid, self.launch_services_bundle(pid).await) })).await;
+        bundles.extend(found.into_iter().filter_map(|(pid, bundle)| Some((pid, bundle?))));
+        bundles
+    }
+
+    async fn launch_services_bundle(&self, pid: i64) -> Option<String> {
+        if let Some(known) = self.inner.pid_bundles.lock().unwrap_or_else(|error| error.into_inner()).get(&pid) {
+            return known.clone();
+        }
+        let found = regular_app_bundle(pid).await;
+        let mut cache = self.inner.pid_bundles.lock().unwrap_or_else(|error| error.into_inner());
+        if cache.len() >= 512 {
+            cache.clear();
+        }
+        cache.insert(pid, found.clone());
+        found
     }
 
     /// Installed and running apps, from a cached `list_apps`. It is scanned
@@ -609,6 +688,7 @@ impl ComputerUse {
         let misses = pids.iter().copied().filter(|pid| !known.contains(pid)).collect();
         *self.inner.apps.lock().unwrap_or_else(|error| error.into_inner()) =
             Some(AppCache { at: Instant::now(), apps: apps.clone(), pids: known, misses });
+        self.inner.pid_bundles.lock().unwrap_or_else(|error| error.into_inner()).clear();
         apps
     }
 
@@ -798,7 +878,7 @@ impl ComputerUse {
             }
         }
         if let Some(note) = note {
-            output.push_text(note.into());
+            output.push_text(note);
         }
         Ok(output)
     }
@@ -858,7 +938,7 @@ impl ComputerUse {
         });
         self.attach_image(&mut output, window, &result.images)?;
         if let Some(note) = note {
-            output.push_text(note.into());
+            output.push_text(note);
         }
         Ok(output)
     }
@@ -1096,7 +1176,7 @@ impl ComputerUse {
         output.push_text(report.join("\n"));
         output.append(observed);
         if let Some(note) = note {
-            output.push_text(note.into());
+            output.push_text(note);
         }
         Ok(output)
     }
@@ -1630,6 +1710,7 @@ fn parse<T: for<'de> Deserialize<'de>>(arguments: Value, usage: &str) -> Result<
 const APPS_USAGE: &str = "Usage: {} lists windows; {\"query\":\"Notes\"} filters; {\"launch\":\"Notes\"} opens an app in the background.";
 const OBSERVE_USAGE: &str = "Usage: {\"window\":\"w1234\"} with optional query, limit, text:true, screenshot:true.";
 const SCREENSHOT_USAGE: &str = "Usage: {\"window\":\"w1234\"} or {\"window\":\"w1234\",\"region\":[left,top,right,bottom]}.";
+const NOTE_USAGE: &str = "Usage: {\"window\":\"w1234\",\"add\":\"Set the compose box; typing does not reach it.\"} or {\"app\":\"WhatsApp\",\"replace\":\"- …\"} to rewrite the whole note.";
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -1680,6 +1761,19 @@ struct ScreenshotArgs {
     window: WindowRef,
     #[serde(default)]
     region: Option<[f64; 4]>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteArgs {
+    #[serde(default)]
+    window: Option<WindowRef>,
+    #[serde(default)]
+    app: Option<String>,
+    #[serde(default)]
+    add: Option<String>,
+    #[serde(default)]
+    replace: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2057,6 +2151,16 @@ fn tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
             description: "Computer use: read guidance for steps, pixels, foreground control, web and Electron apps, or safety rules.".into(),
             input_schema: object(json!({ "topic": { "enum": ["overview", "steps", "pixels", "foreground", "web", "safety"] } }), &[]),
         },
+        NativeToolDefinition {
+            name: "kybern_computer_note".into(),
+            description: "Computer use: save what you learned about using an app, for later sessions, which see it the first time they use that app. Save only when you found a non-obvious way to get something done (a field that needs set, a hidden step, a workaround): one general, reusable line. Never names, message text, personal data or secrets.".into(),
+            input_schema: object(json!({
+                "window": window,
+                "app": { "type": "string", "description": "App name or bundle id, when no window is open." },
+                "add": { "type": "string", "description": "One line to add, e.g. \"Set the compose box; typing does not reach it.\"" },
+                "replace": { "type": "string", "description": "The whole note, to merge, correct or drop old lines. Empty clears it." }
+            }), &[]),
+        },
     ]
 }
 
@@ -2090,6 +2194,32 @@ async fn spotlight_app(requested: &str) -> Option<(String, String)> {
     Some((name, bundle.to_owned()))
 }
 
+/// An installed app's name for a bundle id, from Spotlight.
+pub(crate) async fn app_name(bundle_id: &str) -> Option<String> {
+    if !bundle_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) {
+        return None;
+    }
+    let query = format!("kMDItemContentType == 'com.apple.application-bundle' && kMDItemCFBundleIdentifier == '{bundle_id}'");
+    let path = command_output("/usr/bin/mdfind", &[&query]).await?.lines().next()?.to_owned();
+    let name = notes::display_name(std::path::Path::new(&path).file_stem()?.to_str()?);
+    (!name.is_empty()).then_some(name)
+}
+
+/// The bundle id of a running regular (Dock) app, from LaunchServices.
+async fn regular_app_bundle(pid: i64) -> Option<String> {
+    let text = command_output("/usr/bin/lsappinfo", &["info", &pid.to_string()]).await?;
+    parse_regular_app_bundle(&text)
+}
+
+fn parse_regular_app_bundle(text: &str) -> Option<String> {
+    if !text.contains("type=\"Foreground\"") {
+        return None;
+    }
+    let start = text.find("bundleID=\"")? + "bundleID=\"".len();
+    let end = text[start..].find('"')?;
+    Some(text[start..start + end].to_owned()).filter(|bundle| !bundle.is_empty())
+}
+
 async fn command_output(program: &str, args: &[&str]) -> Option<String> {
     let output = tokio::process::Command::new(program).args(args).kill_on_drop(true).output();
     let output = tokio::time::timeout(Duration::from_secs(3), output).await.ok()?.ok()?;
@@ -2114,6 +2244,7 @@ const BROWSERS: &[&str] = &[
     "com.citrolabs.ego.lite",
 ];
 const BROWSER_NOTE: &str = "Browser note: page content often ignores background clicks and Return, and cmd+l may not reach the address bar while a page field has focus. Open pages by URL in a new tab instead, with searches in the URL: {\"key\":\"cmd+t\"},{\"type\":\"https://example.com/search?q=term\"},{\"key\":\"return\"}.";
+const WHATSAPP_NOTE: &str = "WhatsApp note: background typing does not reach the compose box; set its value instead (\"Compose message\"). To mention someone, set \"@Name\", press the suggested contact, then set the whole message starting with that full \"@Name\". Press Send to send.";
 const DEVICE_HUB_NOTE: &str = "DeviceHub note: background typing does not reach the device screen; it arrives as repeated keys. Tap with click_at on a screenshot, and enter text another way (a deep link, the device's own tools) or ask the user.";
 
 /// Quirks seen in real sessions, shown once per session per app.
@@ -2123,6 +2254,7 @@ fn quirk_note(bundle_id: &str) -> Option<&'static str> {
     }
     match bundle_id {
         "com.apple.dt.Devices" => Some(DEVICE_HUB_NOTE),
+        "net.whatsapp.WhatsApp" => Some(WHATSAPP_NOTE),
         _ => None,
     }
 }
@@ -2262,10 +2394,20 @@ mod tests {
     }
 
     #[test]
+    fn launch_services_answers_only_for_regular_apps() {
+        let app = "\"Calculator\" ASN:0x0-0x1: \n    bundleID=\"com.apple.calculator\"\n    pid = 7 type=\"Foreground\" flavor=3";
+        assert_eq!(parse_regular_app_bundle(app).as_deref(), Some("com.apple.calculator"));
+        let helper = "\"Helper\" ASN:0x0-0x2: \n    bundleID=\"com.example.helper\"\n    pid = 8 type=\"BackgroundOnly\"";
+        assert_eq!(parse_regular_app_bundle(helper), None);
+        assert_eq!(parse_regular_app_bundle(""), None);
+    }
+
+    #[test]
     fn quirk_notes_cover_browsers_and_device_hub() {
         assert_eq!(quirk_note("company.thebrowser.Browser"), Some(BROWSER_NOTE));
         assert_eq!(quirk_note("com.google.chrome"), Some(BROWSER_NOTE));
         assert_eq!(quirk_note("com.apple.dt.Devices"), Some(DEVICE_HUB_NOTE));
+        assert_eq!(quirk_note("net.whatsapp.WhatsApp"), Some(WHATSAPP_NOTE));
         assert_eq!(quirk_note("com.apple.calculator"), None);
     }
 
@@ -2364,7 +2506,7 @@ mod tests {
     #[test]
     fn catalog_is_small() {
         let definitions = tool_definitions();
-        assert_eq!(definitions.len(), 5);
+        assert_eq!(definitions.len(), 6);
         let bytes: usize = definitions.iter().map(|tool| tool.description.len() + tool.input_schema.to_string().len()).sum();
         // Roughly 4 bytes per token: keep the whole catalog near 1.5k tokens.
         assert!(bytes < 7000, "computer tool catalog grew to {bytes} bytes");
@@ -2444,6 +2586,16 @@ mod live {
                 .unwrap_or_else(|| panic!("no {label} button"))
                 .to_owned()
         };
+        // A note saved in one session reaches another session's first look.
+        let saved = text(
+            &computer.execute(ctx(), "kybern_computer_note", json!({"window": window, "add": "Press Equals to finish."})).await.unwrap(),
+        );
+        assert!(saved.contains("Saved"), "{saved}");
+        let other = CallContext { thread_id: uuid::Uuid::now_v7(), ..ctx() };
+        let first_look = text(&computer.execute(other, "kybern_computer_observe", json!({"window": window})).await.unwrap());
+        assert!(first_look.contains("Notes on Calculator") && first_look.contains("Press Equals"), "{first_look}");
+        assert!(root.join("computer-notes/com.apple.calculator.md").is_file());
+
         let steps: Vec<Value> =
             ["All Clear", "1", "2", "Multiply", "3", "4", "Equals"].iter().map(|label| json!({"press": reference(label)})).collect();
         let started = Instant::now();

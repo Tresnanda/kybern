@@ -80,6 +80,8 @@ expression: names
 - computer.status
 - computer.setup
 - computer.frame
+- computer.notes.list
+- computer.notes.set
 - usage.summary
 - usage.limits
 - access.pairing.create

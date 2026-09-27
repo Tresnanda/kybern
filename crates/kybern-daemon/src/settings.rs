@@ -26,6 +26,11 @@ impl SettingsStore {
         Ok(Self { path: path.to_path_buf(), current: Arc::new(RwLock::new(settings)) })
     }
 
+    /// The data directory `settings.json` lives in.
+    pub fn dir(&self) -> &Path {
+        self.path.parent().unwrap_or(Path::new("."))
+    }
+
     pub fn get(&self) -> Settings {
         self.current.read().unwrap().clone()
     }
