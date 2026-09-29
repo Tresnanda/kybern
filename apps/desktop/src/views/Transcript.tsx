@@ -689,7 +689,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
       (block) =>
         (block.kind === "tool" && !block.complete) ||
         (block.kind === "runtime_task" && isRuntimeTaskActive(block.task)) ||
-        (block.kind === "assistant" && !block.complete && (!!block.thinking.trim() || shouldRevealLiveText(block.text, block.complete))) ||
+        (block.kind === "assistant" && !block.complete && (block.id === group.liveThinkingId || shouldRevealLiveText(block.text, block.complete))) ||
         (block.kind === "approval" && !block.decision),
     )
   const settled = !group.running
@@ -712,7 +712,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                   assistant segment streams; earlier prose never gets reparented.
                   VirtualRows owns the bounded paint host for every item. This
                   growing list must not become one tiled compositing layer. */}
-              <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
+              <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
           {!hasLiveWork && (
@@ -1220,10 +1220,10 @@ function patchChunksTail(previous: WorkChunk[], change: TailChange<Block>): Work
   return null
 }
 
-function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, tone = "muted", liveTextId = null, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; tone?: WorkTone; liveTextId?: string | null; onOpenAgentActivity: OpenAgentActivity }) {
+function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, tone = "muted", liveTextId = null, liveThinkingId = null, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; tone?: WorkTone; liveTextId?: string | null; liveThinkingId?: string | null; onOpenAgentActivity: OpenAgentActivity }) {
   const tasksByToolCall = useMemo(() => new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : []))), [tasks])
   const hierarchy = useTailDerived(blocks, buildWorkHierarchy, patchHierarchyTail)
-  return <WorkRows compact blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} onOpenAgentActivity={onOpenAgentActivity} />
+  return <WorkRows compact blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} liveThinkingId={liveThinkingId} onOpenAgentActivity={onOpenAgentActivity} />
 }
 
 type WorkTone = "bright" | "muted"
@@ -1234,6 +1234,7 @@ function WorkRows({
   childrenByParent,
   tone = "muted",
   liveTextId = null,
+  liveThinkingId = null,
   compact = false,
   onOpenAgentActivity,
 }: {
@@ -1242,6 +1243,7 @@ function WorkRows({
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
   tone?: WorkTone
   liveTextId?: string | null
+  liveThinkingId?: string | null
   compact?: boolean
   onOpenAgentActivity: OpenAgentActivity
 }) {
@@ -1254,6 +1256,7 @@ function WorkRows({
       childrenByParent={childrenByParent}
       tone={tone}
       live={block.kind === "assistant" && block.id === liveTextId}
+      thinking={block.kind === "assistant" && block.id === liveThinkingId}
       onOpenAgentActivity={onOpenAgentActivity}
     />
   )
@@ -1343,6 +1346,7 @@ const WorkRow = memo(function WorkRow({
   childrenByParent,
   tone = "muted",
   live = false,
+  thinking = false,
   onOpenAgentActivity,
 }: {
   block: Block
@@ -1351,6 +1355,8 @@ const WorkRow = memo(function WorkRow({
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
   tone?: WorkTone
   live?: boolean
+  /** Whether this assistant block is still receiving reasoning. */
+  thinking?: boolean
   onOpenAgentActivity: OpenAgentActivity
 }) {
   switch (block.kind) {
@@ -1363,7 +1369,7 @@ const WorkRow = memo(function WorkRow({
     case "image":
       return <ResponseImage source={block.source} />
     case "assistant":
-      return <AssistantWorkRow block={block} tone={tone} live={live} />
+      return <AssistantWorkRow block={block} tone={tone} live={live} thinkingLive={thinking} />
     case "runtime_task":
       return <RuntimeTaskTranscriptRow task={block.task} onOpenAgentActivity={onOpenAgentActivity} />
     case "approval":
@@ -1526,10 +1532,10 @@ function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface
   )
 }
 
-const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone = "muted", live = false }: { block: Extract<Block, { kind: "assistant" }>; tone?: WorkTone; live?: boolean }) {
+const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone = "muted", live = false, thinkingLive = false }: { block: Extract<Block, { kind: "assistant" }>; tone?: WorkTone; live?: boolean; thinkingLive?: boolean }) {
   const [open, setOpen] = useTranscriptRowState("thinking", false)
   // Smooth the reasoning stream too, but only while it is both live and expanded.
-  const thinking = useSmoothStream(block.thinking, !block.complete && open)
+  const thinking = useSmoothStream(block.thinking, thinkingLive && open)
   // Smooth only the segment currently receiving deltas. Its keyed row remains
   // in place when tools or delegated tasks arrive after it.
   const revealed = useSmoothStream(block.text, live && !block.complete, block.complete)
@@ -1544,18 +1550,18 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone = "muted",
         <div className="rounded-lg py-1">
           <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="group/tool-row flex w-full cursor-pointer items-center gap-2 text-left focus-visible:outline-none">
             <span className={cn("flex size-5 shrink-0 items-center justify-center", TONE)}>
-              <IconSwap active={block.complete ? "b" : "a"} a={<Spinner size={14} className="text-muted-foreground" />} b={<BrainIcon className="size-4" />} />
+              <IconSwap active={thinkingLive ? "a" : "b"} a={<Spinner size={14} className="text-muted-foreground" />} b={<BrainIcon className="size-4" />} />
             </span>
             <div className="min-w-0 overflow-hidden">
               <p className={cn("truncate leading-6", TONE)} style={CHAT_FONT}>
-                <TextSwap text={block.complete ? "Thought" : "Thinking"} shimmer={!block.complete} />
+                <TextSwap text={thinkingLive ? "Thinking" : "Thought"} shimmer={thinkingLive} />
               </p>
             </div>
             <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />
           </button>
           <DisclosureRegion open={open} contentClassName="min-w-0 pt-2 ms-7">
             <p className="selectable whitespace-pre-wrap text-muted-foreground" style={TEXT}>
-              <StreamWords text={thinking} live={!block.complete} />
+              <StreamWords text={thinking} live={thinkingLive} />
             </p>
           </DisclosureRegion>
         </div>

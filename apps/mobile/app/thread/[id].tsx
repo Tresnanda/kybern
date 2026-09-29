@@ -123,6 +123,7 @@ const TranscriptRow = memo(function TranscriptRow({
         active={focused && visible}
         expansions={expansions}
         grouped
+        thinking={row.thinking}
       />
     </View>
   );

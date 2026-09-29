@@ -5,7 +5,7 @@ import {
 } from "../../../../packages/kybern-client/src/transcript.ts";
 
 export type TurnRow =
-  | { kind: "block"; key: string; block: Block; nested: boolean }
+  | { kind: "block"; key: string; block: Block; nested: boolean; thinking: boolean }
   | {
       kind: "work";
       key: string;
@@ -69,6 +69,7 @@ export function createTurnRows() {
           key: `${group.turnId}:${block.kind}:${block.id}`,
           block,
           nested,
+          thinking: block.id === group.liveThinkingId,
         });
       if (group.user) add(group.user);
       // A paginated running turn may not have its user message loaded yet.

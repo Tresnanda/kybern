@@ -1077,7 +1077,14 @@ impl OpencodeSession {
                     self.emit(DriverEvent::MessageCompleted { message_id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
             }
-            "reasoning" => {}
+            "reasoning" => {
+                // `started` marks the end as reported; the part updates again later.
+                if !info.started && part.pointer("/time/end").is_some_and(|end| !end.is_null()) {
+                    info.started = true;
+                    drop(st);
+                    self.emit(DriverEvent::ThinkingCompleted { message_id, origin: EventOrigin::Root }).await;
+                }
+            }
             "tool" => {
                 let status = part.pointer("/state/status").and_then(|s| s.as_str()).unwrap_or("");
                 let call_id = part.get("callID").and_then(|s| s.as_str()).unwrap_or(&id).to_string();

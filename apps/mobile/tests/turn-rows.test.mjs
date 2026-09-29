@@ -235,3 +235,25 @@ test("live agent launches and task-linked tools stay outside automatic groups", 
   const history = [user, tool, launch, linked, task];
   assert.deepEqual(content(createTurnRows()(history, new Set())), history);
 });
+
+test("only the tail segment of a running turn is still thinking", () => {
+  const thought = { ...narration, id: "thought", messageId: "m1", text: "", thinking: "Plan the steps.", complete: false };
+  const replied = { ...thought, id: "replied", seq: 3, thinking: "Pick an app.", text: "Opening Notes." };
+  const running = { ...tool, seq: 4, complete: false };
+  const tail = { ...thought, id: "tail", messageId: "m2", seq: 5, thinking: "Check the result." };
+  const thinking = (rows) =>
+    Object.fromEntries(rows.filter((row) => row.kind === "block").map((row) => [row.block.id, row.thinking]));
+
+  // A tool call or another message after a reasoning segment ends its thinking,
+  // even though the provider has not completed that message yet.
+  assert.deepEqual(thinking(createTurnRows()([user, thought, running, tail], new Set())), {
+    user: false, thought: false, tool: false, tail: true,
+  });
+  // Text in the same segment also means its reasoning finished.
+  assert.equal(thinking(createTurnRows()([user, replied], new Set())).replied, false);
+  assert.equal(thinking(createTurnRows()([user, thought], new Set())).thought, true);
+  // The streaming fast path updates the same flag when text arrives in place.
+  const project = createTurnRows();
+  assert.equal(thinking(project([user, thought], new Set())).thought, true);
+  assert.equal(thinking(project([user, { ...thought, text: "Opening Notes." }], new Set())).thought, false);
+});

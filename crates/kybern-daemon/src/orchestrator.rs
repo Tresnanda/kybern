@@ -5429,6 +5429,17 @@ impl Orchestrator {
                 let id = map_message_delta(&mut turn_guard, &origin, &message_id);
                 self.emit(thread_id, turn_id, EventPayload::AssistantThinkingDelta { message_id: id, origin, delta })?;
             }
+            DriverEvent::ThinkingCompleted { message_id, origin } => {
+                // Close the reasoning of the message it streamed into. It never
+                // opens a message: a late signal after completion has nothing to close.
+                let id = turn_guard.as_ref().and_then(|turn| {
+                    let active = turn.active_messages.get(&origin)?;
+                    (turn.messages.get(&(origin.clone(), message_id)) == Some(active)).then_some(*active)
+                });
+                if let Some(id) = id {
+                    self.emit(thread_id, turn_id, EventPayload::AssistantThinkingCompleted { message_id: id, origin })?;
+                }
+            }
             DriverEvent::AsyncQuestions(request) => {
                 let events = self.inner.store.events_for_thread(thread_id)?;
                 if !events.iter().any(|event| matches!(&event.payload, EventPayload::AsyncQuestionsRequested { request: previous } if previous.id == request.id)) {

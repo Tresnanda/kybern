@@ -105,6 +105,13 @@ pub enum EventPayload {
         origin: EventOrigin,
         delta: String,
     },
+    /// The provider closed the reasoning it was streaming into this message.
+    /// The message itself may continue with text or tool calls.
+    AssistantThinkingCompleted {
+        message_id: MessageId,
+        #[serde(default)]
+        origin: EventOrigin,
+    },
     AssistantMessageCompleted {
         message_id: MessageId,
         #[serde(default)]
@@ -229,6 +236,7 @@ impl EventPayload {
             Self::AssistantTextDelta { .. } => "assistant_text_delta",
             Self::ImageReceived { .. } => "image_received",
             Self::AssistantThinkingDelta { .. } => "assistant_thinking_delta",
+            Self::AssistantThinkingCompleted { .. } => "assistant_thinking_completed",
             Self::AssistantMessageCompleted { .. } => "assistant_message_completed",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallOutputDelta { .. } => "tool_call_output_delta",
@@ -295,6 +303,7 @@ mod kind_tests {
             },
             EventPayload::AssistantTextDelta { message_id: MessageId::nil(), origin: Default::default(), delta: "é".into() },
             EventPayload::AssistantThinkingDelta { message_id: MessageId::nil(), origin: Default::default(), delta: String::new() },
+            EventPayload::AssistantThinkingCompleted { message_id: MessageId::nil(), origin: Default::default() },
             EventPayload::AssistantMessageCompleted {
                 message_id: MessageId::nil(),
                 origin: Default::default(),

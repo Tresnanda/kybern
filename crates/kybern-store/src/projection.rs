@@ -364,6 +364,7 @@ fn apply_transcript_event(
                             segment,
                             text: delta.clone(),
                             thinking: None,
+                            thinking_complete: false,
                             at: ev.at,
                             complete: false,
                         });
@@ -380,7 +381,10 @@ fn apply_transcript_event(
                     continue;
                 };
                 match tail_open_assistant(out, message_id, origin) {
-                    Some(TranscriptEntry::Assistant { thinking, .. }) => thinking.get_or_insert_with(String::new).push_str(delta),
+                    Some(TranscriptEntry::Assistant { thinking, thinking_complete, .. }) => {
+                        thinking.get_or_insert_with(String::new).push_str(delta);
+                        *thinking_complete = false;
+                    }
                     _ => {
                         let segment = next_segment(out, message_id, origin);
                         out.push(TranscriptEntry::Assistant {
@@ -391,10 +395,22 @@ fn apply_transcript_event(
                             segment,
                             text: String::new(),
                             thinking: Some(delta.clone()),
+                            thinking_complete: false,
                             at: ev.at,
                             complete: false,
                         });
                     }
+                }
+            }
+            EventPayload::AssistantThinkingCompleted { message_id, origin } => {
+                // The daemon only closes reasoning inside a scoped turn.
+                if !origin.is_root() || turn_id.is_none() {
+                    continue;
+                }
+                // Reasoning streams into the open tail segment. Anything later
+                // already opened a new segment, which ends the earlier one.
+                if let Some(TranscriptEntry::Assistant { thinking: Some(_), thinking_complete, .. }) = tail_open_assistant(out, *message_id, origin) {
+                    *thinking_complete = true;
                 }
             }
             EventPayload::AssistantMessageCompleted { message_id, origin, text, thinking } => {
@@ -416,6 +432,7 @@ fn apply_transcript_event(
                         segment: next_segment(out, message_id, origin),
                         text: text.clone(),
                         thinking: thinking.clone(),
+                        thinking_complete: false,
                         at: ev.at,
                         complete: true,
                     });
@@ -439,6 +456,7 @@ fn apply_transcript_event(
                             segment,
                             text: trailing_text.unwrap_or_default().to_string(),
                             thinking: trailing_thinking.map(str::to_string),
+                            thinking_complete: false,
                             at: ev.at,
                             complete: true,
                         });
@@ -870,6 +888,29 @@ mod tests {
         let unbound: Vec<_> =
             reloaded.into_iter().filter(|event| !matches!(event.payload, EventPayload::ProviderSessionBound { .. })).collect();
         assert_eq!(project_runtime_tasks(&unbound).len(), 3);
+    }
+
+    #[test]
+    fn closed_reasoning_survives_reload_until_more_reasoning_arrives() {
+        let thread_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let message_id = Uuid::new_v4();
+        let thinking = |delta: &str| EventPayload::AssistantThinkingDelta { message_id, origin: EventOrigin::Root, delta: delta.into() };
+        let closed = EventPayload::AssistantThinkingCompleted { message_id, origin: EventOrigin::Root };
+        let project = |payloads: Vec<EventPayload>| {
+            let events: Vec<_> = payloads
+                .into_iter()
+                .enumerate()
+                .map(|(seq, payload)| ThreadEvent { seq: seq as EventSeq + 1, thread_id, turn_id: Some(turn_id), at: Utc::now(), payload })
+                .collect();
+            let reloaded: Vec<ThreadEvent> = serde_json::from_str(&serde_json::to_string(&events).unwrap()).unwrap();
+            let rows = project_transcript(&reloaded);
+            let [TranscriptEntry::Assistant { thinking_complete, complete: false, .. }] = rows.as_slice() else { panic!("{rows:?}") };
+            *thinking_complete
+        };
+        assert!(!project(vec![thinking("Plan.")]));
+        assert!(project(vec![thinking("Plan."), closed.clone()]));
+        assert!(!project(vec![thinking("Plan."), closed, thinking(" More.")]));
     }
 
     #[test]
@@ -1341,6 +1382,7 @@ mod reconciliation_allocation_tests {
                 segment: segment as u32,
                 text: piece.unwrap_or_default().into(),
                 thinking: piece.map(str::to_owned),
+                thinking_complete: false,
                 at: "2026-09-17T00:00:00Z".parse().unwrap(),
                 complete: false,
             });

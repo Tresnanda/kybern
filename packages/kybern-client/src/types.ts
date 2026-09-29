@@ -540,6 +540,8 @@ export type TranscriptEntry =
       segment?: number;
       text: string;
       thinking?: string | null;
+      /** The provider closed this segment's reasoning before the message completed. */
+      thinking_complete?: boolean;
       at: DateTime;
       complete: boolean;
     }
@@ -677,6 +679,7 @@ export type EventPayload =
       origin: EventOrigin;
       delta: string;
     }
+  | { kind: "assistant_thinking_completed"; message_id: MessageId; origin: EventOrigin }
   | {
       kind: "assistant_message_completed";
       message_id: MessageId;

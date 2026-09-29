@@ -111,6 +111,7 @@ export function createOutgoingProjection() {
         key: outgoing.key,
         block: outgoingBlock(outgoing),
         nested: false,
+        thinking: false,
       });
     return { rows: projected, received: !!outgoing?.receipt && !!candidate };
   };

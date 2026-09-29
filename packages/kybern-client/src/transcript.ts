@@ -38,6 +38,8 @@ export type Block =
       segment: number
       text: string
       thinking: string
+      /** The provider closed this segment's reasoning; text or tools may follow. */
+      thinkingComplete?: boolean
       complete: boolean
     }
   | {
@@ -171,7 +173,7 @@ function entryToBlock(e: TranscriptEntry): Block | null {
       const origin = e.origin ?? ROOT_ORIGIN
       if (origin.kind !== "root") return null
       const segment = e.segment ?? 0
-      return { kind: "assistant", id: `${e.id}#${segment}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, origin, messageId: e.id, segment, text: e.text, thinking: e.thinking ?? "", complete: e.complete }
+      return { kind: "assistant", id: `${e.id}#${segment}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, origin, messageId: e.id, segment, text: e.text, thinking: e.thinking ?? "", thinkingComplete: e.thinking_complete ?? false, complete: e.complete }
     }
     case "tool_call":
       return {
@@ -294,11 +296,21 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       const idx = findOpenAssistantSegment(blocks, messageId, origin)
       if (idx !== -1) {
         const b = blocks[idx]!
-        if (b.kind === "assistant") blocks = replaceAt(blocks, idx, { ...b, thinking: b.thinking + ev.delta })
+        if (b.kind === "assistant") blocks = replaceAt(blocks, idx, { ...b, thinking: b.thinking + ev.delta, thinkingComplete: false })
       } else {
         const segment = nextAssistantSegment(blocks, messageId, origin)
         blocks = [...blocks, { kind: "assistant", id: `${messageId}#${segment}`, turnId, at, seq: ev.seq, origin, messageId, segment, text: "", thinking: ev.delta, complete: false }]
       }
+      break
+    }
+    case "assistant_thinking_completed": {
+      // Reasoning streams into the open tail segment; any later row already
+      // ended the earlier segments.
+      const origin = ev.origin ?? ROOT_ORIGIN
+      if (origin.kind !== "root" || ev.turn_id == null) break
+      const idx = findOpenAssistantSegment(blocks, ev.message_id, origin)
+      const b = blocks[idx]
+      if (b?.kind === "assistant" && b.thinking && !b.thinkingComplete) blocks = replaceAt(blocks, idx, { ...b, thinkingComplete: true })
       break
     }
     case "assistant_message_completed": {
@@ -645,6 +657,10 @@ export interface TurnGroup {
   answer: Extract<Block, { kind: "assistant" }> | null
   /** Tail segment currently receiving root text, rendered in place while live. */
   liveTextId: string | null
+  /** Tail segment still receiving reasoning. A message completes only when the
+   * provider settles it, so earlier segments followed by text, a tool call or
+   * any other block have finished thinking even though they are not complete. */
+  liveThinkingId: string | null
   approvals: Extract<Block, { kind: "approval" }>[]
   end: Extract<Block, { kind: "turn_end" }> | null
   reverted: Extract<Block, { kind: "reverted" }> | null
@@ -844,8 +860,7 @@ export function createTurnGrouper(): (blocks: Block[]) => TurnGroup[] {
             group.approvals[approvalIndex] = after
           }
         }
-        const tail = work.at(-1)
-        group.liveTextId = tail?.kind === "assistant" && !tail.complete && tail.text.trim() ? tail.id : null
+        Object.assign(group, liveTailIds(work))
         entry.group = group
         const groups = previousGroups.slice()
         groups[entry.groupIndex] = group
@@ -858,13 +873,25 @@ export function createTurnGrouper(): (blocks: Block[]) => TurnGroup[] {
   }
 }
 
+/** Only the tail of a running turn can still be streaming. Reasoning ends once
+ * the provider closes it or the same segment starts its text. */
+function liveTailIds(work: readonly Block[]): Pick<TurnGroup, "liveTextId" | "liveThinkingId"> {
+  const tail = work.at(-1)
+  if (tail?.kind !== "assistant" || tail.complete) return { liveTextId: null, liveThinkingId: null }
+  const hasText = !!tail.text.trim()
+  return {
+    liveTextId: hasText ? tail.id : null,
+    liveThinkingId: !hasText && !tail.thinkingComplete && tail.thinking.trim() ? tail.id : null,
+  }
+}
+
 export function groupTurns(blocks: Block[]): TurnGroup[] {
   const groups: TurnGroup[] = []
   const byId = new Map<string, TurnGroup>()
   const get = (turnId: TurnId) => {
     let g = byId.get(turnId)
     if (!g) {
-      g = { turnId, user: null, images: [], work: [], answer: null, liveTextId: null, approvals: [], end: null, reverted: null, running: false }
+      g = { turnId, user: null, images: [], work: [], answer: null, liveTextId: null, liveThinkingId: null, approvals: [], end: null, reverted: null, running: false }
       byId.set(turnId, g)
       groups.push(g)
     }
@@ -927,10 +954,7 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
         w.kind === "assistant" && w.messageId === termId ? (i === firstIdx && reasoning ? [reasoning] : []) : [w],
       )
     }
-    if (g.running) {
-      const tail = g.work.at(-1)
-      g.liveTextId = tail?.kind === "assistant" && !tail.complete && tail.text.trim() ? tail.id : null
-    }
+    if (g.running) Object.assign(g, liveTailIds(g.work))
   }
   return groups
 }

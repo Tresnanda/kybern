@@ -143,6 +143,7 @@ mod tests {
                 segment: 0,
                 text: "Beginning of the live response".into(),
                 thinking: None,
+                thinking_complete: false,
                 at: Utc::now(),
                 complete: false,
             },
@@ -195,6 +196,7 @@ mod tests {
             segment: 0,
             text: "Still running".into(),
             thinking: None,
+            thinking_complete: false,
             at: Utc::now(),
             complete: false,
         };
