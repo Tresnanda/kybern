@@ -73,12 +73,15 @@ export const TranscriptBlock = memo(function TranscriptBlock({
   active = true,
   expansions,
   grouped = false,
+  thinking = block.kind === "assistant" && !block.complete,
 }: {
   block: Block;
   threadId: string;
   active?: boolean;
   expansions?: Map<string, boolean>;
   grouped?: boolean;
+  /** Still receiving reasoning; a turn's transcript knows this from its tail. */
+  thinking?: boolean;
 }) {
   const { colors } = useTheme();
   const expansionKey = `${block.kind}:${block.id}`;
@@ -109,7 +112,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
               >
                 <Icon name="sparkle" size={14} color={colors.muted} />
                 <T variant="caption" tone="secondary">
-                  {block.complete ? "Thought process" : "Thinking"}
+                  {thinking ? "Thinking" : "Thought process"}
                 </T>
                 <Icon
                   name={expanded ? "chevron.up" : "chevron.down"}

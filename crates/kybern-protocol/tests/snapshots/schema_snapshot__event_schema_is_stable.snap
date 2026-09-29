@@ -440,6 +440,30 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "The provider closed the reasoning it was streaming into this message.\nThe message itself may continue with text or tool calls.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "origin": {
+          "$ref": "#/$defs/EventOrigin",
+          "default": {
+            "kind": "root"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "assistant_thinking_completed"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "message_id": {

@@ -120,6 +120,10 @@ expression: schema_for!(TranscriptEntry)
             "null"
           ]
         },
+        "thinking_complete": {
+          "description": "The provider closed this segment's reasoning before the message\ncompleted. Only meaningful while `complete` is false.",
+          "type": "boolean"
+        },
         "at": {
           "type": "string",
           "format": "date-time"

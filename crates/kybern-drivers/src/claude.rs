@@ -689,6 +689,8 @@ struct TurnState {
     thinking: HashMap<String, String>,
     /// Message id from the last `message_start`, used to attribute stream deltas.
     current_message: Option<String>,
+    /// Content block index of the thinking block currently streaming.
+    thinking_block: Option<u64>,
     last_total_cost: f64,
     last_bound: Option<(String, Option<String>)>,
     /// uuid of the most recent assistant frame this turn (the rewind anchor).
@@ -1018,7 +1020,28 @@ impl ClaudeSession {
             "message_start" => {
                 self.emit(DriverEvent::ResponseStarted).await;
                 if let Some(id) = ev.pointer("/message/id").and_then(|i| i.as_str()) {
-                    self.state.lock().await.current_message = Some(id.to_string());
+                    let mut st = self.state.lock().await;
+                    st.current_message = Some(id.to_string());
+                    st.thinking_block = None;
+                }
+            }
+            "content_block_start" => {
+                if ev.pointer("/content_block/type").and_then(Value::as_str) == Some("thinking") {
+                    self.state.lock().await.thinking_block = ev.get("index").and_then(Value::as_u64);
+                }
+            }
+            "content_block_stop" => {
+                let index = ev.get("index").and_then(Value::as_u64);
+                let message_id = {
+                    let mut st = self.state.lock().await;
+                    if index.is_none() || st.thinking_block != index {
+                        return;
+                    }
+                    st.thinking_block = None;
+                    st.current_message.clone()
+                };
+                if let Some(message_id) = message_id {
+                    self.emit(DriverEvent::ThinkingCompleted { message_id, origin: EventOrigin::Root }).await;
                 }
             }
             "content_block_delta" => {
@@ -1152,6 +1175,7 @@ impl ClaudeSession {
             st.text.clear();
             st.thinking.clear();
             st.current_message = None;
+            st.thinking_block = None;
             if subtype == "success"
                 && v.pointer("/origin/kind").and_then(Value::as_str) == Some("task-notification")
                 && st.current_user_uuid.is_some()
@@ -1654,6 +1678,20 @@ mod tests {
             "event":{"type":"message_start", "message":{"id":"root-message"}}}))
             .await;
         assert!(matches!(rx.recv().await, Some(DriverEvent::ResponseStarted)));
+
+        // Closing the thinking block ends reasoning; closing text does not.
+        for event in [
+            json!({"type":"content_block_start", "index":0, "content_block":{"type":"thinking", "thinking":""}}),
+            json!({"type":"content_block_delta", "index":0, "delta":{"type":"thinking_delta", "thinking":"Plan."}}),
+            json!({"type":"content_block_stop", "index":0}),
+            json!({"type":"content_block_start", "index":1, "content_block":{"type":"text", "text":""}}),
+            json!({"type":"content_block_stop", "index":1}),
+        ] {
+            session.handle_frame(json!({"type":"stream_event", "parent_tool_use_id":null, "event":event})).await;
+        }
+        assert!(matches!(rx.recv().await, Some(DriverEvent::ThinkingDelta { .. })));
+        assert!(matches!(rx.recv().await, Some(DriverEvent::ThinkingCompleted { message_id, .. }) if message_id == "root-message"));
+        assert!(rx.try_recv().is_err());
         child.kill().await;
     }
 

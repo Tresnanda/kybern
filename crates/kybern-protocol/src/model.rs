@@ -795,6 +795,10 @@ pub enum TranscriptEntry {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thinking: Option<String>,
+        /// The provider closed this segment's reasoning before the message
+        /// completed. Only meaningful while `complete` is false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        thinking_complete: bool,
         at: DateTime<Utc>,
         complete: bool,
     },

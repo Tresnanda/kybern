@@ -280,6 +280,12 @@ pub enum DriverEvent {
         origin: EventOrigin,
         delta: String,
     },
+    /// The provider closed a reasoning block. Text or tool calls may follow in
+    /// the same message; without this the reasoning looks live until they do.
+    ThinkingCompleted {
+        message_id: String,
+        origin: EventOrigin,
+    },
     /// Full text of an assistant message once the provider finalizes it.
     AsyncQuestions(kybern_protocol::AsyncQuestionRequest),
     MessageCompleted {

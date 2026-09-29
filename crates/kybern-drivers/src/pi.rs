@@ -629,6 +629,7 @@ impl PiSession {
                             self.emit(DriverEvent::ThinkingDelta { message_id, origin: EventOrigin::Root, delta: d.to_string() }).await;
                         }
                     }
+                    Some("thinking_end") => self.emit(DriverEvent::ThinkingCompleted { message_id, origin: EventOrigin::Root }).await,
                     _ => {}
                 }
             }

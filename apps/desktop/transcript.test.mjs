@@ -194,6 +194,24 @@ test("reasoning splits into a work row and out of the answer", () => {
   assert.equal(reasoning?.thinking, "I should inspect first.")
 })
 
+test("reasoning stops being live when the provider closes it, before any text", () => {
+  const thinking = { kind: "assistant_thinking_delta", message_id: "m1", delta: "Plan the steps.", origin: ROOT }
+  const closed = { kind: "assistant_thinking_completed", message_id: "m1", origin: ROOT }
+  const live = (events) => groupTurns(fold([start, ...events]).blocks)[0].liveThinkingId
+
+  assert.equal(live([thinking]), "m1#0")
+  assert.equal(live([thinking, closed]), null)
+  // More reasoning in the same open segment makes it live again.
+  assert.equal(live([thinking, closed, { ...thinking, delta: " Then check." }]), "m1#0")
+  // A hydrated page carries the same state.
+  const hydrated = seedFromGet({
+    thread: { id: "t", last_seq: 2 },
+    transcript: [{ role: "assistant", id: "m1", turn_id: T, seq: 2, origin: ROOT, segment: 0, text: "", thinking: "Plan.", thinking_complete: true, at: AT, complete: false }],
+    pending_approvals: [],
+  })
+  assert.equal(hydrated.blocks[0].thinkingComplete, true)
+})
+
 test("a live turn keeps assistant narration in place and exposes no final answer", () => {
   const state = fold([start, { kind: "assistant_text_delta", message_id: "m1", delta: "Streaming answer so far", origin: ROOT }])
   const [group] = groupTurns(state.blocks)

@@ -1370,6 +1370,7 @@ impl CodexSession {
             }
             "reasoning" => {
                 if completed {
+                    self.emit(DriverEvent::ThinkingCompleted { message_id: id.clone(), origin: EventOrigin::Root }).await;
                     let summary = item
                         .get("summary")
                         .and_then(|s| s.as_array())
