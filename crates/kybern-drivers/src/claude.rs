@@ -173,6 +173,10 @@ impl AgentDriver for ClaudeDriver {
             cmd.args(["--effort", effort]);
         }
         cmd.env_remove("NODE_OPTIONS");
+        // stream-json makes Claude Code an `sdk-cli` session, where the
+        // Artifact tools are off unless explicitly enabled. Session env may
+        // still turn them off.
+        cmd.env("CLAUDE_CODE_ARTIFACT", "1");
         cmd.env("CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "0");
         for (k, v) in &config.env {
             cmd.env(k, v);
@@ -1858,6 +1862,45 @@ mod tests {
                 !args.iter().any(|arg| ["--system-prompt", "--tools", "--strict-mcp-config"].contains(&arg.as_str())),
                 "ordinary MCP availability must not replace system prompts or disable native plugins"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_enable_artifacts_unless_the_session_env_disables_them() {
+        use crate::{AgentDriver, SessionConfig};
+        use std::os::unix::fs::PermissionsExt;
+        for (env, expected) in [(None, "1"), (Some("0"), "0")] {
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("claude-fixture");
+            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,os,pathlib,sys\ntmp=pathlib.Path('env.tmp')\ntmp.write_text(json.dumps({k:os.environ.get(k) for k in ['CLAUDE_CODE_ARTIFACT','CLAUDE_CODE_ARTIFACT_AUTO_OPEN']}))\ntmp.rename('env.json')\nfor line in sys.stdin: pass\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let spawned = super::ClaudeDriver::default()
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: kybern_protocol::PermissionMode::FullAccess,
+                    native_tool_bridge: None,
+                    resume_session_id: None,
+                    fork: false,
+                    rewind: None,
+                    binary: Some(binary),
+                    env: env.map(|value| ("CLAUDE_CODE_ARTIFACT".to_string(), value.to_string())).into_iter().collect(),
+                })
+                .await
+                .unwrap();
+            let env_path = root.path().join("env.json");
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !env_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let seen: serde_json::Value = serde_json::from_slice(&std::fs::read(env_path).unwrap()).unwrap();
+            spawned.session.close().await.unwrap();
+            assert_eq!(seen["CLAUDE_CODE_ARTIFACT"], expected);
+            assert_eq!(seen["CLAUDE_CODE_ARTIFACT_AUTO_OPEN"], "0");
         }
     }
 
