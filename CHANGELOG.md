@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.8
+
+<!-- kybern-release-title: Claude can publish artifacts -->
+<!-- kybern-release-summary: Claude agents in Kybern can create and update claude.ai artifacts, and finished reasoning stops showing as still thinking. -->
+
+- Let Claude agents create and update claude.ai artifacts and read their comments. Claude Code keeps these tools off when an app runs it the way Kybern does, so Kybern now turns them on. They need a claude.ai sign-in and are still subject to your organization's policy.
+- Stop showing reasoning as still thinking once the agent moves on to its answer or a tool call, on desktop and mobile.
+
 ## 0.5.7
 
 <!-- kybern-release-title: Agents remember how to use your apps -->
