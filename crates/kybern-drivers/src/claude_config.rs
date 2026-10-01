@@ -117,13 +117,66 @@ fn load_preferences(context: &ProbeContext) -> ClaudePreferences {
     preferences
 }
 
+fn config_dir(context: &ProbeContext) -> Option<PathBuf> {
+    let non_empty = |key| environment_value(context, key).filter(|value| !value.trim().is_empty());
+    non_empty("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        // Claude Code uses the OS home directory, which Windows names USERPROFILE.
+        .or_else(|| non_empty("HOME").or_else(|| non_empty("USERPROFILE")).map(|home| PathBuf::from(home).join(".claude")))
+}
+
+/// Whether Claude Code's stored login is due for a refresh, so the next
+/// Claude Code process would rotate its OAuth tokens. Claude Code refreshes
+/// five minutes before the access token expires. Only the expiry is used.
+/// Linux and Windows keep the login in `.credentials.json`; macOS keeps it in
+/// the Keychain. Windows Credential Manager logins (behind a Claude Code flag)
+/// are not read and count as not due.
+pub(crate) async fn login_needs_refresh(context: &ProbeContext) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Credentials {
+        #[serde(rename = "claudeAiOauth")]
+        oauth: Option<Login>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Login {
+        #[serde(rename = "expiresAt")]
+        expires_at: Option<u64>,
+    }
+    let file = config_dir(context).map(|dir| dir.join(".credentials.json"));
+    let contents = match file.and_then(|file| std::fs::read(file).ok()) {
+        Some(contents) => contents,
+        None => match keychain_login(context).await {
+            Some(contents) => contents,
+            None => return false,
+        },
+    };
+    let Ok(credentials) = serde_json::from_slice::<Credentials>(&contents) else { return false };
+    let Some(expires_at) = credentials.oauth.and_then(|login| login.expires_at) else { return false };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.as_millis() as u64);
+    now + 5 * 60 * 1000 >= expires_at
+}
+
+/// Claude Code's macOS login item, read the way Claude Code reads it. A
+/// custom config directory gets a hashed item name, which is not derived
+/// here, so those logins are treated as not due.
+#[cfg(target_os = "macos")]
+async fn keychain_login(context: &ProbeContext) -> Option<Vec<u8>> {
+    let custom_dir = ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"].iter().any(|key| environment_value(context, key).is_some());
+    let account = environment_value(context, "USER").filter(|user| !user.is_empty() && !custom_dir)?;
+    let mut command = Command::new("/usr/bin/security");
+    command.args(["find-generic-password", "-a", &account, "-w", "-s", "Claude Code-credentials"]);
+    let output = tokio::time::timeout(Duration::from_secs(2), crate::process_tree::output(&mut command)).await.ok()?.ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn keychain_login(_context: &ProbeContext) -> Option<Vec<u8>> {
+    None
+}
+
 pub(super) fn settings_paths(context: &ProbeContext) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    let config_dir =
-        environment_value(context, "CLAUDE_CONFIG_DIR").filter(|value| !value.trim().is_empty()).map(PathBuf::from).or_else(|| {
-            environment_value(context, "HOME").filter(|value| !value.trim().is_empty()).map(|home| PathBuf::from(home).join(".claude"))
-        });
-    if let Some(config_dir) = config_dir {
+    if let Some(config_dir) = config_dir(context) {
         paths.push(config_dir.join("settings.json"));
     }
 
@@ -251,6 +304,31 @@ fn is_default_selector(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reads_only_the_login_expiry_to_decide_whether_a_refresh_is_due() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = ProbeContext {
+            binary: None,
+            cwd: None,
+            env: [("CLAUDE_CONFIG_DIR".to_string(), temp.path().to_string_lossy().into_owned())].into(),
+        };
+        let credentials = temp.path().join(".credentials.json");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let write = |expires_at: u64| {
+            let login = serde_json::json!({ "claudeAiOauth": { "accessToken": "a", "refreshToken": "r", "expiresAt": expires_at } });
+            std::fs::write(&credentials, login.to_string()).unwrap();
+        };
+        assert!(!login_needs_refresh(&context).await, "no stored login");
+        write(now + 8 * 60 * 60 * 1000);
+        assert!(!login_needs_refresh(&context).await);
+        write(now + 60 * 1000);
+        assert!(login_needs_refresh(&context).await, "inside Claude Code's five-minute refresh margin");
+        write(now - 1);
+        assert!(login_needs_refresh(&context).await);
+        std::fs::write(&credentials, "{").unwrap();
+        assert!(!login_needs_refresh(&context).await, "unreadable credentials");
+    }
 
     #[test]
     fn merges_user_project_local_and_managed_settings_in_precedence_order() {
