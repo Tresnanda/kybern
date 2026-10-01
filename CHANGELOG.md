@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.9
+
+<!-- kybern-release-title: Stay signed in to Claude and Codex -->
+<!-- kybern-release-summary: Kybern no longer cuts off Claude Code or Codex while they save a refreshed login, which signed you out about once a day. -->
+
+- Fix having to sign in to Claude Code again almost every day. Kybern stopped its background Claude processes, which read the model list and usage limits, the moment they answered. Sometimes that was while Claude was still saving the login it had just refreshed, and the login was lost. Kybern now lets them finish and exit on their own.
+- Stop agents gracefully on macOS, Linux and Windows, so Codex, which refreshes its ChatGPT login the same way, keeps its sign-in too.
+- Leave the daily login refresh to your conversations. While the login is about to expire, the model list and the Usage page use their saved values instead of starting Claude in the background.
+
 ## 0.5.8
 
 <!-- kybern-release-title: Claude can publish artifacts -->
