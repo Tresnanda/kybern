@@ -12,6 +12,11 @@
 //! served immediately. Stale entries refresh in the background, a failed
 //! refresh never replaces a good entry, and sessions on the default model
 //! keep entries fresh for free because every session sends `initialize`.
+//!
+//! A catalog read is a full Claude Code startup, which refreshes an expiring
+//! login and rotates its OAuth tokens. The read therefore lets the process
+//! exit on its own, and a stale entry waits for the next session rather than
+//! spending the login's refresh on a background probe.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -212,7 +217,7 @@ impl ModelCatalog {
             (cached, stand_in(&state.entries, &key))
         };
         if let Some((models, age)) = cached {
-            if age >= REVALIDATE_AFTER {
+            if age >= REVALIDATE_AFTER && !crate::claude_config::login_needs_refresh(context).await {
                 let _ = self.read(key, binary, context);
             }
             return Some(models);
@@ -316,12 +321,13 @@ fn stand_in(entries: &[Entry], key: &CatalogKey) -> Option<Vec<CatalogModel>> {
         .map(|entry| entry.models.clone())
 }
 
-/// Ask a zero-turn Claude Code process for its catalog, then stop it. No
-/// model request is made and no session is written.
+/// Ask a zero-turn Claude Code process for its catalog, then close its input.
+/// No model request is made and no session is written.
 async fn read_catalog(binary: &Path, context: &ProbeContext) -> Option<Vec<CatalogModel>> {
     let mut command = crate::claude::contextual_command(binary, context);
     command.args(["-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--no-session-persistence"]);
     let child = NdjsonChild::spawn(command).ok()?;
+    tracing::debug!(binary = %binary.display(), "reading Claude Code's model catalog");
     let request = json!({ "type": "control_request", "request_id": REQUEST_ID, "request": { "subtype": "initialize" } });
     let models = match child.write(&request).await {
         Ok(()) => tokio::time::timeout(FETCH_TIMEOUT, async {
@@ -343,7 +349,10 @@ async fn read_catalog(binary: &Path, context: &ProbeContext) -> Option<Vec<Catal
         .flatten(),
         Err(_) => None,
     };
-    child.kill().await;
+    // Claude Code may still be saving a login it refreshed during startup.
+    // End of input lets it finish and exit; killing it first can leave a
+    // retired refresh token on disk and sign the user out.
+    tokio::spawn(async move { child.close().await });
     models
 }
 
@@ -468,21 +477,31 @@ mod tests {
         assert_eq!(state.entries[MAX_ENTRIES - 1].key.stamp, MAX_ENTRIES.to_string());
     }
 
+    const REPLY: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"kybern-model-catalog","response":{"models":[{"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus"}]}}}"#;
+
     /// A stand-in `claude` that counts its launches, then answers
     /// `initialize` (or exits without answering).
     #[cfg(unix)]
     fn fake_cli(dir: &Path, answers: bool) -> (PathBuf, ProbeContext, PathBuf) {
+        let body = if answers { format!("read request\necho '{REPLY}'\nsleep 5\n") } else { "exit 1\n".into() };
+        fake_cli_running(dir, &body)
+    }
+
+    #[cfg(unix)]
+    fn fake_cli_running(dir: &Path, body: &str) -> (PathBuf, ProbeContext, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let binary = dir.join("claude");
         let launches = dir.join("launches");
-        let reply = r#"{"type":"control_response","response":{"subtype":"success","request_id":"kybern-model-catalog","response":{"models":[{"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus"}]}}}"#;
-        let body = if answers { format!("read request\necho '{reply}'\nsleep 5\n") } else { "exit 1\n".into() };
         std::fs::write(&binary, format!("#!/bin/sh\necho launch >> \"$KYBERN_TEST_LAUNCHES\"\n{body}")).unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let context = ProbeContext {
             binary: Some(binary.clone()),
             cwd: Some(dir.to_path_buf()),
-            env: [("KYBERN_TEST_LAUNCHES".to_string(), launches.to_string_lossy().into_owned())].into(),
+            env: [
+                ("KYBERN_TEST_LAUNCHES".to_string(), launches.to_string_lossy().into_owned()),
+                ("CLAUDE_CONFIG_DIR".to_string(), dir.join("config").to_string_lossy().into_owned()),
+            ]
+            .into(),
         };
         (binary, context, launches)
     }
@@ -518,5 +537,63 @@ mod tests {
         assert_eq!(catalog.models(&binary, &context).await, None);
         assert_eq!(launch_count(&launches), 1);
         assert!(catalog.lock().entries.is_empty());
+    }
+
+    /// Claude Code refreshes an expiring login during startup, sometimes
+    /// after it has already answered `initialize`. The probe must let it save
+    /// the rotated tokens instead of killing it as soon as the models arrive.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_catalog_read_lets_claude_finish_saving_a_refreshed_login() {
+        let temp = tempfile::tempdir().unwrap();
+        let saved = temp.path().join("saved-login");
+        let body = format!("read request\necho '{REPLY}'\nwhile read line; do :; done\nsleep 0.3\necho rotated > '{}'\n", saved.display());
+        let (binary, context, launches) = fake_cli_running(temp.path(), &body);
+        let models = Arc::new(ModelCatalog::default()).models(&binary, &context).await.unwrap();
+        assert_eq!(models[0].value, "opus");
+        assert_eq!(launch_count(&launches), 1);
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while !saved.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the probe stopped Claude Code before it saved the refreshed login");
+    }
+
+    /// A stale entry is still usable, so it is not worth a background Claude
+    /// Code startup that would rotate an expiring login. The next session or
+    /// a later probe with a fresh login refreshes it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stale_entries_are_not_refreshed_while_the_login_is_due_for_a_refresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let (binary, context, launches) = fake_cli(temp.path(), true);
+        let config = temp.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let login = |expires_at: u128| {
+            let credentials = json!({ "claudeAiOauth": { "accessToken": "a", "refreshToken": "r", "expiresAt": expires_at } });
+            std::fs::write(config.join(".credentials.json"), credentials.to_string()).unwrap();
+        };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let catalog = Arc::new(ModelCatalog::default());
+        catalog.record(CatalogKey::new(&binary, &context).unwrap(), vec![model("cached")]);
+        catalog.lock().entries[0].fetched_at = 0;
+
+        login(now - 1000);
+        assert_eq!(catalog.models(&binary, &context).await.unwrap()[0].value, "cached");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(launch_count(&launches), 0);
+
+        login(now + 8 * 60 * 60 * 1000);
+        assert_eq!(catalog.models(&binary, &context).await.unwrap()[0].value, "cached");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while catalog.lock().entries[0].models[0].value != "opus" {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a background refresh");
+        assert_eq!(launch_count(&launches), 1);
     }
 }

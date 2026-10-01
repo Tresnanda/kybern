@@ -21,7 +21,9 @@ pub struct NdjsonChild {
 
 impl NdjsonChild {
     pub fn spawn(mut cmd: Command) -> Result<Self> {
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        // `ProcessTree` stops the child when this handle drops. Tokio's
+        // kill-on-drop would SIGKILL it first, even mid OAuth refresh.
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(false);
         #[cfg(unix)]
         cmd.process_group(0);
         let mut child = cmd.spawn()?;
@@ -94,10 +96,35 @@ impl NdjsonChild {
         }
     }
 
+    /// Stop the process tree: end of input and SIGTERM, then a forced kill
+    /// after [`TERMINATE_GRACE`](crate::process_tree::TERMINATE_GRACE). The
+    /// grace lets a provider finish saving a rotated OAuth token. End of input
+    /// is the only graceful stop on Windows.
     pub async fn kill(&self) {
+        self.kill_within(crate::process_tree::TERMINATE_GRACE).await;
+    }
+
+    async fn kill_within(&self, grace: std::time::Duration) {
         let mut child = self.child.lock().await;
-        self.tree.lock().unwrap().take();
-        let _ = child.kill().await;
+        let tree = self.tree.lock().unwrap().take();
+        let Some(tree) = tree else {
+            let _ = child.kill().await;
+            return;
+        };
+        let pid = tree.0;
+        // A writer blocked on a full pipe holds stdin; the signal still stops it.
+        if let Ok(mut stdin) = self.stdin.try_lock() {
+            stdin.take();
+        }
+        tree.terminate();
+        match tokio::time::timeout(grace, child.wait()).await {
+            Ok(status) => tracing::debug!(pid, status = ?status.ok(), "provider process exited when asked to stop"),
+            Err(_) => {
+                tracing::warn!(pid, "provider process did not stop when asked; killing it");
+                tree.kill_now();
+                let _ = child.kill().await;
+            }
+        }
     }
 
     pub async fn wait(&self) -> Option<i32> {
@@ -171,6 +198,50 @@ mod lifecycle_tests {
         tokio::time::sleep(Duration::from_millis(40)).await;
         tokio::time::timeout(Duration::from_secs(2), child.kill()).await.expect("kill must not wait on the exit waiter");
         tokio::time::timeout(Duration::from_secs(2), waiter).await.unwrap().unwrap();
+    }
+
+    async fn ready(child: &NdjsonChild) {
+        tokio::time::timeout(Duration::from_secs(2), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+    }
+
+    /// A provider stopped while it saves a rotated OAuth token must be able
+    /// to finish the write; SIGKILL would leave a dead refresh token on disk.
+    #[tokio::test]
+    async fn kill_lets_a_provider_finish_saving_before_it_exits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.current_dir(dir.path())
+            .args(["-c", "trap 'sleep 0.3; touch saved; exit 0' TERM; printf '{\"ready\":true}\\n'; sleep 30 & wait"]);
+        let child = NdjsonChild::spawn(cmd).unwrap();
+        ready(&child).await;
+        child.kill().await;
+        assert!(dir.path().join("saved").exists());
+    }
+
+    /// Windows has no SIGTERM for console processes, so end of input is the
+    /// graceful stop there. A provider that only reacts to EOF still saves.
+    #[tokio::test]
+    async fn kill_closes_input_so_a_provider_can_stop_without_signals() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.current_dir(dir.path())
+            .args(["-c", "trap '' TERM; printf '{\"ready\":true}\\n'; while read line; do :; done; sleep 0.3; touch saved"]);
+        let child = NdjsonChild::spawn(cmd).unwrap();
+        ready(&child).await;
+        child.kill().await;
+        assert!(dir.path().join("saved").exists());
+    }
+
+    #[tokio::test]
+    async fn kill_escalates_when_a_provider_ignores_terminate() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "trap '' TERM; printf '{\"ready\":true}\\n'; sleep 30 & wait"]);
+        let child = NdjsonChild::spawn(cmd).unwrap();
+        ready(&child).await;
+        let started = std::time::Instant::now();
+        child.kill_within(Duration::from_millis(300)).await;
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(child.child.lock().await.try_wait().unwrap().is_some());
     }
 
     #[tokio::test]

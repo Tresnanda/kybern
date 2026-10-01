@@ -535,6 +535,9 @@ pub(crate) fn contextual_command(binary: &std::path::Path, context: &ProbeContex
 /// Read the account's current plan limits by driving Claude Code's local
 /// `/usage` command over stream-json. It runs no model turn (num_turns 0, zero
 /// cost), so the Usage page can show live limits without the user prompting.
+/// While the login is due for a refresh this returns `None` and the caller
+/// keeps the last stored limits: the next session rotates the tokens, not a
+/// probe opened by a page view.
 pub async fn read_account_limits(
     cwd: &std::path::Path,
     binary: Option<&PathBuf>,
@@ -542,6 +545,10 @@ pub async fn read_account_limits(
 ) -> Option<Vec<kybern_protocol::UsageLimit>> {
     let bin = resolve(ProviderKind::ClaudeCode, binary).ok()?;
     let context = ProbeContext { binary: Some(bin.clone()), cwd: Some(cwd.to_path_buf()), env: env.clone() };
+    if crate::claude_config::login_needs_refresh(&context).await {
+        tracing::debug!("skipped the live Claude Code usage read while its login is due for a refresh");
+        return None;
+    }
     let mut cmd = contextual_command(&bin, &context);
     cmd.args(["-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--no-session-persistence"]);
     let child = NdjsonChild::spawn(cmd).ok()?;
@@ -561,7 +568,9 @@ pub async fn read_account_limits(
     .await
     .ok()
     .flatten();
-    child.kill().await;
+    // Input is already closed, so Claude Code exits once it has saved any
+    // login it refreshed. See `claude_catalog::read_catalog`.
+    tokio::spawn(async move { child.close().await });
     let limits = parse_usage_limits(&text?);
     (!limits.is_empty()).then_some(limits)
 }
@@ -1963,5 +1972,44 @@ mod tests {
         .unwrap();
         assert!(background.backgrounded);
         assert!(!background.capabilities.background);
+    }
+
+    /// A `/usage` read is a full Claude Code startup. Like the catalog probe,
+    /// it must let Claude Code save a refreshed login before it exits.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_usage_read_lets_claude_finish_saving_a_refreshed_login() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let (binary, saved, launches) = (temp.path().join("claude"), temp.path().join("saved-login"), temp.path().join("launches"));
+        let result = r#"{"type":"result","result":"Current session: 7% used · resets Sep 16 at 7:30pm (UTC)"}"#;
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\necho launch >> '{}'\nread message\necho '{result}'\nwhile read line; do :; done\nsleep 0.3\necho rotated > '{}'\n",
+                launches.display(),
+                saved.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = temp.path().join("config");
+        let env = std::collections::BTreeMap::from([("CLAUDE_CONFIG_DIR".to_string(), config.to_string_lossy().into_owned())]);
+
+        let limits = super::read_account_limits(temp.path(), Some(&binary), &env).await.unwrap();
+        assert_eq!(limits[0].used_percent, 7.0);
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            while !saved.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the usage read stopped Claude Code before it saved the refreshed login");
+
+        // An expiring login is left for the next session to refresh.
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join(".credentials.json"), r#"{"claudeAiOauth":{"refreshToken":"r","expiresAt":1}}"#).unwrap();
+        assert!(super::read_account_limits(temp.path(), Some(&binary), &env).await.is_none());
+        assert_eq!(std::fs::read_to_string(&launches).unwrap().lines().count(), 1);
     }
 }
