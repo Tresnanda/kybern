@@ -9,16 +9,14 @@ import type { ProviderUsage } from "@/protocol"
 // Stacked panels (queued follow-ups, approval card, empty-landing tray) render
 // through `above`, inside the same column frame.
 
-import { Fragment, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/kit/button"
-import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, dialogFieldLabelClassName } from "@/components/kit/dialog"
-import { Input } from "@/components/kit/input"
 import { ComposerColumnFrame } from "@/components/kit/chat/ComposerColumnFrame"
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
-import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
@@ -42,12 +40,12 @@ import {
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
 } from "@/components/kit/chat/composerPickerStyles"
 import { Kbd } from "@/components/kit/kbd"
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "@/components/kit/menu"
+import { Menu, MenuGroup, MenuItem, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { buildStructuredTextParts, nextAttachmentLabel, structuredSegments, type AttachmentReference } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
-import { PROVIDER_LABEL, basename, isMac, mod } from "@/lib/format"
-import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, RefreshCwIcon, PluginIcon, DeviceLaptopIcon,
+import { PROVIDER_LABEL, basename, formatEffort, isMac, mod } from "@/lib/format"
+import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, PluginIcon, DeviceLaptopIcon,
   HandRaisedIcon, ShieldCheckIcon, ShieldIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
@@ -56,7 +54,8 @@ import { isFreeChatProject, type ContentPart, type PermissionMode, type ProjectI
 import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { COMPUTER_MENTION_PATH, COMPUTER_MENTION_SKILL } from "@/lib/userInput"
-import { customModelId, findModel, modelChoices } from "../../../../packages/kybern-client/src/models"
+import { findModel, modelQualifier } from "../../../../packages/kybern-client/src/models"
+import { ModelPicker } from "@/components/kybern/ModelPicker"
 
 export interface ComposerHandle {
   focus: () => void
@@ -114,7 +113,8 @@ export interface ComposerProps {
   onModeChange: (m: PermissionMode) => void
   provider: ProviderInstance | null
   providers: ProviderStatus[]
-  onProviderChange?: (p: ProviderInstance) => Promise<void> | void
+  /** `choice` carries a model picked from another harness's favorites. */
+  onProviderChange?: (p: ProviderInstance, choice?: { model?: string; effort?: string }) => Promise<void> | void
   model?: string | null
   effort?: string | null
   onModelChange?: (model: string | undefined, effort: string | undefined) => Promise<void> | void
@@ -268,9 +268,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // Throttles the silent catalog refresh fired whenever the picker opens, so
   // rapid re-opens don't re-probe every agent CLI. Matches the daemon's cache window.
   const lastModelRefresh = useRef(0)
-  const [customModel, setCustomModel] = useState<string | null>(null)
   const [changingModel, setChangingModel] = useState(false)
-  const customModelFieldId = useId()
   const [dragOver, setDragOver] = useState(false)
   const [fileResult, setFileResult] = useState<{ query: string; files: string[] }>({ query: "", files: [] })
   const [threadResult, setThreadResult] = useState<{ query: string; threads: { thread: Thread; snippet?: string | null }[] }>({ query: "", threads: [] })
@@ -663,11 +661,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const models = status?.models ?? []
   const current = model ? findModel(models, model) : models.find((m) => m.is_default)
   const modelLabel = current?.display_name ?? (model || null)
-  const modelOptions = modelChoices(models, model).models.filter((m) => m.id)
-  const efforts = current?.efforts ?? status?.supported_efforts ?? []
+  const modelQualifierLabel = modelQualifier(models, current)
   const effortLabel = effort ?? current?.default_effort ?? null
   const canPickModel = !!onModelChange
-  const customId = customModelId(customModel ?? "")
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange
   const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
@@ -698,11 +694,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }
 
-  async function changeProvider(nextProvider: ProviderInstance) {
+  async function changeProvider(nextProvider: ProviderInstance, choice?: { model?: string; effort?: string }) {
     if (changingModel) return false
     setChangingModel(true)
     try {
-      await onProviderChange?.(nextProvider)
+      await onProviderChange?.(nextProvider, choice)
       return true
     } catch (error) {
       toast.error("Unable to change harness", { description: errorText(error) })
@@ -1016,7 +1012,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 )}
                 {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
-                  <Menu
+                  <ModelPicker
+                    provider={provider}
+                    providers={providers}
+                    model={model}
+                    effort={effort}
+                    canPickModel={canPickModel}
+                    canPickProvider={canPickProvider}
+                    canReload={canReloadModels}
+                    loading={modelCatalogLoading}
+                    busy={changingModel}
                     onOpenChange={(open) => {
                       if (!open || !canReloadModels) return
                       // Self-heal against a stale catalog (e.g. models shipped mid-session)
@@ -1024,29 +1029,24 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       if (Date.now() - lastModelRefresh.current < 60_000) return
                       void refreshModelCatalog(true)
                     }}
-                  >
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <MenuTrigger
-                            disabled={!canPickModel && !canReloadModels && !canPickProvider}
-                            render={
-                              <Button
-                                size="sm"
-                                variant="chrome"
-                                aria-label="Change model and reasoning"
-                                title={`${modelLabel ?? PROVIDER_LABEL[provider.kind]}${effortLabel ? `, ${effortLabel} effort` : ""}`}
-                                className={cn(
-                                  COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
-                                  "disabled:opacity-100",
-                                  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-                                  COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
-                                  "max-w-full !shrink overflow-hidden px-2 sm:px-2",
-                                )}
-                              />
-                            }
-                          />
-                        }
+                    onModelChange={changeModel}
+                    onEffortChange={(next) => changeModel(current?.id ?? model ?? undefined, next)}
+                    onProviderChange={changeProvider}
+                    onReload={() => void reloadModels()}
+                    trigger={
+                      <Button
+                        size="sm"
+                        variant="chrome"
+                        disabled={!canPickModel && !canReloadModels && !canPickProvider}
+                        aria-label="Change model and reasoning"
+                        title={`${modelLabel ?? PROVIDER_LABEL[provider.kind]}${modelQualifierLabel ? ` from ${modelQualifierLabel}` : ""}${effortLabel ? `, ${formatEffort(effortLabel)} effort` : ""}`}
+                        className={cn(
+                          COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
+                          "disabled:opacity-100",
+                          COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+                          COMPOSER_FOOTER_PICKER_TEXT_SIZE_CLASS_NAME,
+                          "max-w-full !shrink overflow-hidden px-2 sm:px-2",
+                        )}
                       >
                         <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
                           <ProviderMark kind={provider.kind} size={14} className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100" />
@@ -1055,103 +1055,35 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                             "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
                             "@max-[360px]:hidden",
                           )}>{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
+                          {modelQualifierLabel && (
+                            <span
+                              className={cn(
+                                "shrink-0 leading-none",
+                                "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
+                                COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                                "@max-[480px]:hidden",
+                              )}
+                            >
+                              {modelQualifierLabel}
+                            </span>
+                          )}
                           {modelLabel && effortLabel && (
                             <span
                               className={cn(
-                                "shrink-0 capitalize leading-none",
+                                "shrink-0 leading-none",
                                 "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
                                 COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
                                 "@max-[620px]:hidden",
                               )}
                             >
-                              {effortLabel}
+                              {formatEffort(effortLabel)}
                             </span>
                           )}
                           {(canPickModel || canReloadModels || canPickProvider) && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
                         </span>
-                      </TooltipTrigger>
-                      <TooltipPopup side="top" sideOffset={6} variant="picker">
-                        <span className="inline-flex items-center gap-2 px-1 py-0.5">Change model</span>
-                      </TooltipPopup>
-                    </Tooltip>
-                    <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
-                      {efforts.length > 0 && canPickModel && (
-                        <MenuGroup>
-                          <MenuGroupLabel>Effort</MenuGroupLabel>
-                          <MenuRadioGroup value={effortLabel ?? ""} onValueChange={(v) => void changeModel(current?.id ?? model ?? undefined, v as string)}>
-                            {efforts.map((e) => (
-                              <MenuRadioItem key={e} value={e}>
-                                <span className="capitalize">{e}</span>
-                                {e === current?.default_effort && <span className="ml-1 text-muted-foreground/60">(default)</span>}
-                              </MenuRadioItem>
-                            ))}
-                          </MenuRadioGroup>
-                        </MenuGroup>
-                      )}
-                      {canPickModel && (
-                        <>
-                          {efforts.length > 0 && <MenuSeparator />}
-                          <MenuGroup>
-                            <MenuSub>
-                              <MenuSubTrigger>
-                                <ProviderMark kind={provider.kind} size={12} className="size-3 shrink-0" />
-                                <span className="truncate">{modelLabel ?? "Model"}</span>
-                              </MenuSubTrigger>
-                              <ComposerPickerMenuSubPopup fixedWidth className="[--available-height:min(20rem,55vh)]">
-                                <MenuRadioGroup value={current?.id ?? model ?? ""} onValueChange={(v) => void changeModel(v as string, models.find((m) => m.id === v)?.default_effort ?? undefined)}>
-                                  {modelOptions.map((m) => (
-                                    <MenuRadioItem key={m.id} value={m.id} title={m.description ?? undefined}>
-                                      {m.description ? (
-                                        <span className="flex min-w-0 flex-1 flex-col gap-0.5 py-0.5">
-                                          <span className="truncate">{m.display_name}</span>
-                                          <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground/70">{m.description}</span>
-                                        </span>
-                                      ) : (
-                                        <span className="truncate">{m.display_name}</span>
-                                      )}
-                                    </MenuRadioItem>
-                                  ))}
-                                </MenuRadioGroup>
-                                {modelOptions.length > 0 && <MenuSeparator />}
-                                <MenuItem onClick={() => setCustomModel(model ?? "")}>
-                                  <PlusIcon className="size-3" />
-                                  <span>Use custom model…</span>
-                                </MenuItem>
-                              </ComposerPickerMenuSubPopup>
-                            </MenuSub>
-                          </MenuGroup>
-                        </>
-                      )}
-                      {canPickProvider && (
-                        <>
-                          {(canPickModel || efforts.length > 0) && <MenuSeparator />}
-                          <MenuGroup>
-                            <MenuGroupLabel>Agent</MenuGroupLabel>
-                            <MenuRadioGroup value={provider.kind} onValueChange={(v) => void changeProvider({ kind: v as ProviderStatus["kind"], instance: "default" })}>
-                              {providers.map((p) => (
-                                <MenuRadioItem key={p.kind} value={p.kind} disabled={!p.available || changingModel}>
-                                  <ProviderMark kind={p.kind} size={12} className="size-3 shrink-0" />
-                                  <span className="truncate">{p.display_name}</span>
-                                  {!p.available && <span className="ml-auto text-[10px] text-muted-foreground/60">Not found</span>}
-                                </MenuRadioItem>
-                              ))}
-                            </MenuRadioGroup>
-                          </MenuGroup>
-                        </>
-                      )}
-                      {canReloadModels && (
-                        <>
-                          {(canPickModel || efforts.length > 0 || canPickProvider) && <MenuSeparator />}
-                          <MenuGroup>
-                            <MenuItem onClick={() => void reloadModels()} disabled={modelCatalogLoading}>
-                              {modelCatalogLoading ? <Spinner size={12} /> : <RefreshCwIcon className="size-3" />}
-                              <span>{modelCatalogLoading ? "Reloading…" : "Reload models"}</span>
-                            </MenuItem>
-                          </MenuGroup>
-                        </>
-                      )}
-                    </ComposerPickerMenuPopup>
-                  </Menu>
+                      </Button>
+                    }
+                  />
                 )}
 
                 {running && (
@@ -1255,29 +1187,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           )}
         </div>
       </div>
-      <Dialog open={customModel !== null} onOpenChange={(open) => { if (!open) setCustomModel(null) }}>
-        <DialogPopup className="max-w-sm">
-          <form className="flex min-h-0 flex-col" onSubmit={(event) => {
-            event.preventDefault()
-            if (!customId) return
-            void changeModel(customId, undefined).then((saved) => { if (saved) setCustomModel(null) })
-          }}>
-            <DialogHeader>
-              <DialogTitle>Use custom model</DialogTitle>
-              <DialogDescription>Enter the exact model ID accepted by {provider ? PROVIDER_LABEL[provider.kind] : "your agent"}.</DialogDescription>
-            </DialogHeader>
-            <DialogPanel className="flex flex-col gap-2 pt-2">
-              <label htmlFor={customModelFieldId} className={dialogFieldLabelClassName}>Model ID</label>
-              <Input id={customModelFieldId} autoFocus disabled={changingModel} autoComplete="off" autoCapitalize="none" spellCheck={false}
-                placeholder="Enter a model ID" value={customModel ?? ""} onChange={(event) => setCustomModel(event.target.value)} />
-            </DialogPanel>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => setCustomModel(null)}>Cancel</Button>
-              <Button type="submit" disabled={!customId || changingModel}>{changingModel ? "Applying…" : "Use model"}</Button>
-            </DialogFooter>
-          </form>
-        </DialogPopup>
-      </Dialog>
     </ComposerColumnFrame>
   )
 })
