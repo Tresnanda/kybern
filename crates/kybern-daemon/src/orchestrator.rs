@@ -7803,6 +7803,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn omp_background_job_timeout_after_its_turn_completes_the_task_as_failed() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Omp);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("run the slow command")).await.unwrap();
+        live.turn_ready.notified().await;
+        let task = DriverRuntimeTask {
+            id: "tool:call-1".into(),
+            kind: RuntimeTaskKind::Process,
+            status: RuntimeTaskStatus::Running,
+            title: "sleep 30".into(),
+            detail: None,
+            provider_type: Some("bash".into()),
+            parent_id: None,
+            tool_call_id: Some("call-1".into()),
+            provider_thread_id: Some("bg_2".into()),
+            model: None,
+            effort: None,
+            backgrounded: true,
+            last_tool_name: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities::default(),
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+        // Background work outlives the turn that started it.
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        assert!(fixture.store.runtime_tasks_for_thread(thread.id).unwrap()[0].status.is_active());
+
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate {
+                    detail: Some("Command timed out after 20 seconds".into()),
+                    ..DriverRuntimeTaskUpdate::status("tool:call-1", RuntimeTaskStatus::Failed)
+                }),
+            )
+            .await
+            .unwrap();
+        let tasks = fixture.store.runtime_tasks_for_thread(thread.id).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].status, RuntimeTaskStatus::Failed);
+        assert_eq!(tasks[0].title, "sleep 30");
+        assert!(tasks[0].completed_at.is_some());
+        assert!(tasks.iter().all(|task| !task.status.is_active()));
+        assert!(matches!(
+            &fixture.store.events_for_thread(thread.id).unwrap().last().unwrap().payload,
+            EventPayload::RuntimeTaskCompleted { task } if task.status == RuntimeTaskStatus::Failed
+        ));
+    }
+
+    #[tokio::test]
     async fn interrupt_fallback_resolves_approvals_and_active_tasks() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);

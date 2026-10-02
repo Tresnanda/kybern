@@ -21,7 +21,10 @@ use uuid::Uuid;
 
 use crate::binary::{at_least, resolve, version_of};
 use crate::ndjson::NdjsonChild;
-use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, ProbeContext, Result, SessionConfig, SpawnedSession};
+use crate::{
+    AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, ProbeContext, Result, SessionConfig,
+    SpawnedSession,
+};
 
 mod extension;
 #[cfg(test)]
@@ -348,6 +351,11 @@ struct State {
     model: Value,
     default_effort: Option<String>,
     tool_previews: HashMap<String, String>,
+    /// Commands of in-flight OMP bash calls. `tool_execution_end` omits
+    /// `args`, so a backgrounded result would otherwise lose its title.
+    bash_commands: HashMap<String, String>,
+    /// OMP background job id -> runtime task id, for jobs not yet settled.
+    background_jobs: HashMap<String, String>,
     context_window: Option<u64>,
     session_id: Option<String>,
     /// Sequence number for synthetic assistant message ids.
@@ -650,6 +658,9 @@ impl PiSession {
                     }
                 }
                 let msg = &v["message"];
+                if self.flavor == Flavor::Omp && is_omp_async_result(msg) {
+                    self.settle_omp_jobs(std::slice::from_ref(msg)).await;
+                }
                 if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
                     return;
                 }
@@ -698,10 +709,8 @@ impl PiSession {
                         st.tool_previews.insert(id.to_string(), String::new());
                     }
                 }
-                if self.flavor == Flavor::Omp
-                    && let Some(task) = omp_background_process(&v)
-                {
-                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                if self.flavor == Flavor::Omp {
+                    self.emit_omp_background_process(&v).await;
                 }
                 self.emit(DriverEvent::ToolStarted(ToolCall {
                     id: v.get("toolCallId").and_then(|i| i.as_str()).unwrap_or("").to_string(),
@@ -731,20 +740,18 @@ impl PiSession {
                         self.emit(DriverEvent::ToolOutputDelta { tool_call_id: id.to_string(), delta }).await;
                     }
                 }
-                if self.flavor == Flavor::Omp
-                    && let Some(task) = omp_background_process(&v)
-                {
-                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                if self.flavor == Flavor::Omp {
+                    self.emit_omp_background_process(&v).await;
                 }
             }
             "tool_execution_end" => {
-                if let Some(id) = v.get("toolCallId").and_then(Value::as_str) {
-                    self.state.lock().await.tool_previews.remove(id);
+                if self.flavor == Flavor::Omp {
+                    self.emit_omp_background_process(&v).await;
                 }
-                if self.flavor == Flavor::Omp
-                    && let Some(task) = omp_background_process(&v)
-                {
-                    self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+                if let Some(id) = v.get("toolCallId").and_then(Value::as_str) {
+                    let mut st = self.state.lock().await;
+                    st.tool_previews.remove(id);
+                    st.bash_commands.remove(id);
                 }
                 let content = v.pointer("/result/content").cloned().unwrap_or(Value::Null);
                 self.emit(DriverEvent::ToolCompleted {
@@ -897,6 +904,7 @@ impl PiSession {
         st.turn_error = None;
         st.aborted = false;
         st.tool_previews.clear();
+        st.bash_commands.clear();
         Ok(Some(st.generation))
     }
 
@@ -978,6 +986,7 @@ impl PiSession {
             st.active = false;
             st.settling = false;
             st.tool_previews.clear();
+            st.bash_commands.clear();
             let duration = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
             break (anchor, std::mem::take(&mut st.turn_usage), st.turn_cost, duration, st.turn_error.take(), st.aborted);
         };
@@ -992,6 +1001,9 @@ impl PiSession {
         };
         self.emit(ev).await;
         drop(_gate);
+        if self.flavor == Flavor::Omp {
+            self.reconcile_omp_jobs().await;
+        }
         // Stats cannot delay completion or overwrite the next turn's context.
         if let Ok(stats) = self.call_with_timeout("get_session_stats", &mut json!({}), std::time::Duration::from_secs(2)).await
             && let (Some(used_tokens), Some(window_tokens)) = (
@@ -1021,6 +1033,91 @@ impl PiSession {
         let requests: Vec<_> = self.pending_app_tools.lock().await.drain().map(|(id, _)| id).collect();
         for id in requests {
             let _ = self.child.write(&json!({ "type": "extension_ui_response", "id": id, "cancelled": true })).await;
+        }
+    }
+
+    /// Map an OMP bash tool frame to a background process task and remember
+    /// running jobs, whose completion arrives later as an `async-result`.
+    async fn emit_omp_background_process(&self, frame: &Value) {
+        if frame.get("toolName").and_then(Value::as_str) != Some("bash") {
+            return;
+        }
+        let task = {
+            let mut st = self.state.lock().await;
+            let tool_call_id = frame.get("toolCallId").and_then(Value::as_str);
+            if let (Some(id), Some(command)) = (tool_call_id, frame.pointer("/args/command").and_then(Value::as_str))
+                && (st.bash_commands.contains_key(id) || st.bash_commands.len() < MAX_ACTIVE_TOOLS)
+            {
+                st.bash_commands.insert(id.to_string(), first_line(command));
+            }
+            let known_command = tool_call_id.and_then(|id| st.bash_commands.get(id)).map(String::as_str);
+            let Some(task) = omp_background_process(frame, known_command) else { return };
+            if let Some(job_id) = &task.provider_thread_id {
+                if !task.status.is_active() {
+                    st.background_jobs.remove(job_id);
+                } else if st.background_jobs.contains_key(job_id) || st.background_jobs.len() < MAX_ACTIVE_TOOLS {
+                    st.background_jobs.insert(job_id.clone(), task.id.clone());
+                }
+            }
+            task
+        };
+        self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+    }
+
+    /// Complete the tracked background jobs named by `async-result` messages.
+    /// Jobs already settled are skipped, so live and reconciled deliveries of
+    /// the same message emit one completion.
+    async fn settle_omp_jobs(&self, messages: &[Value]) {
+        for message in messages.iter().filter(|message| is_omp_async_result(message)) {
+            for outcome in omp_async_result_outcomes(message) {
+                let Some(task_id) = self.state.lock().await.background_jobs.remove(&outcome.job_id) else { continue };
+                self.emit(DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate {
+                    id: task_id,
+                    status: Some(outcome.status),
+                    detail: outcome.detail,
+                    backgrounded: None,
+                    last_tool_name: None,
+                    usage: None,
+                    stats: outcome
+                        .duration_ms
+                        .map(|duration_ms| RuntimeTaskStats { duration_ms: Some(duration_ms), ..RuntimeTaskStats::default() }),
+                    capabilities: None,
+                }))
+                .await;
+            }
+        }
+    }
+
+    /// Turn-end fallback for jobs still marked running. OMP forwards the
+    /// `async-result` message live, but a job can also end without one: the
+    /// agent may cancel it through `proc://` or read its result directly, and
+    /// OMP then skips delivery. Once OMP reports no pending async work, settle
+    /// from the conversation's delivered results and stop the rest.
+    async fn reconcile_omp_jobs(&self) {
+        let tracked: Vec<String> = self.state.lock().await.background_jobs.keys().cloned().collect();
+        if tracked.is_empty() {
+            return;
+        }
+        let Ok(state) = self.call_with_timeout("get_state", &mut json!({}), std::time::Duration::from_secs(2)).await else { return };
+        if state.get("hasPendingAsyncWork").and_then(Value::as_bool) != Some(false) {
+            return;
+        }
+        // `get_branch_messages` lists only user entries; the delivered results
+        // are custom messages in the agent's context.
+        if let Ok(data) = self.call_with_timeout("get_messages", &mut json!({}), std::time::Duration::from_secs(5)).await
+            && let Some(messages) = data.get("messages").and_then(Value::as_array)
+        {
+            self.settle_omp_jobs(messages).await;
+        }
+        // Only jobs seen before the idle check: a new turn may already have
+        // started another one.
+        for job_id in tracked {
+            let Some(task_id) = self.state.lock().await.background_jobs.remove(&job_id) else { continue };
+            self.emit(DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate {
+                detail: Some("Oh My Pi no longer reports this background job".into()),
+                ..DriverRuntimeTaskUpdate::status(task_id, RuntimeTaskStatus::Stopped)
+            }))
+            .await;
         }
     }
 
@@ -1216,11 +1313,13 @@ fn permission_state_available(state: &State) -> bool {
     !state.aborted && !state.closed
 }
 
+/// Unknown strings stay `Running`: OMP also reports non-terminal states such
+/// as `started`, and ending a live task early is worse than a late update.
 fn omp_runtime_status(status: &str) -> RuntimeTaskStatus {
     match status {
         "pending" => RuntimeTaskStatus::Pending,
         "completed" => RuntimeTaskStatus::Completed,
-        "failed" | "error" => RuntimeTaskStatus::Failed,
+        "failed" | "error" | "timedOut" | "timed_out" | "timeout" => RuntimeTaskStatus::Failed,
         "aborted" | "cancelled" | "canceled" | "stopped" => RuntimeTaskStatus::Stopped,
         "waiting" | "idle" | "parked" => RuntimeTaskStatus::Waiting,
         _ => RuntimeTaskStatus::Running,
@@ -1294,7 +1393,9 @@ fn omp_subagent_task(frame: &Value) -> Option<DriverRuntimeTask> {
     })
 }
 
-fn omp_background_process(frame: &Value) -> Option<DriverRuntimeTask> {
+/// `known_command` is the command from an earlier frame of the same call;
+/// `tool_execution_end` carries no `args`.
+fn omp_background_process(frame: &Value, known_command: Option<&str>) -> Option<DriverRuntimeTask> {
     if frame.get("toolName").and_then(Value::as_str)? != "bash" {
         return None;
     }
@@ -1310,7 +1411,12 @@ fn omp_background_process(frame: &Value) -> Option<DriverRuntimeTask> {
     let tool_call_id = frame.get("toolCallId").and_then(Value::as_str)?.to_string();
     let async_state = async_details.and_then(|value| value.get("state")).and_then(Value::as_str).unwrap_or("running");
     let status = omp_runtime_status(async_state);
-    let command = args.get("command").and_then(Value::as_str).map(first_line).filter(|value| !value.is_empty());
+    let command = args
+        .get("command")
+        .and_then(Value::as_str)
+        .map(first_line)
+        .filter(|value| !value.is_empty())
+        .or_else(|| known_command.filter(|value| !value.is_empty()).map(str::to_string));
     let detail_root = frame.pointer("/partialResult/details").or_else(|| frame.pointer("/result/details")).or_else(|| frame.get("details"));
     let stats = RuntimeTaskStats {
         token_count: None,
@@ -1338,6 +1444,97 @@ fn omp_background_process(frame: &Value) -> Option<DriverRuntimeTask> {
         stats,
         capabilities: RuntimeTaskCapabilities::default(),
     })
+}
+
+fn is_omp_async_result(message: &Value) -> bool {
+    message.get("customType").and_then(Value::as_str) == Some("async-result")
+        && (message.get("role").and_then(Value::as_str) == Some("custom")
+            || matches!(message.get("type").and_then(Value::as_str), Some("custom" | "custom_message")))
+}
+
+#[derive(Debug, PartialEq)]
+struct OmpJobOutcome {
+    job_id: String,
+    status: RuntimeTaskStatus,
+    detail: Option<String>,
+    duration_ms: Option<u64>,
+}
+
+/// Outcomes of the jobs named in an OMP `async-result` message.
+///
+/// OMP 18.4 lists each job's id, label, and duration, but not the job
+/// manager's final status, and its notice says "has completed" even after a
+/// timeout. Structured status fields win if a later OMP adds them. Otherwise
+/// the job's section of the notice is searched for the whole-line status
+/// markers OMP's bash tool appends itself: `[Command timed out ...]` and
+/// `Command exited with code N` mean failed, `[Command aborted]` stopped.
+/// Ordinary output rarely matches those exact lines. A notice OMP truncated
+/// before its trailer reads as completed.
+fn omp_async_result_outcomes(message: &Value) -> Vec<OmpJobOutcome> {
+    let jobs = message.pointer("/details/jobs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let text = match message.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => {
+            blocks.iter().filter(|block| block["type"] == "text").filter_map(|block| block["text"].as_str()).collect()
+        }
+        _ => String::new(),
+    };
+    jobs.iter()
+        .filter_map(|job| {
+            let job_id = job.get("jobId").and_then(Value::as_str)?.to_string();
+            let structured = job
+                .get("status")
+                .or_else(|| job.get("state"))
+                .and_then(Value::as_str)
+                .map(omp_runtime_status)
+                .filter(|status| !status.is_active())
+                .or_else(|| (job.get("timedOut").and_then(Value::as_bool) == Some(true)).then_some(RuntimeTaskStatus::Failed))
+                .or_else(|| {
+                    job.get("exitCode")
+                        .and_then(Value::as_i64)
+                        .map(|code| if code == 0 { RuntimeTaskStatus::Completed } else { RuntimeTaskStatus::Failed })
+                });
+            let (status, detail) = match structured {
+                Some(status) => (status, None),
+                None => omp_bash_outcome(omp_job_section(&text, &job_id, jobs.len())),
+            };
+            Some(OmpJobOutcome { job_id, status, detail, duration_ms: job.get("durationMs").and_then(Value::as_u64) })
+        })
+        .collect()
+}
+
+/// A single-job notice is all one result. A batch gives each job a
+/// `── Job {id} ({label}) ──` header; labels are commands and may span lines.
+fn omp_job_section<'a>(text: &'a str, job_id: &str, jobs: usize) -> &'a str {
+    if jobs <= 1 {
+        return text;
+    }
+    let header = format!("── Job {job_id} ");
+    let Some(start) = text.match_indices(&header).map(|(index, _)| index).find(|index| *index == 0 || text[..*index].ends_with('\n'))
+    else {
+        return "";
+    };
+    let body = &text[start..];
+    let body = body.find(" ──\n").map_or("", |end| &body[end + " ──\n".len()..]);
+    body.find("\n── Job ").map_or(body, |end| &body[..end])
+}
+
+fn omp_bash_outcome(section: &str) -> (RuntimeTaskStatus, Option<String>) {
+    let mut outcome = (RuntimeTaskStatus::Completed, None);
+    for line in section.lines().map(str::trim) {
+        let bracketed = line.strip_prefix('[').and_then(|line| line.strip_suffix(']'));
+        if bracketed.is_some_and(|marker| marker == "Command timed out" || marker.starts_with("Command timed out after ")) {
+            return (RuntimeTaskStatus::Failed, bracketed.map(first_line));
+        }
+        if line.strip_prefix("Command exited with code ").and_then(|code| code.parse::<i64>().ok()).is_some_and(|code| code != 0) {
+            return (RuntimeTaskStatus::Failed, Some(line.to_string()));
+        }
+        let marker = bracketed.unwrap_or(line);
+        if matches!(marker, "Command aborted" | "Command cancelled") {
+            outcome = (RuntimeTaskStatus::Stopped, Some(marker.to_string()));
+        }
+    }
+    outcome
 }
 
 fn tool_preview(result: &Value) -> String {
@@ -1841,17 +2038,20 @@ mod tests {
 
     #[test]
     fn maps_omp_managed_background_bash_updates() {
-        let task = omp_background_process(&json!({
-            "type": "tool_execution_update",
-            "toolCallId": "tool-bash-1",
-            "toolName": "bash",
-            "args": { "command": "pnpm dev" },
-            "partialResult": {
-                "details": {
-                    "async": { "state": "running", "jobId": "job-42", "type": "bash" }
+        let task = omp_background_process(
+            &json!({
+                "type": "tool_execution_update",
+                "toolCallId": "tool-bash-1",
+                "toolName": "bash",
+                "args": { "command": "pnpm dev" },
+                "partialResult": {
+                    "details": {
+                        "async": { "state": "running", "jobId": "job-42", "type": "bash" }
+                    }
                 }
-            }
-        }))
+            }),
+            None,
+        )
         .expect("managed background process");
         assert_eq!(task.id, "tool:tool-bash-1");
         assert_eq!(task.kind, RuntimeTaskKind::Process);
@@ -1859,6 +2059,177 @@ mod tests {
         assert_eq!(task.title, "pnpm dev");
         assert_eq!(task.provider_thread_id.as_deref(), Some("job-42"));
         assert!(task.backgrounded);
+    }
+
+    fn omp_session(child: Arc<NdjsonChild>, events: mpsc::Sender<DriverEvent>, state: State) -> Arc<PiSession> {
+        Arc::new(PiSession {
+            flavor: Flavor::Omp,
+            child,
+            events,
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            state: Mutex::new(state),
+            ready: Mutex::new(None),
+            initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
+            command_gate: Mutex::new(()),
+            extension: None,
+            pending_app_tools: Mutex::new(HashMap::new()),
+            app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
+        })
+    }
+
+    /// The `async-result` message OMP 18.4.10 sent over RPC for a bash job
+    /// that hit its timeout.
+    fn omp_timeout_delivery(job_id: &str) -> Value {
+        json!({
+            "role": "custom",
+            "customType": "async-result",
+            "content": format!("<system-notice>\nBackground job {job_id} has completed. Resume your work using the result below.\n[Command timed out after 20 seconds]\nerror: interrupted\nWall time: 20.24 seconds\n</system-notice>"),
+            "display": true,
+            "attribution": "agent",
+            "details": {
+                "meta": { "source": { "type": "report", "value": "background job delivery" } },
+                "jobs": [{ "jobId": job_id, "type": "bash", "label": "sleep 30", "durationMs": 20236 }]
+            }
+        })
+    }
+
+    #[test]
+    fn omp_async_result_reports_timeouts_and_exit_codes_as_failed() {
+        assert_eq!(
+            omp_async_result_outcomes(&omp_timeout_delivery("bg_2")),
+            vec![OmpJobOutcome {
+                job_id: "bg_2".into(),
+                status: RuntimeTaskStatus::Failed,
+                detail: Some("Command timed out after 20 seconds".into()),
+                duration_ms: Some(20236),
+            }]
+        );
+
+        let batch = json!({
+            "type": "custom_message",
+            "customType": "async-result",
+            "content": "<system-notice>\n4 background jobs have completed. Resume your work using the results below.\n\n\
+                ── Job bg_19 (cargo build 2>&1 | tail -5) ──\n    Finished `dev` profile\nCommand timed out after 5 seconds, retrying\nWall time: 217.39 seconds\n\
+                ── Job bg_20 (cargo test\necho done) ──\nerror: test failed\nWall time: 3.10 seconds\n\nCommand exited with code 101\n\
+                ── Job bg_21 (pnpm dev) ──\n[Command aborted]\n\
+                ── Job bg_22 (make) ──\nok\n</system-notice>",
+            "details": {
+                "jobs": [
+                    { "jobId": "bg_19", "type": "bash", "durationMs": 217390 },
+                    { "jobId": "bg_20", "type": "bash", "durationMs": 3100 },
+                    { "jobId": "bg_21", "type": "bash" },
+                    { "jobId": "bg_22", "type": "bash", "status": "failed" }
+                ]
+            }
+        });
+        let outcomes: Vec<_> = omp_async_result_outcomes(&batch).into_iter().map(|outcome| (outcome.job_id, outcome.status)).collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                ("bg_19".into(), RuntimeTaskStatus::Completed),
+                ("bg_20".into(), RuntimeTaskStatus::Failed),
+                ("bg_21".into(), RuntimeTaskStatus::Stopped),
+                ("bg_22".into(), RuntimeTaskStatus::Failed),
+            ]
+        );
+        assert_eq!(omp_runtime_status("timedOut"), RuntimeTaskStatus::Failed);
+        assert_eq!(omp_runtime_status("started"), RuntimeTaskStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn omp_async_result_completes_an_auto_backgrounded_bash_task_once() {
+        let (events, mut rx) = mpsc::channel(32);
+        let session = omp_session(Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap()), events, State::default());
+        let call = "call-4e35|fc_tmp_9iz";
+        session
+            .handle_frame(
+                json!({ "type": "tool_execution_start", "toolCallId": call, "toolName": "bash", "args": { "command": "sleep 30" } }),
+            )
+            .await;
+        session
+            .handle_frame(json!({
+                "type": "tool_execution_update", "toolCallId": call, "toolName": "bash",
+                "args": { "command": "sleep 30" },
+                "partialResult": { "content": [], "details": { "async": { "state": "running", "jobId": "bg_2", "type": "bash" } } }
+            }))
+            .await;
+        // OMP's end frame has no `args`; the captured command must survive it.
+        session
+            .handle_frame(json!({
+                "type": "tool_execution_end", "toolCallId": call, "toolName": "bash", "isError": false,
+                "result": { "content": [], "details": { "async": { "state": "running", "jobId": "bg_2", "type": "bash" }, "timeoutSeconds": 20 } }
+            }))
+            .await;
+        for _ in 0..2 {
+            session.handle_frame(json!({ "type": "message_end", "message": omp_timeout_delivery("bg_2") })).await;
+        }
+
+        let mut started = Vec::new();
+        let mut completed = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                DriverEvent::RuntimeTaskStarted(task) => started.push(task),
+                DriverEvent::RuntimeTaskCompleted(update) => completed.push(update),
+                _ => {}
+            }
+        }
+        assert_eq!(started.len(), 2);
+        assert!(started.iter().all(|task| task.title == "sleep 30" && task.status == RuntimeTaskStatus::Running));
+        assert_eq!(started[1].provider_thread_id.as_deref(), Some("bg_2"));
+        assert_eq!(completed.len(), 1, "a repeated delivery must not complete the task twice");
+        assert_eq!(completed[0].id, format!("tool:{call}"));
+        assert_eq!(completed[0].status, Some(RuntimeTaskStatus::Failed));
+        assert_eq!(completed[0].detail.as_deref(), Some("Command timed out after 20 seconds"));
+        assert_eq!(completed[0].stats.as_ref().and_then(|stats| stats.duration_ms), Some(20236));
+        assert!(session.state.lock().await.background_jobs.is_empty());
+        session.child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn omp_turn_end_settles_jobs_omp_no_longer_runs() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(
+            r#"
+printf '%s\n' '{"type":"agent_end","isTerminal":true}'
+delivery='{"role":"custom","customType":"async-result","content":"<system-notice>\nBackground job bg_7 has completed. Resume your work using the result below.\nnope\nCommand exited with code 1\n</system-notice>","details":{"jobs":[{"jobId":"bg_7","type":"bash","durationMs":900}]}}'
+while IFS= read -r line; do
+  id=${line#*\"id\":\"}
+  id=${id%%\"*}
+  case "$line" in
+    *'"type":"get_branch_messages"'*) printf '{"id":"%s","type":"response","success":true,"data":{"messages":[{"entryId":"entry-1"}]}}\n' "$id" ;;
+    *'"type":"get_state"'*) printf '{"id":"%s","type":"response","success":true,"data":{"hasPendingAsyncWork":false}}\n' "$id" ;;
+    *'"type":"get_messages"'*) printf '{"id":"%s","type":"response","success":true,"data":{"messages":[%s]}}\n' "$id" "$delivery" ;;
+    *) printf '{"id":"%s","type":"response","success":false,"error":"unsupported"}\n' "$id" ;;
+  esac
+done
+"#,
+        );
+        let (events, mut rx) = mpsc::channel(32);
+        let mut state = State { active: true, ..State::default() };
+        state.background_jobs.insert("bg_7".into(), "tool:call-7".into());
+        state.background_jobs.insert("bg_8".into(), "tool:call-8".into());
+        let session = omp_session(Arc::new(NdjsonChild::spawn(command).expect("spawn fake omp")), events, state);
+        let reader = session.clone();
+        tokio::spawn(async move { reader.read_loop().await });
+
+        let mut completed = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut completed = Vec::new();
+            while completed.len() < 2 {
+                if let Some(DriverEvent::RuntimeTaskCompleted(update)) = rx.recv().await {
+                    completed.push((update.id, update.status));
+                }
+            }
+            completed
+        })
+        .await
+        .expect("turn end should settle the jobs OMP no longer runs");
+        completed.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            completed,
+            vec![("tool:call-7".into(), Some(RuntimeTaskStatus::Failed)), ("tool:call-8".into(), Some(RuntimeTaskStatus::Stopped))]
+        );
+        session.child.kill().await;
     }
 
     #[test]
