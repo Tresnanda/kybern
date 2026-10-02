@@ -154,3 +154,10 @@ export const STATUS_LABEL: Record<ThreadStatus, string> = {
   failed: "Failed",
   archived: "Archived",
 }
+
+const EFFORT_LABEL: Record<string, string> = { xhigh: "X-High" }
+
+/** Effort ids are lowercase wire values (`xhigh`); show them as words. */
+export function formatEffort(effort: string): string {
+  return EFFORT_LABEL[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1)
+}

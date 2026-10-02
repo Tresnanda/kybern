@@ -29,7 +29,7 @@ import { ProviderMark } from "../ui/ProviderMark";
 import { useLayout } from "../state/layout";
 import { useTheme } from "../ui/theme";
 import type { ThreadState } from "../state/transcript";
-import { findModel, modelChoices } from "../../../../packages/kybern-client/src/models";
+import { backendLabel, catalogBackends, findModel, modelChoices } from "../../../../packages/kybern-client/src/models";
 const selectUsage = (state: ThreadState) => state.providerUsage;
 
 const modes: { value: PermissionMode; label: string; detail: string }[] = [
@@ -215,6 +215,8 @@ export function ComposerOptions({
     model,
     modelQuery,
   );
+  // One harness can route the same model name through several backends.
+  const multiBackend = catalogBackends(provider?.models ?? []).length > 1;
   async function switchCoordinator(request: Omit<ProjectCoordinatorSwitchHarnessParams, "operation_id" | "project_id">) {
     if (!thread?.coordinator_project_id || !canSwitchHarness) throw new Error("Finish or stop the current turn before changing the coordinator’s harness.");
     const fingerprint = JSON.stringify([thread.coordinator_project_id, request]);
@@ -487,7 +489,7 @@ export function ComposerOptions({
                   {visibleModels.map((m) => (
                     <Tap
                       key={m.id}
-                      label={m.display_name}
+                      label={multiBackend && m.provider ? `${m.display_name}, ${backendLabel(m.provider)}` : m.display_name}
                       disabled={busy}
                       selected={(selectedModel?.id ?? model ?? "") === m.id}
                       onPress={() =>
@@ -512,6 +514,11 @@ export function ComposerOptions({
                     >
                       <View style={{ flex: 1, gap: 2 }}>
                         <T variant="label">{m.display_name}</T>
+                        {multiBackend && !!m.provider && (
+                          <T variant="caption" tone="secondary">
+                            {backendLabel(m.provider)}
+                          </T>
+                        )}
                         {!!m.description && (
                           <T variant="caption" tone="secondary" numberOfLines={2}>
                             {m.description}

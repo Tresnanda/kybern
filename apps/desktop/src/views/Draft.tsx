@@ -148,8 +148,9 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
             mode={mode}
             onModeChange={setMode}
             provider={provider}
-            onProviderChange={(next) => {
+            onProviderChange={(next, nextChoice) => {
               setProvider(next)
+              if (nextChoice) setModelStored((m) => ({ ...m, [next.kind]: nextChoice }))
               const nextStatus = providers.find((item) => item.kind === next.kind)
               if (nextStatus && !nextStatus.supported_permission_modes.includes(mode)) {
                 setMode(nextStatus.supported_permission_modes.includes("supervised") ? "supervised" : nextStatus.supported_permission_modes[0] ?? mode)
