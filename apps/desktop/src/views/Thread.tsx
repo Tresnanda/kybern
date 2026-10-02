@@ -336,7 +336,7 @@ export function ThreadView({
               onModeChange={(m) => updateThread(threadId, { permission_mode: m }).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={thread.provider}
               providers={providers}
-              onProviderChange={canSwitchCoordinator ? (provider) => switchCoordinatorHarness(provider) : undefined}
+              onProviderChange={canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined}
               model={thread.model}
               effort={thread.effort}
               surfaceMode={splitPaneId ? "split" : "single"}
