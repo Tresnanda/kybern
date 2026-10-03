@@ -1,131 +1,212 @@
 use super::*;
+use crate::cursor::{Connection, SDK_SESSION_PREFIX, sdk_id};
 
-async fn connect(context: &ProbeContext) -> Result<ReadRpc> {
-    let mut cmd = command(ProviderKind::Cursor, context)?;
-    cmd.arg("acp");
-    let mut rpc = ReadRpc::spawn(cmd)?;
-    let (init, _) = rpc
-        .call(
-            "initialize",
-            json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"kybern","version":env!("CARGO_PKG_VERSION")}}),
-        )
-        .await?;
-    if init.pointer("/agentCapabilities/sessionCapabilities/list").is_none() {
-        return Err(DriverError::Unsupported("This Cursor CLI cannot list saved sessions. Update Cursor CLI and try again.".into()));
-    }
-    Ok(rpc)
-}
+#[cfg(test)]
+pub(super) use super::cursor_acp::parse;
 
 fn summary(value: &Value) -> Option<SavedSession> {
+    let id = value["agentId"].as_str()?;
+    if id.starts_with("bc-") {
+        return None;
+    }
     Some(SavedSession {
         provider: ProviderKind::Cursor,
-        id: value["sessionId"].as_str()?.into(),
-        title: title(value["title"].as_str().unwrap_or("Untitled session")),
-        cwd: value["cwd"].as_str()?.into(),
-        updated_at: timestamp(&value["updatedAt"]).unwrap_or_else(Utc::now),
+        id: format!("{SDK_SESSION_PREFIX}{id}"),
+        title: title(
+            value["summary"].as_str().filter(|s| !s.is_empty()).or_else(|| value["name"].as_str()).unwrap_or("Untitled Cursor agent"),
+        ),
+        cwd: value["cwd"].as_str().unwrap_or("").to_string(),
+        updated_at: timestamp(&value["lastModified"]).unwrap_or_else(Utc::now),
         model: None,
         thread_id: None,
     })
 }
 
-async fn page(rpc: &mut ReadRpc, context: &ProbeContext, cursor: Option<&str>) -> Result<SessionsListResult> {
-    let mut params = json!({"cursor":cursor});
-    if let Some(cwd) = &context.cwd {
-        params["cwd"] = json!(cwd);
-    }
-    let (value, _) = rpc.call("session/list", params).await?;
-    Ok(SessionsListResult {
-        sessions: value["sessions"].as_array().into_iter().flatten().filter_map(summary).collect(),
-        next_cursor: value["nextCursor"].as_str().map(str::to_string),
-    })
-}
-
 pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {
-    let mut rpc = connect(context).await?;
-    let mut cursor = cursor.map(str::to_string);
+    if let Some(cursor) = cursor.and_then(|s| s.strip_prefix("acp:")) {
+        let mut result = super::cursor_acp::list(context, (!cursor.is_empty()).then_some(cursor), query).await?;
+        result.next_cursor = result.next_cursor.map(|s| format!("acp:{s}"));
+        return Ok(result);
+    }
+    let (connection, _events) = Connection::spawn(context)?;
+    let mut cursor = match cursor {
+        Some(value) => Some(
+            value
+                .strip_prefix("sdk:")
+                .ok_or_else(|| DriverError::Protocol("Refresh the Cursor session list before continuing.".into()))?
+                .to_string(),
+        ),
+        None => None,
+    };
     let mut sessions = Vec::new();
     let mut seen = HashSet::new();
     loop {
-        let result = page(&mut rpc, context, cursor.as_deref()).await?;
-        sessions.extend(result.sessions.into_iter().filter(|s| matches_query(s, query)));
-        cursor = result.next_cursor;
+        let value = connection.call("list", json!({"cwd":context.cwd, "cursor":cursor})).await?;
+        sessions.extend(
+            value["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(summary)
+                .filter(|s| matches_query(s, query) && matches_cwd(s, context)),
+        );
+        cursor = value["nextCursor"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
         if sessions.len() >= PAGE_SIZE || cursor.is_none() {
             break;
         }
         if !seen.insert(cursor.clone()) {
-            return Err(DriverError::Protocol("Cursor repeated a session page. Refresh and try again.".into()));
+            return Err(DriverError::Protocol("Cursor SDK repeated a session page. Refresh and try again.".into()));
         }
     }
-    Ok(SessionsListResult { sessions, next_cursor: cursor })
+    connection.close().await?;
+    let legacy_available = crate::binary::resolve(ProviderKind::Cursor, context.binary.as_ref()).is_ok();
+    Ok(SessionsListResult { sessions, next_cursor: cursor.map(|s| format!("sdk:{s}")).or_else(|| legacy_available.then(|| "acp:".into())) })
 }
 
 pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHistory> {
-    let mut rpc = connect(context).await?;
-    let mut cursor = None;
-    let mut seen = HashSet::new();
-    let session = loop {
-        let result = page(&mut rpc, context, cursor.as_deref()).await?;
-        if let Some(session) = result.sessions.into_iter().find(|s| s.id == id) {
-            break session;
-        }
-        cursor = result.next_cursor;
-        if cursor.as_ref().is_none_or(|cursor| !seen.insert(cursor.clone())) {
-            return Err(DriverError::Protocol("Cursor chat was not found. Refresh the session list and try again.".into()));
-        }
-    };
-    rpc.call("authenticate", json!({"methodId":"cursor_login"})).await?;
-    let (_, updates) = rpc.call("session/load", json!({"sessionId":id,"cwd":session.cwd,"mcpServers":[]})).await?;
-    Ok(parse(session, updates))
+    if !id.starts_with(SDK_SESSION_PREFIX) {
+        return super::cursor_acp::read(context, id).await;
+    }
+    let (connection, _events) = Connection::spawn(context)?;
+    let value = connection.call("read", json!({"agentId":sdk_id(id)?, "cwd":context.cwd})).await?;
+    connection.close().await?;
+    let session = summary(&value["info"]).ok_or_else(|| DriverError::Protocol("Cursor SDK returned an invalid saved agent".into()))?;
+    if session.id != id || !matches_cwd(&session, context) {
+        return Err(DriverError::Protocol("This Cursor agent does not belong to the selected workspace.".into()));
+    }
+    parse_sdk(session, &value["messages"])
 }
 
-pub(super) fn parse(session: SavedSession, updates: Vec<Value>) -> SessionHistory {
+fn parse_sdk(session: SavedSession, messages: &Value) -> Result<SessionHistory> {
     let mut history = History::default();
-    let mut role = "";
-    let mut text = String::new();
     let at = session.updated_at;
-    let flush = |history: &mut History, role: &str, text: &mut String| {
-        if text.is_empty() {
-            return;
-        }
-        let text = std::mem::take(text);
-        match role {
-            "user_message_chunk" => history.user(at, UserMessage::text(text)),
-            "agent_thought_chunk" => history.assistant(at, String::new(), Some(text)),
-            _ => history.assistant(at, text, None),
-        }
-    };
-    for notification in &updates {
-        let update = &notification["params"]["update"];
-        let kind = update["sessionUpdate"].as_str().unwrap_or("");
-        if matches!(kind, "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk") {
-            if role != kind {
-                flush(&mut history, role, &mut text);
+    for item in messages.as_array().into_iter().flatten() {
+        let message = &item["message"];
+        // Agent.messages.list returns protobuf conversation turns. A single
+        // item can contain both the user prompt and all assistant steps.
+        let turn = message.get("agentConversationTurn").or_else(|| {
+            (message.pointer("/turn/case").and_then(Value::as_str) == Some("agentConversationTurn")).then(|| &message["turn"]["value"])
+        });
+        if let Some(turn) = turn {
+            if let Some(user) = turn.get("userMessage") {
+                history.user(at, UserMessage::text(user["text"].as_str().unwrap_or("")));
             }
-            role = kind;
-            if let Some(chunk) = update["content"]["text"].as_str() {
-                text.push_str(chunk);
-            }
-            if update["content"]["type"] == "image" {
-                text.push_str("\n[Image from the original Cursor session]\n");
-            }
-        } else if kind == "tool_call" || kind == "tool_call_update" {
-            flush(&mut history, role, &mut text);
-            role = "";
-            if let Some(id) = update["toolCallId"].as_str() {
-                if kind == "tool_call" {
-                    history.tool(at, id, update["title"].as_str().unwrap_or("tool"), update["rawInput"].clone());
+            for (index, raw) in turn["steps"].as_array().into_iter().flatten().enumerate() {
+                let step = raw.get("step").unwrap_or(raw);
+                if let Some(text) = step
+                    .pointer("/assistantMessage/text")
+                    .and_then(Value::as_str)
+                    .or_else(|| (step["case"] == "assistantMessage").then(|| step.pointer("/value/text").and_then(Value::as_str)).flatten())
+                {
+                    history.assistant(at, text.into(), None);
+                } else if let Some(text) = step
+                    .pointer("/thinkingMessage/text")
+                    .and_then(Value::as_str)
+                    .or_else(|| (step["case"] == "thinkingMessage").then(|| step.pointer("/value/text").and_then(Value::as_str)).flatten())
+                {
+                    history.assistant(at, String::new(), Some(text.into()));
+                } else if let Some(call) = step.get("toolCall").or_else(|| (step["case"] == "toolCall").then(|| &step["value"])) {
+                    let fallback = format!("{}:{index}", item["uuid"].as_str().unwrap_or("saved"));
+                    let id = call["toolCallId"].as_str().unwrap_or(&fallback);
+                    let wrapped = call.as_object().and_then(|o| o.iter().find(|(key, _)| key.ends_with("ToolCall")));
+                    if let Some((name, body)) = wrapped {
+                        history.tool(at, id, name.trim_end_matches("ToolCall"), body["args"].clone());
+                        let result = &body["result"];
+                        if !result.is_null() {
+                            history.result(at, id, result.clone(), result.get("success").is_none());
+                        }
+                    }
                 }
-                if update["status"] == "completed" || update["status"] == "failed" {
-                    history.result(
-                        at,
-                        id,
-                        update.get("rawOutput").or_else(|| update.get("content")).cloned().unwrap_or(Value::Null),
-                        update["status"] == "failed",
-                    );
+            }
+            continue;
+        }
+        let content = message.get("content").unwrap_or(message);
+        if !message.is_string() && message.get("text").is_none() && message.get("content").is_none() {
+            return Err(DriverError::Protocol(
+                "Cursor returned an unsupported saved conversation format. Resume this conversation from its existing Kybern thread."
+                    .into(),
+            ));
+        }
+        if item["type"] == "user" {
+            if let Some(text) = message["text"].as_str() {
+                history.user(at, UserMessage::text(text));
+            } else {
+                history.user(at, user_content(content));
+            }
+        } else if item["type"] == "assistant" {
+            if let Some(text) = message["text"].as_str().or_else(|| content.as_str()) {
+                history.assistant(at, text.to_string(), None);
+            } else {
+                for block in content.as_array().into_iter().flatten() {
+                    match block["type"].as_str().unwrap_or("") {
+                        "text" => history.assistant(at, block["text"].as_str().unwrap_or("").to_string(), None),
+                        "thinking" => history.assistant(
+                            at,
+                            String::new(),
+                            block["thinking"].as_str().or_else(|| block["text"].as_str()).map(str::to_string),
+                        ),
+                        "tool_use" => {
+                            if let Some(id) = block["id"].as_str() {
+                                history.tool(at, id, block["name"].as_str().unwrap_or("tool"), block["input"].clone());
+                            }
+                        }
+                        _ => {}
+                    }
                 }
+            }
+        }
+        // SDK transcript tool results may be carried in a user message. They
+        // close the original tool rather than becoming a new user prompt.
+        for block in content.as_array().into_iter().flatten() {
+            if block["type"] == "tool_result"
+                && let Some(id) = block["tool_use_id"].as_str()
+            {
+                history.result(at, id, block["content"].clone(), block["is_error"].as_bool().unwrap_or(false));
             }
         }
     }
-    flush(&mut history, role, &mut text);
-    history.finish(session)
+    Ok(history.finish(session))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn imports_sdk_messages_without_running_a_turn() {
+        let session = summary(&json!({"agentId":"a1", "summary":"Review", "cwd":"/repo", "lastModified":1790990400000_i64})).unwrap();
+        let history = parse_sdk(session, &json!([
+            {"type":"user","message":{"content":[{"type":"text","text":"Check the file"}]}},
+            {"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Inspect first"},{"type":"text","text":"All **good**."}]}}
+        ])).unwrap();
+        assert_eq!(history.session.id, "cursor-sdk:a1");
+        assert!(
+            history
+                .events
+                .iter()
+                .any(|e| matches!(&e.payload, EventPayload::AssistantMessageCompleted { text, .. } if text == "All **good**."))
+        );
+    }
+
+    #[test]
+    fn imports_sdk_checkpoint_turns_with_user_assistant_and_tool_steps() {
+        let session = summary(&json!({"agentId":"a1", "cwd":"/repo"})).unwrap();
+        let history = parse_sdk(
+            session,
+            &json!([{"type":"user", "uuid":"a1:0", "message":{
+                "agentConversationTurn": {"userMessage":{"text":"Read it"},"steps":[
+                    {"thinkingMessage":{"text":"Checking"}},
+                    {"toolCall":{"toolCallId":"t1","readToolCall":{"args":{"path":"README.md"},"result":{"success":{"content":"hello"}}}}},
+                    {"assistantMessage":{"text":"It says **hello**."}}
+                ]}
+            }}]),
+        )
+        .unwrap();
+        assert!(
+            history
+                .events
+                .iter()
+                .any(|e| matches!(&e.payload, EventPayload::AssistantMessageCompleted { text, .. } if text == "It says **hello**."))
+        );
+        assert!(history.events.iter().any(|e| matches!(&e.payload, EventPayload::ToolCallCompleted { is_error: false, .. })));
+    }
 }

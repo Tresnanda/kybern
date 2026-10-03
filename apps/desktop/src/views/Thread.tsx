@@ -335,6 +335,7 @@ export function ThreadView({
               mode={thread.permission_mode}
               onModeChange={(m) => updateThread(threadId, { permission_mode: m }).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={thread.provider}
+              providerSessionId={thread.provider_session_id}
               providers={providers}
               onProviderChange={canSwitchCoordinator ? (provider) => switchCoordinatorHarness(provider) : undefined}
               model={thread.model}

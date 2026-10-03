@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 kybern-protocol.workspace = true
 kybern-client.workspace = true
+kybern-drivers.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true

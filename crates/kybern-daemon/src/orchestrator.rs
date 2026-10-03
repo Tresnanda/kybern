@@ -460,7 +460,8 @@ impl Orchestrator {
         let model =
             params.model.clone().or_else(|| settings.providers.get(&params.provider.kind).and_then(|provider| provider.model.clone()));
         self.validate_provider_selection(params.project_id, &params.provider, model.as_deref(), params.effort.as_deref()).await?;
-        let permission_mode = params.permission_mode.unwrap_or(settings.default_permission_mode);
+        let permission_mode =
+            params.permission_mode.unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode));
         let (result, events, released) = {
             // `commands` excludes a send between the final idle check, live
             // credential revocation, and the durable provider change.
@@ -3474,7 +3475,11 @@ impl Orchestrator {
             model: session.model,
             effort: None,
             provider: ProviderInstance { kind: session.provider, instance: "default".into() },
-            permission_mode: settings.default_permission_mode,
+            permission_mode: if session.id.starts_with("cursor-sdk:") {
+                default_provider_permission(session.provider, settings.default_permission_mode)
+            } else {
+                settings.default_permission_mode
+            },
             status: ThreadStatus::Idle,
             worktree: None,
             cwd: session.cwd,
@@ -3555,8 +3560,10 @@ impl Orchestrator {
             title: params.title.clone().unwrap_or_else(|| DEFAULT_TITLE.to_string()),
             model: params.model.or(configured_model),
             effort: params.effort,
+            permission_mode: params
+                .permission_mode
+                .unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode)),
             provider: params.provider,
-            permission_mode: params.permission_mode.unwrap_or(settings.default_permission_mode),
             status: ThreadStatus::Idle,
             worktree,
             cwd,
@@ -5818,6 +5825,17 @@ fn merge_task_stats(current: &mut RuntimeTaskStats, update: RuntimeTaskStats) {
     }
 }
 
+// Cursor SDK cannot implement a human approval mode. New threads without an
+// explicit mode use its sandboxed policy; explicit unsupported choices still
+// fail at the driver boundary, never silently gain permissions.
+fn default_provider_permission(provider: ProviderKind, mode: PermissionMode) -> PermissionMode {
+    if provider == ProviderKind::Cursor && !matches!(mode, PermissionMode::Auto | PermissionMode::FullAccess) {
+        PermissionMode::Auto
+    } else {
+        mode
+    }
+}
+
 fn generic_runtime_task(call: &ToolCall) -> Option<DriverRuntimeTask> {
     let normalized = call.name.chars().filter(|char| char.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
     let title_hint = json_text(&call.input, &["title"]).unwrap_or_default();
@@ -5870,6 +5888,11 @@ fn generic_runtime_task(call: &ToolCall) -> Option<DriverRuntimeTask> {
 }
 
 fn generic_runtime_task_for_provider(provider: ProviderKind, call: &ToolCall) -> Option<DriverRuntimeTask> {
+    // SDK events already carry the native task lifecycle and nested ownership.
+    // Legacy Cursor ACP chats still need the conservative tool-only fallback.
+    if provider == ProviderKind::Cursor && call.id.starts_with("cursor-sdk:") {
+        return None;
+    }
     let task = generic_runtime_task(call)?;
     match provider {
         // These harnesses expose first-class lifecycle channels. Mixing a
@@ -6169,6 +6192,17 @@ mod tests {
         assert!(generic_runtime_task_for_provider(ProviderKind::Omp, &agent).is_none());
         assert!(generic_runtime_task_for_provider(ProviderKind::Pi, &agent).is_some());
         assert!(generic_runtime_task_for_provider(ProviderKind::Cursor, &agent).is_some());
+        let sdk_agent = ToolCall { id: "cursor-sdk:r1:tool:agent-1".into(), ..agent };
+        assert!(generic_runtime_task_for_provider(ProviderKind::Cursor, &sdk_agent).is_none());
+    }
+
+    #[test]
+    fn cursor_sdk_defaults_to_its_sandboxed_policy_without_changing_other_providers() {
+        use super::default_provider_permission;
+        assert_eq!(default_provider_permission(ProviderKind::Cursor, PermissionMode::Supervised), PermissionMode::Auto);
+        assert_eq!(default_provider_permission(ProviderKind::Cursor, PermissionMode::AcceptEdits), PermissionMode::Auto);
+        assert_eq!(default_provider_permission(ProviderKind::Cursor, PermissionMode::FullAccess), PermissionMode::FullAccess);
+        assert_eq!(default_provider_permission(ProviderKind::ClaudeCode, PermissionMode::Supervised), PermissionMode::Supervised);
     }
 
     #[tokio::test]

@@ -1,204 +1,58 @@
-//! Cursor driver: drives `agent acp` over the Agent Client Protocol using the
-//! `agent-client-protocol` crate.
+//! Cursor's official local SDK, isolated in a Node helper owned by the session.
 //!
-//! Cursor runs its own tools in-process (it never calls the client's fs or
-//! terminal methods), does not report token usage, and has no session fork,
-//! so rewinds are workspace-only. Sessions persist under ~/.cursor and reload
-//! with `session/load`, which replays history as notifications we ignore.
+//! New session IDs are namespaced so existing ACP sessions continue to resume
+//! with the CLI that created them. We never reinterpret a CLI conversation as
+//! an SDK agent or silently replace a missing conversation with an empty one.
+mod acp;
+mod runtime;
+mod stream;
+
+pub(crate) use runtime::Connection;
+pub use runtime::{SDK_VERSION, install, setup_command};
 
 use std::path::PathBuf;
-use std::process::Stdio;
-use std::sync::Arc;
 
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock, HttpHeader, ImageContent, Implementation, InitializeRequest,
-    LoadSessionRequest, McpServer, McpServerHttp, NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionModeRequest, StopReason as AcpStop, TextContent, ToolCallContent,
-};
-use agent_client_protocol::{
-    Agent, ByteStreams, Client, ConnectionTo, JsonRpcRequest, JsonRpcResponse, on_receive_notification, on_receive_request,
-};
 use async_trait::async_trait;
 use kybern_protocol::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::process::Command;
-use tokio::sync::{Mutex, mpsc, oneshot};
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tokio::sync::Mutex;
 
-use crate::binary::{resolve, version_of};
 use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, NativeToolBridge, ProbeContext, Result, SessionConfig, SpawnedSession};
 
-#[derive(Default)]
+pub const SDK_SESSION_PREFIX: &str = "cursor-sdk:";
 pub struct CursorDriver;
 
-const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-
-fn parse_cursor_models(output: &[u8]) -> Vec<ProviderModel> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .filter_map(|line| {
-            let (id, label) = line.trim().split_once(" - ")?;
-            if id.is_empty() || label.is_empty() {
-                return None;
-            }
-            let is_default = label.ends_with(" (default)");
-            let display_name = label.strip_suffix(" (default)").unwrap_or(label).to_string();
-            Some(ProviderModel {
-                id: id.to_string(),
-                display_name,
-                resolved_id: None,
-                description: None,
-                provider: None,
-                efforts: Vec::new(),
-                default_effort: None,
-                is_default,
-            })
-        })
-        .collect()
+pub(crate) fn sdk_id(id: &str) -> Result<&str> {
+    id.strip_prefix(SDK_SESSION_PREFIX)
+        .filter(|id| !id.is_empty() && !id.starts_with("bc-") && id.len() <= 1024)
+        .ok_or_else(|| DriverError::Protocol("Invalid local Cursor SDK agent id. Refresh the session list and try again.".into()))
 }
 
-async fn cursor_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
-    let mut command = Command::new(bin);
-    command.args(["models"]).stdin(Stdio::null()).kill_on_drop(true).env("NO_COLOR", "1");
-    if let Some(cwd) = &context.cwd {
-        command.current_dir(cwd);
-    }
-    for (key, value) in &context.env {
-        command.env(key, value);
-    }
-    match tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, crate::process_tree::output(&mut command)).await {
-        Ok(Ok(output)) if output.status.success() => parse_cursor_models(&output.stdout),
-        _ => Vec::new(),
+fn validate_mode(mode: PermissionMode) -> Result<()> {
+    if matches!(mode, PermissionMode::Auto | PermissionMode::FullAccess) {
+        Ok(())
+    } else {
+        Err(DriverError::Unsupported(
+            "Cursor SDK has no interactive approvals. Choose Auto-review (auto) or Full access. Existing CLI chats retain their original approvals.".into(),
+        ))
     }
 }
 
-impl CursorDriver {
-    async fn probe_inner(&self, context: &ProbeContext) -> ProviderStatus {
-        let mut status = ProviderStatus {
-            kind: ProviderKind::Cursor,
-            display_name: ProviderKind::Cursor.display_name().into(),
-            available: false,
-            binary_path: None,
-            version: None,
-            unavailable_reason: None,
-            // Cursor's ACP mode decides approvals itself; we map modes onto agent/plan/ask.
-            supported_permission_modes: vec![PermissionMode::Supervised, PermissionMode::Auto, PermissionMode::FullAccess],
-            supports_fork: false,
-            supports_model_switch: true,
-            supports_effort_switch: false,
-            supported_efforts: vec![],
-            models: vec![],
-            instances: vec!["default".into()],
-        };
-        let bin = match resolve(ProviderKind::Cursor, context.binary.as_ref()) {
-            Ok(bin) => bin,
-            Err(error) => {
-                status.unavailable_reason = Some(format!("{error}. Install with: curl https://cursor.com/install -fsS | bash"));
-                return status;
-            }
-        };
-        status.binary_path = Some(bin.display().to_string());
-        match version_of(&bin, &["--version"]).await {
-            Some(version) => {
-                status.available = true;
-                status.version = Some(version);
-                status.models = cursor_models(&bin, context).await;
-            }
-            None => status.unavailable_reason = Some("could not run `agent --version`".into()),
-        }
-        status
+fn mcp_servers(bridge: Option<&NativeToolBridge>) -> Result<Value> {
+    let Some(bridge) = bridge else { return Ok(json!({})) };
+    bridge.validate()?;
+    // Same boundary as T3: use the authenticated per-thread MCP endpoint.
+    // Do not pretend tool discovery alone enforces a coordinator's restrictions.
+    if bridge.restrictions.require_enforcement {
+        return Err(DriverError::Unsupported("Cursor SDK does not enforce Kybern coordinator tool restrictions yet".into()));
     }
-}
-
-#[cfg(test)]
-mod model_catalog_tests {
-    use super::parse_cursor_models;
-
-    #[test]
-    fn parses_cursor_account_models_and_default() {
-        let models = parse_cursor_models(
-            b"Available models\n\nauto - Auto (default)\ngpt-5.4-high - GPT-5.4 1M High\n\nTip: use --model <id> to switch.\n",
-        );
-
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].id, "auto");
-        assert_eq!(models[0].display_name, "Auto");
-        assert!(models[0].is_default);
-        assert_eq!(models[1].id, "gpt-5.4-high");
-        assert!(!models[1].is_default);
-    }
-}
-
-#[cfg(test)]
-mod native_mcp_tests {
-    use super::*;
-    use crate::NativeToolRestrictions;
-
-    #[test]
-    fn builds_scoped_http_mcp_server_for_acp() {
-        let bridge = NativeToolBridge {
-            server_name: "kybern".into(),
-            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
-            authorization: Some("session-capability".into()),
-            coordinator_instructions: None,
-            tools: vec![],
-            restrictions: Default::default(),
-        };
-        let servers = cursor_mcp_servers(Some(&bridge)).unwrap();
-        let [McpServer::Http(server)] = servers.as_slice() else { panic!("expected one HTTP MCP server") };
-        assert_eq!(server.name, "kybern");
-        assert_eq!(server.url, "http://127.0.0.1:4199/native-tools/mcp");
-        assert_eq!(server.headers[0].name, "Authorization");
-        assert_eq!(server.headers[0].value, "Bearer session-capability");
-    }
-
-    #[test]
-    fn rejects_required_coordinator_restrictions() {
-        let bridge = NativeToolBridge {
-            server_name: "kybern".into(),
-            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
-            authorization: Some("session-capability".into()),
-            coordinator_instructions: None,
-            tools: vec![],
-            restrictions: NativeToolRestrictions { require_enforcement: true, ..Default::default() },
-        };
-        assert!(matches!(cursor_mcp_servers(Some(&bridge)), Err(DriverError::Unsupported(message)) if message.contains("cannot enforce")));
-    }
-}
-
-/// Cursor extension: the agent asks the user a question.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
-#[request(method = "cursor/ask_question", response = CursorAskQuestionResponse)]
-#[serde(rename_all = "camelCase")]
-struct CursorAskQuestionRequest {
-    tool_call_id: String,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    questions: Vec<Value>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcResponse)]
-struct CursorAskQuestionResponse {
-    outcome: Value,
-}
-
-/// Cursor extension: the agent proposes a plan.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
-#[request(method = "cursor/create_plan", response = CursorCreatePlanResponse)]
-#[serde(rename_all = "camelCase")]
-struct CursorCreatePlanRequest {
-    tool_call_id: String,
-    #[serde(default)]
-    plan: Option<String>,
-    #[serde(default)]
-    todos: Vec<Value>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcResponse)]
-struct CursorCreatePlanResponse {
-    outcome: Value,
+    let endpoint =
+        bridge.endpoint.as_ref().ok_or_else(|| DriverError::Unsupported("Cursor SDK tools require a daemon MCP endpoint".into()))?;
+    let authorization =
+        bridge.authorization.as_ref().ok_or_else(|| DriverError::Unsupported("Cursor SDK tools require a scoped MCP capability".into()))?;
+    Ok(
+        json!({bridge.server_name.clone(): {"type": "http", "url": endpoint, "headers": {"Authorization": format!("Bearer {authorization}")}}}),
+    )
 }
 
 #[async_trait]
@@ -206,25 +60,43 @@ impl AgentDriver for CursorDriver {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Cursor
     }
-
     fn supports_fork(&self) -> bool {
         false
     }
 
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
-        self.probe_inner(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }).await
+        self.probe_with_context(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }).await
     }
 
     async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
-        self.probe_inner(context).await
+        let mut status = ProviderStatus {
+            kind: self.kind(),
+            display_name: "Cursor".into(),
+            available: false,
+            binary_path: None,
+            version: None,
+            unavailable_reason: None,
+            supported_permission_modes: vec![PermissionMode::Auto, PermissionMode::FullAccess],
+            supports_fork: false,
+            supports_model_switch: true,
+            supports_effort_switch: false,
+            supported_efforts: vec![],
+            models: vec![],
+            instances: vec!["default".into()],
+        };
+        match runtime::probe(context).await {
+            Ok((binary, value)) => {
+                status.available = true;
+                status.binary_path = Some(binary.display().to_string());
+                status.version = Some(format!("SDK {}", value["version"].as_str().unwrap_or(SDK_VERSION)));
+                status.models = serde_json::from_value(value["models"].clone()).unwrap_or_default();
+            }
+            Err(error) => status.unavailable_reason = Some(error.to_string()),
+        }
+        status
     }
 
-    async fn list_sessions(
-        &self,
-        context: &ProbeContext,
-        cursor: Option<&str>,
-        query: &str,
-    ) -> Result<kybern_protocol::methods::SessionsListResult> {
+    async fn list_sessions(&self, context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<methods::SessionsListResult> {
         crate::sessions::list(self.kind(), context, cursor, query).await
     }
 
@@ -233,473 +105,129 @@ impl AgentDriver for CursorDriver {
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
-        if let Some(bridge) = config.native_tool_bridge.as_ref() {
-            cursor_mcp_servers(Some(bridge))?;
+        if config.resume_session_id.as_ref().is_some_and(|id| !id.starts_with(SDK_SESSION_PREFIX)) {
+            return acp::CursorAcpDriver.spawn(config).await;
         }
-        let bin = resolve(ProviderKind::Cursor, config.binary.as_ref())?;
-        let (events_tx, events_rx) = mpsc::channel(1024);
-        let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
-        let (bound_tx, bound_rx) = oneshot::channel::<Result<String>>();
-
-        let shared = Arc::new(Shared {
-            events: events_tx.clone(),
-            pending: Mutex::new(std::collections::HashMap::new()),
-            mode: config.permission_mode,
-        });
-        let (finished, closed) = tokio::sync::watch::channel(());
-        let worker_shared = shared.clone();
-        let cfg = config.clone();
-        let worker = crate::process_tree::SessionTask(tokio::spawn(async move {
-            let _finished = finished;
-            let outcome = run_connection(bin, cfg, worker_shared, cmd_rx, bound_tx).await;
-            let error = outcome.err().map(|e| e.to_string());
-            let _ = events_tx.send(DriverEvent::Exited { code: None, error }).await;
-        }));
-
-        match bound_rx.await {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(DriverError::ProcessExited("cursor agent exited during startup".into())),
+        if config.fork || config.rewind.is_some() {
+            return Err(DriverError::Unsupported("Cursor SDK does not expose native conversation forks or rollback".into()));
         }
-        Ok(SpawnedSession { session: Box::new(Handle { commands: cmd_tx, shared, _worker: worker, closed }), events: events_rx })
-    }
-}
-
-struct Shared {
-    events: mpsc::Sender<DriverEvent>,
-    /// Pending permission requests: request id -> responder sender with the chosen option id.
-    pending: Mutex<std::collections::HashMap<String, oneshot::Sender<Option<String>>>>,
-    mode: PermissionMode,
-}
-
-enum SessionCommand {
-    Prompt { blocks: Vec<ContentBlock> },
-    Cancel,
-    SetModel(String, oneshot::Sender<Result<()>>),
-    SetMode(PermissionMode, oneshot::Sender<Result<()>>),
-    Close,
-}
-
-struct Handle {
-    closed: tokio::sync::watch::Receiver<()>,
-    _worker: crate::process_tree::SessionTask,
-    commands: mpsc::Sender<SessionCommand>,
-    shared: Arc<Shared>,
-}
-
-fn mode_id(mode: PermissionMode) -> &'static str {
-    match mode {
-        PermissionMode::Supervised | PermissionMode::AcceptEdits => "agent",
-        PermissionMode::Auto | PermissionMode::FullAccess => "agent",
-    }
-}
-
-fn cursor_mcp_servers(bridge: Option<&NativeToolBridge>) -> Result<Vec<McpServer>> {
-    let Some(bridge) = bridge else { return Ok(Vec::new()) };
-    bridge.validate()?;
-    if bridge.restrictions.require_enforcement {
-        return Err(DriverError::Unsupported(
-            "Cursor ACP can attach Kybern MCP tools but cannot enforce coordinator tool restrictions at the native boundary".into(),
-        ));
-    }
-    let endpoint = bridge
-        .endpoint
-        .as_deref()
-        .ok_or_else(|| DriverError::Unsupported("Cursor native collaboration tools require a daemon MCP endpoint".into()))?;
-    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
-        DriverError::Unsupported("Cursor native collaboration tools require a scoped MCP authorization capability".into())
-    })?;
-    Ok(vec![McpServer::Http(
-        McpServerHttp::new(bridge.server_name.clone(), endpoint.to_string())
-            .headers(vec![HttpHeader::new("Authorization", format!("Bearer {authorization}"))]),
-    )])
-}
-
-/// The whole ACP connection lives inside `connect_with`; commands arrive over a channel.
-async fn run_connection(
-    bin: PathBuf,
-    config: SessionConfig,
-    shared: Arc<Shared>,
-    mut commands: mpsc::Receiver<SessionCommand>,
-    bound: oneshot::Sender<Result<String>>,
-) -> Result<()> {
-    // Spawn ourselves so the process cwd is the project (Cursor reads .cursor/mcp.json from it).
-    let mut cmd = Command::new(&bin);
-    cmd.arg("acp")
-        .current_dir(&config.cwd)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    for (k, v) in &config.env {
-        cmd.env(k, v);
-    }
-    #[cfg(unix)]
-    cmd.process_group(0);
-    let mut child = cmd.spawn()?;
-    let _tree = crate::process_tree::ProcessTree(child.id().expect("spawned cursor"));
-    let stdin = child.stdin.take().ok_or_else(|| DriverError::Protocol("no stdin".into()))?;
-    let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
-    if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(async move {
-            use tokio::io::AsyncBufReadExt;
-            let mut lines = tokio::io::BufReader::new(stderr).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                tracing::debug!(target: "provider.stderr", "{l}");
-            }
-        });
-    }
-    let agent = ByteStreams::new(stdin.compat_write(), stdout.compat());
-    let _child_guard = child; // killed on drop when the connection ends
-    let cwd = config.cwd.clone();
-    let events = shared.events.clone();
-    let shared_perm = shared.clone();
-    let shared_tools = shared.clone();
-    let mut bound = Some(bound);
-
-    // Message ids are synthetic: one per contiguous run of agent chunks.
-    let msg_state: Arc<Mutex<(u64, bool)>> = Arc::new(Mutex::new((0, false)));
-    let msg_state_notif = msg_state.clone();
-    let loading = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let loading_notif = loading.clone();
-    let native_mcp_servers = cursor_mcp_servers(config.native_tool_bridge.as_ref())?;
-
-    let result = Client
-        .builder()
-        .name("kybern")
-        .on_receive_notification(
-            async move |n: SessionNotification, _cx| {
-                if loading_notif.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Ok(());
-                }
-                let ev = &events;
-                match n.update {
-                    SessionUpdate::AgentMessageChunk(c) => {
-                        if let ContentBlock::Image(image) = &c.content {
-                            let _ = ev.send(DriverEvent::ImageReceived { id: uuid::Uuid::new_v4().to_string(), origin: EventOrigin::Root, source: format!("data:{};base64,{}", image.mime_type, image.data) }).await;
-                        }
-                        if let ContentBlock::Text(t) = c.content {
-                            let id = {
-                                let mut s = msg_state_notif.lock().await;
-                                if !s.1 {
-                                    s.0 += 1;
-                                    s.1 = true;
-                                }
-                                format!("m{}", s.0)
-                            };
-                            let _ = ev.send(DriverEvent::TextDelta { message_id: id, origin: EventOrigin::Root, delta: t.text }).await;
-                        }
-                    }
-                    SessionUpdate::AgentThoughtChunk(c) => {
-                        if let ContentBlock::Text(t) = c.content {
-                            let id = {
-                                let mut s = msg_state_notif.lock().await;
-                                if !s.1 {
-                                    s.0 += 1;
-                                    s.1 = true;
-                                }
-                                format!("m{}", s.0)
-                            };
-                            let _ = ev.send(DriverEvent::ThinkingDelta { message_id: id, origin: EventOrigin::Root, delta: t.text }).await;
-                        }
-                    }
-                    SessionUpdate::ToolCall(tc) => {
-                        // A tool call ends the current assistant message run.
-                        msg_state_notif.lock().await.1 = false;
-                        let _ = ev
-                            .send(DriverEvent::ToolStarted(ToolCall {
-                                id: tc.tool_call_id.to_string(),
-                                name: format!("{:?}", tc.kind).to_lowercase(),
-                                input: json!({ "title": tc.title, "raw": tc.raw_input }),
-                                parent_id: None,
-                            }))
-                            .await;
-                    }
-                    SessionUpdate::ToolCallUpdate(u) => {
-                        let status = u.fields.status.map(|s| format!("{s:?}").to_lowercase());
-                        if matches!(status.as_deref(), Some("completed") | Some("failed")) {
-                            let mut diffs = Vec::new();
-                            for c in u.fields.content.iter().flatten() {
-                                if let ToolCallContent::Diff(d) = c {
-                                    diffs.push(json!({ "path": d.path, "old": d.old_text, "new": d.new_text }));
-                                }
-                            }
-                            let _ = ev
-                                .send(DriverEvent::ToolCompleted {
-                                    tool_call_id: u.tool_call_id.to_string(),
-                                    output: json!({ "raw": u.fields.raw_output, "diffs": diffs, "content": u.fields.content, "title": u.fields.title }),
-                                    is_error: status.as_deref() == Some("failed"),
-                                })
-                                .await;
-                        }
-                    }
-                    SessionUpdate::Plan(p) => {
-                        let _ = ev.send(DriverEvent::Notice { level: NoticeLevel::Info, text: format!("plan updated ({} entries)", p.entries.len()), data: serde_json::to_value(&p).ok() }).await;
-                    }
-                    SessionUpdate::AvailableCommandsUpdate(update) => {
-                        let commands = update.available_commands.into_iter().map(|c| kybern_protocol::ProviderCommand { name: c.name, description: c.description }).collect();
-                        let _ = ev.send(DriverEvent::CommandsUpdated(commands)).await;
-                    }
-                    SessionUpdate::UsageUpdate(u) => {
-                        let _ = ev.send(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: Some(kybern_protocol::ContextUsage { used_tokens: u.used, window_tokens: u.size }), limits: None })).await;
-                    }
-                    _ => {}
-                }
-                Ok(())
-            },
-            on_receive_notification!(),
-        )
-        .on_receive_request(
-            async move |req: RequestPermissionRequest, responder, _cx| {
-                let shared = shared_perm.clone();
-                let request_id = uuid::Uuid::new_v4().simple().to_string();
-                let (tx, rx) = oneshot::channel();
-                shared.pending.lock().await.insert(request_id.clone(), tx);
-                let title = req.tool_call.fields.title.clone().unwrap_or_default();
-                let allow_all = matches!(shared.mode, PermissionMode::Auto | PermissionMode::FullAccess);
-                let options: Vec<Value> = req.options.iter().map(|o| json!({ "id": o.option_id.to_string(), "name": o.name, "kind": format!("{:?}", o.kind) })).collect();
-                let pick = |prefix: &str| req.options.iter().find(|o| format!("{:?}", o.kind).to_lowercase().starts_with(prefix)).map(|o| o.option_id.clone());
-                if allow_all {
-                    let choice = pick("allowalways").or_else(|| pick("allowonce")).or_else(|| req.options.first().map(|o| o.option_id.clone()));
-                    return responder.respond(RequestPermissionResponse::new(match choice {
-                        Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
-                        None => RequestPermissionOutcome::Cancelled,
-                    }));
-                }
-                let _ = shared
-                    .events
-                    .send(DriverEvent::PermissionRequest {
-                        request_id,
-                        tool_call_id: Some(req.tool_call.tool_call_id.to_string()),
-                        tool_name: req.tool_call.fields.kind.map(|k| format!("{k:?}").to_lowercase()).unwrap_or_else(|| "tool".into()),
-                        input: json!({ "title": title, "raw": req.tool_call.fields.raw_input, "options": options }),
-                        summary: title.clone(),
-                        suggestions: vec![],
-                    })
-                    .await;
-                let decision = rx.await.ok().flatten();
-                let outcome = match decision.as_deref() {
-                    Some("allow_once") => pick("allowonce").or_else(|| pick("allowalways")),
-                    Some("allow_always") => pick("allowalways").or_else(|| pick("allowonce")),
-                    Some(_) | None => pick("rejectonce").or_else(|| pick("rejectalways")),
-                };
-                responder.respond(RequestPermissionResponse::new(match outcome {
-                    Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
-                    None => RequestPermissionOutcome::Cancelled,
-                }))
-            },
-            on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |req: CursorAskQuestionRequest, responder, _cx| {
-                let _ = shared_tools
-                    .events
-                    .send(DriverEvent::Notice { level: NoticeLevel::Warning, text: "Cursor asked a question kybern cannot relay yet".into(), data: Some(json!({ "title": req.title, "questions": req.questions })) })
-                    .await;
-                responder.respond(CursorAskQuestionResponse { outcome: json!({ "outcome": "skipped", "reason": "not supported by client" }) })
-            },
-            on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |req: CursorCreatePlanRequest, responder, _cx| {
-                let _ = req;
-                responder.respond(CursorCreatePlanResponse { outcome: json!({ "outcome": "accepted" }) })
-            },
-            on_receive_request!(),
-        )
-        .connect_with(agent, async |cx: ConnectionTo<Agent>| {
-            let init = cx
-                .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(ClientCapabilities::new()).client_info(Implementation::new("kybern", env!("CARGO_PKG_VERSION"))))
-                .block_task()
-                .await?;
-            if init.auth_methods.iter().any(|m| m.id().to_string() == "cursor_login") {
-                let _ = cx.send_request(AuthenticateRequest::new("cursor_login")).block_task().await;
-            }
-
-            let session_id = match &config.resume_session_id {
-                Some(id) => {
-                    loading.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let request = LoadSessionRequest::new(id.clone(), cwd.clone()).mcp_servers(native_mcp_servers.clone());
-                    let r = cx.send_request(request).block_task().await;
-                    loading.store(false, std::sync::atomic::Ordering::Relaxed);
-                    match r {
-                        Ok(_) => agent_client_protocol::schema::v1::SessionId::from(id.clone()),
-                        Err(error) => return Err(error),
-                    }
-                }
-                None => {
-                    let request = NewSessionRequest::new(cwd.clone()).mcp_servers(native_mcp_servers.clone());
-                    cx.send_request(request).block_task().await?.session_id
-                }
-            };
-            let _ = cx.send_request(SetSessionModeRequest::new(session_id.clone(), mode_id(config.permission_mode))).block_task().await;
-            if let Some(model) = &config.model {
-                let _ = cx.send_request(SetSessionConfigOptionRequest::new(session_id.clone(), "model", model.as_str())).block_task().await;
-            }
-            if let Some(b) = bound.take() {
-                let _ = b.send(Ok(session_id.to_string()));
-            }
-            let _ = shared.events.send(DriverEvent::SessionBound { session_id: session_id.to_string(), model: config.model.clone() }).await;
-
-            while let Some(cmd) = commands.recv().await {
-                match cmd {
-                    SessionCommand::Prompt { blocks } => {
-                        let started = std::time::Instant::now();
-                        msg_state.lock().await.1 = false;
-                        let cx2 = cx.clone();
-                        let sid = session_id.clone();
-                        let prompt = cx2.send_request(PromptRequest::new(sid, blocks));
-                        // Allow cancel while the prompt is in flight.
-                        let mut fut = std::pin::pin!(prompt.block_task());
-                        let resp = loop {
-                            tokio::select! {
-                                r = &mut fut => break r,
-                                c = commands.recv() => match c {
-                                    Some(SessionCommand::Cancel) => { let _ = cx.send_notification(CancelNotification::new(session_id.clone())); }
-                                    Some(SessionCommand::Close) | None => { let _ = cx.send_notification(CancelNotification::new(session_id.clone())); }
-                                    Some(SessionCommand::SetModel(_, tx)) => { let _ = tx.send(Err(DriverError::Protocol("busy".into()))); }
-                                    Some(SessionCommand::SetMode(_, tx)) => { let _ = tx.send(Err(DriverError::Protocol("busy".into()))); }
-                                    Some(SessionCommand::Prompt { .. }) => {}
-                                },
-                            }
-                        };
-                        let duration_ms = started.elapsed().as_millis() as u64;
-                        let ev = match resp {
-                            Ok(r) => {
-                                // Cursor reports no token usage over ACP.
-                                let usage = Usage::default();
-                                let stop = match r.stop_reason {
-                                    AcpStop::EndTurn => StopReason::Completed,
-                                    AcpStop::Cancelled => StopReason::Interrupted,
-                                    AcpStop::MaxTokens | AcpStop::MaxTurnRequests => StopReason::MaxTurns,
-                                    AcpStop::Refusal => StopReason::Completed,
-                                    _ => StopReason::Completed,
-                                };
-                                DriverEvent::TurnCompleted { stop_reason: stop, usage, cost_usd: None, duration_ms, anchors: crate::TurnAnchors::default() }
-                            }
-                            Err(e) => DriverEvent::TurnFailed { error: e.to_string() },
-                        };
-                        let _ = shared.events.send(ev).await;
-                    }
-                    SessionCommand::Cancel => {
-                        let _ = cx.send_notification(CancelNotification::new(session_id.clone()));
-                    }
-                    SessionCommand::SetModel(model, tx) => {
-                        let r = cx.send_request(SetSessionConfigOptionRequest::new(session_id.clone(), "model", model.as_str())).block_task().await;
-                        let _ = tx.send(r.map(|_| ()).map_err(|e| DriverError::Protocol(e.to_string())));
-                    }
-                    SessionCommand::SetMode(mode, tx) => {
-                        let r = cx.send_request(SetSessionModeRequest::new(session_id.clone(), mode_id(mode))).block_task().await;
-                        let _ = tx.send(r.map(|_| ()).map_err(|e| DriverError::Protocol(e.to_string())));
-                    }
-                    SessionCommand::Close => break,
-                }
-            }
-            Ok(())
-        })
-        .await;
-    result.map_err(|e| DriverError::Protocol(format!("cursor acp: {e}")))
-}
-
-fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
-    let mut out = Vec::new();
-    for part in &message.parts {
-        match part {
-            ContentPart::Text { text } => out.push(ContentBlock::Text(TextContent::new(text.clone()))),
-            ContentPart::FileMention { path } => out.push(ContentBlock::Text(TextContent::new(format!("@{path}")))),
-            ContentPart::ThreadReference { thread_id, title, .. } => {
-                out.push(ContentBlock::Text(TextContent::new(thread_reference_text(*thread_id, title))))
-            }
-            ContentPart::Skill { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("/{name}")))),
-            ContentPart::Mention { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("@{name}")))),
-            ContentPart::Image { media_type, data } => out.push(ContentBlock::Image(ImageContent::new(data.clone(), media_type.clone()))),
-            ContentPart::Attachment { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("[attached file: {name}]")))),
+        validate_mode(config.permission_mode)?;
+        if config.effort.as_ref().is_some_and(|s| !s.is_empty()) {
+            return Err(DriverError::Unsupported("Choose a Cursor model variant; the SDK has no independent effort control".into()));
         }
+        let servers = mcp_servers(config.native_tool_bridge.as_ref())?;
+        let context = ProbeContext { binary: config.binary.clone(), cwd: Some(config.cwd.clone()), env: config.env.into_iter().collect() };
+        let (connection, events) = Connection::spawn(&context)?;
+        let agent_id = config.resume_session_id.as_deref().map(sdk_id).transpose()?;
+        let opened = connection
+            .call(
+                "open",
+                json!({
+                    "cwd": config.cwd, "model": config.model, "mode": config.permission_mode,
+                    "agentId": agent_id, "mcpServers": servers,
+                }),
+            )
+            .await?;
+        let id = opened["agentId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| DriverError::Protocol("Cursor SDK returned no agent id".into()))?;
+        connection
+            .emit(DriverEvent::SessionBound {
+                session_id: format!("{SDK_SESSION_PREFIX}{id}"),
+                model: opened["model"].as_str().map(str::to_string),
+            })
+            .await;
+        connection
+            .emit(DriverEvent::CommandsUpdated(vec![ProviderCommand {
+                name: "compress".into(),
+                description: "Compact the Cursor conversation".into(),
+            }]))
+            .await;
+        Ok(SpawnedSession { session: Box::new(Session { connection, model: Mutex::new(config.model) }), events })
     }
-    out
+}
+
+struct Session {
+    connection: Connection,
+    model: Mutex<Option<String>>,
 }
 
 #[async_trait]
-impl AgentSession for Handle {
+impl AgentSession for Session {
+    async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
+        self.connection.call("send", json!({"messageId": message_id, "message": sdk_message(message)})).await?;
+        Ok(())
+    }
     async fn compact(&self) -> Result<()> {
-        self.send_message(&uuid::Uuid::now_v7().to_string(), &UserMessage::text("/compact")).await
+        self.send_message(&uuid::Uuid::new_v4().to_string(), &UserMessage::text("/compress")).await
     }
-
-    async fn send_message(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
-        self.commands
-            .send(SessionCommand::Prompt { blocks: blocks(message) })
-            .await
-            .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))
-    }
-
     async fn interrupt(&self) -> Result<()> {
-        self.commands.send(SessionCommand::Cancel).await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))
+        self.connection.call("cancel", json!({})).await?;
+        Ok(())
     }
-
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.commands
-            .send(SessionCommand::SetMode(mode, tx))
-            .await
-            .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?;
-        rx.await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?
+        validate_mode(mode)?;
+        let model = self.model.lock().await;
+        self.connection.call("set_mode", json!({"mode": mode, "model": *model})).await?;
+        Ok(())
     }
-
     async fn set_model(&self, model: &str) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.commands
-            .send(SessionCommand::SetModel(model.to_string(), tx))
-            .await
-            .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?;
-        rx.await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))?
-    }
-
-    async fn set_effort(&self, _effort: &str) -> Result<()> {
-        Err(DriverError::Unsupported("Cursor ACP did not advertise an effort control".into()))
-    }
-
-    async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
-        if matches!(decision, ApprovalDecision::Submit { .. }) {
-            return Err(DriverError::Unsupported("Cursor ACP does not expose structured questions".into()));
-        }
-        let Some(tx) = self.shared.pending.lock().await.remove(request_id) else {
-            return Err(DriverError::Protocol(format!("no pending approval {request_id}")));
-        };
-        let choice = match decision {
-            ApprovalDecision::AllowOnce => "allow_once",
-            ApprovalDecision::AllowAlways => "allow_always",
-            ApprovalDecision::Deny { .. } | ApprovalDecision::Submit { .. } => "reject",
-        };
-        let _ = tx.send(Some(choice.to_string()));
+        let mut selected = self.model.lock().await;
+        self.connection.call("set_model", json!({"model": model})).await?;
+        *selected = Some(model.to_string());
         Ok(())
     }
-
+    async fn set_effort(&self, _: &str) -> Result<()> {
+        Err(DriverError::Unsupported("Choose a Cursor model variant; the SDK has no independent effort control".into()))
+    }
+    async fn respond_permission(&self, _: &str, _: &ApprovalDecision) -> Result<()> {
+        Err(DriverError::Unsupported("Cursor SDK uses sandboxing and Auto-review; it has no interactive approval requests".into()))
+    }
     async fn close(&self) -> Result<()> {
-        let mut closed = self.closed.clone();
-        let graceful = async {
-            let _ = self.commands.send(SessionCommand::Close).await;
-            let _ = closed.changed().await;
-        };
-        if tokio::time::timeout(std::time::Duration::from_secs(5), graceful).await.is_err() {
-            self._worker.0.abort();
-            let _ = closed.changed().await;
-        }
-        Ok(())
+        self.connection.close().await
     }
+}
+
+fn sdk_message(message: &UserMessage) -> Value {
+    let mut text = String::new();
+    let mut images = Vec::new();
+    for part in &message.parts {
+        match part {
+            ContentPart::Text { text: part } => text.push_str(part),
+            ContentPart::FileMention { path } => text.push_str(&format!("@{path}")),
+            ContentPart::ThreadReference { thread_id, title, .. } => text.push_str(&thread_reference_text(*thread_id, title)),
+            ContentPart::Skill { name, .. } => text.push_str(&format!("/{name}")),
+            ContentPart::Mention { name, .. } => text.push_str(&format!("@{name}")),
+            ContentPart::Image { media_type, data } => images.push(json!({"data": data, "mimeType": media_type})),
+            ContentPart::Attachment { name, .. } => text.push_str(&format!("[attached file: {name}]")),
+        }
+    }
+    json!({"text": text, "images": images})
 }
 
 #[cfg(test)]
 mod tests {
-    use super::blocks;
-    use agent_client_protocol::schema::v1::ContentBlock;
-    use kybern_protocol::{ContentPart, UserMessage};
-
+    use super::*;
     #[test]
-    fn cursor_uses_its_native_skill_command_syntax() {
-        let message = UserMessage { parts: vec![ContentPart::Skill { name: "review".into(), path: "/skills/review/SKILL.md".into() }] };
-
-        let blocks = blocks(&message);
-        let ContentBlock::Text(text) = &blocks[0] else { panic!("expected text block") };
-        assert_eq!(text.text, "/review");
+    fn sdk_modes_do_not_advertise_or_silently_simulate_human_approval() {
+        assert!(validate_mode(PermissionMode::Auto).is_ok());
+        assert!(validate_mode(PermissionMode::FullAccess).is_ok());
+        assert!(validate_mode(PermissionMode::Supervised).is_err());
+        assert!(validate_mode(PermissionMode::AcceptEdits).is_err());
+    }
+    #[test]
+    fn separates_native_ids_and_preserves_images_and_skill_syntax() {
+        assert_eq!(sdk_id("cursor-sdk:local-123").unwrap(), "local-123");
+        assert!(sdk_id("old-cli-id").is_err());
+        assert!(sdk_id("cursor-sdk:bc-cloud-id").is_err());
+        assert!(sdk_id("cursor-sdk:").is_err());
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Skill { name: "review".into(), path: "unused".into() },
+                ContentPart::Image { media_type: "image/png".into(), data: "base64".into() },
+            ],
+        };
+        assert_eq!(sdk_message(&message), json!({"text":"/review", "images":[{"data":"base64", "mimeType":"image/png"}]}));
     }
 }

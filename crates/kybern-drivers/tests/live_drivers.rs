@@ -25,6 +25,17 @@ fn skip_or_fail(kind: ProviderKind) -> bool {
     true
 }
 
+async fn skip_or_fail_cursor() -> bool {
+    let registry = DriverRegistry::with_defaults();
+    let status = registry.get(ProviderKind::Cursor).unwrap().probe(None).await;
+    if status.available {
+        return false;
+    }
+    assert!(std::env::var_os("KYBERN_LIVE_TESTS").is_none(), "Cursor SDK unavailable: {:?}", status.unavailable_reason);
+    eprintln!("skipping Cursor SDK: {:?}", status.unavailable_reason);
+    true
+}
+
 async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> {
     let dir = tempfile::tempdir().unwrap();
     std::process::Command::new("git").arg("-C").arg(dir.path()).arg("init").arg("-q").status().unwrap();
@@ -32,6 +43,11 @@ async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> 
     let driver = registry.get(kind).expect("driver registered");
     let status = driver.probe(None).await;
     assert!(status.available, "{kind} should probe as available: {:?}", status.unavailable_reason);
+    let env = if kind == ProviderKind::Cursor {
+        HashMap::from([("KYBERN_CURSOR_STATE_DIR".into(), dir.path().join("sdk-state").display().to_string())])
+    } else {
+        HashMap::new()
+    };
 
     let spawned = driver
         .spawn(SessionConfig {
@@ -44,7 +60,7 @@ async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> 
             fork: false,
             rewind: None,
             binary: None,
-            env: HashMap::new(),
+            env: env.clone(),
         })
         .await
         .expect("spawn");
@@ -70,6 +86,58 @@ async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> 
         }
     }
     session.close().await.ok();
+    if kind == ProviderKind::Cursor {
+        let id = seen
+            .iter()
+            .find_map(|event| match event {
+                DriverEvent::SessionBound { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .expect("SDK agent id");
+        assert!(id.starts_with("cursor-sdk:"));
+        let context =
+            kybern_drivers::ProbeContext { cwd: Some(dir.path().into()), env: env.clone().into_iter().collect(), ..Default::default() };
+        let history = driver.read_session(&context, &id).await.expect("read native SDK history");
+        assert!(history.events.iter().any(|event| matches!(&event.payload, EventPayload::AssistantMessageCompleted { text, .. } if text.to_lowercase().contains("pong"))), "SDK history lost the final answer: {:?}", history.events);
+        let listing = driver.list_sessions(&context, None, "").await.expect("list native SDK agents");
+        assert!(listing.sessions.iter().any(|session| session.id == id));
+        let resumed = driver
+            .spawn(SessionConfig {
+                cwd: dir.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: mode,
+                native_tool_bridge: None,
+                resume_session_id: Some(id.clone()),
+                fork: false,
+                rewind: None,
+                binary: None,
+                env,
+            })
+            .await
+            .expect("resume SDK agent");
+        let mut events = resumed.events;
+        resumed
+            .session
+            .send_message("resume", &UserMessage::text("Repeat the exact word from your previous final answer. Do not use tools."))
+            .await
+            .expect("send after resume");
+        let mut replay = Vec::new();
+        tokio::time::timeout(Duration::from_secs(180), async {
+            while let Some(event) = events.recv().await {
+                let done = matches!(event, DriverEvent::TurnCompleted { .. } | DriverEvent::TurnFailed { .. } | DriverEvent::Exited { .. });
+                replay.push(event);
+                if done {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("resumed turn completion");
+        resumed.session.close().await.expect("close resumed SDK agent");
+        assert_completed_with_text(kind, &replay);
+        assert!(replay.iter().any(|event| matches!(event, DriverEvent::SessionBound { session_id, .. } if session_id == &id)));
+    }
     seen
 }
 
@@ -170,7 +238,7 @@ async fn spawn_probe_mcp() -> (String, Arc<Mutex<Vec<(Option<String>, String)>>>
 }
 
 async fn run_native_bridge_turn(kind: ProviderKind) {
-    if skip_or_fail(kind) {
+    if if kind == ProviderKind::Cursor { skip_or_fail_cursor().await } else { skip_or_fail(kind) } {
         return;
     }
     let (endpoint, mcp_requests, mcp_task) = spawn_probe_mcp().await;
@@ -207,7 +275,11 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
             fork: false,
             rewind: None,
             binary: None,
-            env: HashMap::new(),
+            env: if kind == ProviderKind::Cursor {
+                HashMap::from([("KYBERN_CURSOR_STATE_DIR".into(), dir.path().join("sdk-state").display().to_string())])
+            } else {
+                HashMap::new()
+            },
         })
         .await
         .unwrap_or_else(|error| panic!("{kind}: native bridge spawn failed: {error}"));
@@ -305,7 +377,7 @@ async fn omp_completes_a_turn() {
 
 #[tokio::test]
 async fn cursor_completes_a_turn() {
-    if skip_or_fail(ProviderKind::Cursor) {
+    if skip_or_fail_cursor().await {
         return;
     }
     let events = run_turn(ProviderKind::Cursor, PermissionMode::Auto).await;
