@@ -40,6 +40,9 @@ fn brew_package(kind: ProviderKind, path: &Path) -> Option<(PathBuf, String, boo
 }
 
 pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, String>, cwd: &Path) -> Result<UpdateCommand> {
+    if kind == ProviderKind::Cursor {
+        bail!("Cursor SDK is pinned to this Kybern release. Update Kybern, then run `kybern cursor install`.");
+    }
     let canonical = std::fs::canonicalize(binary)?;
     let paths = format!("{} {}", binary.display(), canonical.display());
     if ["/nix/store/", "/.local/share/mise/", "/.asdf/", "/.local/share/rtx/"].iter().any(|part| paths.contains(part)) {

@@ -49,7 +49,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   // The launch paint shows the home screen settled; later mounts stagger in.
   const [enter] = useState(() => !isLaunching())
 
-  const mode = modeStored ?? settings?.default_permission_mode ?? "supervised"
+  const preferredMode = modeStored ?? settings?.default_permission_mode ?? "supervised"
   const provider = useMemo<ProviderInstance | null>(() => {
     if (providerStored && providers.some((p) => p.kind === providerStored.kind)) return providerStored
     const def = settings?.default_provider
@@ -61,6 +61,8 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   const useWorktree = freeChat ? false : worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
   const coordinatorDraft = purpose === "coordinator"
   const providerStatus = provider ? providers.find((item) => item.kind === provider.kind) : undefined
+  const mode = providerStatus && !providerStatus.supported_permission_modes.includes(preferredMode)
+    ? providerStatus.supported_permission_modes[0] ?? preferredMode : preferredMode
   const dedicatedCoordinator = provider ? projectCoordinatorMode(provider.kind) === "dedicated" : false
 
   useEffect(() => {

@@ -414,15 +414,63 @@ kybern send <returned-thread-id> "Continue from where we left off"
 ```
 
 All six harnesses are supported: Claude Code, Codex, OpenCode, pi, OMP, and
-Cursor CLI. Discovery uses the selected environment's installed harness and
-configured profile. Cursor uses CLI sessions exposed through ACP; editor-only
-or cloud conversations are not included. The original working folder must
+Cursor. Discovery uses the selected environment’s installed harness and
+configured profile. New Cursor chats use the official local SDK. SDK session IDs
+start with `cursor-sdk:`; older CLI chats continue through ACP. Editor-only
+and cloud conversations are not included. The original working folder must
 still exist. Kybern uses it directly and does not create or switch a worktree.
 
 Importing history does not execute old tools, recreate checkpoints, or charge
 historical usage to Kybern. History imports are limited to 64 MB. If a harness
 refuses continuation because another process owns the session, close that
 process and retry. Saved sessions remain native to their original harness.
+
+### Cursor SDK
+
+New Cursor chats use exact-pinned `@cursor/sdk` 1.0.35 in an isolated Node helper.
+Node.js 22.13 or newer and npm must be installed on the daemon’s machine:
+
+```sh
+kybern cursor install
+kybern cursor login
+kybern cursor status
+```
+
+Browser login uses Cursor’s official SDK authentication flow, separate from CLI
+sign-in. Alternatively set `CURSOR_API_KEY` in the Cursor provider’s environment.
+`kybern cursor logout` clears the SDK login; an environment key still takes
+precedence. Discovery never downloads packages or starts a login flow.
+
+Following T3’s SDK integration, Cursor has two permission policies:
+
+| Kybern mode | Cursor SDK behavior |
+| --- | --- |
+| Auto-review (`auto`) | Sandbox enabled, automatic review enabled; no human approval prompts |
+| Full access (`full-access`) | Sandbox disabled, automatic review disabled |
+
+The SDK does not expose interactive approvals. Ask for approval and Approve edits
+are unavailable for new SDK chats; explicit requests fail rather than pretending
+they are enforced. Existing ACP chats retain their original permission controls.
+New threads and SDK history imports default to Auto-review unless the configured
+default is Full access. Cursor’s sandbox policy is distinct from Kybern’s own
+per-app computer-use consent, which still applies.
+
+The SDK driver streams text, reasoning, tool calls, native child tasks, final
+answers, and token usage; supports images, model variants, cancellation, resume,
+`/compress`, and authenticated Kybern MCP tools. Native child tasks are read-only:
+the SDK does not expose child steering, stop, or adoption controls. Fork, rollback,
+structured question responses, mid-turn steering, independent effort settings,
+and authoritative local billing totals are not advertised. Pick a model variant
+for Cursor-specific model parameters.
+
+The installer uses the committed npm lockfile with lifecycle scripts disabled,
+and stores the package under `~/.kybern/cache/cursor-sdk/1.0.35`. Updating it means
+updating Kybern and running `kybern cursor install` again. For isolated tests,
+set `KYBERN_CURSOR_SDK_DIR`, `KYBERN_CURSOR_AUTH_FILE`, and
+`KYBERN_CURSOR_STATE_DIR`; `KYBERN_CURSOR_NODE` selects the Node executable.
+The old provider binary setting applies only to legacy ACP chats.
+
+Implementation and validation details: [Cursor SDK driver](crates/kybern-drivers/src/cursor/README.md).
 
 ### OMP profiles
 
@@ -661,8 +709,9 @@ Current capabilities (platform verification is documented per client):
   reading, pairing codes for other devices, attachment uploads, settings and
   keybindings files.
 - **Agents**: Claude Code, Codex, OpenCode, Oh My Pi, and Cursor drive
-  through their native protocols with streaming, tool calls, approvals,
-  resume, and model switching. pi is wired but untested here.
+  through their native protocols with streaming, tool calls,
+  resume, and model switching. Cursor SDK uses automatic review and sandboxing;
+  other harnesses expose their native approval controls. pi is wired but untested here.
 - **Desktop**: projects and threads in a translucent sidebar, a streaming
   transcript with a message rail, "Worked for" disclosures and inline diffs,
   a frosted composer with @ file mentions, / commands, queued follow-ups,

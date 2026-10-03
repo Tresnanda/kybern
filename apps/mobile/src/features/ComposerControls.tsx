@@ -54,6 +54,12 @@ const modes: { value: PermissionMode; label: string; detail: string }[] = [
     detail: "Allow commands and edits without asking.",
   },
 ];
+function permissionChoices(kind: string, sessionId?: string | null) {
+  if (kind !== "cursor" || (sessionId && !sessionId.startsWith("cursor-sdk:"))) return modes;
+  return modes.filter((m) => m.value === "auto" || m.value === "full-access").map((m) => m.value === "auto"
+    ? { ...m, label: "Auto-review", detail: "Run in Cursor’s sandbox with automatic review; no approval prompts." }
+    : { ...m, detail: "Disable Cursor’s sandbox and automatic review." });
+}
 export function ComposerControls({
   thread,
   disabled,
@@ -87,7 +93,7 @@ export function ComposerControls({
     : "";
   const compactModel = modelLabel.replace(/^GPT[- ]?/i, "");
   const permissionLabel =
-    modes.find((item) => item.value === mode)?.label ?? mode;
+    permissionChoices(kind, thread?.provider_session_id).find((item) => item.value === mode)?.label ?? mode;
   const { regular } = useLayout();
   function openOptions(section: "model" | "permissions" | "usage") {
     router.push({
@@ -300,8 +306,8 @@ export function ComposerOptions({
     <Page>
       <ErrorBanner error={error} />
       {open === "permissions" &&
-        modes
-          .filter((m) => provider?.supported_permission_modes.includes(m.value))
+        permissionChoices(kind, thread?.provider_session_id)
+          .filter((m) => (kind === "cursor" && !!thread?.provider_session_id && !thread.provider_session_id.startsWith("cursor-sdk:")) || provider?.supported_permission_modes.includes(m.value))
           .map((m) => (
             <Tap
               key={m.value}
