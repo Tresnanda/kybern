@@ -74,6 +74,11 @@ enum ArtifactsCmd {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Install or sign in to the official Cursor SDK on this machine.
+    Cursor {
+        #[command(subcommand)]
+        cmd: CursorCmd,
+    },
     /// Coordinate agent threads, assignments, messages, and shared context.
     Collaboration {
         #[command(subcommand)]
@@ -503,6 +508,45 @@ enum TasksCmd {
     Background { task: String },
 }
 
+#[derive(Subcommand)]
+enum CursorCmd {
+    /// Install the exact SDK version supported by this Kybern build (requires Node.js and npm).
+    Install,
+    /// Sign in in your browser. This is separate from Cursor CLI sign-in.
+    Login,
+    /// Show SDK sign-in status without exposing credentials.
+    Status,
+    /// Forget the SDK browser login. Running chats retain their current credential until closed.
+    Logout,
+}
+
+async fn cursor_setup(cmd: &CursorCmd) -> Result<()> {
+    let context = kybern_drivers::ProbeContext::default();
+    let action = match cmd {
+        CursorCmd::Install => {
+            eprintln!("Installing Cursor SDK {}…", kybern_drivers::cursor::SDK_VERSION);
+            let directory = kybern_drivers::cursor::install(&context).await?;
+            println!("Cursor SDK installed at {}. Run `kybern cursor login` to sign in.", directory.display());
+            return Ok(());
+        }
+        CursorCmd::Login => "login",
+        CursorCmd::Status => "status",
+        CursorCmd::Logout => "logout",
+    };
+    let mut command = kybern_drivers::cursor::setup_command(&context, action)?;
+    command
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .kill_on_drop(true);
+    let mut child = command.spawn()?;
+    let status = child.wait().await?;
+    if !status.success() {
+        anyhow::bail!("Cursor SDK {action} failed. Resolve the error above and try again.");
+    }
+    Ok(())
+}
+
 fn parse_mode(s: &str) -> Result<PermissionMode, String> {
     serde_json::from_value(serde_json::Value::String(s.to_string()))
         .map_err(|_| format!("unknown mode {s}; use supervised|accept-edits|auto|full-access"))
@@ -512,11 +556,16 @@ fn parse_mode(s: &str) -> Result<PermissionMode, String> {
 #[tokio::main]
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
+    // SDK setup is local and must work before a daemon has started.
+    if let Cmd::Cursor { cmd } = &cli.cmd {
+        return cursor_setup(cmd).await;
+    }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let client = Client::connect(&ep).await?;
     let json = cli.json;
 
     match cli.cmd {
+        Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
         Cmd::Collaboration { cmd } => collaboration::run(&client, cmd).await?,
         Cmd::Info => {
             let info = client.call::<DaemonInfoMethod>(Empty {}).await?;

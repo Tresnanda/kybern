@@ -75,9 +75,15 @@ export default function Home() {
           instance: first.instances[0] ?? "default",
           model: "",
           effort: "",
+          permission: first.supported_permission_modes.includes(draft.permission)
+            ? draft.permission : first.supported_permission_modes[0] ?? "supervised",
         });
     }
-  }, [project?.id, app.providers, draft.projectId, draft.provider]);
+    const selected = app.providers.find((p) => p.kind === draft.provider && p.available);
+    if (selected && !selected.supported_permission_modes.includes(draft.permission)) {
+      setDraft({ permission: selected.supported_permission_modes[0] ?? "supervised" });
+    }
+  }, [project?.id, app.providers, draft.projectId, draft.provider, draft.permission]);
   async function send(message: UserMessage) {
     if (!project) throw new Error("Add a project before starting a thread.");
     const thread = await rpc("threads.create", {

@@ -3,6 +3,7 @@
 mod claude;
 mod codex;
 mod cursor;
+mod cursor_acp;
 mod opencode;
 mod pi;
 #[cfg(test)]

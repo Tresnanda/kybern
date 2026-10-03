@@ -2741,6 +2741,7 @@ dependencies = [
  "directories",
  "futures",
  "kybern-client",
+ "kybern-drivers",
  "kybern-protocol",
  "serde",
  "serde_json",

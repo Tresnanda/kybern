@@ -112,6 +112,7 @@ export interface ComposerProps {
   mode: PermissionMode
   onModeChange: (m: PermissionMode) => void
   provider: ProviderInstance | null
+  providerSessionId?: string | null
   providers: ProviderStatus[]
   /** `choice` carries a model picked from another harness's favorites. */
   onProviderChange?: (p: ProviderInstance, choice?: { model?: string; effort?: string }) => Promise<void> | void
@@ -666,7 +667,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const canPickModel = !!onModelChange
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange
-  const modeInfo = MODES.find((m) => m.mode === mode) ?? MODES[0]!
+  const legacyCursor = provider?.kind === "cursor" && !!props.providerSessionId && !props.providerSessionId.startsWith("cursor-sdk:")
+  const modes = provider?.kind === "cursor" && !legacyCursor
+    ? MODES.filter((m) => m.mode === "auto" || m.mode === "full-access").map((m) => m.mode === "auto"
+      ? { ...m, label: "Auto-review", description: "Run in Cursor’s sandbox with automatic review; no approval prompts" }
+      : { ...m, description: "Disable Cursor’s sandbox and automatic review" })
+    : MODES
+  const modeInfo = modes.find((m) => m.mode === mode) ?? modes[0]!
   const menuLoading = mention ? !!projectId && (fileResult.query !== mention.query || threadResult.query !== mention.query) : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
   const menuEmptyText = menuLoading
     ? mention
@@ -971,8 +978,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     </MenuTrigger>
                     <ComposerPickerMenuPopup align="start" side="top" className="runtime-mode-menu w-[26rem] min-w-[26rem]">
                       <MenuRadioGroup value={mode} onValueChange={(v) => onModeChange(v as PermissionMode)} className="flex flex-col gap-1">
-                        {MODES.map((m) => {
-                          const supported = !status || status.supported_permission_modes.includes(m.mode)
+                        {modes.map((m) => {
+                          const supported = legacyCursor || !status || status.supported_permission_modes.includes(m.mode)
                           return (
                             <MenuRadioItem
                               key={m.mode}

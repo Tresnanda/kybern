@@ -490,13 +490,17 @@ mod lifecycle_tests {
                 cwd: root.path().into(),
                 model: None,
                 effort: None,
-                permission_mode: PermissionMode::Supervised,
+                permission_mode: if kind == ProviderKind::Cursor { PermissionMode::Auto } else { PermissionMode::Supervised },
                 native_tool_bridge: None,
                 resume_session_id: None,
                 fork: false,
                 rewind: None,
-                binary: Some(binary),
-                env: std::collections::HashMap::new(),
+                binary: Some(binary.clone()),
+                env: if kind == ProviderKind::Cursor {
+                    std::collections::HashMap::from([("KYBERN_CURSOR_NODE".into(), binary.display().to_string())])
+                } else {
+                    std::collections::HashMap::new()
+                },
             };
             let driver = registry.get(kind).unwrap();
             let mut startup = Box::pin(driver.spawn(config));
