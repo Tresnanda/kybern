@@ -42,7 +42,6 @@ import {
 import { SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
-import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "@/views/chrome"
 import type { BackgroundSettings, ComputerForeground, ComputerNote, ComputerPermission, ComputerStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, rpc } from "@/state/rpc"
@@ -114,6 +113,10 @@ export function SettingsScreen({
       }}>
       {/* Same frame as the workspace: a title bar, then one rounded card. */}
       <div data-tauri-drag-region aria-hidden="true" className="settings-titlebar-strip drag-region" />
+      {/* The breadcrumb sits in the title bar over the page, like a route header. */}
+      <div data-tauri-drag-region className="drag-region settings-titlebar">
+        <span>Settings<span className="mx-2 text-muted-foreground/40">/</span>{current[1]}</span>
+      </div>
       <aside className="settings-navigation app-sidebar-panel">
         <div className="settings-navigation-inner">
           <button
@@ -167,9 +170,6 @@ export function SettingsScreen({
             className="z-[25] max-[580px]:hidden"
           />
         )}
-        <div className={cn("drag-region settings-titlebar", CHAT_SURFACE_HEADER_ROW_CLASS_NAME)}>
-          <span>Settings<span className="mx-2 text-muted-foreground/40">/</span>{current[1]}</span>
-        </div>
         <div ref={scroll} className="settings-scroll">
           <div className="settings-page">
             <header className="settings-page-heading">

@@ -9,6 +9,8 @@ import {
   Archive02Icon as HiArchive,
   ArrowTurnBackwardIcon as HiUndo,
   ArrowLeft01Icon as HiArrowLeft,
+  ArrowLeft02Icon as HiHistoryBack,
+  ArrowRight02Icon as HiHistoryForward,
   ArrowRight01Icon as HiArrowRight,
   ArrowDown01Icon as HiArrowDown,
   ArrowUp01Icon as HiArrowUp,
@@ -196,6 +198,9 @@ export const CustomizeIcon: LucideIcon = hugeIcon(HcCustomize);
 export const EraserIcon: LucideIcon = hugeIcon(HcEraser);
 export const ArrowLeftIcon = hugeIcon(HiArrowLeft);
 export const ArrowRightIcon = hugeIcon(HiArrowRight);
+// Title-bar history navigation: arrows with a shaft, like the macOS toolbar.
+export const HistoryBackIcon = hugeIcon(HiHistoryBack);
+export const HistoryForwardIcon = hugeIcon(HiHistoryForward);
 export const ArrowDownIcon = hugeIcon(HiArrowDown);
 export const ArrowUpIcon = hugeIcon(HiArrowUp);
 export const ArrowUpRightIcon = hugeIcon(HiArrowUpRight);

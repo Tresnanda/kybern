@@ -148,6 +148,26 @@
     }
   }
 
+  /* Title bar over the content column. A short divider marks where the panel
+     meets the content, the way the source list meets the toolbar on macOS. */
+  .app-titlebar-slot[data-panel-open]::before,
+  .settings-titlebar::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 0;
+    top: 50%;
+    width: 1px;
+    height: 20px;
+    translate: 0 -50%;
+    background: --alpha(var(--color-black) / 10%);
+    pointer-events: none;
+  }
+
+  .dark .app-titlebar-slot[data-panel-open]::before,
+  .dark .settings-titlebar::before {
+    background: --alpha(var(--color-white) / 9%);
+  }
+
   .app-sidebar-panel {
     background: var(--app-sidebar-surface, var(--card));
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);

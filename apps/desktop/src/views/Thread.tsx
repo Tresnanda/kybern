@@ -733,6 +733,7 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
   return (
     <SurfaceHeader
       environment
+      inline={!!splitPaneId}
       trailing={
         <>
       {deleting && thread && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}

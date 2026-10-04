@@ -7,26 +7,28 @@
 //! redraw. We re-inset them ourselves on show and on every event that triggers
 //! the reset, so they stay level with the sidebar toggle + back/forward glyphs.
 //!
-//! The inset math mirrors tao's own `inset_traffic_lights`. `INSET_Y` must match
-//! `trafficLightPosition.y` in `tauri.conf.json` and `MAC_TRAFFIC_LIGHT_POSITION_Y_PX`
-//! in `src/lib/kit/desktopChrome.ts`.
+//! Tauri's own `inset_traffic_lights` still runs on redraw and sizes the
+//! container to the button height plus `trafficLightPosition.y`; that must equal
+//! `TITLEBAR_HEIGHT` here (14 + 32 = 46), or the two fight. `y` is mirrored in
+//! `MAC_TRAFFIC_LIGHT_POSITION_Y_PX` in `src/lib/kit/desktopChrome.ts`.
 
 use objc2_app_kit::{NSWindow, NSWindowButton};
+use objc2_foundation::NSPoint;
 use tauri::{Runtime, WebviewWindow, WindowEvent};
 
 /// Leading inset from the window edge to the first button. Matches `x` in
 /// `trafficLightPosition`.
 const INSET_X: f64 = 16.0;
-/// Vertical inset added to the button height to lower the dots onto the toolbar
-/// centerline. Matches `y` in `trafficLightPosition`. Calibrate against the
-/// *installed* (release) build, which renders the dots ~1 CSS px lower per unit
-/// than the dev preview: installed 0.4.4 shipped 25 and sat ~4 low, installed
-/// 0.4.5 shipped 22 and sat ~1 low, so 21 lands the installed dots on the icon
-/// centerline. (The dev build shows this a touch high — expected; verify with a
-/// real `pnpm tauri build` bundle, not the dev server.)
-const INSET_Y: f64 = 21.0;
+/// Height of the web title bar the dots center on (`CHAT_SURFACE_HEADER_HEIGHT_PX`).
+const TITLEBAR_HEIGHT: f64 = 46.0;
 
 /// Re-position the close/miniaturize/zoom buttons. Must run on the main thread.
+///
+/// The container grows to the full title-bar height, and each button is centered
+/// on the title bar's midline, measured from the window's top edge. Earlier
+/// versions only grew the container and relied on macOS's default button offset,
+/// which differed between dev and bundled builds, so the dots sat off the
+/// toolbar centerline in one of them.
 ///
 /// # Safety
 /// `window` must be a live `NSWindow` and this must be called on the main thread.
@@ -39,24 +41,28 @@ unsafe fn apply(window: &NSWindow) {
         return;
     };
 
-    // Frame captured before we grow the container, matching tao's ordering.
-    let close_rect = close.frame();
-
-    // Grow the title-bar container so the buttons may sit lower than the default.
+    let window_height = window.frame().size.height;
     // SAFETY: called on the main thread with live views (see `apply` contract).
     let container = unsafe { close.superview().and_then(|s| s.superview()) };
-    if let Some(container) = container {
-        let height = close_rect.size.height + INSET_Y;
+    if let Some(container) = &container {
         let mut rect = container.frame();
-        rect.size.height = height;
-        rect.origin.y = window.frame().size.height - height;
+        rect.size.height = TITLEBAR_HEIGHT;
+        rect.origin.y = window_height - TITLEBAR_HEIGHT;
         container.setFrame(rect);
     }
 
-    let space_between = miniaturize.frame().origin.x - close_rect.origin.x;
+    let space_between = miniaturize.frame().origin.x - close.frame().origin.x;
+    // The midline in window base coordinates (origin at the bottom left).
+    let midline = NSPoint::new(0.0, window_height - TITLEBAR_HEIGHT / 2.0);
     for (i, button) in [&close, &miniaturize, &zoom].into_iter().enumerate() {
-        let mut origin = button.frame().origin;
+        let frame = button.frame();
+        let mut origin = frame.origin;
         origin.x = INSET_X + (i as f64) * space_between;
+        // SAFETY: as above.
+        if let Some(parent) = unsafe { button.superview() } {
+            let local = parent.convertPoint_fromView(midline, None);
+            origin.y = local.y - frame.size.height / 2.0;
+        }
         button.setFrameOrigin(origin);
     }
 }

@@ -12,7 +12,7 @@ import { ChatPaneDropOverlay } from "@/components/kybern/ChatPaneDropOverlay"
 import { ErrorBoundary } from "@/components/kybern/ErrorBoundary"
 import { DelayedSpinner, Logo, Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/kit/button"
-import { Sidebar, SidebarInset, SidebarProvider } from "@/components/kit/sidebar"
+import { Sidebar, SidebarInset, SidebarProvider, sidebarOffcanvasMotionClass } from "@/components/kit/sidebar"
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import { useHotkey, useResize } from "@/lib/hooks"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
@@ -36,10 +36,18 @@ import { ThreadSidebar } from "@/views/Sidebar"
 import { SplitThreads } from "@/views/SplitThreads"
 import { ThreadView } from "@/views/Thread"
 import { AppUpdateSurface } from "@/views/AppUpdate"
-import { SurfaceHeader } from "@/views/chrome"
+import { SurfaceHeader, TitlebarSlotProvider } from "@/views/chrome"
 
 /** Width of the app rail. */
 const APP_RAIL_WIDTH = 52
+/** With the panel collapsed, keep route titles clear of the window controls:
+ *  they start at the traffic-light gutter (or 16px) and are 84px wide; the slot
+ *  itself starts after the rail. */
+const TITLEBAR_COLLAPSED_INSET_CLASS =
+  platform() === "macos"
+    ? "md:ps-[calc(var(--desktop-top-bar-traffic-light-gutter,82px)+84px-var(--app-rail-width))]"
+    : "md:ps-[calc(16px+84px-var(--app-rail-width))]"
+
 /** Gap between the workspace card and the window's right and bottom edges. */
 const APP_FRAME_INSET = 8
 
@@ -80,6 +88,7 @@ function Workspace() {
   const [keyboardNavigation, setKeyboardNavigation] = useState(false)
   const workspaceFocus = useRef<HTMLElement | null>(null)
   const set = useStore((s) => s.set)
+  const [titlebarSlot, setTitlebarSlot] = useState<HTMLDivElement | null>(null)
 
   useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen })
@@ -125,6 +134,7 @@ function Workspace() {
       data-sidebar-side="left"
       style={{ "--sidebar-width": `${sidebar.width}px`, "--app-rail-width": `${APP_RAIL_WIDTH}px`, "--app-titlebar-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px`, "--app-frame-inset": `${APP_FRAME_INSET}px` } as React.CSSProperties}
     >
+      <TitlebarSlotProvider value={titlebarSlot}>
       {/* The rail stays live over Settings, which opens beside it. */}
       <NavRail />
       <div className="settings-workspace flex h-dvh min-w-0 flex-1" inert={settingsOpen} aria-hidden={settingsOpen || undefined} data-settings-open={settingsOpen} data-keyboard={keyboardNavigation || undefined}>
@@ -148,6 +158,21 @@ function Workspace() {
       </Sidebar>
 
       <div className="relative flex h-svh min-h-0 min-w-0 flex-1 md:pt-(--app-titlebar-height) md:pe-(--app-frame-inset) md:pb-(--app-frame-inset)">
+        {/* Route headers render here, in the title bar over the content column.
+            Collapsed, it starts after the window controls (padding, so the title
+            travels with the panel's slide instead of popping). */}
+        <div
+          ref={setTitlebarSlot}
+          data-titlebar-slot
+          data-panel-open={sidebarOpen || undefined}
+          data-tauri-drag-region="deep"
+          className={cn(
+            "app-titlebar-slot drag-region absolute top-0 left-0 right-(--app-frame-inset) z-[2] hidden h-(--app-titlebar-height) min-w-0 md:flex",
+            "transition-[padding-inline-start] motion-reduce:transition-none",
+            sidebarOffcanvasMotionClass(sidebarOpen),
+            !sidebarOpen && TITLEBAR_COLLAPSED_INSET_CLASS,
+          )}
+        />
         {sidebarOpen && <ResizeHandle edge="left" label="Resize sidebar" onPointerDown={sidebar.onPointerDown} dragging={sidebar.dragging} className="z-[25]" />}
         {/* The content card owns the fill; an opaque inset behind it hides native vibrancy. */}
         <SidebarInset className="h-full min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
@@ -231,6 +256,7 @@ function Workspace() {
       <ErrorBoundary label="closing">
         <CloseGuard />
       </ErrorBoundary>
+      </TitlebarSlotProvider>
     </SidebarProvider>
   )
 }
