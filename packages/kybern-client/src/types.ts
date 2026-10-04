@@ -936,6 +936,67 @@ export interface ThreadNotes {
   revision: number;
 }
 
+// ---- notes ----
+
+export const NOTES_CHANGED_NOTIFICATION = "notes.changed";
+
+export type NoteId = Uuid;
+export type NoteScope = "global" | "project" | "thread";
+
+/** A note without its body, as listed. */
+export interface NoteSummary {
+  id: NoteId;
+  scope: NoteScope;
+  /** The project of a project note, or the thread's project for a thread note. */
+  project_id?: ProjectId | null;
+  thread_id?: ThreadId | null;
+  /** A thread note's title is the thread's title. */
+  title: string;
+  /** Plain-text excerpt of the body, markdown syntax removed, at most 240 characters. */
+  preview: string;
+  checklist: { done: number; total: number };
+  pinned: boolean;
+  /** Content revision: bumps when the title or body changes. 0 = no saved note yet. */
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  /** Set while the note is in Recently deleted. */
+  deleted_at?: string | null;
+  /** Where a deleted note came from once its project or thread was removed, e.g. "kybern" or "kybern › Fix login". */
+  origin?: string | null;
+}
+
+export interface Note extends NoteSummary {
+  /** Markdown. */
+  body: string;
+}
+
+export interface NotesCreateParams {
+  /** Only "global" or "project"; thread notes are created by `notes.update` with `thread_id`. */
+  scope: NoteScope;
+  project_id?: ProjectId | null;
+  title?: string;
+  body?: string;
+}
+
+export interface NotesUpdateParams {
+  /** Exactly one of `id` or `thread_id`. `thread_id` with `expected_revision: 0` creates the thread's note. */
+  id?: NoteId | null;
+  thread_id?: ThreadId | null;
+  /** Fails with CONFLICT (-32004) when the note changed elsewhere. */
+  expected_revision: number;
+  /** Ignored for thread notes. */
+  title?: string | null;
+  body?: string | null;
+}
+
+export interface NotesChangedNotification {
+  /** The note after the change, including soft deletes and restores. */
+  note?: NoteSummary | null;
+  /** Set instead of `note` when a note was permanently removed. */
+  purged_id?: NoteId | null;
+}
+
 export interface ThreadsUpdateParams {
   thread_id: ThreadId;
   title?: string;
@@ -1481,6 +1542,16 @@ export interface Methods {
   "threads.steer": [QueuedMessage, ThreadsSendResult];
   "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
   "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
+  "notes.list": [Empty, { notes: NoteSummary[] }];
+  "notes.get": [{ id?: NoteId | null; thread_id?: ThreadId | null }, { note?: Note | null }];
+  "notes.create": [NotesCreateParams, Note];
+  "notes.update": [NotesUpdateParams, Note];
+  "notes.pin": [{ id: NoteId; pinned: boolean }, NoteSummary];
+  "notes.move": [{ id: NoteId; scope: NoteScope; project_id?: ProjectId | null }, NoteSummary];
+  "notes.delete": [{ id: NoteId }, NoteSummary];
+  "notes.restore": [{ id: NoteId }, NoteSummary];
+  "notes.purge": [{ id: NoteId }, Empty];
+  "notes.search": [{ query: string; limit?: number | null }, { results: { id: NoteId; snippet: string }[] }];
   "queue.list": [{ thread_id?: ThreadId }, { messages: QueuedMessage[] }];
   "queue.remove": [
     { thread_id: ThreadId; id: MessageId },

@@ -30,6 +30,16 @@ expression: names
 - threads.steer
 - threads.notes.get
 - threads.notes.set
+- notes.list
+- notes.get
+- notes.create
+- notes.update
+- notes.pin
+- notes.move
+- notes.delete
+- notes.restore
+- notes.purge
+- notes.search
 - queue.add
 - queue.update
 - queue.list

@@ -22,6 +22,8 @@ use uuid::Uuid;
 use crate::config::Paths;
 use crate::settings::SettingsStore;
 
+mod notes;
+
 #[derive(Clone)]
 pub struct Orchestrator {
     inner: Arc<Inner>,
@@ -2693,6 +2695,8 @@ struct Inner {
     /// queue worker sleeps instead of polling the store.
     queue_wakeup: Notify,
     collaboration_wakeup: Notify,
+    /// Note changes, forwarded to clients as `notes.changed`.
+    notes_changed: tokio::sync::broadcast::Sender<methods::NotesChangedNotification>,
 }
 
 struct LiveSession {
@@ -2919,6 +2923,7 @@ impl Orchestrator {
                 pending_rewinds: Mutex::new(HashMap::new()),
                 queue_wakeup: Notify::new(),
                 collaboration_wakeup: Notify::new(),
+                notes_changed: tokio::sync::broadcast::channel(1024).0,
             }),
         }
     }
@@ -3829,24 +3834,6 @@ impl Orchestrator {
         }
         self.emit(message.thread_id, None, EventPayload::MessageQueueUpdated { message })?;
         Ok(())
-    }
-
-    pub fn set_notes(&self, params: methods::ThreadNotesSetParams) -> Result<methods::ThreadNotes> {
-        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found. Open another conversation."))?;
-        if params.text.len() > 128 * 1024 {
-            return Err(anyhow!("These notes are too long. Keep them under 128 KB and try again."));
-        }
-        let current = self.inner.store.thread_notes(params.thread_id)?;
-        if current.text == params.text {
-            return Ok(current);
-        }
-        if current.revision != params.expected_revision {
-            return Err(anyhow!("Notes changed on another device. Copy your edits, reload the saved notes, and try again."));
-        }
-        let notes = methods::ThreadNotes { text: params.text, revision: current.revision + 1 };
-        self.emit(params.thread_id, None, EventPayload::ThreadNotesUpdated { notes: notes.clone() })?;
-        Ok(notes)
     }
 
     /// Deliver new user input within the current native turn. The turn gate also
@@ -7969,7 +7956,7 @@ mod tests {
         assert_eq!(fixture.store.thread_notes(a.id).unwrap(), saved);
         assert_eq!(fixture.store.thread_notes(b.id).unwrap(), methods::ThreadNotes::default());
         let events = fixture.store.events_for_thread(a.id).unwrap();
-        assert_eq!(events.len(), 1);
+        assert!(events.is_empty(), "notes are stored in the notes table, not as thread events");
         assert!(kybern_store::project_transcript(&events).is_empty(), "notes are not prompts");
         let cleared = fixture
             .orchestrator
@@ -7980,9 +7967,104 @@ mod tests {
         assert!(
             fixture
                 .orchestrator
-                .set_notes(methods::ThreadNotesSetParams { thread_id: a.id, text: "x".repeat(128 * 1024 + 1), expected_revision: 2 })
+                .set_notes(methods::ThreadNotesSetParams { thread_id: a.id, text: "x".repeat(512 * 1024 + 1), expected_revision: 2 })
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_notepad_shims_the_thread_note_and_clearing_a_missing_note_saves_nothing() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let cleared = fixture
+            .orchestrator
+            .set_notes(methods::ThreadNotesSetParams { thread_id: thread.id, text: String::new(), expected_revision: 0 })
+            .unwrap();
+        assert_eq!(cleared, methods::ThreadNotes::default());
+        assert!(fixture.store.note_for_thread(thread.id).unwrap().is_none());
+
+        let saved = fixture
+            .orchestrator
+            .set_notes(methods::ThreadNotesSetParams { thread_id: thread.id, text: "legacy text".into(), expected_revision: 0 })
+            .unwrap();
+        let note = fixture.store.note_for_thread(thread.id).unwrap().unwrap();
+        assert_eq!(
+            (note.body.as_str(), note.summary.revision, note.summary.scope),
+            ("legacy text", saved.revision, methods::NoteScope::Thread)
+        );
+        assert_eq!(note.summary.title, thread.title);
+        assert!(
+            fixture
+                .orchestrator
+                .set_notes(methods::ThreadNotesSetParams { thread_id: Uuid::now_v7(), text: "x".into(), expected_revision: 0 })
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn note_changes_are_published_and_unchanged_saves_stay_quiet() {
+        let fixture = Fixture::new();
+        let mut changes = fixture.orchestrator.subscribe_notes();
+        let note = fixture
+            .orchestrator
+            .note_create(methods::NotesCreateParams {
+                scope: methods::NoteScope::Project,
+                project_id: Some(fixture.project.id),
+                title: Some("Plan".into()),
+                body: Some("- [ ] ship".into()),
+            })
+            .unwrap();
+        assert_eq!(changes.try_recv().unwrap().note.unwrap().id, note.summary.id);
+
+        let update = |body: &str, expected_revision| methods::NotesUpdateParams {
+            id: Some(note.summary.id),
+            thread_id: None,
+            expected_revision,
+            title: None,
+            body: Some(body.into()),
+        };
+        fixture.orchestrator.note_update(update("- [ ] ship", 1)).unwrap();
+        assert!(changes.try_recv().is_err(), "nothing changed, nothing published");
+        let edited = fixture.orchestrator.note_update(update("- [x] ship", 1)).unwrap();
+        assert_eq!(changes.try_recv().unwrap().note.unwrap().checklist, methods::NoteChecklist { done: 1, total: 1 });
+        assert!(fixture.orchestrator.note_update(update("stale", 1)).is_err());
+        assert!(changes.try_recv().is_err(), "a rejected save is not published");
+
+        let both = methods::NotesUpdateParams { thread_id: Some(Uuid::now_v7()), ..update("x", edited.summary.revision) };
+        assert!(fixture.orchestrator.note_update(both).is_err(), "exactly one of id and thread_id");
+        fixture.orchestrator.note_delete(note.summary.id).unwrap();
+        assert!(changes.try_recv().unwrap().note.unwrap().deleted_at.is_some());
+        fixture.orchestrator.note_purge(note.summary.id).unwrap();
+        assert_eq!(changes.try_recv().unwrap().purged_id, Some(note.summary.id));
+    }
+
+    #[tokio::test]
+    async fn removing_a_project_moves_its_notes_to_recently_deleted_and_publishes_them() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let page = fixture
+            .orchestrator
+            .note_create(methods::NotesCreateParams {
+                scope: methods::NoteScope::Project,
+                project_id: Some(fixture.project.id),
+                title: Some("Plan".into()),
+                body: None,
+            })
+            .unwrap();
+        fixture
+            .orchestrator
+            .set_notes(methods::ThreadNotesSetParams { thread_id: thread.id, text: "thread note".into(), expected_revision: 0 })
+            .unwrap();
+        let mut changes = fixture.orchestrator.subscribe_notes();
+        fixture.orchestrator.remove_project(fixture.project.id).unwrap();
+        let mut deleted = [changes.try_recv().unwrap().note.unwrap(), changes.try_recv().unwrap().note.unwrap()];
+        deleted.sort_by_key(|note| note.scope as u8);
+        assert!(deleted.iter().all(|note| note.deleted_at.is_some()));
+        assert_eq!(deleted[0].origin.as_deref(), Some("fixture"));
+        assert_eq!(deleted[1].origin.as_deref(), Some(format!("fixture › {}", thread.title).as_str()));
+        assert!(fixture.store.project_get(fixture.project.id).unwrap().is_none());
+        assert!(fixture.store.note_get(page.summary.id).unwrap().is_some(), "the note outlives its project");
+        assert!(fixture.orchestrator.remove_project(FREE_CHAT_PROJECT_ID).is_err());
     }
 
     #[tokio::test]

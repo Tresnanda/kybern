@@ -403,6 +403,8 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     });
     let mut live = state.events.subscribe();
     let mut revoked = state.revoked_tokens.subscribe();
+    // Notes are orchestration state: only clients that may read it hear about changes.
+    let mut notes = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_notes());
     if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
         return;
     }
@@ -448,6 +450,20 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {}
                     Some(Err(e)) => { tracing::debug!(%e, "ws read error"); break; }
+                }
+            }
+            note = async {
+                match notes.as_mut() {
+                    Some(notes) => notes.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match note {
+                    Ok(changed) => { let _ = ctx.out.notify(kybern_protocol::methods::NOTES_CHANGED_NOTIFICATION, changed).await; }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(conn = %ctx.id, lagged = n, "client missed note changes");
+                    }
+                    Err(_) => notes = None,
                 }
             }
             ev = live.recv() => {

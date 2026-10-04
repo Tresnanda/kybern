@@ -58,6 +58,26 @@ expression: scopes
   - "orchestration:read"
 - - threads.notes.set
   - "orchestration:operate"
+- - notes.list
+  - "orchestration:read"
+- - notes.get
+  - "orchestration:read"
+- - notes.create
+  - "orchestration:operate"
+- - notes.update
+  - "orchestration:operate"
+- - notes.pin
+  - "orchestration:operate"
+- - notes.move
+  - "orchestration:operate"
+- - notes.delete
+  - "orchestration:operate"
+- - notes.restore
+  - "orchestration:operate"
+- - notes.purge
+  - "orchestration:operate"
+- - notes.search
+  - "orchestration:read"
 - - queue.add
   - "orchestration:operate"
 - - queue.update

@@ -345,7 +345,200 @@ async fn notes_sync_between_clients_and_survive_reopening_the_store() {
     assert!(snapshot.transcript.is_empty());
     let reopened = kybern_store::Store::open(&host.state.paths.db).unwrap();
     assert_eq!(reopened.thread_notes(thread.id).unwrap(), notes);
-    assert!(matches!(reopened.events_for_thread(thread.id).unwrap()[0].payload, EventPayload::ThreadNotesUpdated { .. }));
+    assert!(reopened.events_for_thread(thread.id).unwrap().is_empty(), "notes no longer write thread events");
+    assert_eq!(reopened.note_for_thread(thread.id).unwrap().unwrap().body, "Desktop note\n☑ Test phone");
+}
+
+async fn next_notes_changed(client: &Client) -> NotesChangedNotification {
+    let mut notifications = client.notifications.lock().await;
+    loop {
+        let notification =
+            tokio::time::timeout(Duration::from_secs(3), futures::StreamExt::next(&mut *notifications)).await.unwrap().unwrap();
+        if notification.method == NOTES_CHANGED_NOTIFICATION {
+            return serde_json::from_value(notification.params).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let desktop = host.client().await;
+    let phone = host.client().await;
+    let created = desktop
+        .call::<NotesCreate>(NotesCreateParams {
+            scope: NoteScope::Project,
+            project_id: Some(thread.project_id),
+            title: Some("Release plan".into()),
+            body: Some("# Plan\n- [x] tag\n- [ ] ship".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!((created.summary.revision, created.summary.preview.as_str()), (1, "Plan tag ship"));
+    assert_eq!(created.summary.checklist, NoteChecklist { done: 1, total: 2 });
+
+    let announced = next_notes_changed(&phone).await;
+    assert_eq!(announced.note.as_ref().map(|note| note.id), Some(created.summary.id));
+    assert_eq!(phone.call::<NotesList>(Empty {}).await.unwrap().notes, vec![created.summary.clone()]);
+    let fetched = phone.call::<NotesGet>(NotesGetParams { id: Some(created.summary.id), thread_id: None }).await.unwrap();
+    assert_eq!(fetched.note, Some(created.clone()));
+    assert!(phone.call::<NotesGet>(NotesGetParams { id: None, thread_id: Some(thread.id) }).await.unwrap().note.is_none());
+
+    let update = |body: &str, expected_revision| NotesUpdateParams {
+        id: Some(created.summary.id),
+        thread_id: None,
+        expected_revision,
+        title: None,
+        body: Some(body.into()),
+    };
+    let edited = desktop.call::<NotesUpdate>(update("desktop edit", 1)).await.unwrap();
+    assert_eq!(edited.summary.revision, 2);
+    assert_eq!(next_notes_changed(&phone).await.note.unwrap().revision, 2);
+
+    // The phone still holds revision 1: the daemon answers with the CONFLICT code.
+    let conflict = phone.call_raw(NotesUpdate::NAME, serde_json::to_value(update("phone edit", 1)).unwrap()).await.unwrap_err().to_string();
+    assert_eq!(conflict, format!("This note changed on another device. Choose which version to keep. (code {})", codes::CONFLICT));
+    assert_eq!(
+        desktop.call::<NotesGet>(NotesGetParams { id: Some(created.summary.id), thread_id: None }).await.unwrap().note.unwrap().body,
+        "desktop edit"
+    );
+
+    let pinned = desktop.call::<NotesPin>(NotesPinParams { id: created.summary.id, pinned: true }).await.unwrap();
+    assert!(pinned.pinned);
+    assert!(next_notes_changed(&phone).await.note.unwrap().pinned);
+    let moved =
+        desktop.call::<NotesMove>(NotesMoveParams { id: created.summary.id, scope: NoteScope::Global, project_id: None }).await.unwrap();
+    assert_eq!((moved.scope, moved.project_id), (NoteScope::Global, None));
+    next_notes_changed(&phone).await;
+
+    let hits = phone.call::<NotesSearch>(NotesSearchParams { query: "DESKTOP".into(), limit: None }).await.unwrap().results;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, created.summary.id);
+
+    let deleted = desktop.call::<NotesDelete>(NotesIdParams { id: created.summary.id }).await.unwrap();
+    assert!(deleted.deleted_at.is_some());
+    assert!(next_notes_changed(&phone).await.note.unwrap().deleted_at.is_some());
+    let edit_deleted = phone.call_raw(NotesUpdate::NAME, serde_json::to_value(update("late", 2)).unwrap()).await.unwrap_err().to_string();
+    assert!(edit_deleted.contains("Restore this note before editing it."), "{edit_deleted}");
+    assert!(phone.call::<NotesSearch>(NotesSearchParams { query: "desktop".into(), limit: None }).await.unwrap().results.is_empty());
+    assert!(phone.call_raw(NotesPurge::NAME, json!({"id": Uuid::now_v7()})).await.unwrap_err().to_string().contains("code -32003"));
+    desktop.call::<NotesRestore>(NotesIdParams { id: created.summary.id }).await.unwrap();
+    assert!(next_notes_changed(&phone).await.note.unwrap().deleted_at.is_none());
+    desktop.call::<NotesDelete>(NotesIdParams { id: created.summary.id }).await.unwrap();
+    next_notes_changed(&phone).await;
+    desktop.call::<NotesPurge>(NotesIdParams { id: created.summary.id }).await.unwrap();
+    assert_eq!(next_notes_changed(&phone).await.purged_id, Some(created.summary.id));
+    assert!(phone.call::<NotesList>(Empty {}).await.unwrap().notes.is_empty());
+
+    // The same thread note through both APIs, and the legacy field on threads.get.
+    let thread_note = desktop
+        .call::<NotesUpdate>(NotesUpdateParams {
+            id: None,
+            thread_id: Some(thread.id),
+            expected_revision: 0,
+            title: None,
+            body: Some("on the thread".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!((thread_note.summary.scope, thread_note.summary.title.as_str()), (NoteScope::Thread, "Test"));
+    assert_eq!(
+        phone.call::<ThreadNotesGet>(ThreadsInterruptParams { thread_id: thread.id }).await.unwrap(),
+        ThreadNotes { text: "on the thread".into(), revision: 1 }
+    );
+    let legacy = phone
+        .call::<ThreadNotesSet>(ThreadNotesSetParams { thread_id: thread.id, text: "from an old client".into(), expected_revision: 1 })
+        .await
+        .unwrap();
+    assert_eq!(legacy.revision, 2);
+    assert_eq!(
+        desktop.call::<NotesGet>(NotesGetParams { id: None, thread_id: Some(thread.id) }).await.unwrap().note.unwrap().body,
+        "from an old client"
+    );
+    let snapshot = phone
+        .call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(10), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(snapshot.notes, legacy);
+}
+
+#[tokio::test]
+async fn removing_a_project_over_rpc_keeps_its_notes_in_recently_deleted() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let client = host.client().await;
+    let watcher = host.client().await;
+    let page = client
+        .call::<NotesCreate>(NotesCreateParams {
+            scope: NoteScope::Project,
+            project_id: Some(thread.project_id),
+            title: Some("Plan".into()),
+            body: None,
+        })
+        .await
+        .unwrap();
+    next_notes_changed(&watcher).await;
+    client
+        .call::<NotesUpdate>(NotesUpdateParams {
+            id: None,
+            thread_id: Some(thread.id),
+            expected_revision: 0,
+            title: None,
+            body: Some("remember".into()),
+        })
+        .await
+        .unwrap();
+    next_notes_changed(&watcher).await;
+
+    client.call::<ProjectsRemove>(ProjectsRemoveParams { project_id: thread.project_id }).await.unwrap();
+    let first = next_notes_changed(&watcher).await.note.unwrap();
+    let second = next_notes_changed(&watcher).await.note.unwrap();
+    assert!(first.deleted_at.is_some() && second.deleted_at.is_some());
+    let listed = client.call::<NotesList>(Empty {}).await.unwrap().notes;
+    assert_eq!(listed.len(), 2);
+    assert!(
+        listed.iter().all(|note| note.deleted_at.is_some() && note.origin.as_deref().is_some_and(|origin| origin.starts_with("Fixture")))
+    );
+    let thread_note = listed.iter().find(|note| note.scope == NoteScope::Thread).unwrap();
+    assert_eq!(thread_note.origin.as_deref(), Some("Fixture › Test"));
+    assert_eq!(thread_note.title, "Test");
+
+    let restored = client.call::<NotesRestore>(NotesIdParams { id: page.summary.id }).await.unwrap();
+    assert_eq!((restored.scope, restored.project_id), (NoteScope::Global, None), "the project is gone, so the note becomes global");
+}
+
+#[tokio::test]
+async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
+    let host = Host::start().await;
+    let connect_with = |scopes: &[Scope]| {
+        let token = crate::auth::generate();
+        host.state.store.token_insert(Uuid::now_v7(), &crate::auth::hash(&token), "scoped", scopes).unwrap();
+        async { Client::connect(&Endpoint { url: format!("{}/ws", host.url.replace("http:", "ws:")), token }).await.unwrap() }
+    };
+    let reader = connect_with(&[Scope::OrchestrationRead]).await;
+    let blind = connect_with(&[Scope::ReviewWrite]).await;
+    let writer = host.client().await;
+    writer
+        .call::<NotesCreate>(NotesCreateParams { scope: NoteScope::Global, project_id: None, title: Some("Hello".into()), body: None })
+        .await
+        .unwrap();
+    assert_eq!(next_notes_changed(&reader).await.note.unwrap().title, "Hello");
+    // A client without the read scope must not hear about notes, and cannot list or write them.
+    let mut notifications = blind.notifications.lock().await;
+    assert!(tokio::time::timeout(Duration::from_millis(300), futures::StreamExt::next(&mut *notifications)).await.is_err());
+    drop(notifications);
+    assert!(blind.call::<NotesList>(Empty {}).await.unwrap_err().to_string().contains("missing scope"));
+    assert!(reader.call::<NotesList>(Empty {}).await.is_ok());
+    assert!(
+        reader
+            .call::<NotesCreate>(NotesCreateParams { scope: NoteScope::Global, project_id: None, title: None, body: None })
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("missing scope"),
+        "writing needs the operate scope"
+    );
 }
 
 #[cfg(unix)]

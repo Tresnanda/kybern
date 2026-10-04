@@ -58,6 +58,22 @@ pub fn threads(list: &[Thread]) {
     }
 }
 
+pub fn notes(list: &[NoteSummary]) {
+    for note in list {
+        let scope = match note.scope {
+            NoteScope::Global => "global",
+            NoteScope::Project => "project",
+            NoteScope::Thread => "thread",
+        };
+        let title = if note.title.is_empty() { "Untitled" } else { note.title.as_str() };
+        let checklist =
+            if note.checklist.total > 0 { format!("  [{}/{}]", note.checklist.done, note.checklist.total) } else { String::new() };
+        let preview =
+            if note.preview.is_empty() { String::new() } else { format!("  {}", note.preview.chars().take(60).collect::<String>()) };
+        println!("{}  {:<8} {}{}{}{}", note.id, scope, title, if note.pinned { "  📌" } else { "" }, checklist, preview);
+    }
+}
+
 pub fn approvals(list: &[ApprovalRequest]) {
     if list.is_empty() {
         println!("no pending approvals");

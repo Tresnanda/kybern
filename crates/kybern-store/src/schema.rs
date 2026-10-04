@@ -248,14 +248,55 @@ const MIGRATIONS: &[&str] = &[
       ON events(json_extract(payload, '$.message_id'))
       WHERE kind = 'turn_started';
     ",
+    // v13: notes across global, project and thread scopes. No foreign keys: a note
+    // outlives its project or thread (it moves to Recently deleted instead). Thread
+    // notes from the old per-thread notepad are copied over; `thread_notes` stays
+    // behind untouched.
+    "
+    CREATE TABLE notes (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL,
+        project_id TEXT,
+        thread_id TEXT UNIQUE,
+        title TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        pinned INTEGER NOT NULL DEFAULT 0,
+        revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        origin TEXT
+    );
+    CREATE INDEX notes_deleted ON notes(deleted_at);
+    CREATE INDEX notes_project ON notes(project_id);
+    INSERT INTO notes(id, scope, project_id, thread_id, title, body, pinned, revision, created_at, updated_at)
+    SELECT
+        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-'
+            || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+        'thread', t.project_id, n.thread_id, t.title, n.text, 0, n.revision,
+        COALESCE((SELECT MIN(at) FROM events WHERE thread_id = n.thread_id AND kind = 'thread_notes_updated'), t.created_at),
+        COALESCE((SELECT MAX(at) FROM events WHERE thread_id = n.thread_id AND kind = 'thread_notes_updated'), t.updated_at)
+    FROM thread_notes n JOIN threads t ON t.id = n.thread_id
+    WHERE trim(n.text) != '';
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {
+    migrate_to(conn, MIGRATIONS.len())
+}
+
+/// Apply migrations up to `target` (a schema version). Tests use it to build an older database.
+pub(crate) fn migrate_to(conn: &Connection, target: usize) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+    for (i, sql) in MIGRATIONS.iter().enumerate().take(target).skip(version as usize) {
         conn.execute_batch(sql)?;
         conn.pragma_update(None, "user_version", (i + 1) as i64)?;
         tracing::info!(version = i + 1, "applied store migration");
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn migration_count() -> usize {
+    MIGRATIONS.len()
 }
