@@ -80,3 +80,36 @@ fn replay_ready_schema_is_stable() {
 fn thread_file_read_schema_is_stable() {
     insta::assert_json_snapshot!(schema_for!(ThreadFileReadParams));
 }
+
+#[test]
+fn notes_wire_shape_is_stable() {
+    insta::assert_json_snapshot!("note_schema", schema_for!(Note));
+    insta::assert_json_snapshot!("notes_changed_notification", schema_for!(NotesChangedNotification));
+    let note = Note {
+        summary: NoteSummary {
+            id: uuid::Uuid::nil(),
+            scope: NoteScope::Thread,
+            project_id: Some(uuid::Uuid::nil()),
+            thread_id: None,
+            title: "Plan".into(),
+            preview: "Ship it".into(),
+            checklist: NoteChecklist { done: 1, total: 3 },
+            pinned: false,
+            revision: 2,
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-10-05T00:00:00Z").unwrap().into(),
+            updated_at: chrono::DateTime::parse_from_rfc3339("2026-10-05T00:00:00Z").unwrap().into(),
+            deleted_at: None,
+            origin: None,
+        },
+        body: "- [x] Ship it".into(),
+    };
+    let json = serde_json::to_value(&note).unwrap();
+    assert_eq!(json["scope"], "thread");
+    assert_eq!(json["body"], "- [x] Ship it", "body sits beside the summary fields");
+    assert_eq!(json["checklist"], serde_json::json!({"done": 1, "total": 3}));
+    assert!(json.get("thread_id").is_none() && json.get("deleted_at").is_none(), "absent options are omitted");
+    assert_eq!(serde_json::from_value::<Note>(json).unwrap(), note);
+    let update: NotesUpdateParams =
+        serde_json::from_value(serde_json::json!({"thread_id": uuid::Uuid::nil(), "expected_revision": 0})).unwrap();
+    assert!(update.id.is_none() && update.body.is_none());
+}

@@ -1,0 +1,149 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(NotesChangedNotification)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NotesChangedNotification",
+  "description": "Params of the `notes.changed` notification.",
+  "type": "object",
+  "properties": {
+    "note": {
+      "description": "The note after the change, including soft deletes and restores.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NoteSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "purged_id": {
+      "description": "Set instead of `note` when a note was permanently removed.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    }
+  },
+  "$defs": {
+    "NoteSummary": {
+      "description": "A note without its body, as listed.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scope": {
+          "$ref": "#/$defs/NoteScope"
+        },
+        "project_id": {
+          "description": "The project of a project note, or the thread's project for a thread note.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "title": {
+          "description": "A thread note's title is the thread's title.",
+          "type": "string"
+        },
+        "preview": {
+          "description": "Plain-text excerpt of the body, markdown syntax removed, at most 240 characters.",
+          "type": "string"
+        },
+        "checklist": {
+          "$ref": "#/$defs/NoteChecklist"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "revision": {
+          "description": "Content revision: bumps when the title or body changes. 0 means no saved note yet.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "deleted_at": {
+          "description": "Set while the note is in Recently deleted.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "origin": {
+          "description": "Where a deleted note came from once its project or thread was removed,\nsuch as \"kybern\" or \"kybern › Fix login\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "title",
+        "preview",
+        "checklist",
+        "pinned",
+        "revision",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "NoteScope": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "global",
+            "project"
+          ]
+        },
+        {
+          "description": "Exactly one per thread; titled after the thread.",
+          "type": "string",
+          "const": "thread"
+        }
+      ]
+    },
+    "NoteChecklist": {
+      "type": "object",
+      "properties": {
+        "done": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "done",
+        "total"
+      ]
+    }
+  }
+}

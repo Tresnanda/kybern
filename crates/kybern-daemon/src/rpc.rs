@@ -156,7 +156,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ProjectsRemove::NAME => {
             let p: ProjectsRemoveParams = parse(params)?;
-            state.store.project_delete(p.project_id).map_err(internal)?;
+            state.orchestrator.remove_project(p.project_id).map_err(note_err)?;
             ok(Empty {})
         }
         ThreadsList::NAME => {
@@ -314,7 +314,35 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| bad(anyhow::anyhow!("Thread not found.")))?;
             ok(state.store.thread_notes(p.thread_id).map_err(internal)?)
         }
-        ThreadNotesSet::NAME => ok(state.orchestrator.set_notes(parse(params)?).map_err(bad)?),
+        ThreadNotesSet::NAME => ok(state.orchestrator.set_notes(parse(params)?).map_err(note_err)?),
+        NotesList::NAME => {
+            let orchestrator = state.orchestrator.clone();
+            let notes = tokio::task::spawn_blocking(move || orchestrator.notes_list()).await.map_err(internal)?.map_err(note_err)?;
+            ok(NotesListResult { notes })
+        }
+        NotesGet::NAME => ok(NotesGetResult { note: state.orchestrator.note_get(parse_or_default(params)?).map_err(note_err)? }),
+        NotesCreate::NAME => ok(state.orchestrator.note_create(parse(params)?).map_err(note_err)?),
+        NotesUpdate::NAME => ok(state.orchestrator.note_update(parse(params)?).map_err(note_err)?),
+        NotesPin::NAME => {
+            let p: NotesPinParams = parse(params)?;
+            ok(state.orchestrator.note_pin(p.id, p.pinned).map_err(note_err)?)
+        }
+        NotesMove::NAME => ok(state.orchestrator.note_move(parse(params)?).map_err(note_err)?),
+        NotesDelete::NAME => ok(state.orchestrator.note_delete(parse::<NotesIdParams>(params)?.id).map_err(note_err)?),
+        NotesRestore::NAME => ok(state.orchestrator.note_restore(parse::<NotesIdParams>(params)?.id).map_err(note_err)?),
+        NotesPurge::NAME => {
+            state.orchestrator.note_purge(parse::<NotesIdParams>(params)?.id).map_err(note_err)?;
+            ok(Empty {})
+        }
+        NotesSearch::NAME => {
+            let p: NotesSearchParams = parse(params)?;
+            let orchestrator = state.orchestrator.clone();
+            let results = tokio::task::spawn_blocking(move || orchestrator.notes_search(&p.query, p.limit))
+                .await
+                .map_err(internal)?
+                .map_err(note_err)?;
+            ok(NotesSearchResult { results })
+        }
         QueueUpdate::NAME => {
             state.orchestrator.update_queued(parse(params)?).map_err(bad)?;
             ok(Empty {})
@@ -791,6 +819,18 @@ fn bad(e: anyhow::Error) -> RpcError {
         RpcError::new(codes::PROVIDER_UNAVAILABLE, msg)
     } else {
         RpcError::new(codes::INVALID_PARAMS, msg)
+    }
+}
+
+/// Notes failures: a stale revision is a CONFLICT the client can resolve, the rest
+/// say what to do next. Anything unexpected is an internal error.
+fn note_err(e: anyhow::Error) -> RpcError {
+    use kybern_store::NoteError;
+    match e.downcast_ref::<NoteError>() {
+        Some(NoteError::Conflict) => RpcError::new(codes::CONFLICT, e.to_string()),
+        Some(NoteError::NotFound(_)) => RpcError::new(codes::NOT_FOUND, e.to_string()),
+        Some(NoteError::Deleted | NoteError::Invalid(_)) => RpcError::new(codes::INVALID_PARAMS, e.to_string()),
+        None => internal(e),
     }
 }
 

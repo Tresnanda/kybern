@@ -54,6 +54,9 @@ fn main() {
     add::<ProjectCoordinator>(&mut types, "ProjectCoordinator");
     add::<ThreadReadMessage>(&mut types, "ThreadReadMessage");
     add::<ThreadSearchHit>(&mut types, "ThreadSearchHit");
+    add::<Note>(&mut types, "Note");
+    add::<NoteSummary>(&mut types, "NoteSummary");
+    add::<NotesChangedNotification>(&mut types, "NotesChangedNotification");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -84,6 +87,16 @@ fn main() {
     method::<ThreadsSteer>(&mut methods);
     method::<ThreadNotesGet>(&mut methods);
     method::<ThreadNotesSet>(&mut methods);
+    method::<NotesList>(&mut methods);
+    method::<NotesGet>(&mut methods);
+    method::<NotesCreate>(&mut methods);
+    method::<NotesUpdate>(&mut methods);
+    method::<NotesPin>(&mut methods);
+    method::<NotesMove>(&mut methods);
+    method::<NotesDelete>(&mut methods);
+    method::<NotesRestore>(&mut methods);
+    method::<NotesPurge>(&mut methods);
+    method::<NotesSearch>(&mut methods);
     method::<QueueAdd>(&mut methods);
     method::<QueueUpdate>(&mut methods);
     method::<QueueList>(&mut methods);

@@ -3,10 +3,15 @@
 //! The store is synchronous; the daemon wraps calls in `spawn_blocking` when
 //! they may take more than a few milliseconds (replays, projections).
 
+mod notes;
 mod projection;
 mod schema;
 mod thread_history;
 mod transcript_page;
+pub use notes::{
+    NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
+    preview as note_preview,
+};
 pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHistorySearchPage};
 pub use transcript_page::{transcript_page, transcript_page_ref};
 
@@ -1637,16 +1642,6 @@ impl Store {
                 c.prepare("SELECT payload FROM queued_messages WHERE pending = 1 AND (?1 IS NULL OR thread_id = ?1) ORDER BY seq")?;
             let rows = st.query_map([thread_id.map(|id| id.to_string())], |r| r.get::<_, String>(0))?;
             rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
-        })
-    }
-
-    pub fn thread_notes(&self, thread_id: ThreadId) -> Result<methods::ThreadNotes> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT text, revision FROM thread_notes WHERE thread_id = ?1", [thread_id.to_string()], |r| {
-                Ok(methods::ThreadNotes { text: r.get(0)?, revision: r.get(1)? })
-            })
-            .optional()?
-            .unwrap_or_default())
         })
     }
 

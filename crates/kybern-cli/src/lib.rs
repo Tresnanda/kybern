@@ -184,6 +184,11 @@ enum Cmd {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// Write and find notes: global pages, project pages and thread notes.
+    Note {
+        #[command(subcommand)]
+        cmd: NoteCmd,
+    },
     /// Print a thread's transcript.
     Show {
         thread: String,
@@ -347,6 +352,44 @@ enum Cmd {
     },
     /// Call any RPC method with raw JSON params.
     Call { method: String, params: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum NoteCmd {
+    /// List notes, newest first with pinned notes on top.
+    List {
+        /// Show Recently deleted notes instead.
+        #[arg(long)]
+        deleted: bool,
+    },
+    /// Print a note as markdown.
+    Show { id: String },
+    /// Create a global note, or a project note with --project.
+    New {
+        /// Project name, path or id.
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        /// Read the markdown body from this file (`-` reads stdin).
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Replace a note's body from a file (`-` reads stdin), and optionally its title.
+    Edit {
+        id: String,
+        /// Read the new markdown body from this file (`-` reads stdin).
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+    },
+    /// Move a note to Recently deleted.
+    Delete { id: String },
+    /// Bring a deleted note back.
+    Restore { id: String },
+    /// Find notes whose title or text contains the words.
+    Search { query: Vec<String> },
 }
 
 #[derive(Subcommand)]
@@ -753,6 +796,7 @@ pub async fn run() -> Result<()> {
                 println!("{}", notes.text);
             }
         }
+        Cmd::Note { cmd } => note_command(&client, cmd, json).await?,
         Cmd::Queue { cmd } => match cmd {
             QueueCmd::List { thread } => {
                 let result = client.call::<QueueList>(QueueListParams { thread_id: thread.map(|id| id.parse()).transpose()? }).await?;
@@ -1252,6 +1296,137 @@ fn print_json(value: &impl serde::Serialize) -> Result<()> {
     serde_json::to_writer_pretty(&mut output, value)?;
     output.write_all(b"\n")?;
     output.flush()?;
+    Ok(())
+}
+
+/// The text of a file, or of stdin for `-`.
+fn read_input(path: &str) -> Result<String> {
+    if path == "-" {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+        return Ok(text);
+    }
+    Ok(std::fs::read_to_string(path)?)
+}
+
+/// A full note id, or any unambiguous prefix of one.
+async fn resolve_note(client: &Client, key: &str) -> Result<NoteId> {
+    if let Ok(id) = key.parse::<NoteId>() {
+        return Ok(id);
+    }
+    let notes = client.call::<NotesList>(Empty {}).await?.notes;
+    let mut matches = notes.iter().filter(|note| !key.is_empty() && note.id.to_string().starts_with(key));
+    match (matches.next(), matches.next()) {
+        (Some(note), None) => Ok(note.id),
+        (Some(_), Some(_)) => Err(anyhow!("note id {key} matches several notes; use more of the id")),
+        _ => Err(anyhow!("note {key} not found; run `kybern note list` for ids")),
+    }
+}
+
+async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
+    match cmd {
+        NoteCmd::List { deleted } => {
+            let mut result = client.call::<NotesList>(Empty {}).await?;
+            result.notes.retain(|note| note.deleted_at.is_some() == deleted);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if result.notes.is_empty() {
+                println!(
+                    "{}",
+                    if deleted { "No deleted notes." } else { "No notes yet. Create one with `kybern note new --title Ideas`." }
+                );
+            } else {
+                render::notes(&result.notes);
+            }
+        }
+        NoteCmd::Show { id } => {
+            let note = client.call::<NotesGet>(NotesGetParams { id: Some(resolve_note(client, &id).await?), thread_id: None }).await?.note;
+            let note = note.ok_or_else(|| anyhow!("note {id} not found; run `kybern note list` for ids"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&note)?);
+            } else {
+                if !note.summary.title.is_empty() {
+                    println!("# {}\n", note.summary.title);
+                }
+                println!("{}", note.body);
+            }
+        }
+        NoteCmd::New { project, title, file } => {
+            let project_id = match &project {
+                Some(project) => Some(resolve_project(client, project, false).await?),
+                None => None,
+            };
+            let note = client
+                .call::<NotesCreate>(NotesCreateParams {
+                    scope: if project_id.is_some() { NoteScope::Project } else { NoteScope::Global },
+                    project_id,
+                    title,
+                    body: file.as_deref().map(read_input).transpose()?,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&note)?);
+            } else {
+                println!("{}", note.summary.id);
+            }
+        }
+        NoteCmd::Edit { id, file, title } => {
+            if file.is_none() && title.is_none() {
+                return Err(anyhow!("nothing to change; pass --file <path|-> for the body or --title for the title"));
+            }
+            let id = resolve_note(client, &id).await?;
+            let current = client
+                .call::<NotesGet>(NotesGetParams { id: Some(id), thread_id: None })
+                .await?
+                .note
+                .ok_or_else(|| anyhow!("note {id} not found; run `kybern note list` for ids"))?;
+            let note = client
+                .call::<NotesUpdate>(NotesUpdateParams {
+                    id: Some(id),
+                    thread_id: None,
+                    expected_revision: current.summary.revision,
+                    title,
+                    body: file.as_deref().map(read_input).transpose()?,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&note)?);
+            } else {
+                println!("Saved revision {}.", note.summary.revision);
+            }
+        }
+        NoteCmd::Delete { id } => {
+            let note = client.call::<NotesDelete>(NotesIdParams { id: resolve_note(client, &id).await? }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&note)?);
+            } else {
+                println!("Deleted. Restore it within 30 days with `kybern note restore {}`.", note.id);
+            }
+        }
+        NoteCmd::Restore { id } => {
+            let note = client.call::<NotesRestore>(NotesIdParams { id: resolve_note(client, &id).await? }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&note)?);
+            } else {
+                println!("Restored{}.", if note.scope == NoteScope::Global && note.origin.is_some() { " as a global note" } else { "" });
+            }
+        }
+        NoteCmd::Search { query } => {
+            let query = query.join(" ");
+            if query.trim().is_empty() {
+                return Err(anyhow!("type something to search for, like `kybern note search release plan`"));
+            }
+            let result = client.call::<NotesSearch>(NotesSearchParams { query, limit: None }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if result.results.is_empty() {
+                println!("No matching notes.");
+            }
+            for hit in result.results.iter().filter(|_| !json) {
+                println!("{}  {}", hit.id, hit.snippet);
+            }
+        }
+    }
     Ok(())
 }
 

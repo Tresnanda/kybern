@@ -156,6 +156,7 @@ pub async fn run() -> Result<()> {
     let update_worker = tokio::spawn(harness_updates::run(state.clone()));
     let self_update_worker = tokio::spawn(self_update::run(state.clone()));
     let maintenance_worker = tokio::spawn(maintenance::run(state.clone(), !args.pair));
+    let notes_worker = tokio::spawn(purge_expired_notes(state.clone()));
     let queue_state = state.clone();
     let queue_worker = tokio::spawn(async move {
         // Follow-ups dispatch when their thread goes idle. The orchestrator
@@ -226,6 +227,7 @@ pub async fn run() -> Result<()> {
     };
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
+    notes_worker.abort();
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
     let _ = self_update_worker.await;
@@ -236,6 +238,21 @@ pub async fn run() -> Result<()> {
         self_update::restart(&paths.root.join("daemon.log"));
     }
     Ok(())
+}
+
+/// Notes deleted more than 30 days ago are removed for good, once at start and then hourly.
+async fn purge_expired_notes(state: state::AppState) {
+    loop {
+        match state.orchestrator.purge_expired_notes() {
+            Ok(0) => {}
+            Ok(purged) => tracing::info!(purged, "removed notes deleted more than 30 days ago"),
+            Err(error) => tracing::warn!(%error, "could not remove expired notes"),
+        }
+        tokio::select! {
+            _ = state.shutdown.cancelled() => break,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(60 * 60)) => {}
+        }
+    }
 }
 
 /// Agent CLIs usually live in per-user directories that a service manager or a

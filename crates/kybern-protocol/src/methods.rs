@@ -1735,6 +1735,184 @@ pub struct ArtifactPreviewResult {
 }
 method!(ArtifactPreview, "threads.artifacts.preview", Some(Scope::OrchestrationRead), ArtifactReadParams, ArtifactPreviewResult);
 
+// ---- notes ----
+
+/// Notification method delivered to every client that can read orchestration
+/// state after a note changes. Older clients ignore it.
+pub const NOTES_CHANGED_NOTIFICATION: &str = "notes.changed";
+
+pub type NoteId = uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteScope {
+    Global,
+    Project,
+    /// Exactly one per thread; titled after the thread.
+    Thread,
+}
+
+impl NoteScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoteScope::Global => "global",
+            NoteScope::Project => "project",
+            NoteScope::Thread => "thread",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteChecklist {
+    pub done: u32,
+    pub total: u32,
+}
+
+/// A note without its body, as listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteSummary {
+    pub id: NoteId,
+    pub scope: NoteScope,
+    /// The project of a project note, or the thread's project for a thread note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    /// A thread note's title is the thread's title.
+    pub title: String,
+    /// Plain-text excerpt of the body, markdown syntax removed, at most 240 characters.
+    pub preview: String,
+    pub checklist: NoteChecklist,
+    pub pinned: bool,
+    /// Content revision: bumps when the title or body changes. 0 means no saved note yet.
+    pub revision: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Set while the note is in Recently deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Where a deleted note came from once its project or thread was removed,
+    /// such as "kybern" or "kybern › Fix login".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Note {
+    #[serde(flatten)]
+    pub summary: NoteSummary,
+    /// Markdown.
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NotesListResult {
+    pub notes: Vec<NoteSummary>,
+}
+method!(NotesList, "notes.list", Some(Scope::OrchestrationRead), Empty, NotesListResult);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NotesGetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<NoteId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NotesGetResult {
+    /// Absent when the thread has no note yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Note>,
+}
+method!(NotesGet, "notes.get", Some(Scope::OrchestrationRead), NotesGetParams, NotesGetResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesCreateParams {
+    /// Only `global` or `project`; thread notes are created by `notes.update` with `thread_id`.
+    pub scope: NoteScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+method!(NotesCreate, "notes.create", Some(Scope::OrchestrationOperate), NotesCreateParams, Note);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesUpdateParams {
+    /// Exactly one of `id` or `thread_id`. `thread_id` with `expected_revision: 0` creates the thread's note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<NoteId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    /// Fails with CONFLICT (-32004) when the note changed elsewhere.
+    pub expected_revision: i64,
+    /// Ignored for thread notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+method!(NotesUpdate, "notes.update", Some(Scope::OrchestrationOperate), NotesUpdateParams, Note);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesPinParams {
+    pub id: NoteId,
+    pub pinned: bool,
+}
+method!(NotesPin, "notes.pin", Some(Scope::OrchestrationOperate), NotesPinParams, NoteSummary);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesMoveParams {
+    pub id: NoteId,
+    /// Only `global` or `project`; thread notes cannot be moved.
+    pub scope: NoteScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+}
+method!(NotesMove, "notes.move", Some(Scope::OrchestrationOperate), NotesMoveParams, NoteSummary);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesIdParams {
+    pub id: NoteId,
+}
+// Soft delete: the note moves to Recently deleted for 30 days.
+method!(NotesDelete, "notes.delete", Some(Scope::OrchestrationOperate), NotesIdParams, NoteSummary);
+method!(NotesRestore, "notes.restore", Some(Scope::OrchestrationOperate), NotesIdParams, NoteSummary);
+// Permanent removal; only allowed for a deleted note.
+method!(NotesPurge, "notes.purge", Some(Scope::OrchestrationOperate), NotesIdParams, Empty);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesSearchParams {
+    pub query: String,
+    /// Defaults to 50, at most 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteSearchHit {
+    pub id: NoteId,
+    /// About 120 characters around the first match.
+    pub snippet: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NotesSearchResult {
+    pub results: Vec<NoteSearchHit>,
+}
+method!(NotesSearch, "notes.search", Some(Scope::OrchestrationRead), NotesSearchParams, NotesSearchResult);
+
+/// Params of the `notes.changed` notification.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NotesChangedNotification {
+    /// The note after the change, including soft deletes and restores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<NoteSummary>,
+    /// Set instead of `note` when a note was permanently removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purged_id: Option<NoteId>,
+}
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -1778,6 +1956,16 @@ registry!(
     ThreadsSteer,
     ThreadNotesGet,
     ThreadNotesSet,
+    NotesList,
+    NotesGet,
+    NotesCreate,
+    NotesUpdate,
+    NotesPin,
+    NotesMove,
+    NotesDelete,
+    NotesRestore,
+    NotesPurge,
+    NotesSearch,
     QueueAdd,
     QueueUpdate,
     QueueList,
