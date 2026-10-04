@@ -146,8 +146,10 @@ const MODES: { mode: PermissionMode; label: string; description: string; icon: R
 /** "claude-fable-5-1" -> "Claude Fable 5.1" when the catalog has no entry. */
 // Rich input: text and inline tokens. It grows with its content up to 200px,
 // then scrolls; tokens are real elements sized like sent messages.
+// `overflow-y: auto` alone makes the x axis scrollable too, and spaces that hang
+// at a wrapped line's end overflow sideways. Clip that axis like a textarea does.
 const EDITOR_CLASS = cn(
-  "block max-h-[200px] w-full overflow-y-auto break-words whitespace-pre-wrap outline-none selectable",
+  "block max-h-[200px] w-full overflow-x-hidden overflow-y-auto break-words whitespace-pre-wrap outline-none selectable",
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
 )
 
