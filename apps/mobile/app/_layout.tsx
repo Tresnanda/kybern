@@ -323,6 +323,21 @@ function Navigation() {
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
         <Stack.Screen name="app-updates" options={{ title: "App updates" }} />
         <Stack.Screen name="projects" options={{ title: "Projects" }} />
+        <Stack.Screen
+          name="notes"
+          options={{ title: "Notes", headerLargeTitleEnabled: true }}
+        />
+        <Stack.Screen name="note" options={{ title: "" }} />
+        <Stack.Screen
+          name="note-move"
+          options={{
+            title: "Move note",
+            presentation: "formSheet",
+            sheetAllowedDetents: sheetDetents,
+            sheetGrabberVisible: true,
+            ...androidSheet,
+          }}
+        />
         <Stack.Screen name="activity" options={{ title: "Activity" }} />
         <Stack.Screen name="sessions" options={{ title: "Resume a session" }} />
         <Stack.Screen name="pair" options={{ headerShown: false }} />

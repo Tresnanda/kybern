@@ -95,14 +95,30 @@ still appear here. Requests run as regular Claude turns, with approvals visible
 in the conversation. These controls require a daemon with the integrations/artifacts
 RPCs; an older daemon reports an unsupported-method error.
 
-## Notes and follow-ups
+## Notes
 
-Open **Notes** from the conversation’s environment menu to keep reminders and
-things to do. Use **Save notes** to sync them with the desktop. Notes belong to
-the conversation and are not appended to prompts automatically. Pi can read
-them when it calls the Kybern thread-context tool. Conflicting edits from another
-device preserve the local draft; copy it before choosing **Reload saved notes**.
-Unsaved mobile drafts survive navigation within the current app session.
+**Notes** opens from the Threads screen, the iPad sidebar, the home header, and a
+project's page. Notes belong to the connected computer and sync with the desktop.
+The list groups them as Pinned, Global (on that computer), one section per
+project (project notes, then a collapsed **Thread notes** group), Chats, and
+Recently deleted, which keeps a note for 30 days. Search matches titles and
+previews at once and note text through the computer. Long-press a note to pin,
+move, copy or share it as Markdown, or delete it; **Undo** appears after a delete.
+
+A note opens as formatted Markdown. **Edit** switches to the Markdown text and
+a title field; **Done** returns. Changes save about 600 ms after typing stops and
+when you leave the screen or the app. If another device saved first, a banner
+offers **Keep mine** or **Load theirs**; your text stays on the phone until you
+choose, and unsaved drafts survive leaving a note while the app is open. A new
+note is created on the first save, so abandoned ones never appear.
+
+A conversation's note stays in the environment menu → **Notes**, using the same
+editor. Its title is the thread's title. Notes are not appended to prompts
+automatically; agents read them only through the Kybern thread-context tool.
+Notes need a computer running a Kybern with `notes.*` methods; an older one shows
+an update prompt.
+
+## Follow-ups
 
 During a turn, **Queue follow-up** sends the prompt after the current work
 finishes. Queued prompts can be edited or removed; editing preserves their
