@@ -10,7 +10,7 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { useLocalStorage } from "@/lib/hooks"
-import { CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
+import { AnalyticsIcon, CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
 import { isLaunching } from "@/lib/launch"
 import { cn } from "@/lib/utils"
 import type { PaneId } from "@/state/splitView"
@@ -87,7 +87,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
       { name: "sessions", hint: "Browse saved sessions", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: projectId ?? null }) },
       { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
       { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
-      { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
+      { name: "usage", hint: "Review token usage and cost", icon: <AnalyticsIcon className="size-4" />, run: () => useStore.getState().selectUsage() },
     ],
     [set, projectId],
   )
@@ -97,7 +97,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
 
   return (
     <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-col">
-      <SurfaceHeader minimal showSidebarControls={!paneId} />
+      <SurfaceHeader minimal />
       <div className={cn("flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER)}>
         <div className="flex min-h-0 flex-1 items-center justify-center">
           <div className={cn(enter && "t-stagger", "flex flex-col items-center gap-4 px-6 text-center select-none mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]")}>

@@ -4,7 +4,6 @@
 // Exports: border, surface, card, row, and inset list class names
 
 import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "./sidebarRowStyles";
-import { SOFT_SURFACE_FILL_CLASS_NAME } from "./surfaceStyles";
 
 /** Corner radius for top-level settings boxes: cards, empty states, dropdown panels. */
 export const SETTINGS_RADIUS_CLASS_NAME = "rounded-xl";
@@ -32,12 +31,17 @@ export const SETTINGS_SECTION_LABEL_CLASS_NAME = `px-2 py-1 ${SIDEBAR_SECTION_LA
 /** Vertical rhythm between stacked settings groups in the content panel. */
 export const SETTINGS_PANEL_SECTION_CLASS_NAME = "flex flex-col gap-1.5 not-first:mt-4";
 
-/** Grouped settings card: the same faint fill as a `soft` input (the settings search
- *  field), so cards read as one material lifted just off the page surface. */
+/** Card fill and edge, one step and three steps off the page surface (lighter in
+ *  dark mode, darker in light mode), like Codex's settings cards. The edge also
+ *  separates the card's rows. Set by the theme (`--app-settings-card-*`). */
+const SETTINGS_CARD_BORDER_COLOR_CLASS_NAME = "border-[color:var(--app-settings-card-border,var(--color-border))]";
+
+/** Grouped settings card: a fill lifted one clear step off the page, with a firmer edge. */
 export const SETTINGS_CARD_CLASS_NAME = [
   "overflow-hidden",
-  SOFT_SURFACE_FILL_CLASS_NAME,
-  SETTINGS_CONTROL_BORDER_CLASS_NAME,
+  "bg-[var(--app-settings-card-surface,var(--color-background-elevated-secondary))]",
+  "border",
+  SETTINGS_CARD_BORDER_COLOR_CLASS_NAME,
   SETTINGS_RADIUS_CLASS_NAME,
 ].join(" ");
 
@@ -54,13 +58,13 @@ export const SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME =
   "text-[length:var(--app-font-size-ui,12px)] text-muted-foreground";
 
 /** Divider between stacked rows inside one card. */
-export const SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME = "border-t border-[color:var(--color-border)]";
+export const SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME = "border-t border-[color:var(--app-settings-card-border,var(--color-border))]";
 
 /** Hairlines between the stacked children of a card or inset list. Applied by
  *  {@link SETTINGS_CARD_CLASS_NAME} consumers (`SettingsCard`) and by any surface that
  *  stacks rows itself, so every settings group separates its rows the same way. */
 export const SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME =
-  "divide-y divide-[color:var(--color-border)]";
+  "divide-y divide-[color:var(--app-settings-card-border,var(--color-border))]";
 
 /** Outlined block nested inside a settings group (a reorderable row, a bordered panel).
  *  Outline-only: it already sits on a filled card, and stacking a second fill would read as

@@ -4,14 +4,14 @@
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react"
 import { Button } from "@/components/kit/button"
-import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/kit/sidebar"
+import { useSidebar } from "@/components/kit/sidebar"
 import { IconSwap } from "@/components/kybern/motion"
 import { Toggle } from "@/components/kit/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
 import { ArrowLeftIcon, ArrowRightIcon, LayoutSidebarIcon, NewThreadIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
 import { mod } from "@/lib/format"
-import { isTauri, platform } from "@/lib/tauri"
+import { isTauri } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { newThread } from "@/state/nav"
 import { useStore } from "@/state/store"
@@ -218,19 +218,6 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
   )
 }
 
-/**
- * Leading inset that keeps the route header's title clear of the fixed sidebar
- * toggle + navigation cluster (`SidebarLeadingControls`) once the sidebar is collapsed.
- * Measured from the header's own padding edge: on macOS the controls start at the
- * traffic-light gutter, elsewhere at 16px; both are 84px wide and want 16px of air.
- * The header itself pads 20px. This is padding, not a spacer, so the title's
- * position is one tweened value that follows the slide instead of popping at frame 0.
- */
-const SIDEBAR_HEADER_LEADING_INSET_CLASS =
-  platform() === "macos"
-    ? "md:ps-[calc(var(--desktop-top-bar-traffic-light-gutter,82px)+80px)]"
-    : "md:ps-[80px]"
-
 const PANEL_TOGGLE_CLASS_NAME = cn(
   CHAT_HEADER_TOGGLE_CLASS_NAME,
   "!size-7 [&_svg]:mx-0",
@@ -293,18 +280,14 @@ export function EnvironmentToggle() {
 export function SurfaceHeader({
   minimal,
   environment,
-  showSidebarControls = true,
   children,
   trailing,
 }: {
   minimal?: boolean
   environment?: boolean
-  showSidebarControls?: boolean
   children?: ReactNode
   trailing?: ReactNode
 }) {
-  const { open } = useSidebar()
-  const inset = showSidebarControls && !open
   return (
     <div
       data-tauri-drag-region="deep"
@@ -315,16 +298,7 @@ export function SurfaceHeader({
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 items-center gap-2 overflow-hidden",
-            // Tween the inset with the sidebar slide so the title travels as one
-            // continuous motion; `minimal` headers have no title to keep clear.
-            "transition-[padding-inline-start] motion-reduce:transition-none",
-            sidebarOffcanvasMotionClass(open),
-            inset && SIDEBAR_HEADER_LEADING_INSET_CLASS,
-          )}
-        >
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           {!minimal && children}
         </div>
         <div

@@ -278,6 +278,8 @@ export const WebSearchIcon: LucideIcon = GlobeIcon;
 export const DeviceMobileIcon: LucideIcon = hugeIcon(HcPhone);
 // Hardware-button glyphs for the simulator's control rail.
 export const DeviceHomeIcon: LucideIcon = hugeIcon(HcHome);
+// The app rail's Home destination (chats).
+export const HomeIcon: LucideIcon = DeviceHomeIcon;
 export const DeviceLockIcon: LucideIcon = hugeIcon(HcLock);
 export const DeviceVolumeUpIcon: LucideIcon = hugeIcon(HcVolUp);
 export const DeviceVolumeDownIcon: LucideIcon = hugeIcon(HcVolDown);

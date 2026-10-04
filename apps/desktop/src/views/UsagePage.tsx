@@ -9,6 +9,7 @@ import { tokens, usd } from "@/lib/format"
 import { limitLabel, reportedPercent, resetLabel } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
+import { SurfaceHeader } from "./chrome"
 import type { ProviderKind, ProviderLimits, ProviderUsage, UsageGroup, UsageSummaryResult } from "@/protocol"
 
 type ReportedLimit = NonNullable<ProviderUsage["limits"]>[number]
@@ -221,6 +222,22 @@ function PlanValue({ apiEquivalent, period }: { apiEquivalent: number; period: P
       ) : (
         <p className="usage-plan-caption">Add your total plan cost per month to see how much pay-as-you-go compute your flat fee actually covers.</p>
       )}
+    </div>
+  )
+}
+
+/** Usage as a top-level page, opened from the app rail. */
+export function UsageView() {
+  return (
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
+      <SurfaceHeader>
+        <h1 className="truncate font-system-ui text-sm font-medium">Usage</h1>
+      </SurfaceHeader>
+      <main className="settings-scroll">
+        <div className="settings-page settings-page-wide">
+          <UsagePage />
+        </div>
+      </main>
     </div>
   )
 }

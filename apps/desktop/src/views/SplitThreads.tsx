@@ -27,7 +27,6 @@ import {
   canSplitPane,
   clampSplitRatioForWidth,
   collectSplitThreadIds,
-  collectThreadPanes,
   shouldStackHorizontalSplit,
   type Pane,
   type PaneId,
@@ -47,7 +46,6 @@ export function SplitThreads({ splitView }: { splitView: SplitView }) {
     () => new Set(collectSplitThreadIds(splitView)),
     [splitView]
   )
-  const primaryPaneId = collectThreadPanes(splitView.root)[0]?.id ?? null
 
   return (
     <div
@@ -59,7 +57,6 @@ export function SplitThreads({ splitView }: { splitView: SplitView }) {
         splitView={splitView}
         threads={threads}
         openThreadIds={openThreadIds}
-        primaryPaneId={primaryPaneId}
         onSetRatio={setRatio}
       />
     </div>
@@ -71,7 +68,6 @@ function PaneRenderer(props: {
   splitView: SplitView
   threads: Record<ThreadId, Thread>
   openThreadIds: ReadonlySet<ThreadId>
-  primaryPaneId: PaneId | null
   onSetRatio: (nodeId: PaneId, ratio: number) => void
 }): ReactNode {
   if (props.pane.kind === "leaf") {
@@ -82,7 +78,6 @@ function PaneRenderer(props: {
         splitView={props.splitView}
         threads={props.threads}
         openThreadIds={props.openThreadIds}
-        primary={props.pane.id === props.primaryPaneId}
       />
     )
   }
@@ -93,7 +88,6 @@ function PaneRenderer(props: {
       splitView={props.splitView}
       threads={props.threads}
       openThreadIds={props.openThreadIds}
-      primaryPaneId={props.primaryPaneId}
       onSetRatio={props.onSetRatio}
     />
   )
@@ -104,14 +98,12 @@ function SplitNodeRenderer({
   splitView,
   threads,
   openThreadIds,
-  primaryPaneId,
   onSetRatio,
 }: {
   node: SplitNode
   splitView: SplitView
   threads: Record<ThreadId, Thread>
   openThreadIds: ReadonlySet<ThreadId>
-  primaryPaneId: PaneId | null
   onSetRatio: (nodeId: PaneId, ratio: number) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -265,7 +257,6 @@ function SplitNodeRenderer({
           splitView={splitView}
           threads={threads}
           openThreadIds={openThreadIds}
-          primaryPaneId={primaryPaneId}
           onSetRatio={onSetRatio}
         />
         <ResizeHandle
@@ -291,7 +282,6 @@ function SplitNodeRenderer({
           splitView={splitView}
           threads={threads}
           openThreadIds={openThreadIds}
-          primaryPaneId={primaryPaneId}
           onSetRatio={onSetRatio}
         />
       </div>
@@ -304,13 +294,11 @@ function SplitThreadPane({
   splitView,
   threads,
   openThreadIds,
-  primary,
 }: {
   pane: ThreadPane
   splitView: SplitView
   threads: Record<ThreadId, Thread>
   openThreadIds: ReadonlySet<ThreadId>
-  primary: boolean
 }) {
   const focusPane = useStore((state) => state.focusSplitPane)
   const closePane = useStore((state) => state.closeSplitPane)
@@ -350,7 +338,6 @@ function SplitThreadPane({
               threadId={thread.id}
               splitPaneId={pane.id}
               isFocused={focused}
-              showSidebarControls={primary}
             />
           </ErrorBoundary>
         ) : (

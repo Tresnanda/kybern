@@ -1,7 +1,8 @@
 import { SidebarLeadingControls } from "@/views/chrome"
 import { platform } from "@/lib/tauri"
-// App shell: an offcanvas, resizable,
-// translucent left sidebar; a content card with a seam rail; the right dock.
+// App shell: a window frame (title bar + app rail) on the window material, with
+// one rounded workspace card on top of it: the offcanvas, resizable thread
+// panel, the content surface, and the right dock.
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useEffect, useRef, useState } from "react"
@@ -14,6 +15,7 @@ import { Button } from "@/components/kit/button"
 import { Sidebar, SidebarInset, SidebarProvider } from "@/components/kit/sidebar"
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import { useHotkey, useResize } from "@/lib/hooks"
+import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
 import { cn } from "@/lib/utils"
 import type { ThreadId } from "@/protocol"
 import { newThread } from "@/state/nav"
@@ -22,6 +24,8 @@ import { useEnvironments, activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 import { Draft } from "@/views/Draft"
 import { HandoffDialog } from "@/views/Handoff"
+import { NavRail } from "@/views/NavRail"
+import { UsageView } from "@/views/UsagePage"
 import { CloseGuard } from "@/views/CloseGuard"
 import { SessionsDialog } from "@/views/SessionsDialog"
 import { Palette } from "@/views/Palette"
@@ -33,6 +37,11 @@ import { SplitThreads } from "@/views/SplitThreads"
 import { ThreadView } from "@/views/Thread"
 import { AppUpdateSurface } from "@/views/AppUpdate"
 import { SurfaceHeader } from "@/views/chrome"
+
+/** Width of the app rail. */
+const APP_RAIL_WIDTH = 52
+/** Gap between the workspace card and the window's right and bottom edges. */
+const APP_FRAME_INSET = 8
 
 const DOCK_MOTION = { type: "spring", stiffness: 420, damping: 42, mass: 0.7 } as const
 
@@ -109,38 +118,45 @@ function Workspace() {
     <SidebarProvider
       open={sidebarOpen}
       onOpenChange={(open) => set({ sidebarOpen: open })}
-      className="relative bg-[var(--app-shell-background)]"
+      className="relative bg-(--app-frame-surface,var(--app-shell-background))"
       onPointerDownCapture={() => setKeyboardNavigation(false)}
       onKeyDownCapture={() => setKeyboardNavigation(true)}
       onFocusCapture={(event) => { if (!settingsOpen) workspaceFocus.current = event.target as HTMLElement }}
       data-sidebar-side="left"
-      style={{ "--sidebar-width": `${sidebar.width}px` } as React.CSSProperties}
+      style={{ "--sidebar-width": `${sidebar.width}px`, "--app-rail-width": `${APP_RAIL_WIDTH}px`, "--app-titlebar-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px`, "--app-frame-inset": `${APP_FRAME_INSET}px` } as React.CSSProperties}
     >
+      {/* The rail stays live over Settings, which opens beside it. */}
+      <NavRail />
       <div className="settings-workspace flex h-dvh min-w-0 flex-1" inert={settingsOpen} aria-hidden={settingsOpen || undefined} data-settings-open={settingsOpen} data-keyboard={keyboardNavigation || undefined}>
+      {/* The title bar: one draggable strip across the frame, above the card. */}
+      <div data-tauri-drag-region aria-hidden="true" className="drag-region fixed inset-x-0 top-0 z-[1] hidden h-(--app-titlebar-height) md:block" />
       <div className="fixed top-0 z-40 flex h-[46px] items-center" style={{ left: platform() === "macos" ? "var(--desktop-top-bar-traffic-light-gutter, 84px)" : "16px" }}>
         <SidebarLeadingControls className="hidden md:flex" />
       </div>
+      {/* The panel is the card's leading section. It slides out from under the
+          rail, fading as it goes so it never shows through the translucent frame. */}
       <Sidebar
         side="left"
         collapsible="offcanvas"
         transparentSurface
-        innerClassName="app-sidebar-surface"
+        innerClassName="app-sidebar-panel"
+        className="top-(--app-titlebar-height) bottom-(--app-frame-inset) left-(--app-rail-width) h-auto transition-[left,right,width,translate,transform,opacity] group-data-[collapsible=offcanvas]:opacity-0 group-data-[collapsible=offcanvas]:pointer-events-none"
       >
         <ErrorBoundary label="the sidebar">
           <ThreadSidebar />
         </ErrorBoundary>
       </Sidebar>
 
-      <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
+      <div className="relative flex h-svh min-h-0 min-w-0 flex-1 md:pt-(--app-titlebar-height) md:pe-(--app-frame-inset) md:pb-(--app-frame-inset)">
         {sidebarOpen && <ResizeHandle edge="left" label="Resize sidebar" onPointerDown={sidebar.onPointerDown} dragging={sidebar.dragging} className="z-[25]" />}
         {/* The content card owns the fill; an opaque inset behind it hides native vibrancy. */}
-        <SidebarInset className="h-dvh min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
+        <SidebarInset className="h-full min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
           {/* Keep the full-window card out of its own stacking context. Its later DOM order already places it above the sidebar's z-0 shell; a z-index here forces WebKit to retain another viewport-sized backing. */}
           <div
             data-slot="sidebar-inset-surface"
-            className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card relative overflow-hidden"
+            className="flex min-h-0 min-w-0 flex-1 flex-col text-inherit bg-[var(--color-background-surface)] chat-content-card workspace-card relative overflow-hidden"
           >
-            <div ref={dockContainerRef} className="relative flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div ref={dockContainerRef} className="relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
               <main data-workspace-chat inert={overlayOpen} aria-hidden={overlayOpen || undefined} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <ConnectionBanner />
                 {connecting ? <Welcome /> : splitView ? (
@@ -150,6 +166,10 @@ function Workspace() {
                 ) : selected.kind === "pulls" ? (
                   <ErrorBoundary label="pull requests">
                     <PullRequests />
+                  </ErrorBoundary>
+                ) : selected.kind === "usage" ? (
+                  <ErrorBoundary label="usage">
+                    <UsageView />
                   </ErrorBoundary>
                 ) : selected.kind === "draft" ? (
                   <ErrorBoundary key={`${selected.draft.projectId ?? "free"}:${selected.draft.purpose ?? "thread"}`} label="the home screen">
@@ -189,7 +209,7 @@ function Workspace() {
 
       </div>
       <AnimatePresence initial={false} onExitComplete={() => { if (!useStore.getState().settingsOpen && workspaceFocus.current?.isConnected) workspaceFocus.current.focus({ preventScroll: true }) }}>
-        {settingsOpen && <motion.div key="settings-screen" className="absolute inset-0 z-50"
+        {settingsOpen && <motion.div key="settings-screen" className="absolute inset-y-0 right-0 left-0 z-50 md:left-(--app-rail-width)"
           style={{ willChange: "transform, opacity" }}
           initial={{ x: 8, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}

@@ -9,11 +9,10 @@ import { toast } from "sonner"
 import { ProviderMark } from "@/components/kybern/bits"
 import { useTheme } from "@/components/theme-context"
 import { Button } from "@/components/kit/button"
-import { UsagePage } from "./UsagePage"
 import { ArrowLeftIcon, SearchIcon, PluginIcon, BellIcon, BackgroundTrayIcon } from "@/lib/kit/icons"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
-import { CheckIcon, ChevronDownIcon, XIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, ClockIcon, InfoIcon } from "@/lib/kit/icons"
+import { CheckIcon, ChevronDownIcon, XIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, InfoIcon } from "@/lib/kit/icons"
 import { Switch } from "@/components/kit/switch"
 import { Textarea } from "@/components/kit/textarea"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
@@ -50,7 +49,7 @@ import { errorText, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 
-type Tab = "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "usage" | "about"
+type Tab = "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
 
 const TABS: [Tab, string, string][] = [
   ["general", "General", "Defaults for new threads and workspace behavior."],
@@ -60,12 +59,11 @@ const TABS: [Tab, string, string][] = [
   ["appearance", "Appearance", "Make Kybern feel at home on your desktop."],
   ["notifications", "Notifications", "Choose when Kybern gets your attention."],
   ["background", "Background activity", "Manage idle agents, terminals, and power use."],
-  ["usage", "Usage", "Understand your activity, token use, and reported costs."],
   ["about", "About", "App version, updates, and connected machine."],
 ]
 
 const NAV_GROUPS: { label: string; tabs: Tab[] }[] = [
-  { label: "Personal", tabs: ["general", "appearance", "notifications", "usage"] },
+  { label: "Personal", tabs: ["general", "appearance", "notifications"] },
   { label: "Coding", tabs: ["agents", "integrations", "computer"] },
   { label: "System", tabs: ["background", "about"] },
 ]
@@ -78,7 +76,6 @@ const SEARCH_TERMS: Record<Tab, string> = {
   integrations: "plugins connectors tools mcp skills sign in authentication",
   computer: "computer use cuadriver screen apps click type accessibility screen recording permissions cursor",
   appearance: "theme light dark system translucent glass window",
-  usage: "tokens cost spending activity model day cache history",
   about: "version update protocol host data folder machine",
 }
 
@@ -115,8 +112,9 @@ export function SettingsScreen({
         if (query) setQuery("")
         else close()
       }}>
-      <aside className="settings-navigation app-sidebar-surface">
-        <div className="drag-region h-[46px] shrink-0" />
+      {/* Same frame as the workspace: a title bar, then one rounded card. */}
+      <div data-tauri-drag-region aria-hidden="true" className="settings-titlebar-strip drag-region" />
+      <aside className="settings-navigation app-sidebar-panel">
         <div className="settings-navigation-inner">
           <button
             type="button"
@@ -141,7 +139,7 @@ export function SettingsScreen({
                 return <Fragment key={group.label}>
                   <li className="settings-nav-category"><h2 className={cn(SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME, "m-0")}>{group.label}</h2></li>
                   {items.map(([id, label]) => {
-                    const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: PluginIcon, computer: DeviceLaptopIcon, appearance: AppearanceIcon, usage: ClockIcon, notifications: BellIcon, background: BackgroundTrayIcon, about: InfoIcon }[id]
+                    const Icon = { general: SettingsIcon, agents: TerminalIcon, integrations: PluginIcon, computer: DeviceLaptopIcon, appearance: AppearanceIcon, notifications: BellIcon, background: BackgroundTrayIcon, about: InfoIcon }[id]
                     return <li key={id} className="relative z-[1]">
                       <button type="button" aria-current={tab === id ? "page" : undefined} data-tab-active={tab === id}
                         onClick={(event) => select(id, event.detail === 0)}
@@ -159,7 +157,7 @@ export function SettingsScreen({
           <div className="settings-nav-footer"><span className="size-1.5 rounded-full bg-muted-foreground/50" />{activeEnvironment()?.name ?? "This machine"}</div>
         </div>
       </aside>
-      <main className="settings-content app-settings-surface chat-content-card relative z-[15] overflow-hidden">
+      <main className="settings-content app-settings-surface chat-content-card workspace-card relative z-[15] overflow-hidden">
         {sidebarResize && (
           <ResizeHandle
             edge="left"
@@ -173,7 +171,7 @@ export function SettingsScreen({
           <span>Settings<span className="mx-2 text-muted-foreground/40">/</span>{current[1]}</span>
         </div>
         <div ref={scroll} className="settings-scroll">
-          <div className={cn("settings-page", tab === "usage" && "settings-page-wide")}>
+          <div className="settings-page">
             <header className="settings-page-heading">
               <h1 ref={heading} tabIndex={-1}>{current[1]}</h1>
               <p>{current[2]}</p>
@@ -186,7 +184,6 @@ export function SettingsScreen({
               {tab === "appearance" && <Appearance />}
               {tab === "notifications" && <Notifications />}
               {tab === "background" && <Background />}
-              {tab === "usage" && <UsagePage />}
               {tab === "about" && <About />}
             </div>
           </div>

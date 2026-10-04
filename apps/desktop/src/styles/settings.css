@@ -1,10 +1,11 @@
 /* Dedicated settings and usage screens, using the kit's surfaces and motion scale. */
 .settings-workspace[data-settings-open="true"] { opacity: 0; pointer-events: none; }
 .settings-workspace[inert] *, .settings-workspace[inert] *::before, .settings-workspace[inert] *::after { animation-play-state: paused !important; }
-.settings-screen { display: flex; width: 100%; height: 100dvh; min-width: 0; color: var(--foreground); background: var(--app-shell-background); font-family: var(--font-system-ui, system-ui); }
+.settings-screen { position: relative; display: flex; width: 100%; height: 100dvh; min-width: 0; padding: var(--app-titlebar-height, 46px) var(--app-frame-inset, 8px) var(--app-frame-inset, 8px) 0; color: var(--foreground); background: transparent; font-family: var(--font-system-ui, system-ui); }
 /* Width tracks the thread sidebar (`--sidebar-width` from the same resize hook). */
 .settings-navigation { display: flex; flex-direction: column; width: var(--sidebar-width, 16rem); flex-shrink: 0; min-width: 0; }
-.settings-navigation-inner { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 4px 6px 12px; }
+.settings-navigation-inner { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 8px 6px 12px; }
+.settings-titlebar-strip { position: absolute; inset-inline: 0; top: 0; height: var(--app-titlebar-height, 46px); }
 .settings-back { color: inherit; }
 .settings-nav-category { margin: 12px 0 2px; }
 .settings-nav-category:first-of-type, .settings-nav-list > .t-tabs-pill + .settings-nav-category { margin-top: 0; }
@@ -18,12 +19,6 @@
 .settings-search-empty { font-size: var(--app-font-size-ui, 12px); line-height: 1.5; padding: 8px; color: var(--muted-foreground); }
 /* Flush content pane, same treatment as the thread `chat-content-card` — no inset card. */
 .settings-content { display: flex; flex: 1; flex-direction: column; min-width: 0; overflow: hidden; }
-/* Settings always shows its nav, so keep the content seam even when the inert
-   thread sidebar behind the overlay is collapsed (kit hides `.chat-content-card`
-   seams in that state). */
-[data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"]) .settings-content.chat-content-card::before {
-  opacity: 1;
-}
 .settings-titlebar { padding-inline: 20px; font-size: var(--app-font-size-ui, 12px); color: var(--muted-foreground); }
 .settings-scroll { overflow-y: auto; min-height: 0; flex: 1; overscroll-behavior: contain; direction: ltr; }
 .settings-page { width: 100%; max-width: 760px; margin-inline: auto; padding: 26px 40px 64px; }
@@ -112,7 +107,6 @@
 @media (max-width: 580px) {
   .settings-screen { flex-direction: column; }
   .settings-navigation { width: 100%; }
-  .settings-navigation > .drag-region { height: 30px; }
   .settings-navigation-inner { padding: 4px 16px 12px; display: block; }
   .settings-back { min-height: 32px; }
   .settings-nav-category, .settings-nav-footer, .settings-titlebar { display: none; }

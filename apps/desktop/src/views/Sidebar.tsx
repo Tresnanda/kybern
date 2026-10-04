@@ -1,7 +1,7 @@
 import { collaborationThreadRows } from "../../../../packages/kybern-client/src/collaboration"
-// Left sidebar: 46px drag-region title bar,
-// brand row, primary nav, "Projects" list with nested thread rows, footer
-// with Settings and Help.
+// Thread panel: the leading section of the workspace card, beside the app rail.
+// Brand row, chat actions, and the "Projects" list with nested thread rows.
+// Destinations (pull requests, usage, settings) live on the rail.
 
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
@@ -20,19 +20,16 @@ import { ThreadRunningSpinner } from "@/components/kit/ThreadRunningSpinner"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Kbd, KbdGroup } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/kit/menu"
-import { SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/kit/sidebar"
+import { SidebarContent, SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/kit/sidebar"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { mod, PROVIDER_LABEL } from "@/lib/format"
 import { useAppUpdate } from "@/lib/appUpdate"
 import {
   AddPlusIcon,
-  AnalyticsIcon,
   ArchiveIcon,
   ArrowDownIcon,
   ArrowUpIcon,
-  GitPullRequestIcon,
   CircleCheckIcon,
-  CircleQuestionIcon,
   RefreshCwIcon,
   ClockIcon,
   FilterIcon,
@@ -64,7 +61,7 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "@/lib/kit/sidebarRowStyles"
-import { pickFolder, platform } from "@/lib/tauri"
+import { pickFolder } from "@/lib/tauri"
 import { activeEnvironment } from "@/state/environments"
 import { isLaunching } from "@/lib/launch"
 import { cn } from "@/lib/utils"
@@ -127,9 +124,7 @@ export function ThreadSidebar() {
   // Activity only matters to the Working filter; skip the subscription otherwise.
   const threadActivity = useStore((s) => (sidebarFilter.threads === "working" ? s.threadActivity : NO_ACTIVITY))
   const set = useStore((s) => s.set)
-  const pullsActive = useStore((s) => s.selected.kind === "pulls")
   const selected = useStore((s) => s.selected)
-  const mac = platform() === "macos"
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
   const [enterSurface] = useState(() => !isLaunching())
   const connection = useStore((s) => s.connection)
@@ -202,42 +197,9 @@ export function ThreadSidebar() {
 
   return (
     <>
-      <SidebarHeader
-        data-tauri-drag-region="deep"
-        className={cn(
-          "drag-region flex h-[46px] flex-row items-center gap-1 !pt-0 !pb-0 pe-3 font-system-ui",
-          mac ? "desktop-top-bar-traffic-light-gutter" : "ps-4",
-        )}
-      >
-        <div className="hidden h-7 w-[84px] md:block" aria-hidden="true" />
-      </SidebarHeader>
-
       <SidebarContent className="gap-0 font-system-ui">
-        <div className="flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5">
-          <Menu>
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label="App menu"
-                  className="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 outline-hidden transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)] focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-                />
-              }
-            >
-              <span className="font-display min-w-0 truncate text-[17px] text-foreground">kybern</span>
-              <DisclosureChevron open className="text-muted-foreground/70" />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-56">
-              <MenuGroup>
-                <MenuItem onClick={onAddProject}>
-                  <FolderOpenIcon /> Add project
-                </MenuItem>
-                <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "general" })}>
-                  <SettingsIcon /> Settings
-                </MenuItem>
-              </MenuGroup>
-            </ComposerPickerMenuPopup>
-          </Menu>
+        <div className="flex items-center gap-1 pt-2 pb-1 pr-2.5 pl-1.5">
+          <AppMenu onAddProject={onAddProject} />
           <div className="ml-auto flex items-center gap-1.5">
             <SidebarIconButton icon={SearchIcon} label="Search" glyph="leading" size="header" tooltip={`Search (${mod}K)`} tooltipSide="bottom" className="text-foreground/80 hover:text-foreground" onClick={() => setTimeout(() => set({ paletteOpen: true }), 0)} />
             <NotificationBell />
@@ -257,8 +219,6 @@ export function ThreadSidebar() {
                 onClick={() => newThread()}
               />
               <PrimaryAction icon={<ClockIcon className="size-3.5 shrink-0" />} label="Resume session" onClick={() => set({ sessionsOpen: true, sessionsProjectId: selected.kind === "draft" ? selected.draft.projectId ?? null : selected.kind === "thread" ? (isFreeChatProject(useStore.getState().threads[selected.id]?.project_id ?? "") ? null : useStore.getState().threads[selected.id]?.project_id ?? null) : null })} />
-              <PrimaryAction icon={<GitPullRequestIcon className="size-3.5 shrink-0" />} label="Pull requests" active={pullsActive} onClick={() => useStore.getState().selectPulls()} />
-              <PrimaryAction icon={<AnalyticsIcon className="size-3.5 shrink-0" />} label="Usage" onClick={() => set({ settingsOpen: true, settingsTab: "usage" })} />
             </SidebarMenu>
           </SidebarGroup>
 
@@ -341,26 +301,10 @@ export function ThreadSidebar() {
       </SidebarContent>
 
       <ProjectPicker open={projectPickerOpen} onOpenChange={setProjectPickerOpen} />
-      <SidebarFooter className="gap-2 border-t border-sidebar-border p-2 font-system-ui">
-        <SidebarMenu>
-          <SidebarUpdateButton />
-          <SidebarMenuItem>
-            <div className="flex items-center gap-2">
-              <SidebarMenuButton
-                size="sm"
-                className={cn(SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, "flex-1")}
-                onClick={() => set({ settingsOpen: true, settingsTab: "general" })}
-              >
-                <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-foreground/95">
-                  <SettingsIcon className="size-[15px] shrink-0" />
-                </span>
-                <span>Settings</span>
-              </SidebarMenuButton>
-              <HelpMenu />
-            </div>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
+      {/* Only an available update occupies the foot of the panel. */}
+      <SidebarMenu className="p-2 font-system-ui empty:hidden">
+        <SidebarUpdateButton />
+      </SidebarMenu>
     </>
   )
 }
@@ -454,10 +398,11 @@ function MenuDetail(props: React.ComponentProps<"span">) {
 type AgentCheck = { state: "idle" } | { state: "checking" } | { state: "done"; ready: number }
 
 /**
- * Footer help menu. Reloading agents reports its result in place, so the menu
- * stays open while it checks and the answer appears where it was asked for.
+ * The "kybern" menu: projects, settings, help, and agents. Reloading agents
+ * reports its result in place, so the menu stays open while it checks and the
+ * answer appears where it was asked for.
  */
-function HelpMenu() {
+function AppMenu({ onAddProject }: { onAddProject: () => void }) {
   const set = useStore((s) => s.set)
   const version = useAppUpdate((s) => s.appVersion)
   const [check, setCheck] = useState<AgentCheck>({ state: "idle" })
@@ -474,16 +419,30 @@ function HelpMenu() {
   }
   return (
     <Menu onOpenChange={(open) => !open && check.state === "done" && setCheck({ state: "idle" })}>
-      <SidebarIconButton render={<MenuTrigger />} icon={CircleQuestionIcon} iconClassName="size-[15px] shrink-0" label="Help and agents" tooltip="Help and agents" size="md" />
-      <ComposerPickerMenuPopup align="end" side="top" className="action-menu">
+      <MenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label="App menu"
+            className="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 outline-hidden transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)] focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+          />
+        }
+      >
+        <span className="font-display min-w-0 truncate text-[17px] text-foreground">kybern</span>
+        <DisclosureChevron open className="text-muted-foreground/70" />
+      </MenuTrigger>
+      <ComposerPickerMenuPopup align="start" side="bottom" className="action-menu min-w-56">
         <MenuGroup>
+          <MenuItem onClick={onAddProject}>
+            <FolderOpenIcon /> Add project
+          </MenuItem>
+          <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "general" })}>
+            <SettingsIcon /> Settings
+            <MenuShortcut>{mod},</MenuShortcut>
+          </MenuItem>
           <MenuItem onClick={() => set({ paletteOpen: true })}>
             <CommandIcon /> Commands and shortcuts
             <MenuShortcut>{mod}K</MenuShortcut>
-          </MenuItem>
-          <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "about" })}>
-            <InfoIcon /> About kybern
-            {version && <MenuDetail>{version}</MenuDetail>}
           </MenuItem>
         </MenuGroup>
         <MenuSeparator />
@@ -503,6 +462,13 @@ function HelpMenu() {
           </MenuItem>
           <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "agents" })}>
             <SettingsIcon /> Agent settings
+          </MenuItem>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuGroup>
+          <MenuItem onClick={() => set({ settingsOpen: true, settingsTab: "about" })}>
+            <InfoIcon /> About kybern
+            {version && <MenuDetail>{version}</MenuDetail>}
           </MenuItem>
         </MenuGroup>
       </ComposerPickerMenuPopup>

@@ -28,6 +28,7 @@ import { PROVIDER_LABEL, basename, mod, toolLine } from "@/lib/format"
 import { promptCacheWindow } from "@/lib/promptCache"
 import { activeTaskSummary } from "@/lib/runtimeActivity"
 import {
+  AnalyticsIcon,
   ArrowLeftIcon,
   ArchiveIcon,
   ChangesIcon,
@@ -91,12 +92,10 @@ export function ThreadView({
   threadId,
   splitPaneId,
   isFocused = true,
-  showSidebarControls = true,
 }: {
   threadId: ThreadId
   splitPaneId?: PaneId
   isFocused?: boolean
-  showSidebarControls?: boolean
 }) {
   const steeringAttempt = useRef<{ signature: string; id: string } | null>(null)
   const coordinatorSwitchAttempt = useRef<{ fingerprint: string; operationId: string } | null>(null)
@@ -233,7 +232,7 @@ export function ThreadView({
       ] : []),
       ...(!thread?.coordinator_project_id ? [{ name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) }] : []),
       { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
-      { name: "usage", hint: "Review token usage and cost", icon: <ClockIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "usage" }) },
+      { name: "usage", hint: "Review token usage and cost", icon: <AnalyticsIcon className="size-4" />, run: () => useStore.getState().selectUsage() },
     ],
     [threadId, thread?.project_id, thread?.coordinator_project_id, thread?.provider, freeChat, canCompact, nativeCommands, set],
   )
@@ -301,7 +300,7 @@ export function ThreadView({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-      <Header threadId={threadId} splitPaneId={splitPaneId} showSidebarControls={showSidebarControls} />
+      <Header threadId={threadId} splitPaneId={splitPaneId} />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div className={cn("flex min-h-0 flex-1 flex-col", ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)} style={{ paddingRight: envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX : 0 }}>
           <Transcript threadId={threadId} bottomInset={overlayHeight} surfaceMode={splitPaneId ? "split" : "single"} />
@@ -694,7 +693,7 @@ function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, onCho
   </div>
 }
 
-function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: ThreadId; splitPaneId?: PaneId; showSidebarControls: boolean }) {
+function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: PaneId }) {
   const [deleting, setDeleting] = useState(false)
   const thread = useStore((s) => s.threads[threadId])
   const threads = useStore((s) => s.threads)
@@ -734,7 +733,6 @@ function Header({ threadId, splitPaneId, showSidebarControls }: { threadId: Thre
   return (
     <SurfaceHeader
       environment
-      showSidebarControls={showSidebarControls}
       trailing={
         <>
       {deleting && thread && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}
