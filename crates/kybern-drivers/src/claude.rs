@@ -79,6 +79,9 @@ impl AgentDriver for ClaudeDriver {
                         "dontAsk",
                         "--disallowedTools",
                         "*",
+                        // `--disallowedTools` is variadic: without the
+                        // terminator it swallows the prompt as deny rules.
+                        "--",
                     ])
                     .arg(prompt)
                     .env_remove("NODE_OPTIONS")
@@ -1809,6 +1812,19 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn one_shot_keeps_the_prompt_out_of_variadic_tool_rules() {
+        use crate::AgentDriver;
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("claude-fixture");
+        std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = super::ClaudeDriver::default().one_shot(root.path(), "Name this session", Some(&binary)).await.unwrap();
+        let args: Vec<String> = serde_json::from_str(&out).unwrap();
+        assert_eq!(args[args.len() - 2..], ["--", "Name this session"]);
+    }
+
     #[tokio::test]
     async fn session_start_resume_and_fork_scope_mcp_and_coordinator_bootstrap() {
         use crate::{AgentDriver, NativeToolDefinition, SessionConfig};
