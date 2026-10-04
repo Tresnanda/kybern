@@ -1,5 +1,6 @@
 // App rail: the narrow column of destinations beside the thread sidebar.
-// Home (chats), Pull requests, and Usage at the top; Settings at the foot.
+// Home (chats), Pull requests, and Usage at the top; Settings at the foot, with
+// an update badge above it when a new release is ready.
 // It stays put when the sidebar collapses and while Settings is open, so every
 // destination is one click away.
 
@@ -13,6 +14,7 @@ import { useSlidingPill } from "@/lib/kit/slidingPill"
 import { cn } from "@/lib/utils"
 import { loadThread } from "@/state/rpc"
 import { useStore } from "@/state/store"
+import { RailUpdateButton } from "@/views/AppUpdate"
 
 type Destination = "home" | "pulls" | "usage"
 
@@ -48,6 +50,7 @@ export function NavRail() {
         <RailButton icon={AnalyticsIcon} label="Usage" active={destination === "usage"} onClick={() => go("usage")} />
       </div>
       <div data-tauri-drag-region="false" className="no-drag mt-auto flex flex-col items-center gap-1.5">
+        <RailUpdateButton />
         <RailButton icon={SettingsIcon} label="Settings" shortcut={[mod, ","]} active={settingsOpen} activeFill onClick={() => useStore.getState().set(settingsOpen ? { settingsOpen: false } : { settingsOpen: true, settingsTab: "general" })} />
       </div>
     </nav>

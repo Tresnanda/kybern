@@ -54,6 +54,13 @@ const byLabel = (label: string, scope: ParentNode = document) =>
       (element.getAttribute("aria-label") === label ||
         element.textContent?.trim() === label)
   )
+const railBadge = () => document.querySelector<HTMLElement>('[data-testid="rail-update"]')
+/** Open the rail badge's card unless its install action is already showing. */
+const openRailCard = async () => {
+  if (innerWidth < 768 || byLabel("Update and restart") || byLabel("Retry update")) return
+  railBadge()?.click()
+  await sleep(260)
+}
 const click = async (label: string, delay = 260) => {
   const button = byLabel(label)
   if (!button) throw new Error(`Missing action: ${label}`)
@@ -152,7 +159,7 @@ async function run() {
   applyTheme(__UPDATE_THEME__ === "light" ? "light" : "dark")
   fixtureInstall.reset()
   useAppUpdate.setState({ ...state, announcementOpen: false })
-  const { AppUpdateSurface, SidebarUpdateButton } =
+  const { AppUpdateSurface, RailUpdateButton } =
     await import("../src/views/AppUpdate")
 
   function Fixture() {
@@ -167,6 +174,12 @@ async function run() {
       >
         <>
           <SidebarProvider className="h-dvh min-h-0 bg-[var(--app-shell-background)] text-foreground">
+            <nav className="app-nav-rail hidden w-[52px] shrink-0 flex-col items-center pb-3 md:flex">
+              <div className="h-[46px] drag-region" />
+              <div className="mt-auto">
+                <RailUpdateButton />
+              </div>
+            </nav>
             <aside className="hidden w-64 shrink-0 flex-col border-e border-[color:var(--app-surface-divider)] bg-[var(--sidebar-background)] p-2 md:flex">
               <div className="h-[46px] drag-region" />
               <div className="px-2 text-[17px] font-medium">kybern</div>
@@ -175,9 +188,6 @@ async function run() {
               </div>
               <div className="mt-2 rounded-lg bg-[var(--sidebar-accent)] px-2 py-2 text-sm">
                 Release verification
-              </div>
-              <div className="mt-auto">
-                <SidebarUpdateButton />
               </div>
             </aside>
             <main className="relative flex min-w-0 flex-1 flex-col bg-[var(--color-background-surface)] p-5 sm:p-8">
@@ -281,10 +291,8 @@ async function run() {
     "dismiss removes the card after its exit"
   )
   check(
-    !!document
-      .querySelector("aside")
-      ?.textContent?.includes("Update and restart") || innerWidth < 768,
-    "sidebar update action remains after dismiss"
+    visible(railBadge()) || innerWidth < 768,
+    "rail update badge remains after dismiss"
   )
 
   useAppUpdate.setState({ announcementOpen: true })
@@ -356,26 +364,25 @@ async function run() {
   )
   check(
     document.activeElement ===
-      (innerWidth >= 768
-        ? byLabel("See what’s new", document.querySelector("aside")!)
-        : probe),
+      (innerWidth >= 768 ? railBadge() : probe),
     "Escape returns focus to a visible update trigger"
   )
 
   if (innerWidth >= 768) {
-    const sidebarDetails = await click("See what’s new")
+    await openRailCard()
+    await click("See what’s new")
     const dialog = document.querySelector<HTMLElement>(
       '[data-testid="update-details"]'
     )
-    check(visible(dialog), "sidebar opens release details")
+    check(visible(dialog), "rail card opens release details")
     await click("Close release details")
     check(
       !visible(document.querySelector('[data-testid="update-details"]')),
       "close action closes release details"
     )
     check(
-      document.activeElement === sidebarDetails,
-      "close action returns focus to the sidebar action"
+      document.activeElement === railBadge(),
+      "close action returns focus to the rail badge"
     )
   } else {
     useAppUpdate.setState({ detailsOpen: true })
@@ -395,6 +402,7 @@ async function run() {
   })
   await sleep(220)
   const attemptsBeforeQuickUpdate = fixtureInstall.attempts
+  await openRailCard()
   await click("Update and restart", 80)
   await click("Updating… 42%", 260).catch(() => {})
   check(
@@ -416,6 +424,7 @@ async function run() {
   fixtureInstall.failNext = true
   await sleep(120)
   const attemptsBeforeFailure = fixtureInstall.attempts
+  await openRailCard()
   await click("Update and restart", 280)
   check(
     fixtureInstall.attempts === attemptsBeforeFailure + 1,

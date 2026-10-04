@@ -79,7 +79,6 @@ import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { NotificationBell } from "./NotificationBell"
 import { ProjectPicker } from "./ProjectPicker"
-import { SidebarUpdateButton } from "./AppUpdate"
 
 const MAX_PROJECT_THREADS = 8
 
@@ -301,10 +300,6 @@ export function ThreadSidebar() {
       </SidebarContent>
 
       <ProjectPicker open={projectPickerOpen} onOpenChange={setProjectPickerOpen} />
-      {/* Only an available update occupies the foot of the panel. */}
-      <SidebarMenu className="p-2 font-system-ui empty:hidden">
-        <SidebarUpdateButton />
-      </SidebarMenu>
     </>
   )
 }
