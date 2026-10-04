@@ -6,6 +6,7 @@ import { createNativeSocket } from "./nativeSocket";
 import { setDraft } from "./draft";
 import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
+import { attachNotes, loadNotes, resetNotes } from "./notes";
 import {
   KybernClient,
   httpBase,
@@ -360,6 +361,7 @@ export function connect(id: string | null) {
   client?.close();
   client = null;
   snapshots.cancelReplay();
+  resetNotes();
   if (state.activeId === id) snapshots.invalidateAll();
   else snapshots.clear();
   loads.clear();
@@ -386,6 +388,7 @@ export function connect(id: string | null) {
     createSocket: Platform.OS === "web" ? undefined : createNativeSocket,
   });
   client = next;
+  attachNotes(next, () => generation === thisGeneration);
   next.onStatus((status, detail) => {
     if (generation !== thisGeneration) return;
     publish({ status, error: status === "open" ? null : (detail ?? null) });
@@ -471,6 +474,7 @@ export function connect(id: string | null) {
       void refresh().catch((e) => {
         if (generation === thisGeneration) publish({ error: errorText(e) });
       });
+      void loadNotes();
       for (const id of threadListeners.keys())
         if (id)
           void loadThread(id).catch((e) => {
@@ -485,6 +489,7 @@ export function connect(id: string | null) {
       void refresh().catch((e) => {
         if (generation === thisGeneration) publish({ error: errorText(e) });
       });
+      void loadNotes();
       for (const id of threadListeners.keys())
         if (id) void ensureThread(id).catch((e) => {
           if (generation === thisGeneration) publish({ error: errorText(e) });

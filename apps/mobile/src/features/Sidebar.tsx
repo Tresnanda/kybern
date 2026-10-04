@@ -363,6 +363,11 @@ export function Sidebar() {
           }}
         >
           <Row
+            title="Notes"
+            icon="doc.text"
+            onPress={() => router.navigate("/notes")}
+          />
+          <Row
             title="Projects"
             icon="folder"
             onPress={() => router.navigate("/projects")}

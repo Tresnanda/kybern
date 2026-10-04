@@ -137,22 +137,31 @@ export default function Home() {
             ...styles.spread,
           }}
         >
-          <IconButton
-            name="sidebar.left"
-            label="Open threads"
-            onPress={() => router.push("/library")}
-          />
+          <View style={{ flex: 1, alignItems: "flex-start" }}>
+            <IconButton
+              name="sidebar.left"
+              label="Open threads"
+              onPress={() => router.push("/library")}
+            />
+          </View>
           <View style={[styles.line, { gap: 9 }]}>
             <Brand size={21} />
             <T variant="heading" style={{ fontSize: 19 }}>
               kybern
             </T>
           </View>
-          <IconButton
-            name="gearshape"
-            label="Open settings"
-            onPress={() => router.push("/settings")}
-          />
+          <View style={[styles.line, { flex: 1, justifyContent: "flex-end", gap: 0 }]}>
+            <IconButton
+              name="doc.text"
+              label="Open notes"
+              onPress={() => router.push("/notes")}
+            />
+            <IconButton
+              name="gearshape"
+              label="Open settings"
+              onPress={() => router.push("/settings")}
+            />
+          </View>
         </View>
       )}
       <ScrollView

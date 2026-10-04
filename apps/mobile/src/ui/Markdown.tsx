@@ -5,7 +5,7 @@ import { chatLink } from "../../../../packages/kybern-client/src/chatLinks";
 import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
-import { IconButton, T, styles } from "./primitives";
+import { Icon, IconButton, T, styles } from "./primitives";
 import { useTheme } from "./theme";
 
 export function openLink(url: string) {
@@ -282,6 +282,9 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
       <View style={{ gap: 8 }}>
         {para.split("\n").map((line, i) => {
           const match = /^(\s*)([-*+]|\d+\.)\s(.*)$/.exec(line);
+          // Checklist items (`- [ ] item`) show a checkbox instead of a bullet.
+          const task = match ? /^\[( |x|X)\]\s+(.*)$/.exec(match[3]!) : null;
+          const checked = task ? task[1] !== " " : false;
           return (
             <View
               key={i}
@@ -291,13 +294,35 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
                 gap: 10,
               }}
             >
-              {match && (
-                <T tone="secondary" style={{ minWidth: 15 }}>
-                  {/\d/.test(match[2]!) ? match[2] : "•"}
-                </T>
+              {task ? (
+                <View
+                  accessible
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked }}
+                  style={{ minWidth: 15, paddingTop: 3 }}
+                >
+                  <Icon
+                    name={checked ? "checkmark.square.fill" : "square"}
+                    size={19}
+                    color={checked ? colors.accent : colors.secondary}
+                  />
+                </View>
+              ) : (
+                match && (
+                  <T tone="secondary" style={{ minWidth: 15 }}>
+                    {/\d/.test(match[2]!) ? match[2] : "•"}
+                  </T>
+                )
               )}
-              <T selectable style={{ flex: 1 }}>
-                <Inline text={match?.[3] ?? line} />
+              <T
+                selectable
+                tone={checked ? "secondary" : "ink"}
+                style={{
+                  flex: 1,
+                  textDecorationLine: checked ? "line-through" : "none",
+                }}
+              >
+                <Inline text={task ? task[2]! : (match?.[3] ?? line)} />
               </T>
             </View>
           );

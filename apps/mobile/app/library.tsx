@@ -316,6 +316,11 @@ export default function Library() {
               }}
             >
               <Row
+                title="Notes"
+                icon="doc.text"
+                onPress={() => router.push("/notes")}
+              />
+              <Row
                 title="Projects"
                 icon="folder"
                 onPress={() => router.push("/projects")}
