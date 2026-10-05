@@ -151,8 +151,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 project.worktrees_default = w;
             }
             project.updated_at = chrono::Utc::now();
+            if let Some(prefix) = &p.task_prefix {
+                // Validated first, so a bad prefix leaves the other edits unsaved too.
+                state.store.project_set_task_prefix(p.project_id, prefix).map_err(task_err)?;
+            }
             state.store.project_update(&project).map_err(internal)?;
-            ok(project)
+            ok(state.store.project_get(p.project_id).map_err(internal)?.unwrap_or(project))
         }
         ProjectsRemove::NAME => {
             let p: ProjectsRemoveParams = parse(params)?;
@@ -343,6 +347,23 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .map_err(note_err)?;
             ok(NotesSearchResult { results })
         }
+        TaskItemsList::NAME => {
+            let orchestrator = state.orchestrator.clone();
+            let tasks = tokio::task::spawn_blocking(move || orchestrator.task_items_list()).await.map_err(internal)?.map_err(task_err)?;
+            ok(TaskItemsListResult { tasks })
+        }
+        TaskItemsGet::NAME => {
+            ok(TaskItemsGetResult { task: state.orchestrator.task_item_get(parse_or_default(params)?).map_err(task_err)? })
+        }
+        TaskItemsCreate::NAME => ok(state.orchestrator.task_item_create(parse(params)?).map_err(task_err)?),
+        TaskItemsUpdate::NAME => ok(state.orchestrator.task_item_update(parse(params)?).map_err(task_err)?),
+        TaskItemsDelete::NAME => {
+            state.orchestrator.task_item_delete(parse::<TaskItemsIdParams>(params)?.id).map_err(task_err)?;
+            ok(Empty {})
+        }
+        TaskItemsRestore::NAME => ok(state.orchestrator.task_item_restore(parse::<TaskItemsIdParams>(params)?.id).map_err(task_err)?),
+        TaskItemsSend::NAME => ok(state.orchestrator.task_item_send(parse(params)?).await.map_err(task_err)?),
+        TaskItemsFollowup::NAME => ok(state.orchestrator.task_item_followup(parse(params)?).await.map_err(task_err)?),
         QueueUpdate::NAME => {
             state.orchestrator.update_queued(parse(params)?).map_err(bad)?;
             ok(Empty {})
@@ -831,6 +852,21 @@ fn note_err(e: anyhow::Error) -> RpcError {
         Some(NoteError::NotFound(_)) => RpcError::new(codes::NOT_FOUND, e.to_string()),
         Some(NoteError::Deleted | NoteError::Invalid(_)) => RpcError::new(codes::INVALID_PARAMS, e.to_string()),
         None => internal(e),
+    }
+}
+
+/// Task failures: a stale revision is a CONFLICT the client can resolve, the rest
+/// say what to do next. Notes and threads reached through a task keep their own
+/// codes. Anything unexpected is an internal error.
+fn task_err(e: anyhow::Error) -> RpcError {
+    use kybern_store::TaskError;
+    match e.downcast_ref::<TaskError>() {
+        Some(TaskError::Conflict) => RpcError::new(codes::CONFLICT, e.to_string()),
+        Some(TaskError::NotFound(_)) => RpcError::new(codes::NOT_FOUND, e.to_string()),
+        Some(TaskError::Invalid(_)) => RpcError::new(codes::INVALID_PARAMS, e.to_string()),
+        None if e.downcast_ref::<kybern_store::NoteError>().is_some() => note_err(e),
+        // Starting the agent can fail for provider reasons (unknown model, no binary).
+        None => bad(e),
     }
 }
 

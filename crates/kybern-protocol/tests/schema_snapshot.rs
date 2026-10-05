@@ -113,3 +113,55 @@ fn notes_wire_shape_is_stable() {
         serde_json::from_value(serde_json::json!({"thread_id": uuid::Uuid::nil(), "expected_revision": 0})).unwrap();
     assert!(update.id.is_none() && update.body.is_none());
 }
+
+#[test]
+fn task_items_wire_shape_is_stable() {
+    insta::assert_json_snapshot!("task_item_schema", schema_for!(TaskItem));
+    insta::assert_json_snapshot!("task_items_changed_notification", schema_for!(TaskItemsChangedNotification));
+    let at: chrono::DateTime<chrono::Utc> = chrono::DateTime::parse_from_rfc3339("2026-10-05T00:00:00Z").unwrap().into();
+    let task = TaskItem {
+        id: uuid::Uuid::nil(),
+        key: "ADE-14".into(),
+        scope: TaskScope::Project,
+        project_id: Some(uuid::Uuid::nil()),
+        title: "Fix login".into(),
+        body: "Redirect after sign in".into(),
+        status: TaskStatus::NeedsReview,
+        priority: 2,
+        rank: 1024.0,
+        note_ids: vec![uuid::Uuid::nil()],
+        source_note_id: None,
+        pending_followup: None,
+        runs: vec![TaskRun {
+            thread_id: uuid::Uuid::nil(),
+            number: 1,
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            model: None,
+            started_at: at,
+            ended_at: Some(at),
+            state: TaskRunState::Completed,
+            activity: None,
+            diff: Some(TaskRunDiff { added: 12, removed: 3, files: 2 }),
+            notes: vec![TaskRunNote { note_id: uuid::Uuid::nil(), revision: 4 }],
+        }],
+        revision: 1,
+        created_at: at,
+        updated_at: at,
+        status_changed_at: at,
+    };
+    let json = serde_json::to_value(&task).unwrap();
+    assert_eq!(json["status"], "needs_review");
+    assert_eq!(json["scope"], "project");
+    assert_eq!(json["priority"], 2);
+    assert_eq!(json["runs"][0]["state"], "completed");
+    assert_eq!(json["runs"][0]["diff"], serde_json::json!({"added": 12, "removed": 3, "files": 2}));
+    assert_eq!(json["runs"][0]["notes"][0]["revision"], 4);
+    assert!(json.get("source_note_id").is_none() && json.get("pending_followup").is_none(), "absent options are omitted");
+    assert!(json["runs"][0].get("model").is_none() && json["runs"][0].get("activity").is_none());
+    assert_eq!(serde_json::from_value::<TaskItem>(json).unwrap(), task);
+    let update: TaskItemsUpdateParams = serde_json::from_value(serde_json::json!({"id": uuid::Uuid::nil()})).unwrap();
+    assert!(update.status.is_none() && update.before_id.is_none());
+    assert_eq!(serde_json::to_value(TaskStatus::Todo).unwrap(), "todo");
+    assert_eq!(TaskItemsList::NAME, "tasks.items.list");
+    assert_eq!(TASK_ITEMS_CHANGED_NOTIFICATION, "tasks.items.changed");
+}

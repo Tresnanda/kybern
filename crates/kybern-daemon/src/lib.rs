@@ -240,13 +240,18 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-/// Notes deleted more than 30 days ago are removed for good, once at start and then hourly.
+/// Notes and tasks deleted more than 30 days ago are removed for good, once at start and then hourly.
 async fn purge_expired_notes(state: state::AppState) {
     loop {
         match state.orchestrator.purge_expired_notes() {
             Ok(0) => {}
             Ok(purged) => tracing::info!(purged, "removed notes deleted more than 30 days ago"),
             Err(error) => tracing::warn!(%error, "could not remove expired notes"),
+        }
+        match state.orchestrator.purge_expired_tasks() {
+            Ok(0) => {}
+            Ok(purged) => tracing::info!(purged, "removed tasks deleted more than 30 days ago"),
+            Err(error) => tracing::warn!(%error, "could not remove expired tasks"),
         }
         tokio::select! {
             _ = state.shutdown.cancelled() => break,

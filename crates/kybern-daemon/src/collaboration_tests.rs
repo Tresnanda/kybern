@@ -31,6 +31,7 @@ impl Fixture {
             path: root.to_string_lossy().into_owned(),
             is_git: false,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -672,6 +673,7 @@ fn external_threads_keep_membership_permissions_and_can_reply_across_projects() 
         path: fixture.root.join("other").to_string_lossy().into_owned(),
         is_git: false,
         worktrees_default: None,
+        task_prefix: None,
         created_at: now,
         updated_at: now,
     };

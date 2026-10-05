@@ -57,6 +57,8 @@ fn main() {
     add::<Note>(&mut types, "Note");
     add::<NoteSummary>(&mut types, "NoteSummary");
     add::<NotesChangedNotification>(&mut types, "NotesChangedNotification");
+    add::<TaskItem>(&mut types, "TaskItem");
+    add::<TaskItemsChangedNotification>(&mut types, "TaskItemsChangedNotification");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -97,6 +99,14 @@ fn main() {
     method::<NotesRestore>(&mut methods);
     method::<NotesPurge>(&mut methods);
     method::<NotesSearch>(&mut methods);
+    method::<TaskItemsList>(&mut methods);
+    method::<TaskItemsGet>(&mut methods);
+    method::<TaskItemsCreate>(&mut methods);
+    method::<TaskItemsUpdate>(&mut methods);
+    method::<TaskItemsDelete>(&mut methods);
+    method::<TaskItemsRestore>(&mut methods);
+    method::<TaskItemsSend>(&mut methods);
+    method::<TaskItemsFollowup>(&mut methods);
     method::<QueueAdd>(&mut methods);
     method::<QueueUpdate>(&mut methods);
     method::<QueueList>(&mut methods);

@@ -1,0 +1,297 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(TaskItem)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TaskItem",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "key": {
+      "description": "Display id such as `ADE-14`; global tasks use `TSK`. Never reused.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/TaskScope"
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "title": {
+      "type": "string"
+    },
+    "body": {
+      "description": "Markdown: description, optionally followed by acceptance criteria as a checklist.",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/TaskStatus"
+    },
+    "priority": {
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "rank": {
+      "description": "Position within its status column, ascending.",
+      "type": "number",
+      "format": "double"
+    },
+    "note_ids": {
+      "description": "Notes attached as context.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "source_note_id": {
+      "description": "The note whose checklist line created this task, if any.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "pending_followup": {
+      "description": "Saved follow-up text for the next run, when no run could receive it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TaskRun"
+      }
+    },
+    "revision": {
+      "description": "Content revision for title and body edits.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status_changed_at": {
+      "description": "When the status last changed.",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "id",
+    "key",
+    "scope",
+    "title",
+    "body",
+    "status",
+    "priority",
+    "rank",
+    "note_ids",
+    "runs",
+    "revision",
+    "created_at",
+    "updated_at",
+    "status_changed_at"
+  ],
+  "$defs": {
+    "TaskScope": {
+      "type": "string",
+      "enum": [
+        "global",
+        "project"
+      ]
+    },
+    "TaskStatus": {
+      "description": "`Running` and `NeedsReview` are owned by the latest run; the rest are set by the user.",
+      "type": "string",
+      "enum": [
+        "inbox",
+        "todo",
+        "running",
+        "needs_review",
+        "done",
+        "canceled"
+      ]
+    },
+    "TaskRun": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "number": {
+          "description": "1-based within the task.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRunState"
+        },
+        "activity": {
+          "description": "What the agent is doing now, such as \"Editing src/main.rs\". Live runs only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diff": {
+          "description": "Lines added and removed by the run's changes, when known.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRunDiff"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskRunNote"
+          }
+        }
+      },
+      "required": [
+        "thread_id",
+        "number",
+        "provider",
+        "started_at",
+        "state"
+      ]
+    },
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "TaskRunState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed",
+            "interrupted"
+          ]
+        },
+        {
+          "description": "Live: the agent is working.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Live: waiting for an approval or an answer.",
+          "type": "string",
+          "const": "waiting"
+        }
+      ]
+    },
+    "TaskRunDiff": {
+      "description": "Lines added and removed by a run's changes.",
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "removed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "files"
+      ]
+    },
+    "TaskRunNote": {
+      "description": "A note sent with a run and the revision it was at when the run started.",
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "note_id",
+        "revision"
+      ]
+    }
+  }
+}

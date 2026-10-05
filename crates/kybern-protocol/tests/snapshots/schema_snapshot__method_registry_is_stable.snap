@@ -40,6 +40,14 @@ expression: names
 - notes.restore
 - notes.purge
 - notes.search
+- tasks.items.list
+- tasks.items.get
+- tasks.items.create
+- tasks.items.update
+- tasks.items.delete
+- tasks.items.restore
+- tasks.items.send
+- tasks.items.followup
 - queue.add
 - queue.update
 - queue.list

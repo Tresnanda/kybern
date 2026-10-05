@@ -29,7 +29,7 @@ impl Orchestrator {
         self.inner.notes_changed.subscribe()
     }
 
-    fn publish_note(&self, note: NoteSummary) {
+    pub(super) fn publish_note(&self, note: NoteSummary) {
         // No receivers just means no client is connected.
         let _ = self.inner.notes_changed.send(NotesChangedNotification { note: Some(note), purged_id: None });
     }
@@ -75,10 +75,19 @@ impl Orchestrator {
             _ => return invalid("Pass either id or thread_id."),
         };
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        let previous_body = match target {
+            NoteTarget::Id(id) => self.inner.store.note_get(id)?,
+            NoteTarget::Thread(thread_id) => self.inner.store.note_for_thread(thread_id)?,
+        }
+        .map(|note| note.body);
         let note = self.inner.store.note_update(target, params.expected_revision, params.title.as_deref(), params.body.as_deref())?;
         // An unchanged save returns the note as it is; only a real write moved the revision.
         if note.summary.revision != params.expected_revision {
             self.publish_note(note.summary.clone());
+            // Ticking or unticking a line that links a task moves that task.
+            if let Some(previous_body) = previous_body.filter(|previous| *previous != note.body) {
+                self.sync_tasks_from_note(&previous_body, &note);
+            }
         }
         Ok(note)
     }
@@ -133,15 +142,20 @@ impl Orchestrator {
         Ok(purged.len())
     }
 
-    /// Remove a project. Its notes, including its threads' notes, move to Recently
-    /// deleted first instead of being destroyed with it.
+    /// Remove a project. Its notes, including its threads' notes, and its tasks move
+    /// to Recently deleted first instead of being destroyed with it.
     pub fn remove_project(&self, project_id: ProjectId) -> Result<()> {
         if is_free_chat_project(project_id) {
             return Err(anyhow!("the free-chat workspace cannot be removed"));
         }
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        for note in self.inner.store.project_remove(project_id)? {
+        let _tasks = self.inner.task_writes.lock().map_err(|_| anyhow!("task lock poisoned"))?;
+        let removal = self.inner.store.project_remove(project_id)?;
+        for note in removal.notes {
             self.publish_note(note);
+        }
+        for task_id in removal.tasks {
+            self.publish_task_deleted(task_id);
         }
         Ok(())
     }

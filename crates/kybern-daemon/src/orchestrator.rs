@@ -23,6 +23,7 @@ use crate::config::Paths;
 use crate::settings::SettingsStore;
 
 mod notes;
+mod tasks;
 
 #[derive(Clone)]
 pub struct Orchestrator {
@@ -2697,6 +2698,15 @@ struct Inner {
     collaboration_wakeup: Notify,
     /// Note changes, forwarded to clients as `notes.changed`.
     notes_changed: tokio::sync::broadcast::Sender<methods::NotesChangedNotification>,
+    /// Task changes, forwarded to clients as `tasks.items.changed`.
+    tasks_changed: tokio::sync::broadcast::Sender<methods::TaskItemsChangedNotification>,
+    /// Serializes task writes, including the run tracker that `emit` calls.
+    /// Always taken after `commands` when both are needed.
+    task_writes: std::sync::Mutex<()>,
+    /// Threads that are a task's run, so `emit` skips the store for every other thread.
+    task_threads: std::sync::Mutex<HashSet<ThreadId>>,
+    /// When a run's task was last published, to space out activity-only updates.
+    task_published: std::sync::Mutex<HashMap<ThreadId, Instant>>,
 }
 
 struct LiveSession {
@@ -2744,12 +2754,19 @@ struct DaemonApproval {
     decision: tokio::sync::watch::Sender<Option<ApprovalDecision>>,
 }
 
-/// The copy of a user message a provider receives. Kybern-only mentions
-/// become instructions; everything else passes through unchanged.
-fn provider_message<'a>(message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
-    match crate::computer::ComputerUse::expand_mention(message, live.computer_tools) {
-        Some(expanded) => std::borrow::Cow::Owned(expanded),
-        None => std::borrow::Cow::Borrowed(message),
+impl Orchestrator {
+    /// The copy of a user message a provider receives. Kybern-only mentions become
+    /// text: `@Computer` an instruction, a `kybern://note/<id>` mention the note.
+    /// Everything else passes through unchanged; the stored message keeps the chips.
+    fn provider_message<'a>(&self, message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
+        let computer = crate::computer::ComputerUse::expand_mention(message, live.computer_tools);
+        match self.expand_note_mentions(computer.as_ref().unwrap_or(message)) {
+            Some(expanded) => std::borrow::Cow::Owned(expanded),
+            None => match computer {
+                Some(expanded) => std::borrow::Cow::Owned(expanded),
+                None => std::borrow::Cow::Borrowed(message),
+            },
+        }
     }
 }
 
@@ -2901,6 +2918,10 @@ impl Orchestrator {
     ) -> Self {
         let app_tools = crate::app_tools::AppTools::new(store.clone(), crate::terminal::TerminalManager::default());
         let computer = crate::computer::ComputerUse::new(settings.clone());
+        let task_threads = store.task_run_thread_ids().map(|ids| ids.into_iter().collect::<HashSet<_>>()).unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not load the threads that run tasks");
+            HashSet::new()
+        });
         Self {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
@@ -2924,6 +2945,10 @@ impl Orchestrator {
                 queue_wakeup: Notify::new(),
                 collaboration_wakeup: Notify::new(),
                 notes_changed: tokio::sync::broadcast::channel(1024).0,
+                tasks_changed: tokio::sync::broadcast::channel(1024).0,
+                task_writes: std::sync::Mutex::new(()),
+                task_threads: std::sync::Mutex::new(task_threads),
+                task_published: std::sync::Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -3289,6 +3314,7 @@ impl Orchestrator {
             self.inner.queue_wakeup.notify_one();
         }
         let _ = self.inner.events.send(ev.clone());
+        self.track_task_run(&ev);
         if let Some(error) = collaboration_failure {
             self.record_collaboration_turn_failure(thread_id, &error)?;
         }
@@ -3418,6 +3444,7 @@ impl Orchestrator {
             is_git: project_path_is_git(&path),
             path,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -3429,7 +3456,8 @@ impl Orchestrator {
             }
             return Err(error);
         }
-        Ok(project)
+        // The store assigns the task prefix on insert; return the project as stored.
+        Ok(self.inner.store.project_get(project.id)?.unwrap_or(project))
     }
 
     // ---- threads ----
@@ -3605,6 +3633,7 @@ impl Orchestrator {
             path: path.to_string_lossy().into_owned(),
             is_git: false,
             worktrees_default: Some(false),
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -3872,7 +3901,7 @@ impl Orchestrator {
             .filter(|turn| !turn.completed)
             .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
         live.touch();
-        live.session.steer(&params.id.to_string(), &provider_message(&params.message, &live)).await?;
+        live.session.steer(&params.id.to_string(), &self.provider_message(&params.message, &live)).await?;
         self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
         if let Err(error) = self.record_user_redirect(params.thread_id, &redirect_summary) {
             tracing::warn!(thread_id = %params.thread_id, %error, "could not notify collaboration coordinator of direct user steering");
@@ -4073,7 +4102,7 @@ impl Orchestrator {
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            live.session.send_message(&message_id.to_string(), &provider_message(&message, &live)).await
+            live.session.send_message(&message_id.to_string(), &self.provider_message(&message, &live)).await
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -4317,7 +4346,7 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed)
                 .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
             live.touch();
-            live.session.steer(&message_id.to_string(), &provider_message(&message, &live)).await?;
+            live.session.steer(&message_id.to_string(), &self.provider_message(&message, &live)).await?;
             active.id
         } else {
             self.send_with_id(params.thread_id, message_id, message.clone(), false, false).await?.0
@@ -4530,6 +4559,10 @@ impl Orchestrator {
     /// Kick off a background title generation for threads still carrying the derived title.
     fn maybe_generate_title(&self, thread: &Thread) {
         if !self.inner.settings.get().generate_titles {
+            return;
+        }
+        // A task's run keeps the task's title.
+        if self.inner.task_threads.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&thread.id) {
             return;
         }
         let Ok((first, turns)) = self.inner.store.first_turn_message_and_count(thread.id) else { return };
@@ -6219,6 +6252,7 @@ mod tests {
             path: root.to_string_lossy().into_owned(),
             is_git: false,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -6573,6 +6607,7 @@ mod tests {
                 path: root.to_string_lossy().into_owned(),
                 is_git: false,
                 worktrees_default: None,
+                task_prefix: None,
                 created_at: now,
                 updated_at: now,
             };

@@ -205,6 +205,11 @@ pub struct ProjectsUpdateParams {
     /// `Some(None)` clears the override. Encoded as `null` on the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktrees_default: Option<Option<bool>>,
+    /// New prefix for task keys: 2 to 5 letters A-Z (lowercase is accepted and
+    /// uppercased), unique across projects. Existing task keys do not change.
+    /// Absent or `null` leaves the prefix as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_prefix: Option<String>,
 }
 method!(ProjectsUpdate, "projects.update", Some(Scope::OrchestrationOperate), ProjectsUpdateParams, Project);
 
@@ -1913,6 +1918,298 @@ pub struct NotesChangedNotification {
     pub purged_id: Option<NoteId>,
 }
 
+// ---- user tasks ----
+
+/// Notification method delivered to every client that can read orchestration
+/// state after a user task changes. Older clients ignore it.
+pub const TASK_ITEMS_CHANGED_NOTIFICATION: &str = "tasks.items.changed";
+
+pub type TaskItemId = uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskScope {
+    Global,
+    Project,
+}
+
+/// `Running` and `NeedsReview` are owned by the latest run; the rest are set by the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Inbox,
+    Todo,
+    Running,
+    NeedsReview,
+    Done,
+    Canceled,
+}
+
+impl TaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskStatus::Inbox => "inbox",
+            TaskStatus::Todo => "todo",
+            TaskStatus::Running => "running",
+            TaskStatus::NeedsReview => "needs_review",
+            TaskStatus::Done => "done",
+            TaskStatus::Canceled => "canceled",
+        }
+    }
+
+    /// Statuses a user may set by hand.
+    pub fn is_user_settable(self) -> bool {
+        matches!(self, TaskStatus::Inbox | TaskStatus::Todo | TaskStatus::Done | TaskStatus::Canceled)
+    }
+}
+
+/// 0 none, 1 urgent, 2 high, 3 medium, 4 low (Linear order).
+pub type TaskPriority = u8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRunState {
+    /// Live: the agent is working.
+    Running,
+    /// Live: waiting for an approval or an answer.
+    Waiting,
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+impl TaskRunState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskRunState::Running => "running",
+            TaskRunState::Waiting => "waiting",
+            TaskRunState::Completed => "completed",
+            TaskRunState::Failed => "failed",
+            TaskRunState::Interrupted => "interrupted",
+        }
+    }
+
+    pub fn is_live(self) -> bool {
+        matches!(self, TaskRunState::Running | TaskRunState::Waiting)
+    }
+}
+
+/// Lines added and removed by a run's changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskRunDiff {
+    pub added: u32,
+    pub removed: u32,
+    pub files: u32,
+}
+
+/// A note sent with a run and the revision it was at when the run started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskRunNote {
+    pub note_id: NoteId,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskRun {
+    pub thread_id: ThreadId,
+    /// 1-based within the task.
+    pub number: u32,
+    pub provider: ProviderInstance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub state: TaskRunState,
+    /// What the agent is doing now, such as "Editing src/main.rs". Live runs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    /// Lines added and removed by the run's changes, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<TaskRunDiff>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<TaskRunNote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItem {
+    pub id: TaskItemId,
+    /// Display id such as `ADE-14`; global tasks use `TSK`. Never reused.
+    pub key: String,
+    pub scope: TaskScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub title: String,
+    /// Markdown: description, optionally followed by acceptance criteria as a checklist.
+    pub body: String,
+    pub status: TaskStatus,
+    pub priority: TaskPriority,
+    /// Position within its status column, ascending.
+    pub rank: f64,
+    /// Notes attached as context.
+    pub note_ids: Vec<NoteId>,
+    /// The note whose checklist line created this task, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_note_id: Option<NoteId>,
+    /// Saved follow-up text for the next run, when no run could receive it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_followup: Option<String>,
+    pub runs: Vec<TaskRun>,
+    /// Content revision for title and body edits.
+    pub revision: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// When the status last changed.
+    pub status_changed_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsListResult {
+    pub tasks: Vec<TaskItem>,
+}
+method!(TaskItemsList, "tasks.items.list", Some(Scope::OrchestrationRead), Empty, TaskItemsListResult);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsGetParams {
+    /// Exactly one of `id` or `key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<TaskItemId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsGetResult {
+    /// Absent when no live task matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskItem>,
+}
+method!(TaskItemsGet, "tasks.items.get", Some(Scope::OrchestrationRead), TaskItemsGetParams, TaskItemsGetResult);
+
+/// A checklist line of a note that becomes a task.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemSource {
+    pub note_id: NoteId,
+    /// The line's text, with or without its `- [ ]` marker.
+    pub line_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsCreateParams {
+    pub scope: TaskScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Defaults to `inbox`. Only user statuses are accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<TaskPriority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_ids: Option<Vec<NoteId>>,
+    /// Create from a checklist line: the daemon rewrites that line to end with `[KEY](kybern://task/<id>)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<TaskItemSource>,
+}
+method!(TaskItemsCreate, "tasks.items.create", Some(Scope::OrchestrationOperate), TaskItemsCreateParams, TaskItem);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsUpdateParams {
+    pub id: TaskItemId,
+    /// Required when `title` or `body` change. Fails with CONFLICT (-32004) when the task changed elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// User statuses only: inbox, todo, done, canceled. Sending a status without
+    /// `before_id` places the task at the end of that column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<TaskPriority>,
+    /// Move between Global and a project. The key changes only when the task has no runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<TaskScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    /// Replaces the attached notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_ids: Option<Vec<NoteId>>,
+    /// Replaces the saved follow-up; an empty string clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_followup: Option<String>,
+    /// Place before this task in the target status column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_id: Option<TaskItemId>,
+}
+method!(TaskItemsUpdate, "tasks.items.update", Some(Scope::OrchestrationOperate), TaskItemsUpdateParams, TaskItem);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsIdParams {
+    pub id: TaskItemId,
+}
+// Soft delete: the task is hidden and removed for good after 30 days unless restored.
+method!(TaskItemsDelete, "tasks.items.delete", Some(Scope::OrchestrationOperate), TaskItemsIdParams, Empty);
+method!(TaskItemsRestore, "tasks.items.restore", Some(Scope::OrchestrationOperate), TaskItemsIdParams, TaskItem);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsSendParams {
+    pub id: TaskItemId,
+    pub provider: ProviderInstance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_worktree: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// Required for global tasks: the project the run happens in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    /// The (possibly edited) prompt text.
+    pub prompt: String,
+    /// Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_ids: Option<Vec<NoteId>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsSendResult {
+    pub task: TaskItem,
+    pub thread_id: ThreadId,
+}
+method!(TaskItemsSend, "tasks.items.send", Some(Scope::OrchestrationOperate), TaskItemsSendParams, TaskItemsSendResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsFollowupParams {
+    pub id: TaskItemId,
+    pub text: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsFollowupResult {
+    pub task: TaskItem,
+    /// The run thread that received the text, sent now or queued. Absent when it was saved for the next run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_to: Option<ThreadId>,
+}
+method!(TaskItemsFollowup, "tasks.items.followup", Some(Scope::OrchestrationOperate), TaskItemsFollowupParams, TaskItemsFollowupResult);
+
+/// Params of the `tasks.items.changed` notification.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsChangedNotification {
+    /// The task after the change, including restores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskItem>,
+    /// Set instead of `task` when a task was deleted or permanently removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_id: Option<TaskItemId>,
+}
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -1966,6 +2263,14 @@ registry!(
     NotesRestore,
     NotesPurge,
     NotesSearch,
+    TaskItemsList,
+    TaskItemsGet,
+    TaskItemsCreate,
+    TaskItemsUpdate,
+    TaskItemsDelete,
+    TaskItemsRestore,
+    TaskItemsSend,
+    TaskItemsFollowup,
     QueueAdd,
     QueueUpdate,
     QueueList,

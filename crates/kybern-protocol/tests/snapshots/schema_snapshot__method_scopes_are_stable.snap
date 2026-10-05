@@ -78,6 +78,22 @@ expression: scopes
   - "orchestration:operate"
 - - notes.search
   - "orchestration:read"
+- - tasks.items.list
+  - "orchestration:read"
+- - tasks.items.get
+  - "orchestration:read"
+- - tasks.items.create
+  - "orchestration:operate"
+- - tasks.items.update
+  - "orchestration:operate"
+- - tasks.items.delete
+  - "orchestration:operate"
+- - tasks.items.restore
+  - "orchestration:operate"
+- - tasks.items.send
+  - "orchestration:operate"
+- - tasks.items.followup
+  - "orchestration:operate"
 - - queue.add
   - "orchestration:operate"
 - - queue.update

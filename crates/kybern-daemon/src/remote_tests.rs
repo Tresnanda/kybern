@@ -541,6 +541,205 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
     );
 }
 
+async fn next_tasks_changed(client: &Client) -> TaskItemsChangedNotification {
+    let mut notifications = client.notifications.lock().await;
+    loop {
+        let notification =
+            tokio::time::timeout(Duration::from_secs(3), futures::StreamExt::next(&mut *notifications)).await.unwrap().unwrap();
+        if notification.method == TASK_ITEMS_CHANGED_NOTIFICATION {
+            return serde_json::from_value(notification.params).unwrap();
+        }
+    }
+}
+
+fn task_create(project_id: Option<ProjectId>, title: &str) -> TaskItemsCreateParams {
+    TaskItemsCreateParams {
+        scope: if project_id.is_some() { TaskScope::Project } else { TaskScope::Global },
+        project_id,
+        title: title.into(),
+        body: None,
+        status: None,
+        priority: None,
+        note_ids: None,
+        source: None,
+    }
+}
+
+fn task_update(id: TaskItemId) -> TaskItemsUpdateParams {
+    TaskItemsUpdateParams {
+        id,
+        expected_revision: None,
+        title: None,
+        body: None,
+        status: None,
+        priority: None,
+        scope: None,
+        project_id: None,
+        note_ids: None,
+        pending_followup: None,
+        before_id: None,
+    }
+}
+
+#[tokio::test]
+async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
+    let host = Host::start().await;
+    host.thread();
+    let desktop = host.client().await;
+    let phone = host.client().await;
+
+    let project = desktop.call::<ProjectsList>(Empty {}).await.unwrap().projects.remove(0);
+    assert_eq!(project.task_prefix.as_deref(), Some("FIX"), "derived from the project name when it was added");
+    let created = desktop.call::<TaskItemsCreate>(task_create(Some(project.id), "Fix login")).await.unwrap();
+    assert_eq!(
+        (created.key.as_str(), created.status, created.revision, created.scope),
+        ("FIX-1", TaskStatus::Inbox, 1, TaskScope::Project)
+    );
+    assert_eq!(next_tasks_changed(&phone).await.task, Some(created.clone()));
+    let global = desktop.call::<TaskItemsCreate>(task_create(None, "Loose end")).await.unwrap();
+    assert_eq!(global.key, "TSK-1");
+    next_tasks_changed(&phone).await;
+
+    let listed = phone.call::<TaskItemsList>(Empty {}).await.unwrap().tasks;
+    assert_eq!(listed.iter().map(|task| task.key.as_str()).collect::<Vec<_>>(), ["FIX-1", "TSK-1"]);
+    let by_key = phone.call::<TaskItemsGet>(TaskItemsGetParams { id: None, key: Some("fix-1".into()) }).await.unwrap();
+    assert_eq!(by_key.task, Some(created.clone()));
+    assert!(phone.call::<TaskItemsGet>(TaskItemsGetParams { id: Some(Uuid::now_v7()), key: None }).await.unwrap().task.is_none());
+
+    let edited = desktop
+        .call::<TaskItemsUpdate>(TaskItemsUpdateParams {
+            body: Some("details".into()),
+            expected_revision: Some(1),
+            ..task_update(created.id)
+        })
+        .await
+        .unwrap();
+    assert_eq!(edited.revision, 2);
+    assert_eq!(next_tasks_changed(&phone).await.task.unwrap().body, "details");
+    let stale = TaskItemsUpdateParams { body: Some("phone edit".into()), expected_revision: Some(1), ..task_update(created.id) };
+    let conflict = phone.call_raw(TaskItemsUpdate::NAME, serde_json::to_value(stale).unwrap()).await.unwrap_err().to_string();
+    assert_eq!(conflict, format!("This task changed on another device. Choose which version to keep. (code {})", codes::CONFLICT));
+
+    let todo = phone
+        .call::<TaskItemsUpdate>(TaskItemsUpdateParams { status: Some(TaskStatus::Todo), priority: Some(2), ..task_update(created.id) })
+        .await
+        .unwrap();
+    assert_eq!((todo.status, todo.priority, todo.revision), (TaskStatus::Todo, 2, 2));
+    assert_eq!(next_tasks_changed(&phone).await.task.unwrap().status, TaskStatus::Todo);
+    let running = phone.call_raw(TaskItemsUpdate::NAME, json!({"id": created.id, "status": "running"})).await.unwrap_err().to_string();
+    assert!(running.contains(&format!("code {}", codes::INVALID_PARAMS)), "{running}");
+    let unknown = phone.call_raw(TaskItemsUpdate::NAME, json!({"id": Uuid::now_v7(), "priority": 1})).await.unwrap_err().to_string();
+    assert!(unknown.contains(&format!("code {}", codes::NOT_FOUND)), "{unknown}");
+
+    // Sending validates before starting anything; a follow-up with no run is saved for the next one.
+    let empty_prompt = TaskItemsSendParams {
+        id: created.id,
+        provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+        model: None,
+        effort: None,
+        permission_mode: None,
+        use_worktree: None,
+        base_branch: None,
+        project_id: None,
+        prompt: " ".into(),
+        note_ids: None,
+    };
+    let rejected = phone.call_raw(TaskItemsSend::NAME, serde_json::to_value(empty_prompt).unwrap()).await.unwrap_err().to_string();
+    assert!(rejected.contains(&format!("code {}", codes::INVALID_PARAMS)), "{rejected}");
+    let saved = phone.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: created.id, text: "also tests".into() }).await.unwrap();
+    assert_eq!((saved.sent_to, saved.task.pending_followup.as_deref()), (None, Some("also tests")));
+    assert_eq!(next_tasks_changed(&phone).await.task.unwrap().pending_followup.as_deref(), Some("also tests"));
+
+    desktop.call::<TaskItemsDelete>(TaskItemsIdParams { id: created.id }).await.unwrap();
+    assert_eq!(next_tasks_changed(&phone).await.deleted_id, Some(created.id));
+    assert_eq!(phone.call::<TaskItemsList>(Empty {}).await.unwrap().tasks.len(), 1);
+    let restored = desktop.call::<TaskItemsRestore>(TaskItemsIdParams { id: created.id }).await.unwrap();
+    assert_eq!((restored.key.as_str(), restored.pending_followup.as_deref()), ("FIX-1", Some("also tests")));
+    assert_eq!(next_tasks_changed(&phone).await.task.map(|task| task.id), Some(created.id));
+}
+
+#[tokio::test]
+async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
+    let host = Host::start().await;
+    let client = host.client().await;
+    let one = host.root.join("one");
+    let two = host.root.join("two");
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::create_dir_all(&two).unwrap();
+    let a = client
+        .call::<ProjectsAdd>(ProjectsAddParams { path: one.to_string_lossy().into_owned(), name: Some("kybern-mobile".into()) })
+        .await
+        .unwrap();
+    let b = client
+        .call::<ProjectsAdd>(ProjectsAddParams { path: two.to_string_lossy().into_owned(), name: Some("kybern-mobile".into()) })
+        .await
+        .unwrap();
+    assert_eq!((a.task_prefix.as_deref(), b.task_prefix.as_deref()), (Some("KYM"), Some("KYMA")));
+
+    let update = |project_id, prefix: &str| ProjectsUpdateParams {
+        project_id,
+        name: None,
+        worktrees_default: None,
+        task_prefix: Some(prefix.into()),
+    };
+    let renamed = client.call::<ProjectsUpdate>(update(a.id, "mob")).await.unwrap();
+    assert_eq!(renamed.task_prefix.as_deref(), Some("MOB"));
+    let key = client.call::<TaskItemsCreate>(task_create(Some(a.id), "First")).await.unwrap().key;
+    assert_eq!(key, "MOB-1");
+    for bad in ["x", "TOOLONG", "A1B", "TSK"] {
+        let error = client.call_raw(ProjectsUpdate::NAME, serde_json::to_value(update(a.id, bad)).unwrap()).await.unwrap_err().to_string();
+        assert!(error.contains(&format!("code {}", codes::INVALID_PARAMS)), "{bad}: {error}");
+    }
+    let taken = client.call_raw(ProjectsUpdate::NAME, serde_json::to_value(update(b.id, "MOB")).unwrap()).await.unwrap_err().to_string();
+    assert!(taken.contains("Another project already uses MOB"), "{taken}");
+    let untouched = client
+        .call::<ProjectsUpdate>(ProjectsUpdateParams {
+            project_id: b.id,
+            name: Some("Renamed".into()),
+            worktrees_default: None,
+            task_prefix: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!((untouched.name.as_str(), untouched.task_prefix.as_deref()), ("Renamed", Some("KYMA")), "a rename leaves the prefix alone");
+    assert!(client.call::<ProjectsList>(Empty {}).await.unwrap().projects.iter().all(|project| project.task_prefix.is_some()));
+}
+
+#[tokio::test]
+async fn removing_a_project_over_rpc_hides_its_tasks_and_task_notifications_respect_scopes() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let client = host.client().await;
+    let watcher = host.client().await;
+    let task = client.call::<TaskItemsCreate>(task_create(Some(thread.project_id), "Project work")).await.unwrap();
+    let global = client.call::<TaskItemsCreate>(task_create(None, "Global work")).await.unwrap();
+    next_tasks_changed(&watcher).await;
+    next_tasks_changed(&watcher).await;
+
+    client.call::<ProjectsRemove>(ProjectsRemoveParams { project_id: thread.project_id }).await.unwrap();
+    assert_eq!(next_tasks_changed(&watcher).await.deleted_id, Some(task.id));
+    let remaining = client.call::<TaskItemsList>(Empty {}).await.unwrap().tasks;
+    assert_eq!(remaining.iter().map(|task| task.id).collect::<Vec<_>>(), vec![global.id]);
+    let restored = client.call::<TaskItemsRestore>(TaskItemsIdParams { id: task.id }).await.unwrap();
+    assert_eq!((restored.scope, restored.project_id, restored.key.as_str()), (TaskScope::Global, None, "FIX-1"));
+
+    let connect_with = |scopes: &[Scope]| {
+        let token = crate::auth::generate();
+        host.state.store.token_insert(Uuid::now_v7(), &crate::auth::hash(&token), "scoped", scopes).unwrap();
+        async { Client::connect(&Endpoint { url: format!("{}/ws", host.url.replace("http:", "ws:")), token }).await.unwrap() }
+    };
+    let reader = connect_with(&[Scope::OrchestrationRead]).await;
+    let blind = connect_with(&[Scope::ReviewWrite]).await;
+    client.call::<TaskItemsCreate>(task_create(None, "Hello")).await.unwrap();
+    assert_eq!(next_tasks_changed(&reader).await.task.unwrap().title, "Hello");
+    let mut notifications = blind.notifications.lock().await;
+    assert!(tokio::time::timeout(Duration::from_millis(300), futures::StreamExt::next(&mut *notifications)).await.is_err());
+    drop(notifications);
+    assert!(blind.call::<TaskItemsList>(Empty {}).await.unwrap_err().to_string().contains("missing scope"));
+    assert!(reader.call::<TaskItemsList>(Empty {}).await.is_ok());
+    assert!(reader.call::<TaskItemsCreate>(task_create(None, "No")).await.unwrap_err().to_string().contains("missing scope"));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn reconnect_reattaches_terminal_and_closed_identity_cannot_spawn_again() {
