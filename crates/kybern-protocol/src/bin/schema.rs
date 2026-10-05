@@ -59,6 +59,7 @@ fn main() {
     add::<NotesChangedNotification>(&mut types, "NotesChangedNotification");
     add::<TaskItem>(&mut types, "TaskItem");
     add::<TaskItemsChangedNotification>(&mut types, "TaskItemsChangedNotification");
+    add::<ProjectsChangedNotification>(&mut types, "ProjectsChangedNotification");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);

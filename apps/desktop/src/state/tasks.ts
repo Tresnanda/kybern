@@ -529,11 +529,12 @@ export async function sendTask(params: TaskRunSendParams): Promise<{ task: TaskI
 }
 
 /**
- * Send a follow-up: into an idle run, queued behind a busy one, or saved for the next
- * run. Throws, so the composer keeps the text and says what went wrong.
+ * Send a follow-up with its chips and attachments: into an idle run, queued behind a
+ * busy one, or saved as text for the next run (the daemon refuses attachments there).
+ * Throws, so the composer keeps the message and says what went wrong.
  */
-export async function followupTask(id: TaskItemId, text: string): Promise<{ task: TaskItem; sent_to?: ThreadId | null }> {
-  const result = await client().call("tasks.items.followup", { id, text })
+export async function followupTask(id: TaskItemId, message: UserMessage): Promise<{ task: TaskItem; sent_to?: ThreadId | null }> {
+  const result = await client().call("tasks.items.followup", { id, message })
   upsert(result.task)
   return result
 }

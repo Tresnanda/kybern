@@ -21,6 +21,7 @@ registerHooks({
         status = 'open'; info = null;
         constructor() { globalThis.memoryClient = this }
         onStatus(callback) { this.statusCallback = callback }
+        onNotification(method, callback) { (this.notifications ??= {})[method] = callback; return () => {} }
         subscribeEvents(params, callback, subscribed, ready) { this.event = callback; this.subscribed = subscribed; this.ready = ready }
         connect() { this.statusCallback('open') }
         close() { this.status = 'closed' }

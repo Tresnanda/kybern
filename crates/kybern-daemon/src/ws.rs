@@ -407,6 +407,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut notes = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_notes());
     let mut tasks = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_tasks());
     let mut usage = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.usage().subscribe());
+    let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
         return;
     }
@@ -480,6 +481,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                         tracing::warn!(conn = %ctx.id, lagged = n, "client missed task changes");
                     }
                     Err(_) => tasks = None,
+                }
+            }
+            changed = async {
+                match projects.as_mut() {
+                    Some(projects) => projects.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match changed {
+                    Ok(changed) => { let _ = ctx.out.notify(kybern_protocol::methods::PROJECTS_CHANGED_NOTIFICATION, changed).await; }
+                    // Each notification carries the whole list; the next one catches up.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => projects = None,
                 }
             }
             limits = async {

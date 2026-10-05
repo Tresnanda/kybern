@@ -1096,6 +1096,7 @@ impl Orchestrator {
                     project.is_git = true;
                     project.updated_at = Utc::now();
                     self.inner.store.project_update(&project)?;
+                    self.publish_projects();
                 } else {
                     return Err(anyhow!("editing and integration workers require a Git project so Kybern can isolate their changes"));
                 }
@@ -2704,6 +2705,8 @@ struct Inner {
     notes_changed: tokio::sync::broadcast::Sender<methods::NotesChangedNotification>,
     /// Task changes, forwarded to clients as `tasks.items.changed`.
     tasks_changed: tokio::sync::broadcast::Sender<methods::TaskItemsChangedNotification>,
+    /// The project list after each change, forwarded as `projects.changed`.
+    projects_changed: tokio::sync::broadcast::Sender<methods::ProjectsChangedNotification>,
     /// Account plan limits per provider, forwarded as `usage.limits.changed`.
     usage: crate::usage::UsageMonitor,
     /// Serializes task writes, including the run tracker that `emit` calls.
@@ -2970,6 +2973,7 @@ impl Orchestrator {
                 collaboration_wakeup: Notify::new(),
                 notes_changed: tokio::sync::broadcast::channel(1024).0,
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
+                projects_changed: tokio::sync::broadcast::channel(64).0,
                 usage,
                 task_writes: std::sync::Mutex::new(()),
                 task_threads: std::sync::Mutex::new(task_threads),
@@ -3471,6 +3475,7 @@ impl Orchestrator {
                 existing.is_git = live;
                 existing.updated_at = Utc::now();
                 self.inner.store.project_update(&existing)?;
+                self.publish_projects();
             }
             return Ok(existing);
         }
@@ -3493,8 +3498,26 @@ impl Orchestrator {
             }
             return Err(error);
         }
+        self.publish_projects();
         // The store assigns the task prefix on insert; return the project as stored.
         Ok(self.inner.store.project_get(project.id)?.unwrap_or(project))
+    }
+
+    /// Changes to the project list, for forwarding to connected clients.
+    pub fn subscribe_projects(&self) -> tokio::sync::broadcast::Receiver<methods::ProjectsChangedNotification> {
+        self.inner.projects_changed.subscribe()
+    }
+
+    /// Tell clients the project list changed. Each notification carries the whole
+    /// list, so a client that misses one catches up with the next.
+    pub fn publish_projects(&self) {
+        match self.inner.store.projects_list() {
+            // No receivers just means no client is connected.
+            Ok(projects) => {
+                let _ = self.inner.projects_changed.send(methods::ProjectsChangedNotification { projects });
+            }
+            Err(error) => tracing::warn!(%error, "could not read projects to announce a change"),
+        }
     }
 
     // ---- threads ----
@@ -3604,6 +3627,7 @@ impl Orchestrator {
                 project.is_git = true;
                 project.updated_at = Utc::now();
                 self.inner.store.project_update(&project)?;
+                self.publish_projects();
             } else {
                 return Err(anyhow!("project is not a git repository; cannot create a worktree"));
             }
@@ -3675,7 +3699,10 @@ impl Orchestrator {
             updated_at: now,
         };
         match self.inner.store.project_insert(&project) {
-            Ok(()) => Ok(project),
+            Ok(()) => {
+                self.publish_projects();
+                Ok(project)
+            }
             Err(error) => self.inner.store.project_get(FREE_CHAT_PROJECT_ID)?.ok_or(error),
         }
     }

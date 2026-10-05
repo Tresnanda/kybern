@@ -219,6 +219,16 @@ pub struct ProjectsRemoveParams {
 }
 method!(ProjectsRemove, "projects.remove", Some(Scope::OrchestrationOperate), ProjectsRemoveParams, Empty);
 
+pub const PROJECTS_CHANGED_NOTIFICATION: &str = "projects.changed";
+
+/// Params of the `projects.changed` notification, sent after a project is added,
+/// updated or removed by any client or by the daemon itself.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsChangedNotification {
+    /// Every project after the change, in `projects.list` order.
+    pub projects: Vec<Project>,
+}
+
 // ---- threads ----
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2258,12 +2268,26 @@ method!(TaskItemsSend, "tasks.items.send", Some(Scope::OrchestrationOperate), Ta
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsFollowupParams {
     pub id: TaskItemId,
-    pub text: String,
+    /// Plain text. Exactly one of `text` or `message` is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The full follow-up (text, mentions, skills, files, thread references,
+    /// attachments), sent or queued as is. When no run can receive it, a message
+    /// of text and references is saved as readable text for the next run; one
+    /// with attachments is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<UserMessage>,
+}
+impl TaskItemsFollowupParams {
+    /// A plain-text follow-up.
+    pub fn text(id: TaskItemId, text: impl Into<String>) -> Self {
+        Self { id, text: Some(text.into()), message: None }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsFollowupResult {
     pub task: TaskItem,
-    /// The run thread that received the text, sent now or queued. Absent when it was saved for the next run.
+    /// The run thread that received the follow-up, sent now or queued. Absent when it was saved for the next run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sent_to: Option<ThreadId>,
 }

@@ -157,6 +157,7 @@ impl Orchestrator {
         for task_id in removal.tasks {
             self.publish_task_deleted(task_id);
         }
+        self.publish_projects();
         Ok(())
     }
 

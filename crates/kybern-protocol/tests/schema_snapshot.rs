@@ -122,6 +122,7 @@ fn notes_wire_shape_is_stable() {
 fn task_items_wire_shape_is_stable() {
     insta::assert_json_snapshot!("task_item_schema", schema_for!(TaskItem));
     insta::assert_json_snapshot!("task_items_changed_notification", schema_for!(TaskItemsChangedNotification));
+    insta::assert_json_snapshot!("task_items_followup_params", schema_for!(TaskItemsFollowupParams));
     let at: chrono::DateTime<chrono::Utc> = chrono::DateTime::parse_from_rfc3339("2026-10-05T00:00:00Z").unwrap().into();
     let task = TaskItem {
         id: uuid::Uuid::nil(),
@@ -188,4 +189,9 @@ fn task_items_wire_shape_is_stable() {
     }))
     .unwrap();
     assert!(send.prompt.is_none() && send.message.is_some_and(|message| message.parts.len() == 1));
+}
+
+#[test]
+fn projects_changed_notification_is_stable() {
+    insta::assert_json_snapshot!("projects_changed_notification", schema_for!(ProjectsChangedNotification));
 }

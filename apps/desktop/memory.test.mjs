@@ -18,6 +18,7 @@ registerHooks({ resolve(specifier, context, next) {
       status = 'open'; info = null;
       constructor() { globalThis.memoryClient = this }
       onStatus(callback) { this.statusCallback = callback }
+      onNotification(method, callback) { (this.notifications ??= {})[method] = callback; return () => {} }
       subscribeEvents(params, callback, subscribed, ready) { this.event = callback; this.subscribed = subscribed; this.ready = ready }
       connect() { this.statusCallback('open') }
       close() { this.status = 'closed' }
@@ -857,4 +858,26 @@ test("activity hydration selects the exact row when another turn reused the call
     for (const release of releases) release()
     f.runtime.disconnect()
   }
+})
+
+test("projects.changed keeps the project list current and moves a draft off a removed project", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("projects-changed")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  const project = (id, name) => ({ id, name, path: `/work/${id}`, is_git: true, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" })
+  try {
+    const changed = client.notifications["projects.changed"]
+    changed({ projects: [project("a", "Ade"), project("s", "Shop")] })
+    assert.deepEqual(Object.keys(store.getState().projects), ["a", "s"], "a project added elsewhere appears")
+    store.getState().selectDraft("s")
+    changed({ projects: [project("a", "Ade")] })
+    assert.deepEqual(Object.keys(store.getState().projects), ["a"])
+    const selected = store.getState().selected
+    assert.equal(selected.kind, "draft")
+    assert.equal(selected.draft.projectId, "a", "the draft falls back to the first project")
+    changed({ projects: [] })
+    assert.deepEqual(store.getState().selected, { kind: "draft", draft: {} }, "with no projects left, a free chat")
+  } finally { runtime.disconnect() }
 })

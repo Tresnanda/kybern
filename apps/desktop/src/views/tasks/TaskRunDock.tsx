@@ -23,7 +23,7 @@ import { noteTitle } from "@/state/notesModel"
 import { errorText, rpc, updateThread } from "@/state/rpc"
 import { selectAvailableProviders, useStore } from "@/state/store"
 import { closeRunComposer, followupTask, openRunComposer, openRunThread, sendTask, updateTask, useTasks, writeSendPrefs } from "@/state/tasks"
-import { followupText, isLiveRun, latestRun, suggestionQuery } from "@/state/tasksModel"
+import { isLiveRun, latestRun, suggestionQuery } from "@/state/tasksModel"
 import { findModel } from "../../../../../packages/kybern-client/src/models"
 import { Composer, LandingTray, type ComposerHandle } from "../Composer"
 import { BranchTrayChip, ProjectTrayChip, WorkspaceTrayChip } from "../trayChips"
@@ -252,10 +252,8 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
 
   const sendFollowup = async (message: UserMessage) => {
     if (!run) return
-    const text = followupText(message)
-    if (!text) throw new Error("Write a follow-up first.")
     const wasLive = live
-    const result = await followupTask(task.id, text)
+    const result = await followupTask(task.id, message)
     close()
     const sentTo = result.sent_to
     if (sentTo) toast(wasLive ? `Queued for Run ${run.number}` : `Sent to Run ${run.number}`, { action: { label: "Open", onClick: () => openRunThread(sentTo) } })

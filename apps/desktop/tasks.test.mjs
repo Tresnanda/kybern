@@ -7,7 +7,6 @@ import {
   countTasks,
   dropAction,
   findTaskKeys,
-  followupText,
   groupTasks,
   isGroupCollapsed,
   keyMatchesQuery,
@@ -173,22 +172,6 @@ test("the body splits into a description and acceptance criteria", () => {
 
 test("inline Markdown reads as plain text", () => {
   assert.equal(plainInline("**Bold** `code` [link](https://x)"), "Bold code link")
-})
-
-test("a follow-up's chips become readable text that keeps their target", () => {
-  const text = followupText({
-    parts: [
-      { type: "text", text: "Also read " },
-      { type: "mention", name: "Spec", path: "kybern://note/n1", display_name: "Spec" },
-      { type: "text", text: " and " },
-      { type: "file_mention", path: "src/app.ts" },
-      { type: "text", text: " with " },
-      { type: "skill", name: "review", path: "/skills/review" },
-      { type: "text", text: " " },
-    ],
-  })
-  assert.equal(text, "Also read Spec (kybern://note/n1) and @src/app.ts with $review")
-  assert.throws(() => followupText({ parts: [{ type: "attachment", asset_id: "a", name: "x.png", media_type: "image/png", size: 1 }] }), /text only/)
 })
 
 test("suggested notes search the title's longer words", () => {

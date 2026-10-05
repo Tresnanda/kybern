@@ -316,11 +316,18 @@ impl Orchestrator {
         }
     }
 
-    /// Send text to the task's agent: into the latest run's thread now when it is idle,
-    /// queued when it is busy, or saved for the next run when there is no run to receive it.
+    /// Send a follow-up to the task's agent: into the latest run's thread now when it
+    /// is idle, queued when it is busy, or saved as text for the next run when there
+    /// is no run to receive it. A full message travels as is to a run; saved, its
+    /// references become readable text, and attachments are refused.
     pub async fn task_item_followup(&self, params: TaskItemsFollowupParams) -> Result<TaskItemsFollowupResult> {
-        let text = params.text.trim().to_owned();
-        if text.is_empty() {
+        let message = match (params.text, params.message) {
+            (Some(_), Some(_)) => return invalid("Send either text or a message, not both."),
+            (Some(text), None) => UserMessage::text(text.trim()),
+            (None, Some(message)) => message,
+            (None, None) => return invalid("Write a follow-up first."),
+        };
+        if !message.parts.iter().any(|part| !matches!(part, ContentPart::Text { text } if text.trim().is_empty())) {
             return invalid("Write a follow-up first.");
         }
         enum Route {
@@ -338,10 +345,14 @@ impl Orchestrator {
             };
             match thread {
                 None => {
+                    let text = followup_saved_text(&message)?;
+                    if text.is_empty() {
+                        return invalid("Write a follow-up first.");
+                    }
                     // Saved text stays one block per follow-up, a blank line apart.
                     let combined = match task.pending_followup.as_deref().map(str::trim) {
                         Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
-                        _ => text.clone(),
+                        _ => text,
                     };
                     let saved = store
                         .task_item_update(task.id, TaskPatch { pending_followup: Some(combined), ..Default::default() })
@@ -359,11 +370,11 @@ impl Orchestrator {
         match route {
             Route::Saved(task) => Ok(TaskItemsFollowupResult { task: *task, sent_to: None }),
             Route::Queue(thread_id) => {
-                self.enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id, message: UserMessage::text(text) })?;
+                self.enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id, message })?;
                 self.task_with_sent_to(params.id, thread_id)
             }
             Route::Send(thread_id) => {
-                self.send(thread_id, UserMessage::text(text)).await?;
+                self.send(thread_id, message).await?;
                 self.task_with_sent_to(params.id, thread_id)
             }
         }
@@ -740,6 +751,37 @@ pub(crate) fn task_mention(task: &TaskItem) -> ContentPart {
         path: format!("{TASK_MENTION_PREFIX}{}", task.id),
         display_name: Some(format!("{} {}", task.key, task.title)),
     }
+}
+
+/// A follow-up as the text a task saves for its next run. References become
+/// readable text that keeps their target: a note or task keeps its `kybern://`
+/// link, a file its path, a skill its name. Attachments cannot be saved as text.
+fn followup_saved_text(message: &UserMessage) -> Result<String> {
+    let mut text = String::new();
+    for part in &message.parts {
+        match part {
+            ContentPart::Text { text: part } => text.push_str(part),
+            ContentPart::Mention { name, path, display_name } => {
+                if path.starts_with(NOTE_MENTION_PREFIX) || path.starts_with(TASK_MENTION_PREFIX) {
+                    let label = display_name.as_deref().map(str::trim).filter(|label| !label.is_empty()).unwrap_or(name);
+                    text.push_str(&format!("{label} ({path})"));
+                } else {
+                    text.push_str(&format!("@{name}"));
+                }
+            }
+            ContentPart::FileMention { path } => text.push_str(&format!("@{path}")),
+            ContentPart::Skill { name, .. } => text.push_str(&format!("${name}")),
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                text.push_str(&format!("\u{201c}{title}\u{201d} (thread {thread_id})"))
+            }
+            ContentPart::Image { .. } | ContentPart::Attachment { .. } => {
+                return invalid(
+                    "This task has no run to receive attachments. Start a new run to send them, or remove them to save this follow-up for the next run.",
+                );
+            }
+        }
+    }
+    Ok(text.trim().to_owned())
 }
 
 /// Add the task's saved follow-up to the end of a first message, a blank line
@@ -1308,18 +1350,15 @@ mod tests {
         let fixture = Fixture::new();
         let task = fixture.task("Talk");
         // No run yet: saved, appended on repeat, and no thread involved.
-        let first =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: " also tests ".into() }).await.unwrap();
+        let first = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, " also tests ")).await.unwrap();
         assert_eq!((first.sent_to, first.task.pending_followup.as_deref()), (None, Some("also tests")));
-        let second =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "and docs".into() }).await.unwrap();
+        let second = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "and docs")).await.unwrap();
         assert_eq!(second.task.pending_followup.as_deref(), Some("also tests\n\nand docs"));
-        assert!(fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "  ".into() }).await.is_err());
+        assert!(fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "  ")).await.is_err());
 
         // A busy run queues the text on its thread.
         let thread = fixture.manual_run(&task);
-        let queued =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "while you work".into() }).await.unwrap();
+        let queued = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "while you work")).await.unwrap();
         assert_eq!(queued.sent_to, Some(thread.id));
         let queue = fixture.store.queue_list(Some(thread.id)).unwrap();
         assert_eq!(queue.len(), 1);
@@ -1332,7 +1371,7 @@ mod tests {
         fixture.store.thread_upsert(&idle).unwrap();
         fixture.emit(&thread, turn_completed(StopReason::Completed));
         assert_eq!(fixture.current(&task).status, TaskStatus::NeedsReview);
-        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "now this".into() }).await.unwrap();
+        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "now this")).await.unwrap();
         assert_eq!(sent.sent_to, Some(thread.id));
         assert_eq!((sent.task.status, sent.task.runs[0].state), (TaskStatus::Running, TaskRunState::Running));
         let started = fixture
@@ -1346,9 +1385,70 @@ mod tests {
         let mut archived = fixture.store.thread_get(thread.id).unwrap().unwrap();
         archived.status = ThreadStatus::Archived;
         fixture.store.thread_upsert(&archived).unwrap();
-        let saved = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "later".into() }).await.unwrap();
+        let saved = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "later")).await.unwrap();
         assert_eq!(saved.sent_to, None);
         assert!(saved.task.pending_followup.as_deref().unwrap().ends_with("later"));
+    }
+
+    #[tokio::test]
+    async fn a_full_message_follow_up_is_sent_or_queued_as_is_and_saved_as_readable_text() {
+        let fixture = Fixture::new();
+        let task = fixture.task("Talk");
+        let spec = fixture.note("Spec", "details");
+        let note_path = format!("{NOTE_MENTION_PREFIX}{}", spec.summary.id);
+        let with_refs = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: " Read ".into() },
+                ContentPart::Mention { name: "Spec".into(), path: note_path.clone(), display_name: Some("Spec".into()) },
+                ContentPart::Text { text: " and ".into() },
+                ContentPart::FileMention { path: "src/main.rs".into() },
+                ContentPart::Text { text: " with ".into() },
+                ContentPart::Skill { name: "tdd".into(), path: "/skills/tdd/SKILL.md".into() },
+            ],
+        };
+        let attachment =
+            ContentPart::Attachment { asset_id: Uuid::now_v7(), name: "shot.png".into(), media_type: "image/png".into(), size: 12 };
+        let with_attachment = UserMessage { parts: vec![ContentPart::Text { text: "See this".into() }, attachment] };
+        let message = |message: &UserMessage| TaskItemsFollowupParams { id: task.id, text: None, message: Some(message.clone()) };
+
+        // Exactly one of text or message.
+        let both = TaskItemsFollowupParams { id: task.id, text: Some("hi".into()), message: Some(with_refs.clone()) };
+        assert!(fixture.orchestrator.task_item_followup(both).await.is_err());
+        let neither = TaskItemsFollowupParams { id: task.id, text: None, message: None };
+        assert!(fixture.orchestrator.task_item_followup(neither).await.is_err());
+        let blank = UserMessage { parts: vec![ContentPart::Text { text: "  ".into() }] };
+        assert!(fixture.orchestrator.task_item_followup(message(&blank)).await.is_err());
+
+        // No run: references are saved as readable text that keeps their targets.
+        let saved = fixture.orchestrator.task_item_followup(message(&with_refs)).await.unwrap();
+        assert_eq!(saved.sent_to, None);
+        let expected = format!("Read Spec ({note_path}) and @src/main.rs with $tdd");
+        assert_eq!(saved.task.pending_followup.as_deref(), Some(expected.as_str()));
+        // Attachments cannot be saved as text: refused, and the saved text is untouched.
+        let error = fixture.orchestrator.task_item_followup(message(&with_attachment)).await.unwrap_err();
+        assert!(error.to_string().contains("Start a new run"), "{error}");
+        assert_eq!(fixture.current(&task).pending_followup.as_deref(), Some(expected.as_str()));
+
+        // A busy run queues the whole message, attachment included.
+        let thread = fixture.manual_run(&task);
+        let queued = fixture.orchestrator.task_item_followup(message(&with_attachment)).await.unwrap();
+        assert_eq!(queued.sent_to, Some(thread.id));
+        let queue = fixture.store.queue_list(Some(thread.id)).unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].message, with_attachment);
+
+        // An idle run receives the whole message: its chips start the turn.
+        let mut idle = fixture.store.thread_get(thread.id).unwrap().unwrap();
+        idle.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&idle).unwrap();
+        let sent = fixture.orchestrator.task_item_followup(message(&with_refs)).await.unwrap();
+        assert_eq!(sent.sent_to, Some(thread.id));
+        let started = fixture.store.events_for_thread(thread.id).unwrap().into_iter().any(|event| {
+            matches!(&event.payload, EventPayload::TurnStarted { message, .. }
+                if message.parts.iter().any(|part| matches!(part, ContentPart::Mention { path, .. } if *path == note_path))
+                    && message.parts.iter().any(|part| matches!(part, ContentPart::Skill { name, .. } if name == "tdd")))
+        });
+        assert!(started, "the follow-up started a turn with its chips");
     }
 
     /// The task's status and its latest run belong together: a task is Running
@@ -1380,8 +1480,7 @@ mod tests {
         fixture.drain();
         tokio::time::sleep(Duration::from_millis(5)).await;
 
-        let sent =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "one more thing".into() }).await.unwrap();
+        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "one more thing")).await.unwrap();
         assert_eq!(sent.sent_to, Some(thread.id));
         let running = fixture.current(&task);
         assert_eq!((running.status, running.runs[0].state, running.runs[0].ended_at), (TaskStatus::Running, TaskRunState::Running, None));
@@ -1499,7 +1598,7 @@ mod tests {
     async fn saved_follow_ups_are_trimmed_and_separated_by_a_blank_line() {
         let fixture = Fixture::new();
         let task = fixture.task("Notes to self");
-        let add = |text: &str| fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: text.into() });
+        let add = |text: &str| fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, text));
         assert_eq!(
             add("\n  first line\nsecond line \n\n").await.unwrap().task.pending_followup.as_deref(),
             Some("first line\nsecond line")

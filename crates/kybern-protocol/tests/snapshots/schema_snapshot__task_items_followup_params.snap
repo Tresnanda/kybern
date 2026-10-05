@@ -1,0 +1,221 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(TaskItemsFollowupParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TaskItemsFollowupParams",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "text": {
+      "description": "Plain text. Exactly one of `text` or `message` is required.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "message": {
+      "description": "The full follow-up (text, mentions, skills, files, thread references,\nattachments), sent or queued as is. When no run can receive it, a message\nof text and references is saved as readable text for the next run; one\nwith attachments is refused.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UserMessage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "$defs": {
+    "UserMessage": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
+        }
+      },
+      "required": [
+        "parts"
+      ]
+    },
+    "ContentPart": {
+      "description": "One piece of a user message.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Inline image. `data` is base64 of the raw bytes.",
+          "type": "object",
+          "properties": {
+            "media_type": {
+              "type": "string"
+            },
+            "data": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ]
+        },
+        {
+          "description": "Uploaded attachment served by the daemon's HTTP asset route.",
+          "type": "object",
+          "properties": {
+            "asset_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "attachment"
+            }
+          },
+          "required": [
+            "type",
+            "asset_id",
+            "name",
+            "media_type",
+            "size"
+          ]
+        },
+        {
+          "description": "`@path` mention resolved relative to the thread cwd.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "file_mention"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ]
+        },
+        {
+          "description": "Inert reference to an existing Kybern thread. Selecting or rendering it\nnever reads, wakes, or sends to the referenced thread.",
+          "type": "object",
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_reference"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "title"
+          ]
+        },
+        {
+          "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Canonical `SKILL.md` path returned by the provider catalog. Codex\nrequires it for its structured `skill` turn input; other drivers\nmay use only the name.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "skill"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
+        },
+        {
+          "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "display_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "mention"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
+        }
+      ]
+    }
+  }
+}

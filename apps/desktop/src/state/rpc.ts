@@ -14,6 +14,7 @@ import {
   codes,
   KybernClient,
   ConnectionClosedError,
+  PROJECTS_CHANGED_NOTIFICATION,
   RpcCallError,
   type ApprovalDecision,
   type ApprovalId,
@@ -21,7 +22,9 @@ import {
   type GitStatus,
   type JsonValue,
   type PermissionMode,
+  type Project,
   type ProjectId,
+  type ProjectsChangedNotification,
   type ProviderKind,
   type ProviderInstance,
   type ProviderStatus,
@@ -40,6 +43,7 @@ import { threadCanNotify, trackFocusedThreadReads, type NotificationKind } from 
 import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
+import { mergeProjects, selectsMissingProject } from "./projects"
 import {
   diffKey,
   isThreadFocused,
@@ -66,6 +70,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const snapshots = new Map<ThreadId, ReturnType<typeof createSnapshotReplay>>()
   let disposed = false
   let hydrationGeneration = 0
+  /** Counts `projects.changed` notifications, so a slower `projects.list` cannot undo one. */
+  let projectChanges = 0
   let canReuseSnapshots = false
   const reusableSnapshots = new Set<ThreadId>()
   const uploads = new AbortController()
@@ -215,6 +221,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         })
       }
     })
+    client.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
+      const projects = (params as ProjectsChangedNotification | null)?.projects
+      if (!disposed && Array.isArray(projects)) applyProjects(projects)
+    })
     client.subscribeEvents({ include_tool_output: false }, onEvent, (_headSeq, replay) => {
       const generation = ++hydrationGeneration
       if (replay.resumed && replay.supported) {
@@ -248,6 +258,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
     try {
       void loadQueue()
+      const projectsSeen = projectChanges
       const [info, projects, threads, settings] = await Promise.all([
         c.call("daemon.info", {}),
         c.call("projects.list", {}),
@@ -287,7 +298,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         return {
           info,
           settings,
-          projects: Object.fromEntries(projects.projects.map((p) => [p.id, p])),
+          // A `projects.changed` received meanwhile is newer than this list.
+          projects: projectChanges === projectsSeen ? Object.fromEntries(projects.projects.map((p) => [p.id, p])) : state.projects,
           threads: mergedThreads,
           threadActivity,
         }
@@ -323,6 +335,23 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         toast.error("Unable to load workspace", { description: errorText(e) })
       }
     }
+  }
+
+  /**
+   * Follow a project list change made anywhere. A draft in a removed project falls
+   * back the way boot does: to the open split view, else the first project's draft.
+   */
+  function applyProjects(incoming: Project[]): void {
+    projectChanges++
+    useStore.getState().set((state) => ({ projects: mergeProjects(state.projects, incoming) }))
+    const state = useStore.getState()
+    if (state.homeSelection && selectsMissingProject(state.homeSelection, state.projects)) state.set({ homeSelection: null })
+    if (!selectsMissingProject(state.selected, state.projects)) return
+    state.set({ selected: { kind: "none" } })
+    if (collectSplitThreadIds(useStore.getState().splitView).length > 0) return
+    const first = incoming[0]
+    if (first) useStore.getState().selectDraft(first.id)
+    else useStore.getState().selectFreeDraft()
   }
 
   function isCurrentHydration(generation: number): boolean {

@@ -805,6 +805,14 @@ export interface ProjectsListResult {
   projects: Project[];
 }
 
+export const PROJECTS_CHANGED_NOTIFICATION = "projects.changed";
+
+/** Sent after a project is added, updated or removed by any client or the daemon. */
+export interface ProjectsChangedNotification {
+  /** Every project after the change, in `projects.list` order. */
+  projects: Project[];
+}
+
 export interface ProjectsAddParams {
   path: string;
   name?: string;
@@ -1103,6 +1111,14 @@ export interface TaskItemsSendParams {
   message?: UserMessage;
   /** Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only. Only the notes listed here are sent. A saved `pending_followup` is cleared by the send (the prompt is expected to include it). */
   note_ids?: NoteId[];
+}
+
+export interface TaskItemsFollowupParams {
+  id: TaskItemId;
+  /** Plain text. Exactly one of `text` or `message` is required. */
+  text?: string;
+  /** The full follow-up, sent or queued as is. With no run to receive it, text and references are saved as readable text; attachments are refused. */
+  message?: UserMessage;
 }
 
 export interface TaskItemsChangedNotification {
@@ -1701,7 +1717,7 @@ export interface Methods {
   "tasks.items.delete": [{ id: TaskItemId }, Empty];
   "tasks.items.restore": [{ id: TaskItemId }, TaskItem];
   "tasks.items.send": [TaskItemsSendParams, { task: TaskItem; thread_id: ThreadId }];
-  "tasks.items.followup": [{ id: TaskItemId; text: string }, { task: TaskItem; sent_to?: ThreadId | null }];
+  "tasks.items.followup": [TaskItemsFollowupParams, { task: TaskItem; sent_to?: ThreadId | null }];
   "queue.list": [{ thread_id?: ThreadId }, { messages: QueuedMessage[] }];
   "queue.remove": [
     { thread_id: ThreadId; id: MessageId },

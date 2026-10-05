@@ -1,7 +1,6 @@
-// Tasks model: statuses, keys, grouping, ranks, the body's acceptance criteria and
-// the run composer's messages. Pure helpers, so the list's organization is testable
-// without React.
-import type { ContentPart, NoteId, ProjectId, TaskItem, TaskItemId, TaskPriority, TaskRun, TaskStatus, UserMessage } from "@/protocol"
+// Tasks model: statuses, keys, grouping, ranks and the body's acceptance criteria.
+// Pure helpers, so the list's organization is testable without React.
+import type { NoteId, ProjectId, TaskItem, TaskItemId, TaskPriority, TaskRun, TaskStatus } from "@/protocol"
 
 // ---- statuses and priorities ----
 
@@ -438,37 +437,6 @@ export function composeTaskBody(description: string, criteria: Criterion[]): str
 /** `[ADE-14](kybern://task/…)` reads as "ADE-14"; other Markdown links read as their label. */
 export function plainInline(text: string): string {
   return text.replace(/\[([^\]]+)\]\((?:[^)\s]+)\)/g, "$1").replace(/(\*\*|__)(.+?)\1/g, "$2").replace(/`([^`]+)`/g, "$1")
-}
-
-// ---- the run composer's messages ----
-
-/**
- * A follow-up as the text `tasks.items.followup` takes. Chips become readable text
- * that keeps their target: a note or task keeps its `kybern://` link, a file its
- * path, a skill its name. Attachments cannot travel as text, so they are refused.
- */
-export function followupText(message: UserMessage): string {
-  return message.parts.map(partText).join("").trim()
-}
-
-function partText(part: ContentPart): string {
-  switch (part.type) {
-    case "text":
-      return part.text
-    case "mention": {
-      const label = part.display_name?.trim() || part.name
-      return /^kybern:\/\/(note|task)\//.test(part.path) ? `${label} (${part.path})` : `@${part.name}`
-    }
-    case "file_mention":
-      return `@${part.path}`
-    case "skill":
-      return `$${part.name}`
-    case "thread_reference":
-      return `“${part.title}” (thread ${part.thread_id})`
-    case "attachment":
-    case "image":
-      throw new Error("A follow-up to a run takes text only. Remove the attachment, or open the run and send it there.")
-  }
 }
 
 /** Words worth searching notes for: the title's longer words, minus filler. */

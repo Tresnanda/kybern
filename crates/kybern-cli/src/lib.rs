@@ -1641,7 +1641,7 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
         }
         TaskCmd::Followup { task, text } => {
             let current = resolve_task(client, &task).await?;
-            let sent = client.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: current.id, text: join_prompt(text)? }).await?;
+            let sent = client.call::<TaskItemsFollowup>(TaskItemsFollowupParams::text(current.id, join_prompt(text)?)).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&sent)?);
             } else {
