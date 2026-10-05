@@ -7,15 +7,13 @@ export const CHAT_SURFACE_HEADER_HEIGHT_PX = 46
 
 export const MAC_TRAFFIC_LIGHT_INSET_X_PX = 16
 
-/** Vertically centers the native macOS traffic lights on the 46px toolbar, level
- * with the sidebar toggle + back/forward glyphs. Calibrated against the gap between
- * the dots and the icon centerline measured within a single window shot once the
- * inset is actually applied (crop-invariant): y=33 → dots ~8 CSS px low, y=43 → ~18
- * low, slope ~1 CSS px/unit, so the centered value is 25. macOS resets the buttons
- * to their default (high) after the window first paints, so `traffic_lights.rs`
- * re-applies this inset on show + resize/move/theme events. Must match
- * `trafficLightPosition.y` in `src-tauri/tauri.conf.json`. */
-export const MAC_TRAFFIC_LIGHT_POSITION_Y_PX = 21
+/** Tauri's `trafficLightPosition.y`: it grows the native title-bar container to
+ * the 14px button height plus this, so 32 makes the container the full 46px web
+ * title bar. `traffic_lights.rs` then centers the dots on that bar's midline
+ * explicitly (macOS leaves them 9px off the container's bottom, which put them
+ * 4px above the toolbar icons). Must match `trafficLightPosition.y` in
+ * `src-tauri/tauri.conf.json`. */
+export const MAC_TRAFFIC_LIGHT_POSITION_Y_PX = 32
 
 /** Radius of a macOS traffic-light dot (~14px across). */
 export const MAC_TRAFFIC_LIGHT_DOT_RADIUS_PX = 7

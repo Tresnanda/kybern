@@ -121,10 +121,12 @@ export function ThemeProvider({
       // After the first paint, flip palettes inside a view transition so the
       // whole window cross-fades instead of snapping (per-element transitions
       // stay disabled above; this is one document-level fade).
-      const doc = document as Document & { startViewTransition?: (update: () => void) => unknown }
+      const doc = document as Document & { startViewTransition?: (update: () => void) => { ready: Promise<void> } }
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      if (appliedOnce.current && doc.startViewTransition && !reduceMotion) {
-        doc.startViewTransition(() => applyAppearance(nextTheme))
+      // A hidden window has nothing to fade, and WebKit rejects the transition there.
+      if (appliedOnce.current && doc.startViewTransition && !reduceMotion && !document.hidden) {
+        // A skipped transition still applies the update; only its animation is lost.
+        doc.startViewTransition(() => applyAppearance(nextTheme)).ready.catch(() => {})
       } else {
         applyAppearance(nextTheme)
       }

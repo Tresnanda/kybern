@@ -1,17 +1,18 @@
-// Shared header chrome:
-// a 46px bar, 28px controls on one baseline, and the sidebar-toggle +
-// navigation cluster that moves into the route header when the sidebar collapses.
+// Shared header chrome: the window title bar (back/forward + sidebar toggle,
+// then the route header over the content column), a 46px row, and 28px
+// controls on one baseline.
 
-import { forwardRef, type ComponentProps, type ReactNode } from "react"
+import { createContext, forwardRef, useContext, type ComponentProps, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { Button } from "@/components/kit/button"
-import { sidebarOffcanvasMotionClass, useSidebar } from "@/components/kit/sidebar"
+import { useSidebar } from "@/components/kit/sidebar"
 import { IconSwap } from "@/components/kybern/motion"
 import { Toggle } from "@/components/kit/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
-import { ArrowLeftIcon, ArrowRightIcon, LayoutSidebarIcon, NewThreadIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
+import { HistoryBackIcon, HistoryForwardIcon, LayoutSidebarIcon, NewThreadIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
 import { mod } from "@/lib/format"
-import { isTauri, platform } from "@/lib/tauri"
+import { isTauri } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { newThread } from "@/state/nav"
 import { useStore } from "@/state/store"
@@ -20,6 +21,10 @@ export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_
   "h-[46px]"
 
 export const CHAT_SURFACE_HEADER_PADDING_X_CLASS = "px-3 sm:px-5"
+
+/** The title-bar slot over the content column; route headers render into it. */
+const TitlebarSlotContext = createContext<HTMLElement | null>(null)
+export const TitlebarSlotProvider = TitlebarSlotContext.Provider
 
 export const CHAT_SURFACE_HEADER_ROW_CLASS_NAME = cn(
   "flex shrink-0 items-center",
@@ -125,7 +130,7 @@ const SIDEBAR_TRIGGER_CLASS_NAME = cn(
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 )
 
-/** Sidebar toggle + back/forward, or a single new-thread action when collapsed. */
+/** Back/forward (or a single new-thread action when collapsed), then the sidebar toggle. */
 export function SidebarLeadingControls({ className }: { className?: string }) {
   const { open, toggleSidebar } = useSidebar()
   return (
@@ -133,22 +138,6 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
       data-tauri-drag-region="false"
       className={cn("no-drag flex shrink-0 items-center gap-0", className)}
     >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={SIDEBAR_TRIGGER_CLASS_NAME}
-              aria-label="Toggle thread sidebar"
-              onClick={toggleSidebar}
-            />
-          }
-        >
-          <LayoutSidebarIcon className="size-4" />
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">Toggle sidebar ({mod}B)</TooltipPopup>
-      </Tooltip>
       {isTauri() && (
         <IconSwap
           active={open ? "a" : "b"}
@@ -168,7 +157,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                     />
                   }
                 >
-                  <ArrowLeftIcon className="size-4" />
+                  <HistoryBackIcon className="size-[18px]" />
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">Back ({mod}[)</TooltipPopup>
               </Tooltip>
@@ -185,7 +174,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                     />
                   }
                 >
-                  <ArrowRightIcon className="size-4" />
+                  <HistoryForwardIcon className="size-[18px]" />
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">Forward ({mod}])</TooltipPopup>
               </Tooltip>
@@ -214,22 +203,25 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
           }
         />
       )}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={SIDEBAR_TRIGGER_CLASS_NAME}
+              aria-label="Toggle thread sidebar"
+              onClick={toggleSidebar}
+            />
+          }
+        >
+          <LayoutSidebarIcon className="size-[18px]" />
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">Toggle sidebar ({mod}B)</TooltipPopup>
+      </Tooltip>
     </div>
   )
 }
-
-/**
- * Leading inset that keeps the route header's title clear of the fixed sidebar
- * toggle + navigation cluster (`SidebarLeadingControls`) once the sidebar is collapsed.
- * Measured from the header's own padding edge: on macOS the controls start at the
- * traffic-light gutter, elsewhere at 16px; both are 84px wide and want 16px of air.
- * The header itself pads 20px. This is padding, not a spacer, so the title's
- * position is one tweened value that follows the slide instead of popping at frame 0.
- */
-const SIDEBAR_HEADER_LEADING_INSET_CLASS =
-  platform() === "macos"
-    ? "md:ps-[calc(var(--desktop-top-bar-traffic-light-gutter,82px)+80px)]"
-    : "md:ps-[80px]"
 
 const PANEL_TOGGLE_CLASS_NAME = cn(
   CHAT_HEADER_TOGGLE_CLASS_NAME,
@@ -288,43 +280,35 @@ export function EnvironmentToggle() {
 /**
  * Route header. `minimal` hides the title cluster (home / empty landing).
  * `environment` adds the Environment toggle before the dock toggle.
- * On macOS the traffic-light gutter applies whenever the sidebar is collapsed.
+ * It renders into the window title bar, above the workspace card; `inline`
+ * keeps it inside its own pane (split view), with the pane's hairline below.
  */
 export function SurfaceHeader({
   minimal,
   environment,
-  showSidebarControls = true,
+  inline,
   children,
   trailing,
 }: {
   minimal?: boolean
   environment?: boolean
-  showSidebarControls?: boolean
+  inline?: boolean
   children?: ReactNode
   trailing?: ReactNode
 }) {
-  const { open } = useSidebar()
-  const inset = showSidebarControls && !open
-  return (
+  const slot = useContext(TitlebarSlotContext)
+  const titlebar = !inline && slot !== null
+  const row = (
     <div
       data-tauri-drag-region="deep"
       className={cn(
-        CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
+        titlebar ? cn("flex min-w-0 flex-1 items-center", CHAT_SURFACE_HEADER_HEIGHT_CLASS) : CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
         CHAT_SURFACE_HEADER_PADDING_X_CLASS,
         "@container drag-region font-system-ui",
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 items-center gap-2 overflow-hidden",
-            // Tween the inset with the sidebar slide so the title travels as one
-            // continuous motion; `minimal` headers have no title to keep clear.
-            "transition-[padding-inline-start] motion-reduce:transition-none",
-            sidebarOffcanvasMotionClass(open),
-            inset && SIDEBAR_HEADER_LEADING_INSET_CLASS,
-          )}
-        >
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           {!minimal && children}
         </div>
         <div
@@ -338,4 +322,5 @@ export function SurfaceHeader({
       </div>
     </div>
   )
+  return titlebar ? createPortal(row, slot) : row
 }

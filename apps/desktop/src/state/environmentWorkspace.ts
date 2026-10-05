@@ -26,6 +26,7 @@ export function readWorkspace(environmentId: string): Partial<AppState> {
       selected &&
       (selected.kind === "none" ||
         selected.kind === "pulls" ||
+        selected.kind === "usage" ||
         (selected.kind === "thread" && typeof selected.id === "string") ||
         (selected.kind === "draft" &&
           (selected.draft?.projectId === undefined || typeof selected.draft.projectId === "string")))

@@ -151,8 +151,37 @@ const SURFACE_UNDER_BASE_ALPHA: Record<ThemeVariant, number> = {
   light: 0.04,
 };
 const SIDEBAR_TINT_OPACITY: Record<ThemeVariant, number> = {
-  dark: 0.5,
-  light: 0.68,
+  dark: 0.96,
+  light: 0.95,
+};
+/**
+ * The thread panel steps away from the content surface so the two read as
+ * separate sections of the card: lighter in dark mode, darker in light mode
+ * (the Codex panel sits ~6 levels above its #181818 thread). Mixed toward
+ * white/black from the content surface itself, so it tracks the theme.
+ */
+const SIDEBAR_STEP: Record<ThemeVariant, { color: string; amount: number }> = {
+  dark: { color: "#ffffff", amount: 0.04 },
+  light: { color: "#000000", amount: 0.04 },
+};
+/**
+ * The window frame (title bar + app rail) is a mostly solid tint, one step past
+ * the thread panel: lighter in dark mode, darker in light mode, so the workspace
+ * card reads as resting on it (Codex: frame ~40, panel ~30, thread 24). A little
+ * of the native material still shows through on translucent shells.
+ */
+/**
+ * Settings cards: a fill one clear step off the page and an edge (also the row
+ * dividers) three steps off, lighter in dark mode and darker in light mode.
+ * Dark lands on Codex's measured page 24 / card 35 / edge 53.
+ */
+const SETTINGS_CARD_STEP: Record<ThemeVariant, { color: string; fill: number; edge: number }> = {
+  dark: { color: "#ffffff", fill: 0.048, edge: 0.125 },
+  light: { color: "#000000", fill: 0.025, edge: 0.09 },
+};
+const FRAME_STEP: Record<ThemeVariant, { color: string; amount: number; opacity: number }> = {
+  dark: { color: "#ffffff", amount: 0.09, opacity: 0.88 },
+  light: { color: "#000000", amount: 0.08, opacity: 0.88 },
 };
 const CONTENT_SURFACE_LIFT: Record<ThemeVariant, number> = {
   dark: 0.08,
@@ -725,15 +754,11 @@ export function buildThemeCssVariables(
       : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
   const seedSurface = readCodexVariable("--color-background-surface");
-  // The sidebar is a translucent color wash over the native macOS vibrancy.
-  // Washing the very dark page surface (#181818) at high opacity buried the glass
-  // and read as a flat grey overlay. Lift the wash a step toward white so it lands
-  // near a neutral rgb(40,40,40) — light window chrome that lets the material show
-  // through — matching the reference translucent shell (Mustr). Opaque shells keep
-  // the plain surface.
-  const sidebarSurface = readCodexVariable("--color-background-surface");
-  const sidebarTintSeed =
-    variant === "dark" ? mixHex(seedSurface, "#ffffff", 0.07) : sidebarSurface;
+  // Two layers over the native macOS vibrancy. The window frame (title bar +
+  // rail) is the light, mostly clear veil where the glass shows through. The
+  // thread panel is a denser wash of the page surface, so it reads as part of the
+  // workspace card resting on the frame (the Codex shell). Opaque shells keep the
+  // plain surface for the panel and step the frame away from it.
   const contentLift = CONTENT_SURFACE_LIFT[variant];
   const contentSurface =
     variant === "dark"
@@ -741,6 +766,11 @@ export function buildThemeCssVariables(
       : contentLift > 0
         ? mixHex(seedSurface, "#ffffff", contentLift)
         : seedSurface;
+  const sidebarStep = SIDEBAR_STEP[variant];
+  const sidebarSurface = mixHex(contentSurface, sidebarStep.color, sidebarStep.amount);
+  const sidebarTintSeed = sidebarSurface;
+  const frameStep = FRAME_STEP[variant];
+  const frameSurface = mixHex(contentSurface, frameStep.color, frameStep.amount);
   const composerSurface =
     variant === "dark"
       ? DARK_COMPOSER_CHROME
@@ -765,6 +795,10 @@ export function buildThemeCssVariables(
       material === "translucent"
         ? "transparent"
         : readCodexVariable("--color-background-surface-under"),
+    "--app-frame-surface":
+      material === "translucent"
+        ? `color-mix(in srgb, ${frameSurface} ${Math.round(frameStep.opacity * 100)}%, transparent)`
+        : frameSurface,
     "--app-composer-focus-border": composerFocusBorder,
     // Frosted blur only when the shell is translucent (macOS). On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
@@ -790,6 +824,8 @@ export function buildThemeCssVariables(
         ? `color-mix(in srgb, ${sidebarTintSeed} ${Math.round(SIDEBAR_TINT_OPACITY[variant] * 100)}%, transparent)`
         : sidebarSurface,
     "--app-settings-surface": contentSurface,
+    "--app-settings-card-surface": mixHex(contentSurface, SETTINGS_CARD_STEP[variant].color, SETTINGS_CARD_STEP[variant].fill),
+    "--app-settings-card-border": mixHex(contentSurface, SETTINGS_CARD_STEP[variant].color, SETTINGS_CARD_STEP[variant].edge),
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),
     "--card": readCodexVariable("--color-background-panel"),
