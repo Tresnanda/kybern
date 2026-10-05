@@ -265,7 +265,7 @@ function Navigation() {
             ...androidSheet,
           }}
         />
-        <Stack.Screen name="tasks" options={{ title: "Tasks & agents" }} />
+        <Stack.Screen name="tasks" options={{ title: "Agents & processes" }} />
         <Stack.Screen name="collaboration" options={{ title: "Agents" }} />
         <Stack.Screen
           name="coordinator"
@@ -328,6 +328,21 @@ function Navigation() {
           options={{ title: "Notes", headerLargeTitleEnabled: true }}
         />
         <Stack.Screen name="note" options={{ title: "" }} />
+        <Stack.Screen
+          name="todo"
+          options={{ title: "Tasks", headerLargeTitleEnabled: true }}
+        />
+        <Stack.Screen name="todo-item" options={{ title: "" }} />
+        <Stack.Screen
+          name="todo-send"
+          options={{
+            title: "Send to agent",
+            presentation: "formSheet",
+            sheetAllowedDetents: sheetDetents,
+            sheetGrabberVisible: true,
+            ...androidSheet,
+          }}
+        />
         <Stack.Screen
           name="note-move"
           options={{

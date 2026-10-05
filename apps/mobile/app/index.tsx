@@ -152,6 +152,11 @@ export default function Home() {
           </View>
           <View style={[styles.line, { flex: 1, justifyContent: "flex-end", gap: 0 }]}>
             <IconButton
+              name="checklist"
+              label="Open tasks"
+              onPress={() => router.push("/todo")}
+            />
+            <IconButton
               name="doc.text"
               label="Open notes"
               onPress={() => router.push("/notes")}

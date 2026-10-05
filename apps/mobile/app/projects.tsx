@@ -130,6 +130,16 @@ export default function Projects() {
               }
             />
             <Row
+              title="Tasks"
+              icon="checklist"
+              onPress={() =>
+                router.push({
+                  pathname: "/todo",
+                  params: { projectId: selected.id },
+                })
+              }
+            />
+            <Row
               title="Notes"
               icon="doc.text"
               onPress={() =>

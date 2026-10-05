@@ -7,6 +7,7 @@ import { setDraft } from "./draft";
 import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
 import { attachNotes, loadNotes, resetNotes } from "./notes";
+import { attachTasks, loadTasks, resetTasks } from "./tasks";
 import {
   KybernClient,
   httpBase,
@@ -113,17 +114,19 @@ function trimSnapshots() {
     (id) => threadListeners.has(id) || loads.has(id) || historyLoads.has(id),
   );
 }
+function subscribeApp(fn: () => void) {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
 export function useApp() {
-  return useSyncExternalStore(
-    (fn) => {
-      listeners.add(fn);
-      return () => {
-        listeners.delete(fn);
-      };
-    },
-    getState,
-    getState,
-  );
+  return useSyncExternalStore(subscribeApp, getState, getState);
+}
+/** The environment's projects; re-renders only when the list itself changes. */
+export function useProjects() {
+  const read = () => state.projects;
+  return useSyncExternalStore(subscribeApp, read, read);
 }
 const threadIdentity = (snapshot: ThreadState) => snapshot;
 export function useThread(id: string) {
@@ -362,6 +365,7 @@ export function connect(id: string | null) {
   client = null;
   snapshots.cancelReplay();
   resetNotes();
+  resetTasks();
   if (state.activeId === id) snapshots.invalidateAll();
   else snapshots.clear();
   loads.clear();
@@ -389,6 +393,7 @@ export function connect(id: string | null) {
   });
   client = next;
   attachNotes(next, () => generation === thisGeneration);
+  attachTasks(next, () => generation === thisGeneration);
   next.onStatus((status, detail) => {
     if (generation !== thisGeneration) return;
     publish({ status, error: status === "open" ? null : (detail ?? null) });
@@ -475,6 +480,7 @@ export function connect(id: string | null) {
         if (generation === thisGeneration) publish({ error: errorText(e) });
       });
       void loadNotes();
+      void loadTasks();
       for (const id of threadListeners.keys())
         if (id)
           void loadThread(id).catch((e) => {
@@ -490,6 +496,7 @@ export function connect(id: string | null) {
         if (generation === thisGeneration) publish({ error: errorText(e) });
       });
       void loadNotes();
+      void loadTasks();
       for (const id of threadListeners.keys())
         if (id) void ensureThread(id).catch((e) => {
           if (generation === thisGeneration) publish({ error: errorText(e) });
