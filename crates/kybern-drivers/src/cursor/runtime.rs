@@ -271,6 +271,20 @@ mod tests {
         }
     }
 
+    /// Linux refuses to run a file that another test's freshly forked child
+    /// still holds open for writing (ETXTBSY) until that child execs. Retry.
+    fn spawn(context: &ProbeContext) -> (Connection, mpsc::Receiver<DriverEvent>) {
+        for _ in 0..50 {
+            match Connection::spawn(context) {
+                Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
+                result => return result.unwrap(),
+            }
+        }
+        Connection::spawn(context).unwrap()
+    }
+
     #[tokio::test]
     async fn correlates_protocol_calls_and_delivers_stream_before_exit() {
         let root = tempfile::tempdir().unwrap();
@@ -289,7 +303,7 @@ for line in sys.stdin:
     if op == 'close': break
 "#,
         );
-        let (connection, mut events) = Connection::spawn(&context).unwrap();
+        let (connection, mut events) = spawn(&context);
         assert_eq!(connection.call("open", json!({})).await.unwrap()["agentId"], "a1");
         connection.call("send", json!({})).await.unwrap();
         let mut completed = false;
@@ -313,7 +327,7 @@ for line in sys.stdin:
     async fn process_exit_rejects_pending_and_later_requests_without_timeout() {
         let root = tempfile::tempdir().unwrap();
         let context = fixture(root.path(), "import sys\nsys.stdin.readline()\nsys.exit(1)\n");
-        let (connection, _events) = Connection::spawn(&context).unwrap();
+        let (connection, _events) = spawn(&context);
         tokio::time::timeout(Duration::from_secs(5), async {
             assert!(connection.call("open", json!({})).await.is_err());
             assert!(connection.call("send", json!({})).await.is_err());
