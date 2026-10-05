@@ -69,6 +69,7 @@ const DOCK_MOTION = { type: "spring", stiffness: 420, damping: 42, mass: 0.7 } a
 
 /** Reserve readable chat width; use an overlay when both panes cannot fit. */
 const RIGHT_DOCK_MIN_WIDTH = 26 * 16
+const SIDEBAR_MIN_WIDTH = 208
 function useDockWidth(containerRef: React.RefObject<HTMLDivElement | null>) {
   const [available, setAvailable] = useState(window.innerWidth)
   useEffect(() => {
@@ -132,7 +133,20 @@ function Workspace() {
   const dockContainerRef = useRef<HTMLDivElement>(null)
   const dock = useDockWidth(dockContainerRef)
   const dockWidth = dock.width
-  const sidebar = useResize({ initial: 256, min: 208, max: 480, side: "left", storageKey: "kybern.sidebar.width" })
+  const sidebar = useResize({ initial: 256, min: SIDEBAR_MIN_WIDTH, max: 480, side: "left", storageKey: "kybern.sidebar.width" })
+  // On a narrow window the panel gives way before the dock does: the content
+  // column keeps room for the dock's minimum width, beside the rail and the
+  // frame inset. The saved width returns when the window widens again.
+  const workspaceRef = useRef<HTMLDivElement>(null)
+  const [workspaceWidth, setWorkspaceWidth] = useState(() => window.innerWidth - APP_RAIL_WIDTH)
+  useEffect(() => {
+    const workspace = workspaceRef.current
+    if (!workspace) return
+    const observer = new ResizeObserver(([entry]) => setWorkspaceWidth(entry.contentRect.width))
+    observer.observe(workspace)
+    return () => observer.disconnect()
+  }, [])
+  const sidebarWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(sidebar.width, workspaceWidth - APP_FRAME_INSET - RIGHT_DOCK_MIN_WIDTH))
   const dockRef = useRef<HTMLElement>(null)
   const overlayOpen = dock.overlay && rightOpen && !connecting
   useEffect(() => {
@@ -156,12 +170,12 @@ function Workspace() {
       onKeyDownCapture={() => setKeyboardNavigation(true)}
       onFocusCapture={(event) => { if (!settingsOpen) workspaceFocus.current = event.target as HTMLElement }}
       data-sidebar-side="left"
-      style={{ "--sidebar-width": `${sidebar.width}px`, "--app-rail-width": `${APP_RAIL_WIDTH}px`, "--app-titlebar-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px`, "--app-frame-inset": `${APP_FRAME_INSET}px` } as React.CSSProperties}
+      style={{ "--sidebar-width": `${sidebarWidth}px`, "--app-rail-width": `${APP_RAIL_WIDTH}px`, "--app-titlebar-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px`, "--app-frame-inset": `${APP_FRAME_INSET}px` } as React.CSSProperties}
     >
       <TitlebarSlotProvider value={titlebarSlot}>
       {/* The rail stays live over Settings, which opens beside it. */}
       <NavRail />
-      <div className="settings-workspace flex h-dvh min-w-0 flex-1" inert={settingsOpen} aria-hidden={settingsOpen || undefined} data-settings-open={settingsOpen} data-keyboard={keyboardNavigation || undefined}>
+      <div ref={workspaceRef} className="settings-workspace flex h-dvh min-w-0 flex-1" inert={settingsOpen} aria-hidden={settingsOpen || undefined} data-settings-open={settingsOpen} data-keyboard={keyboardNavigation || undefined}>
       {/* The title bar: one draggable strip across the frame, above the card. */}
       <div data-tauri-drag-region aria-hidden="true" className="drag-region fixed inset-x-0 top-0 z-[1] hidden h-(--app-titlebar-height) md:block" />
       <div className="fixed top-0 z-40 flex h-[46px] items-center" style={{ left: platform() === "macos" ? "var(--desktop-top-bar-traffic-light-gutter, 84px)" : "16px" }}>
