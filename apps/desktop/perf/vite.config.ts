@@ -50,7 +50,7 @@ export default mergeConfig(base, {
     name: "usage-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!id.endsWith("/views/UsagePage.tsx")) return
+      if (!/\/(views\/UsagePage\.tsx|views\/useUsageLimitsSync\.ts|state\/usageLimits\.ts)$/.test(id)) return
       return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "usage-rpc.ts")))
     },
   }] : process.env.KYBERN_PERF_FIXTURE === "settings" ? [{

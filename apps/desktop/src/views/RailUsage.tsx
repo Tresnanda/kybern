@@ -10,12 +10,12 @@ import { LimitMeter } from "@/components/kybern/LimitMeter"
 import { useNow } from "@/lib/hooks"
 import { PROVIDER_NAMES, bindingLimit, limitLabel, limitPace, limitTone, limitsStale, reportedPercent, resetIn, updatedAgo } from "@/lib/providerUsage"
 import type { ProviderKind, ProviderLimits } from "@/protocol"
-import { refreshUsageLimits, useUsageLimits } from "@/state/usageLimits"
+import { refreshUsageLimits, useAccountLimits, useProviderLimits, useRefreshingLimits } from "@/state/usageLimits"
 
 const usageCard = PopoverCreateHandle<ProviderKind>()
 
 export function RailUsage() {
-  const providers = useUsageLimits((s) => s.providers)
+  const providers = useAccountLimits()
   const now = useNow(60_000)
   const glance = providers.flatMap((entry) => {
     const binding = bindingLimit(entry.limits)
@@ -71,8 +71,8 @@ function UsageRing({ kind, left, tone, stale }: { kind: ProviderKind; left: numb
 }
 
 function UsageCard({ kind }: { kind: ProviderKind }) {
-  const entry = useUsageLimits((s) => s.providers.find((provider) => provider.provider === kind))
-  const refreshing = useUsageLimits((s) => s.refreshing.includes(kind))
+  const entry = useProviderLimits(kind)
+  const refreshing = useRefreshingLimits().includes(kind)
   const now = useNow(15_000)
   if (!entry) return null
   return (

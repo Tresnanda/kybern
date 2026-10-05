@@ -11,7 +11,7 @@ import { useNow } from "@/lib/hooks"
 import { PROVIDER_NAMES, limitLabel, limitPace, limitTone, limitsStale, reportedPercent, resetIn, updatedAgo } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import { refreshUsageLimits, useUsageLimits } from "@/state/usageLimits"
+import { refreshUsageLimits, useAccountLimits, useRefreshingLimits } from "@/state/usageLimits"
 import { SurfaceHeader } from "./chrome"
 import type { ProviderKind, UsageGroup, UsageSummaryResult } from "@/protocol"
 
@@ -25,8 +25,8 @@ export function UsagePage() {
   const connection = useStore((s) => s.connection.state)
   // Account limits come from the daemon's shared cache and update live
   // (see state/usageLimits.ts); this page only renders them.
-  const limitProviders = useUsageLimits((s) => s.providers)
-  const limitsRefreshing = useUsageLimits((s) => s.refreshing.length > 0)
+  const limitProviders = useAccountLimits()
+  const limitsRefreshing = useRefreshingLimits().length > 0
   const now = useNow(15_000)
   const [period, setPeriod] = useState<Period>("30")
   const [group, setGroup] = useState<UsageGroup>("provider")

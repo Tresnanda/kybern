@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { UsagePage } from "../src/views/UsagePage"
+import { useUsageLimitsSync } from "../src/views/useUsageLimitsSync"
 import { useStore } from "../src/state/store"
 import { pending } from "./usage-rpc"
 import "../src/index.css"
@@ -8,9 +9,14 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const report = (value: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(value))
 const check = (value: unknown, message: string) => { if (!value) throw new Error(message) }
 const limits = (name: string) => ({ providers: [{ provider: "codex" as const, limits: [{ name, used_percent: 42, window_minutes: null, resets_at: null }] }] })
+// The workspace follows the environment's limits feed; the page only renders them.
+function Workspace() {
+  useUsageLimitsSync()
+  return <UsagePage />
+}
 async function run() {
   useStore.getState().set({ environmentId: "first", connection: { state: "open" } })
-  flushSync(() => createRoot(document.getElementById("root")!).render(<UsagePage />))
+  flushSync(() => createRoot(document.getElementById("root")!).render(<Workspace />))
   await sleep(50)
   pending.shift()!.resolve(limits("First account"))
   await sleep(50)
