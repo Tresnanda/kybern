@@ -659,6 +659,66 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
 }
 
 #[tokio::test]
+async fn a_follow_up_over_rpc_reopens_the_run_and_every_broadcast_keeps_task_and_run_in_step() {
+    let host = Host::start().await;
+    let mut thread = host.thread();
+    let desktop = host.client().await;
+    let phone = host.client().await;
+    let task = desktop.call::<TaskItemsCreate>(task_create(Some(thread.project_id), "Talk")).await.unwrap();
+    next_tasks_changed(&phone).await;
+
+    // Before any run, follow-ups are saved: trimmed, one blank line apart.
+    let call = |text: &str| desktop.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: task.id, text: text.into() });
+    assert_eq!(call("  first \n").await.unwrap().task.pending_followup.as_deref(), Some("first"));
+    assert_eq!(call("\nsecond\n\n").await.unwrap().task.pending_followup.as_deref(), Some("first\n\nsecond"));
+    next_tasks_changed(&phone).await;
+    next_tasks_changed(&phone).await;
+
+    // A run on the thread, driven by hand: the agent is out of the picture.
+    host.state.store.task_run_start(task.id, thread.id, &thread.provider, None, &[]).unwrap();
+    host.state.orchestrator.track_task_thread(thread.id);
+    thread.status = ThreadStatus::Running;
+    host.state.store.thread_upsert(&thread).unwrap();
+    let emit = |payload| host.state.orchestrator.emit(thread.id, Some(Uuid::nil()), payload).unwrap();
+    let completed = || EventPayload::TurnCompleted {
+        stop_reason: StopReason::Completed,
+        usage: Usage::default(),
+        cost_usd: None,
+        duration_ms: 1,
+        terminal_message_id: None,
+    };
+    let started = || EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("go") };
+    let in_step = |task: &TaskItem| match task.status {
+        TaskStatus::Running => assert!(task.runs[0].state.is_live(), "running next to {:?}", task.runs[0].state),
+        TaskStatus::NeedsReview => assert!(!task.runs[0].state.is_live(), "in review next to {:?}", task.runs[0].state),
+        _ => {}
+    };
+
+    emit(completed());
+    let reviewed = next_tasks_changed(&phone).await.task.unwrap();
+    in_step(&reviewed);
+    assert_eq!((reviewed.status, reviewed.runs[0].state), (TaskStatus::NeedsReview, TaskRunState::Completed));
+    let first_end = reviewed.runs[0].ended_at.expect("ended");
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    // The thread is busy, so the follow-up is queued on it; when the queued turn starts, the run reopens.
+    let queued = desktop.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: task.id, text: "while you work".into() }).await.unwrap();
+    assert_eq!(queued.sent_to, Some(thread.id));
+    assert_eq!(host.state.store.queue_list(Some(thread.id)).unwrap().len(), 1);
+    emit(started());
+    let reopened = next_tasks_changed(&phone).await.task.unwrap();
+    in_step(&reopened);
+    assert_eq!((reopened.status, reopened.runs[0].state, reopened.runs[0].ended_at), (TaskStatus::Running, TaskRunState::Running, None));
+    assert_eq!(phone.call::<TaskItemsGet>(TaskItemsGetParams { id: Some(task.id), key: None }).await.unwrap().task, Some(reopened));
+
+    emit(completed());
+    let again = next_tasks_changed(&phone).await.task.unwrap();
+    in_step(&again);
+    assert_eq!((again.status, again.runs[0].state), (TaskStatus::NeedsReview, TaskRunState::Completed));
+    assert!(again.runs[0].ended_at.unwrap() > first_end, "the end time moves to the new turn");
+}
+
+#[tokio::test]
 async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
     let host = Host::start().await;
     let client = host.client().await;

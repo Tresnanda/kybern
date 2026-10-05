@@ -15,7 +15,7 @@ pub use notes::{
 };
 pub use tasks::{
     GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,
-    derive_task_prefix, task_link_lines, task_link_source_line, task_set_line_checked,
+    TaskRunUpdate, TaskStatusChange, derive_task_prefix, task_link_lines, task_link_source_line, task_set_line_checked,
 };
 pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHistorySearchPage};
 pub use transcript_page::{transcript_page, transcript_page_ref};

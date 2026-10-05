@@ -448,6 +448,8 @@ enum TaskCmd {
     },
     /// Mark a task done.
     Done { task: String },
+    /// Send text to the task's agent: now when its run is idle, queued when busy, or saved for the next run.
+    Followup { task: String, text: Vec<String> },
     /// Start an agent on a task, in the background. Follow it with `kybern task show`.
     Send {
         task: String,
@@ -1635,6 +1637,18 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&task)?);
             } else {
                 println!("{}  done", task.key);
+            }
+        }
+        TaskCmd::Followup { task, text } => {
+            let current = resolve_task(client, &task).await?;
+            let sent = client.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: current.id, text: join_prompt(text)? }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&sent)?);
+            } else {
+                match sent.sent_to {
+                    Some(thread) => println!("{} follow-up sent to thread {thread}.", sent.task.key),
+                    None => println!("{} follow-up saved for the next run.", sent.task.key),
+                }
             }
         }
         TaskCmd::Send { task, provider, model, effort, mode, worktree, branch, project, prompt } => {
