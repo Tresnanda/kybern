@@ -1168,7 +1168,7 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Usage { by, days, limits } => {
             if limits {
-                let r = client.call::<UsageLimits>(UsageLimitsParams {}).await?;
+                let r = client.call::<UsageLimits>(UsageLimitsParams { refresh: true, ..Default::default() }).await?;
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
                 let group_by = serde_json::from_value(serde_json::Value::String(by))?;

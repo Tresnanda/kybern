@@ -535,6 +535,23 @@ pub(crate) fn contextual_command(binary: &std::path::Path, context: &ProbeContex
     command
 }
 
+/// Read the account's plan limits and plan name. Anthropic's OAuth usage
+/// endpoint answers in one request; when no usable login is stored, fall back
+/// to Claude Code's `/usage` command. Throttling or a login due for refresh
+/// returns `None`, and the caller keeps its last values.
+pub async fn read_account_usage(
+    cwd: &std::path::Path,
+    binary: Option<&PathBuf>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<(Vec<kybern_protocol::UsageLimit>, Option<String>)> {
+    let context = ProbeContext { binary: resolve(ProviderKind::ClaudeCode, binary).ok(), cwd: Some(cwd.to_path_buf()), env: env.clone() };
+    match crate::claude_usage::read(&context).await {
+        crate::claude_usage::OauthUsage::Read { limits, plan } => Some((limits, plan)),
+        crate::claude_usage::OauthUsage::Wait => None,
+        crate::claude_usage::OauthUsage::Unavailable => read_account_limits(cwd, binary, env).await.map(|limits| (limits, None)),
+    }
+}
+
 /// Read the account's current plan limits by driving Claude Code's local
 /// `/usage` command over stream-json. It runs no model turn (num_turns 0, zero
 /// cost), so the Usage page can show live limits without the user prompting.
@@ -836,9 +853,11 @@ impl ClaudeSession {
                 if let (Some(kind), Some(utilization)) =
                     (info.get("rateLimitType").and_then(Value::as_str), info.get("utilization").and_then(Value::as_f64))
                 {
+                    // Same names as `/usage` (see `classify_usage_limit`), so a
+                    // live read and an in-turn report fold into one row.
                     let (name, window_minutes) = match kind {
-                        "five_hour" => ("5-hour", Some(300)),
-                        "seven_day" => ("Weekly", Some(10080)),
+                        "five_hour" => ("Current session", Some(300)),
+                        "seven_day" => ("This week", Some(10080)),
                         _ => (kind, None),
                     };
                     self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {

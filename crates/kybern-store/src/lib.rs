@@ -2330,18 +2330,20 @@ impl Store {
         use std::collections::BTreeMap;
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT t.provider_kind, e.payload FROM events e
+                "SELECT t.provider_kind, e.payload, e.at FROM events e
                  JOIN threads t ON t.id = e.thread_id
                  WHERE e.kind = 'provider_usage_updated' ORDER BY e.seq ASC",
             )?;
-            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
             let mut by_provider: BTreeMap<String, BTreeMap<String, UsageLimit>> = BTreeMap::new();
+            let mut reported_at: BTreeMap<String, String> = BTreeMap::new();
             for row in rows {
-                let (provider, payload) = row?;
+                let (provider, payload, at) = row?;
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else { continue };
                 let Some(limits) = value.get("usage").and_then(|u| u.get("limits")).and_then(|l| l.as_array()) else {
                     continue;
                 };
+                reported_at.insert(provider.clone(), at);
                 let windows = by_provider.entry(provider).or_default();
                 // Rows arrive in seq order, so a later event overwrites an earlier one.
                 for entry in limits {
@@ -2359,7 +2361,9 @@ impl Store {
                     }
                     let mut limits: Vec<UsageLimit> = windows.into_values().collect();
                     limits.sort_by_key(|l| l.window_minutes.unwrap_or(u64::MAX));
-                    Some(methods::ProviderLimits { provider, limits })
+                    let updated_at =
+                        reported_at.get(&kind).and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| at.to_utc());
+                    Some(methods::ProviderLimits { provider, limits, updated_at, source: Some(methods::LimitsSource::Stored), plan: None })
                 })
                 .collect();
             Ok(providers)

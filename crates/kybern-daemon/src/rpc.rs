@@ -599,39 +599,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(UsageSummaryResult { rows, total })
         }
         UsageLimits::NAME => {
-            let _p: UsageLimitsParams = parse_or_default(params)?;
-            let mut providers = state.store.latest_provider_limits().map_err(internal)?;
-            // Both harnesses expose a turn-free way to read current limits — Codex
-            // via account/rateLimits/read, Claude via its local /usage command. cwd
-            // only needs to be a real directory; account auth lives under $HOME,
-            // which the daemon already inherits. Refresh both concurrently and
-            // overlay the live values on the stored snapshot.
-            let settings = state.settings.get();
-            let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
-            let claude = crate::settings::provider_settings(&settings, ProviderKind::ClaudeCode, None);
-            let codex = crate::settings::provider_settings(&settings, ProviderKind::Codex, None);
-            let claude_bin: Option<std::path::PathBuf> = claude.binary.clone().map(Into::into);
-            let codex_bin: Option<std::path::PathBuf> = codex.binary.clone().map(Into::into);
-            let (claude_live, codex_live) = tokio::join!(
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(15),
-                    kybern_drivers::claude::read_account_limits(&home, claude_bin.as_ref(), &claude.env)
-                ),
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(8),
-                    kybern_drivers::codex::read_account_limits(&home, codex_bin.as_ref(), &codex.env)
-                ),
-            );
-            for (kind, live) in [(ProviderKind::ClaudeCode, claude_live.ok().flatten()), (ProviderKind::Codex, codex_live.ok().flatten())] {
-                if let Some(limits) = live {
-                    providers.retain(|entry| entry.provider != kind);
-                    if !limits.is_empty() {
-                        providers.push(ProviderLimits { provider: kind, limits });
-                    }
-                }
-            }
-            providers.sort_by_key(|entry| entry.provider != ProviderKind::ClaudeCode);
-            ok(UsageLimitsResult { providers })
+            let p: UsageLimitsParams = parse_or_default(params)?;
+            ok(state.orchestrator.usage().limits(p).await)
         }
         PairingCreate::NAME => {
             let p: PairingCreateParams = parse_or_default(params)?;
