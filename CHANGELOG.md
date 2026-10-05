@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.2
+
+<!-- kybern-release-title: Agents can use your notes and tasks -->
+<!-- kybern-release-summary: Agents can read your notes and tasks, file follow-up tasks and take a task on, and you can start a task's run from the real composer. -->
+
+- Let agents search and read your notes and tasks, write notes, file tasks and claim a task they're working on. They only fully edit what an agent created, never close a task, and ask first unless the chat has Full access or Auto. Each write shows a card with Open and Undo.
+- Start a task's run from the real composer on the task page, with every agent, model, effort and permission choice, skills, mentions and attachments. Follow-ups to a running task can carry images and files too.
+- Mention notes and tasks in any chat. The @ menu now has All, Threads, Notes, Tasks, Files and Plugins tabs, and @ works without a project.
+- Add Notes and Tasks panels to the right dock, and drop the empty dock from the Notes and Tasks pages.
+- Quick-added tasks save when you click away. In the Tasks sidebar, Projects can collapse while pinned projects stay visible.
+- Paste or drop images into task descriptions. Images in pasted content are uploaded instead of stored inline, and task descriptions can be up to 512 KB.
+- Projects added from the CLI, mobile or another window now appear right away, and the plan usage rings in the rail have more room.
+
 ## 0.6.1
 
 <!-- kybern-release-title: Projects in Notes and Tasks, images in notes -->
