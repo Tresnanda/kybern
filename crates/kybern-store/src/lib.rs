@@ -2363,7 +2363,15 @@ impl Store {
                     limits.sort_by_key(|l| l.window_minutes.unwrap_or(u64::MAX));
                     let updated_at =
                         reported_at.get(&kind).and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| at.to_utc());
-                    Some(methods::ProviderLimits { provider, limits, updated_at, source: Some(methods::LimitsSource::Stored), plan: None })
+                    Some(methods::ProviderLimits {
+                        provider,
+                        limits,
+                        updated_at,
+                        source: Some(methods::LimitsSource::Stored),
+                        plan: None,
+                        stale: None,
+                        retry_at: None,
+                    })
                 })
                 .collect();
             Ok(providers)

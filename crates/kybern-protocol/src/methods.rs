@@ -1324,6 +1324,25 @@ pub struct ProviderLimits {
     /// Plan name when the provider reports one, e.g. "Pro+".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// Why the last live read left these values as they were. Absent while
+    /// live reads succeed, and from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<LimitsStale>,
+    /// While reads are throttled: when the next one may run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+/// Why a provider's live read did not update its limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitsStale {
+    /// The provider's login is due for a refresh, which only the provider's
+    /// own session may do; the next session (or turn) renews it.
+    LoginRefresh,
+    /// The provider is limiting how often usage can be read.
+    Throttled,
+    /// The read failed: not signed in, unreachable, or an unexpected answer.
+    Unavailable,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct UsageLimitsResult {

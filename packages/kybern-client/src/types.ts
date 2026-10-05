@@ -1452,6 +1452,8 @@ export interface UsageLimitsParams {
 }
 /** Where a provider's current limits came from. */
 export type LimitsSource = "live" | "session" | "stored";
+/** Why a provider's live read did not update its limits. */
+export type LimitsStale = "login_refresh" | "throttled" | "unavailable";
 export interface ProviderLimits {
   provider: ProviderKind;
   limits: NonNullable<ProviderUsage["limits"]>;
@@ -1460,6 +1462,10 @@ export interface ProviderLimits {
   source?: LimitsSource;
   /** Plan name when the provider reports one, e.g. "Pro+". */
   plan?: string;
+  /** Why the last live read left these values as they were. Absent while reads succeed. */
+  stale?: LimitsStale;
+  /** While reads are throttled: when the next one may run (ISO). */
+  retry_at?: string;
 }
 export interface UsageLimitsResult {
   providers: ProviderLimits[];

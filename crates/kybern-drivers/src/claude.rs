@@ -539,16 +539,39 @@ pub(crate) fn contextual_command(binary: &std::path::Path, context: &ProbeContex
 /// endpoint answers in one request; when no usable login is stored, fall back
 /// to Claude Code's `/usage` command. Throttling or a login due for refresh
 /// returns `None`, and the caller keeps its last values.
+/// Why Claude's plan limits were not read: the reason for clients, the detail for the log.
+#[derive(Debug, Clone)]
+pub struct UsageUnread {
+    pub reason: kybern_protocol::methods::LimitsStale,
+    /// While throttled: when reads may run again.
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub detail: String,
+}
+
 pub async fn read_account_usage(
     cwd: &std::path::Path,
     binary: Option<&PathBuf>,
     env: &std::collections::BTreeMap<String, String>,
-) -> Option<(Vec<kybern_protocol::UsageLimit>, Option<String>)> {
+) -> std::result::Result<(Vec<kybern_protocol::UsageLimit>, Option<String>), UsageUnread> {
     let context = ProbeContext { binary: resolve(ProviderKind::ClaudeCode, binary).ok(), cwd: Some(cwd.to_path_buf()), env: env.clone() };
     match crate::claude_usage::read(&context).await {
-        crate::claude_usage::OauthUsage::Read { limits, plan } => Some((limits, plan)),
-        crate::claude_usage::OauthUsage::Wait => None,
-        crate::claude_usage::OauthUsage::Unavailable => read_account_limits(cwd, binary, env).await.map(|limits| (limits, None)),
+        crate::claude_usage::OauthUsage::Read { limits, plan } => Ok((limits, plan)),
+        crate::claude_usage::OauthUsage::Wait(unread) => Err(unread),
+        crate::claude_usage::OauthUsage::Unavailable(detail) => {
+            // `/usage` also skips a login that is due for a refresh; say so instead of "unavailable".
+            if crate::claude_config::login_needs_refresh(&context).await {
+                return Err(UsageUnread {
+                    reason: kybern_protocol::methods::LimitsStale::LoginRefresh,
+                    retry_at: None,
+                    detail: format!("{detail}; the Claude Code login is due for a refresh"),
+                });
+            }
+            read_account_limits(cwd, binary, env).await.map(|limits| (limits, None)).ok_or_else(|| UsageUnread {
+                reason: kybern_protocol::methods::LimitsStale::Unavailable,
+                retry_at: None,
+                detail: format!("{detail}; Claude Code's /usage gave no limits either"),
+            })
+        }
     }
 }
 
