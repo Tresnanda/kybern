@@ -1,23 +1,25 @@
 // The document's floating toolbar: one slim material bar at the top of the page.
 // Block style (Body ⌄), bold and italic, then checklist, bullets, code block,
-// quote and link, then the outline. It is the page's only formatting control, so
+// quote, link and image, then the outline. It is the page's only formatting control, so
 // the selection bubble stays away; strikethrough and inline code keep their
 // shortcuts and Markdown rules. The link button turns the bar into a link field.
 import type { Editor } from "@tiptap/core"
 import { useEditorState } from "@tiptap/react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/kit/menu"
 import { mod } from "@/lib/format"
-import { BoldIcon, CheckIcon, ChevronDownIcon, CodeBlockIcon, ItalicIcon, LinkIcon, ListBulletIcon, ListChecksIcon, OutlineIcon, QuoteIcon } from "@/lib/kit/icons"
+import { BoldIcon, CheckIcon, ChevronDownIcon, CodeBlockIcon, ImageIcon, ItalicIcon, LinkIcon, ListBulletIcon, ListChecksIcon, OutlineIcon, QuoteIcon } from "@/lib/kit/icons"
 import { FormatButton, LinkField } from "./FormatBar"
+import { canAddImages, insertImageFiles } from "./noteImage"
 import { useLinkEditRequest } from "./linkEditRequest"
 import { SLASH_ICONS } from "./slashIcons"
 import { currentBlockId, TURN_INTO_ITEMS, turnInto } from "./slashItems"
 
 export function NoteToolbar({ editor, outline, onToggleOutline }: { editor: Editor; outline: boolean | null; onToggleOutline: () => void }) {
   const [linking, setLinking] = useState(false)
+  const filePicker = useRef<HTMLInputElement>(null)
   const state = useEditorState({
     editor,
     selector: ({ editor: current }) => ({
@@ -81,6 +83,23 @@ export function NoteToolbar({ editor, outline, onToggleOutline }: { editor: Edit
           <FormatButton icon={CodeBlockIcon} label="Code block" shortcut={[mod, "⌥", "C"]} active={state.code} onClick={() => run((c) => c.toggleCodeBlock())} />
           <FormatButton icon={QuoteIcon} label="Quote" shortcut={[mod, "⇧", "B"]} active={state.quote} onClick={() => run((c) => c.toggleBlockquote())} />
           <FormatButton icon={LinkIcon} label={state.link ? "Edit link" : "Add link"} active={state.link} onClick={() => setLinking(true)} />
+          {canAddImages(editor) && (
+            <>
+              <FormatButton icon={ImageIcon} label="Add image" onClick={() => filePicker.current?.click()} />
+              <input
+                ref={filePicker}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(event) => {
+                  const files = [...(event.currentTarget.files ?? [])]
+                  event.currentTarget.value = ""
+                  void insertImageFiles(editor, files)
+                }}
+              />
+            </>
+          )}
           {outline !== null && (
             <>
               <i className="note-toolbar-sep" aria-hidden="true" />

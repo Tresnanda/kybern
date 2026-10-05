@@ -18,7 +18,7 @@ import { observeResizeFrame } from "@/lib/resizeObserver"
 import { cn } from "@/lib/utils"
 import { isFreeChatProject, type NoteId, type NoteSummary, type ThreadId } from "@/protocol"
 import { countWords, wordCountLabel } from "@/state/miniMarkdown"
-import { clearFocusRequest, pinNote, restoreNote, useNotes, useNoteSummary } from "@/state/notes"
+import { clearFocusRequest, fetchNoteImage, noteSourceOf, pinNote, restoreNote, uploadNoteImage, useNotes, useNoteSummary } from "@/state/notes"
 import { setNotesDisplay, useNotesDisplay } from "@/state/notesDisplay"
 import { editedAgo, noteScopeLabel } from "@/state/notesModel"
 import { loadThread } from "@/state/rpc"
@@ -29,6 +29,7 @@ import { NoteFooterTasks } from "./NoteFooterTasks"
 import { NoteMenu, NoteScopeMenu, NoteShareMenu, PurgeNoteDialog } from "./NoteMenu"
 import { NoteOutline } from "./NoteOutline"
 import { useHeadings } from "./outlineHeadings"
+import type { NoteImageHost } from "./noteImage"
 import type { NoteTaskContext } from "./noteTaskActions"
 import { NoteToolbar } from "./NoteToolbar"
 import { SaveStatus } from "./SaveStatus"
@@ -169,6 +170,15 @@ function NoteEditorInner({ noteId, threadId, variant = "page", autoFocus, placeh
     [taskNoteId, taskProjectId, tasksSupported, snapshot.deleted, session],
   )
 
+  // Pasted images are kept by the daemon that keeps the note, looked up when used.
+  const imageHost = useMemo<NoteImageHost>(
+    () => ({
+      upload: (file) => uploadNoteImage(noteSourceOf(taskNoteId), file),
+      load: (id, signal) => fetchNoteImage(noteSourceOf(taskNoteId), id, signal),
+    }),
+    [taskNoteId],
+  )
+
   const body = ready ? (
     <Suspense fallback={null}>
       <NoteBody
@@ -179,6 +189,7 @@ function NoteEditorInner({ noteId, threadId, variant = "page", autoFocus, placeh
         placeholder={placeholder}
         onBackspaceAtStart={page && !isThreadNote ? focusTitleEnd : undefined}
         tasks={taskContext}
+        images={imageHost}
       />
     </Suspense>
   ) : null

@@ -133,6 +133,9 @@ const SIDEBAR_TRIGGER_CLASS_NAME = cn(
 /** The sidebar toggle first, so it never moves, then back/forward (or a single new-thread action when collapsed). */
 export function SidebarLeadingControls({ className }: { className?: string }) {
   const { open, toggleSidebar } = useSidebar()
+  // Notes have no side panel, so nothing here applies (App.tsx keeps the panel closed there).
+  const panelless = useStore((s) => s.selected.kind === "notes")
+  if (panelless) return null
   return (
     <div
       data-tauri-drag-region="false"

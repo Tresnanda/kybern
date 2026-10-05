@@ -1,5 +1,6 @@
 // The gallery's controls: the title bar's search field, Display menu and New note
-// button; the filter row (All, Global, each project with notes, Threads, then
+// button (with a menu to start the note in a chosen project); the filter row (All,
+// Global, each project with notes, Threads, a "+" for the other projects, then
 // Recently deleted); the quiet hint bar; and the empty states.
 import { forwardRef, useLayoutEffect, useRef, useState } from "react"
 
@@ -8,7 +9,7 @@ import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMen
 import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { mod } from "@/lib/format"
-import { ChevronDownIcon, CustomizeIcon, MessageCircleIcon, NewThreadIcon, SearchIcon, TrashCanIcon, XIcon } from "@/lib/kit/icons"
+import { AddPlusIcon, ChevronDownIcon, CustomizeIcon, FolderOpenIcon, MessageCircleIcon, NewThreadIcon, SearchIcon, TrashCanIcon, XIcon } from "@/lib/kit/icons"
 import { ProjectDot } from "@/lib/kit/projectDot"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { cn } from "@/lib/utils"
@@ -18,6 +19,8 @@ import { chooseFilter, setNotesDisplay, useNotesDisplay, type NotesLayout } from
 import { NOTE_RETENTION_DAYS, type NotesFilter, type NotesGroupBy, type NotesSortBy } from "@/state/notesModel"
 import { useStore } from "@/state/store"
 import { ChatHeaderButton, ChatHeaderIconButton } from "../chrome"
+import { useAddProject } from "../useAddProject"
+import { useProjectChoices } from "./noteMenuKit"
 
 // ---- title bar ----
 
@@ -119,19 +122,86 @@ export function NewNoteButton() {
   // Re-read on render: the label follows the filter row.
   useNotesDisplay((s) => s.filter)
   const label = newNoteLabel()
+  const projects = useProjectChoices()
+  const addProject = useAddProject((project) => void createAndOpenNote({ scope: "project", projectId: project.id }))
   return (
-    <Tooltip>
-      <TooltipTrigger render={<ChatHeaderIconButton label={label} className="notes-tb-button" onClick={() => void createAndOpenNote()} />}>
-        <NewThreadIcon className="size-4" />
-      </TooltipTrigger>
-      <TooltipPopup side="bottom">
-        {label} <span className="notes-tip-key">{mod}N</span>
-      </TooltipPopup>
-    </Tooltip>
+    <div className="notes-new">
+      <Tooltip>
+        <TooltipTrigger render={<ChatHeaderIconButton label={label} className="notes-tb-button" onClick={() => void createAndOpenNote()} />}>
+          <NewThreadIcon className="size-4" />
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">
+          {label} <span className="notes-tip-key">{mod}N</span>
+        </TooltipPopup>
+      </Tooltip>
+      {/* Choose where the note goes before writing it, instead of moving it afterwards. */}
+      <Menu>
+        <MenuTrigger render={<ChatHeaderIconButton label="New note in a project" className="notes-tb-button notes-new-more" />}>
+          <ChevronDownIcon className="size-3" />
+        </MenuTrigger>
+        <ComposerPickerMenuPopup align="end" side="bottom" sideOffset={6} className="action-menu min-w-52 [--available-height:min(22rem,60vh)]">
+          <MenuGroup>
+            <MenuGroupLabel>New note in</MenuGroupLabel>
+            <MenuItem onClick={() => void createAndOpenNote({ scope: "global" })}>
+              <ProjectDot projectId={null} className="mx-[3.5px]" /> Global
+            </MenuItem>
+            {projects.map((project) => (
+              <MenuItem key={project.id} onClick={() => void createAndOpenNote({ scope: "project", projectId: project.id })}>
+                <ProjectDot projectId={project.id} className="mx-[3.5px]" /> <span className="truncate">{project.name}</span>
+              </MenuItem>
+            ))}
+          </MenuGroup>
+          <MenuSeparator />
+          <MenuGroup>
+            <MenuItem onClick={addProject.add}>
+              <FolderOpenIcon /> Add project…
+            </MenuItem>
+          </MenuGroup>
+        </ComposerPickerMenuPopup>
+      </Menu>
+      {addProject.dialog}
+    </div>
   )
 }
 
 // ---- filter row ----
+
+/** "+" after the chips: the projects without notes yet, and adding another. With none to list, it adds one directly. */
+function AddProjectChip({ others, onAdd }: { others: Pick<Project, "id" | "name">[]; onAdd: () => void }) {
+  if (others.length === 0) {
+    return (
+      <Tooltip>
+        <TooltipTrigger render={<button type="button" className="notes-chip notes-chip-add" aria-label="Add project" onClick={onAdd} />}>
+          <AddPlusIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">Add project</TooltipPopup>
+      </Tooltip>
+    )
+  }
+  return (
+    <Menu>
+      <MenuTrigger render={<button type="button" className="notes-chip notes-chip-add" aria-label="More projects" />}>
+        <AddPlusIcon className="size-3.5" />
+      </MenuTrigger>
+      <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="action-menu min-w-52 [--available-height:min(22rem,60vh)]">
+        <MenuGroup>
+          <MenuGroupLabel>Show notes from</MenuGroupLabel>
+          {others.map((project) => (
+            <MenuItem key={project.id} onClick={() => chooseFilter({ kind: "project", projectId: project.id as ProjectId })}>
+              <ProjectDot projectId={project.id} className="mx-[3.5px]" /> <span className="truncate">{project.name}</span>
+            </MenuItem>
+          ))}
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuGroup>
+          <MenuItem onClick={onAdd}>
+            <FolderOpenIcon /> Add project…
+          </MenuItem>
+        </MenuGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  )
+}
 
 type Chip = { key: string; label: string; filter: NotesFilter; projectId?: string; threads?: boolean }
 
@@ -156,6 +226,7 @@ function ChipView({ chip, selected, onClick, measure }: { chip: Chip; selected?:
 }
 
 const MORE_WIDTH = 84
+const ADD_WIDTH = 28
 const CHIP_GAP = 4
 
 export function FilterRow({ projects, threads, deleted }: { projects: Pick<Project, "id" | "name">[]; threads: number; deleted: number }) {
@@ -164,10 +235,17 @@ export function FilterRow({ projects, threads, deleted }: { projects: Pick<Proje
   const measureRef = useRef<HTMLDivElement>(null)
   const [fit, setFit] = useState(Number.POSITIVE_INFINITY)
 
+  // Every project, for the "+" menu; one chosen there keeps a chip while it has no notes yet.
+  const allProjects = useProjectChoices()
+  const chosen = filter.kind === "project" && !projects.some((project) => project.id === filter.projectId) ? allProjects.find((project) => project.id === filter.projectId) : undefined
+  const chipProjects = chosen ? [...projects, chosen] : projects
+  const others = allProjects.filter((project) => !chipProjects.some((shown) => shown.id === project.id))
+  const addProject = useAddProject((project) => chooseFilter({ kind: "project", projectId: project.id }))
+
   const chips: Chip[] = [
     { key: "all", label: "All", filter: { kind: "all" } },
     { key: "global", label: "Global", filter: { kind: "global" } },
-    ...projects.map((project): Chip => ({ key: `p:${project.id}`, label: project.name, projectId: project.id, filter: { kind: "project", projectId: project.id as ProjectId } })),
+    ...chipProjects.map((project): Chip => ({ key: `p:${project.id}`, label: project.name, projectId: project.id, filter: { kind: "project", projectId: project.id as ProjectId } })),
     ...(threads > 0 ? [{ key: "threads", label: "Threads", threads: true, filter: { kind: "threads" } } satisfies Chip] : []),
   ]
   const deletedChip: Chip = { key: "deleted", label: "Recently deleted", filter: { kind: "deleted" } }
@@ -180,7 +258,8 @@ export function FilterRow({ projects, threads, deleted }: { projects: Pick<Proje
     if (!row || !ruler) return
     const measure = () => {
       const widths = [...ruler.children].map((child) => (child as HTMLElement).offsetWidth)
-      const available = row.clientWidth
+      // Room for the "+" after the chips.
+      const available = row.clientWidth - ADD_WIDTH - CHIP_GAP
       const total = widths.reduce((sum, width) => sum + width + CHIP_GAP, 0)
       if (total <= available) {
         setFit(Number.POSITIVE_INFINITY)
@@ -220,6 +299,8 @@ export function FilterRow({ projects, threads, deleted }: { projects: Pick<Proje
       {shown.map((chip) => (
         <ChipView key={chip.key} chip={chip} selected={sameFilter(chip.filter, filter)} onClick={() => chooseFilter(chip.filter)} />
       ))}
+      <AddProjectChip others={others} onAdd={addProject.add} />
+      {addProject.dialog}
       {onDeleted && <ChipView chip={deletedChip} selected onClick={() => chooseFilter(deletedChip.filter)} />}
       {hidden.length > 0 ? (
         <Menu>

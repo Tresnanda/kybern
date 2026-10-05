@@ -61,6 +61,11 @@ const TITLEBAR_COLLAPSED_INSET_CLASS =
   platform() === "macos"
     ? "md:ps-[calc(var(--desktop-top-bar-traffic-light-gutter,82px)+84px-var(--app-rail-width))]"
     : "md:ps-[calc(16px+84px-var(--app-rail-width))]"
+/** Pages without a panel have no sidebar controls, so their title starts right after the window controls. */
+const TITLEBAR_PANELLESS_INSET_CLASS =
+  platform() === "macos"
+    ? "md:ps-[calc(var(--desktop-top-bar-traffic-light-gutter,82px)+12px-var(--app-rail-width))]"
+    : "md:ps-[calc(16px+12px-var(--app-rail-width))]"
 
 /** Gap between the workspace card and the window's right and bottom edges. */
 const APP_FRAME_INSET = 8
@@ -97,6 +102,9 @@ function Workspace() {
   const selected = useStore((s) => s.selected)
   const splitView = useStore((s) => s.splitView)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
+  // Notes use the whole card: no panel there, while the sidebar preference waits for the next page.
+  const panelless = selected.kind === "notes"
+  const panelOpen = sidebarOpen && !panelless
   const rightOpen = useStore((s) => s.rightOpen)
   const settingsOpen = useStore((s) => s.settingsOpen)
   const reducedMotion = useReducedMotion()
@@ -108,7 +116,7 @@ function Workspace() {
   useTasksSync()
   useUsageLimitsSync()
 
-  useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen })
+  useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && !panelless })
   useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })
   // On the Notes page ⌘N starts a note in the section you are in; everywhere else, a thread.
@@ -163,8 +171,10 @@ function Workspace() {
 
   return (
     <SidebarProvider
-      open={sidebarOpen}
-      onOpenChange={(open) => set({ sidebarOpen: open })}
+      open={panelOpen}
+      onOpenChange={(open) => {
+        if (!panelless) set({ sidebarOpen: open })
+      }}
       className="relative bg-(--app-frame-surface,var(--app-shell-background))"
       onPointerDownCapture={() => setKeyboardNavigation(false)}
       onKeyDownCapture={() => setKeyboardNavigation(true)}
@@ -188,7 +198,7 @@ function Workspace() {
         collapsible="offcanvas"
         transparentSurface
         innerClassName="app-sidebar-panel"
-        inert={!sidebarOpen}
+        inert={!panelOpen}
         className="top-(--app-titlebar-height) bottom-(--app-frame-inset) left-(--app-rail-width) h-auto group-data-[collapsible=offcanvas]:pointer-events-none"
       >
         <ErrorBoundary label="the sidebar">
@@ -203,16 +213,16 @@ function Workspace() {
         <div
           ref={setTitlebarSlot}
           data-titlebar-slot
-          data-panel-open={sidebarOpen || undefined}
+          data-panel-open={panelOpen || undefined}
           data-tauri-drag-region="deep"
           className={cn(
             "app-titlebar-slot drag-region absolute top-0 left-0 right-(--app-frame-inset) z-[2] hidden h-(--app-titlebar-height) min-w-0 md:flex",
             "transition-[padding-inline-start] motion-reduce:transition-none",
-            sidebarOffcanvasMotionClass(sidebarOpen),
-            !sidebarOpen && TITLEBAR_COLLAPSED_INSET_CLASS,
+            sidebarOffcanvasMotionClass(panelOpen),
+            !panelOpen && (panelless ? TITLEBAR_PANELLESS_INSET_CLASS : TITLEBAR_COLLAPSED_INSET_CLASS),
           )}
         />
-        {sidebarOpen && <ResizeHandle edge="left" label="Resize sidebar" onPointerDown={sidebar.onPointerDown} dragging={sidebar.dragging} className="z-[25]" />}
+        {panelOpen && <ResizeHandle edge="left" label="Resize sidebar" onPointerDown={sidebar.onPointerDown} dragging={sidebar.dragging} className="z-[25]" />}
         {/* The content card owns the fill; an opaque inset behind it hides native vibrancy. */}
         <SidebarInset className="h-full min-h-0 overscroll-y-none text-foreground" surfaceClassName="bg-transparent">
           {/* Keep the full-window card out of its own stacking context. Its later DOM order already places it above the sidebar's z-0 shell; a z-index here forces WebKit to retain another viewport-sized backing. */}

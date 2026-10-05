@@ -159,6 +159,8 @@ export function attachEnvFeed(client: KybernClient, ownerKey: string): () => voi
 }
 
 let stopHomeConnection: (() => void) | null = null
+/** This Mac's daemon over HTTP, for the images in Global notes kept there. */
+let homeEndpoint: { http_base: string; token: string } | null = null
 let homeRetry: ReturnType<typeof setTimeout> | undefined
 
 /** Open the small connection to this Mac's daemon that Global notes are read through. */
@@ -180,6 +182,7 @@ export function startHomeFeed() {
         { expectedEnvironmentId: profile.environment_id ?? undefined },
       )
       homeClient = client
+      homeEndpoint = endpoint
       const offNotification = client.onNotification(NOTES_CHANGED_NOTIFICATION, (params) => applyChange("home", params as NotesChangedNotification))
       const offStatus = client.onStatus((status, detail) => {
         if (token !== generation.home) return
@@ -195,6 +198,7 @@ export function startHomeFeed() {
         offStatus()
         client.close()
         if (homeClient === client) homeClient = null
+        if (homeEndpoint === endpoint) homeEndpoint = null
         stopHomeConnection = null
       }
       client.connect()
@@ -306,6 +310,58 @@ export function noteClient(source: NoteSource): KybernClient {
 
 function sourceForHome(home: NoteHome): NoteSource {
   return home.scope === "global" && isHomeShared() ? "home" : "env"
+}
+
+/** The daemon a new note in `home` will be kept by. */
+export const noteSourceForHome = sourceForHome
+
+/** The daemon that keeps a note; one not listed yet (a thread note before its first save) is the environment's. */
+export function noteSourceOf(id: NoteId | null | undefined): NoteSource {
+  return (id && locateNote(id)?.source) || "env"
+}
+
+// ---- images ----
+// A pasted image is kept by the daemon that keeps its note, as an asset; the note's
+// Markdown holds only a `kybern://asset/<id>` link to it.
+
+function homeHttp(): { http_base: string; token: string } {
+  if (!homeEndpoint) throw new ConnectionClosedError(HOME_UNREACHABLE)
+  return homeEndpoint
+}
+
+/** Keep an image with the daemon `source` names; resolves to its asset id. */
+export async function uploadNoteImage(source: NoteSource, file: File): Promise<string> {
+  if (source === "env") return (await activeRuntime().uploadFile(file)).id
+  const home = homeHttp()
+  const response = await fetch(`${home.http_base}/assets`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${home.token}`, "content-type": file.type || "application/octet-stream", "x-kybern-filename": file.name || "image" },
+    body: file,
+  })
+  if (!response.ok) throw new Error((await response.text()).trim() || `Upload failed (${response.status})`)
+  return ((await response.json()) as { id: string }).id
+}
+
+async function readNoteImage(source: NoteSource, id: string, signal: AbortSignal): Promise<Blob> {
+  if (source === "env") return activeRuntime().fetchAssetImage(id, signal)
+  const home = homeHttp()
+  const response = await fetch(`${home.http_base}/assets/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${home.token}` }, signal })
+  if (!response.ok) throw new Error("Unable to load the image. Try again.")
+  return response.blob()
+}
+
+/**
+ * An image in a note, from the daemon that keeps the note, else from the other one:
+ * a note moved between This Mac and an environment keeps links to where it was written.
+ */
+export async function fetchNoteImage(source: NoteSource, id: string, signal: AbortSignal): Promise<Blob> {
+  try {
+    return await readNoteImage(source, id, signal)
+  } catch (error) {
+    const other: NoteSource = source === "env" ? "home" : "env"
+    if (signal.aborted || (other === "home" && !homeEndpoint)) throw error
+    return readNoteImage(other, id, signal)
+  }
 }
 
 function upsert(source: NoteSource, summary: NoteSummary) {

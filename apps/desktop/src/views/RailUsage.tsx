@@ -3,6 +3,7 @@
 // provider's card; moving to the next ring carries the same card over without
 // closing it (one shared popover, per the HIG's one-popover-at-a-time rule).
 // Opening asks the daemon to re-read, so the numbers are current when looked at.
+// The card never scrolls, so the resize between providers shows no scrollbar.
 
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTitle, PopoverTrigger } from "@/components/kit/popover"
 import { ProviderMark } from "@/components/kybern/bits"
@@ -49,7 +50,7 @@ export function RailUsage() {
       })}
       <Popover handle={usageCard} onOpenChange={(open) => { if (open) refreshUsageLimits() }}>
         {({ payload }) => (
-          <PopoverPopup side="right" align="end" sideOffset={8} className="w-72 font-system-ui">
+          <PopoverPopup side="right" align="end" sideOffset={8} scrollable={false} className="w-72 font-system-ui">
             {payload && <UsageCard kind={payload} />}
           </PopoverPopup>
         )}

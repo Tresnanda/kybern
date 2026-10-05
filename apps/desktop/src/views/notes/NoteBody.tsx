@@ -3,9 +3,13 @@
 import type { Editor } from "@tiptap/core"
 import { EditorContent, ReactNodeViewRenderer, useEditor } from "@tiptap/react"
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
+import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
+import { errorText } from "@/state/rpc"
 import { createNoteExtensions } from "./editorExtensions"
+import type { NoteImageHost } from "./noteImage"
+import { NoteImageView } from "./NoteImageView"
 import { openNoteLink } from "./noteLinks"
 import { tidyMarkdown } from "./tidyMarkdown"
 import { FormatBar } from "./FormatBar"
@@ -90,6 +94,17 @@ function createLineHost() {
   }
 }
 
+/** Where the editor's images go, swapped in place as the note's host changes. */
+function createImageSlot() {
+  let host: NoteImageHost | null = null
+  return {
+    get: () => host,
+    set: (next: NoteImageHost | null) => {
+      host = next
+    },
+  }
+}
+
 /** Markdown with one trailing newline, or nothing for an empty note. */
 function readMarkdown(editor: Editor): string {
   const markdown = tidyMarkdown(editor.getMarkdown()).trimEnd()
@@ -104,6 +119,7 @@ export default function NoteBody({
   placeholder,
   onBackspaceAtStart,
   tasks,
+  images,
   className,
 }: {
   host: NoteBodyHost
@@ -116,14 +132,29 @@ export default function NoteBody({
   onBackspaceAtStart?: () => void
   /** Where "Make task" puts a task made from a checklist line; null where lines cannot become tasks. */
   tasks?: NoteTaskContext | null
+  /** Where pasted and dropped images are kept; null where text only (task descriptions). */
+  images?: NoteImageHost | null
   className?: string
 }) {
   const slash = useMemo(() => createSlashController(), [])
   const lines = useMemo(() => createLineHost(), [])
   useLayoutEffect(() => lines.setContext(tasks ?? null), [lines, tasks])
+  // Read when an image is added or shown, so a note whose home changes keeps one editor.
+  const imageSlot = useMemo(() => createImageSlot(), [])
+  useLayoutEffect(() => imageSlot.set(images ?? null), [imageSlot, images])
   const extensions = useMemo(
-    () => createNoteExtensions(slash.render, placeholder ?? "Type / for commands", { view: ReactNodeViewRenderer(TaskRefView, { as: "span" }), lines: lines.host }),
-    [slash, placeholder, lines],
+    () =>
+      createNoteExtensions(
+        slash.render,
+        placeholder ?? "Type / for commands",
+        { view: ReactNodeViewRenderer(TaskRefView, { as: "span" }), lines: lines.host },
+        {
+          nodeView: ReactNodeViewRenderer(NoteImageView, { as: "span" }),
+          host: imageSlot.get,
+          onError: (error) => toast.error("Unable to add the image", { description: errorText(error) }),
+        },
+      ),
+    [slash, placeholder, lines, imageSlot],
   )
   const appliedEpoch = useRef(snapshot.epoch)
   const backspaceRef = useRef(onBackspaceAtStart)

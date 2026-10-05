@@ -17,6 +17,7 @@ import { ProjectDot } from "@/lib/kit/projectDot"
 import { AgentMark, PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
 import { QuickAddRow } from "./QuickAdd"
 import { projectForNewTask } from "./taskActions"
+import { TaskProjectChip } from "./TaskMenus"
 import { containerId, useTaskDnd } from "./useTaskDnd"
 
 /** Rows a closed-work group shows before "Show more"; keeps a long history cheap. */
@@ -110,7 +111,7 @@ export function TaskList({ groups, tasks, now }: { groups: TaskGroup[]; tasks: R
       <DragOverlay dropAnimation={reducedMotion ? null : undefined}>
         {active ? (
           <div className="tk-row" data-focused style={{ background: "var(--task-card-hover)", boxShadow: "var(--task-shadow-card-hover)", borderRadius: 8 }}>
-            <RowCells task={active} now={now} projectName={projectName(active.scope === "project" ? active.project_id : null)} />
+            <RowCells task={active} now={now} projectName={projectName(active.scope === "project" ? active.project_id : null)} overlay />
           </div>
         ) : null}
       </DragOverlay>
@@ -190,7 +191,7 @@ const TaskRow = memo(function TaskRow({ task, now, focused, projectName, sortabl
   )
 })
 
-function RowCells({ task, now, projectName }: { task: TaskItem; now: number; projectName: string }) {
+function RowCells({ task, now, projectName, overlay }: { task: TaskItem; now: number; projectName: string; overlay?: boolean }) {
   const run = latestRun(task)
   const changes = run ? runChanges(run) : null
   let detail: React.ReactNode = null
@@ -237,8 +238,14 @@ function RowCells({ task, now, projectName }: { task: TaskItem; now: number; pro
       <span className="t">{task.title || "Untitled"}</span>
       <span className="det">{detail}</span>
       <span className="proj">
-        <ProjectDot projectId={task.scope === "project" ? task.project_id : null} />
-        <span>{projectName}</span>
+        {overlay ? (
+          <>
+            <ProjectDot projectId={task.scope === "project" ? task.project_id : null} />
+            <span>{projectName}</span>
+          </>
+        ) : (
+          <TaskProjectChip task={task} showName />
+        )}
       </span>
       <span className="age">{relativeTime(task.created_at, now)}</span>
     </>

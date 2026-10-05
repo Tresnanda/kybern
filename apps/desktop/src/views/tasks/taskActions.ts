@@ -1,8 +1,12 @@
-// Small commands the Tasks surfaces share: where a new task goes, and starting one.
-import type { ProjectId, TaskStatus } from "@/protocol"
+// Small commands the Tasks surfaces share: where a new task goes, starting one, and
+// the projects a task can belong to.
+import { useMemo } from "react"
+
+import { FREE_CHAT_PROJECT_ID, type ProjectId, type TaskStatus } from "@/protocol"
 import { contextProjectIdOf } from "@/state/notes"
 import { createAndOpenTask, getTask, openTask, startQuickAdd, useTasks } from "@/state/tasks"
 import { filterProjectId } from "@/state/tasksModel"
+import { orderProjects } from "@/state/sidebarOrganize"
 import { useStore } from "@/state/store"
 
 /** The project a new task belongs to: the filtered project, else the one you came from. */
@@ -40,4 +44,14 @@ export function newTaskHere(status: TaskStatus = "inbox") {
   }
   if (selected.kind !== "tasks") openTask()
   startQuickAdd({ groupKey: quickAddGroupKey(status, projectId), status, projectId })
+}
+
+/** Every project a task can belong to, in the thread sidebar's order. */
+export function useTaskProjects() {
+  const projects = useStore((s) => s.projects)
+  const projectOrder = useStore((s) => s.projectOrder)
+  return useMemo(
+    () => orderProjects(Object.values(projects), projectOrder).filter((project) => project.id !== FREE_CHAT_PROJECT_ID),
+    [projects, projectOrder],
+  )
 }
