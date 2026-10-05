@@ -23,7 +23,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use kybern_protocol::methods::{LimitsSource, ProviderLimits, UsageLimitsParams, UsageLimitsResult};
+use kybern_drivers::claude::UsageUnread;
+use kybern_protocol::methods::{LimitsSource, LimitsStale, ProviderLimits, UsageLimitsParams, UsageLimitsResult};
 use kybern_protocol::{ProviderKind, UsageLimit};
 use kybern_store::Store;
 use tokio::sync::broadcast;
@@ -88,6 +89,11 @@ struct Entry {
     /// Last live read, successful or not. Paces retries for a provider that
     /// is not installed or signed in.
     attempted: Option<Instant>,
+    /// Why the last live read failed, until one succeeds.
+    stale: Option<(LimitsStale, Option<DateTime<Utc>>)>,
+    /// The failure last written to the log, so a read failing the same way
+    /// every minute is logged once.
+    logged: Option<String>,
 }
 
 fn window_key(limit: &UsageLimit) -> String {
@@ -174,6 +180,10 @@ impl UsageMonitor {
             if entry.source != Some(LimitsSource::Live) {
                 entry.source = Some(LimitsSource::Session);
             }
+            // A running turn means the provider renewed its login; the next read can run.
+            if entry.stale.is_some_and(|(reason, _)| reason == LimitsStale::LoginRefresh) {
+                entry.stale = None;
+            }
         }
         self.publish();
     }
@@ -240,32 +250,45 @@ impl UsageMonitor {
             let mut state = self.lock();
             let entry = state.providers.entry(kind).or_default();
             entry.attempted = Some(Instant::now());
-            if let Some((limits, plan)) = read {
-                entry.limits = limits;
-                entry.plan = plan.or(entry.plan.take());
-                entry.updated_at = Some(Utc::now());
-                entry.source = Some(LimitsSource::Live);
+            match read {
+                Ok((limits, plan)) => {
+                    entry.limits = limits;
+                    entry.plan = plan.or(entry.plan.take());
+                    entry.updated_at = Some(Utc::now());
+                    entry.source = Some(LimitsSource::Live);
+                    entry.stale = None;
+                    if entry.logged.take().is_some() {
+                        tracing::info!(provider = %kind, "account limits read again");
+                    }
+                }
+                Err(unread) => {
+                    if entry.logged.as_deref() != Some(unread.detail.as_str()) {
+                        tracing::info!(provider = %kind, reason = ?unread.reason, detail = %unread.detail, "could not read account limits; keeping the last values");
+                        entry.logged = Some(unread.detail);
+                    }
+                    entry.stale = Some((unread.reason, unread.retry_at));
+                }
             }
         }
         self.lock().refreshing.remove(&kind);
         self.publish();
     }
 
-    async fn read(&self, kind: ProviderKind) -> Option<(Vec<UsageLimit>, Option<String>)> {
+    async fn read(&self, kind: ProviderKind) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
         let settings = self.inner.settings.get();
         let provider = crate::settings::provider_settings(&settings, kind, None);
         let binary: Option<PathBuf> = provider.binary.clone().map(Into::into);
         // cwd only needs to be a real directory; account auth lives under $HOME.
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         let started = Instant::now();
+        let unavailable = |detail: &str| UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: detail.into() };
         let read = match kind {
             ProviderKind::ClaudeCode => tokio::time::timeout(
                 Duration::from_secs(20),
                 kybern_drivers::claude::read_account_usage(&home, binary.as_ref(), &provider.env),
             )
             .await
-            .ok()
-            .flatten(),
+            .unwrap_or_else(|_| Err(unavailable("the read timed out"))),
             ProviderKind::Codex => tokio::time::timeout(
                 Duration::from_secs(8),
                 kybern_drivers::codex::read_account_limits(&home, binary.as_ref(), &provider.env),
@@ -273,18 +296,20 @@ impl UsageMonitor {
             .await
             .ok()
             .flatten()
-            .map(|limits| (limits, None)),
+            .map(|limits| (limits, None))
+            .ok_or_else(|| unavailable("Codex reported no rate limits")),
             ProviderKind::Cursor => {
                 tokio::time::timeout(Duration::from_secs(10), kybern_drivers::cursor::usage::read_account_usage(&provider.env))
                     .await
                     .ok()
                     .flatten()
                     .map(|usage| (usage.limits, usage.plan))
+                    .ok_or_else(|| unavailable("Cursor reported no usage"))
             }
-            _ => None,
+            _ => Err(unavailable("no account limits to read")),
         };
-        tracing::debug!(provider = %kind, ok = read.is_some(), elapsed_ms = started.elapsed().as_millis() as u64, "read account limits");
-        read.filter(|(limits, _)| !limits.is_empty())
+        tracing::debug!(provider = %kind, ok = read.is_ok(), elapsed_ms = started.elapsed().as_millis() as u64, "read account limits");
+        read.and_then(|(limits, plan)| if limits.is_empty() { Err(unavailable("the read returned no limits")) } else { Ok((limits, plan)) })
     }
 
     fn publish(&self) {
@@ -293,7 +318,8 @@ impl UsageMonitor {
     }
 
     /// The cache as clients see it. A window whose reset time has passed
-    /// reads as unused until the next report says otherwise.
+    /// reads as unused until the next report says otherwise; it keeps the
+    /// passed reset time, so clients can tell it was not read since.
     fn snapshot(&self) -> UsageLimitsResult {
         let state = self.lock();
         let now = Utc::now().timestamp();
@@ -307,13 +333,15 @@ impl UsageMonitor {
                     .limits
                     .iter()
                     .map(|limit| match limit.resets_at {
-                        Some(reset) if reset <= now => UsageLimit { used_percent: 0.0, resets_at: None, ..limit.clone() },
+                        Some(reset) if reset <= now => UsageLimit { used_percent: 0.0, ..limit.clone() },
                         _ => limit.clone(),
                     })
                     .collect(),
                 updated_at: entry.updated_at,
                 source: entry.source,
                 plan: entry.plan.clone(),
+                stale: entry.stale.map(|(reason, _)| reason),
+                retry_at: entry.stale.and_then(|(_, retry_at)| retry_at),
             })
             .collect::<Vec<_>>();
         providers.sort_by_key(|entry| provider_order(entry.provider));
@@ -365,7 +393,25 @@ mod tests {
         monitor.observe(ProviderKind::Codex, &[limit("Primary", 97.0, Some(300), Some(past))]);
         let snapshot = monitor.snapshot();
         assert_eq!(snapshot.providers[0].limits[0].used_percent, 0.0);
-        assert_eq!(snapshot.providers[0].limits[0].resets_at, None);
+        assert_eq!(snapshot.providers[0].limits[0].resets_at, Some(past), "clients see that it reset since the reading");
+    }
+
+    #[tokio::test]
+    async fn clients_see_why_values_are_old_until_a_turn_renews_the_login() {
+        let monitor = monitor();
+        let claude = ProviderKind::ClaudeCode;
+        monitor.observe(claude, &[limit("Current session", 10.0, Some(300), None)]);
+        monitor.lock().providers.get_mut(&claude).unwrap().stale = Some((LimitsStale::LoginRefresh, None));
+        assert_eq!(monitor.snapshot().providers[0].stale, Some(LimitsStale::LoginRefresh));
+        monitor.observe(claude, &[limit("Current session", 20.0, Some(300), None)]);
+        assert_eq!(monitor.snapshot().providers[0].stale, None, "a running turn renewed the login");
+
+        let retry_at = Utc::now() + chrono::Duration::minutes(5);
+        monitor.lock().providers.get_mut(&claude).unwrap().stale = Some((LimitsStale::Throttled, Some(retry_at)));
+        monitor.observe(claude, &[limit("Current session", 30.0, Some(300), None)]);
+        let snapshot = monitor.snapshot();
+        assert_eq!(snapshot.providers[0].stale, Some(LimitsStale::Throttled), "a turn does not lift throttling");
+        assert_eq!(snapshot.providers[0].retry_at, Some(retry_at));
     }
 
     #[tokio::test]

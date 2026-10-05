@@ -3,7 +3,7 @@ import test from "node:test"
 
 import { installRuntimeErrorReporting, isResizeObserverNotice } from "./src/lib/runtimeErrors.ts"
 import { observeResizeFrame } from "./src/lib/resizeObserver.ts"
-import { bindingLimit, contextUsage, limitLabel, limitPace, limitTone, reportedPercent, resetIn } from "./src/lib/providerUsage.ts"
+import { bindingLimit, contextUsage, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, reportedPercent, resetIn, staleReason } from "./src/lib/providerUsage.ts"
 
 test("native resize notifications do not become interface errors; real exceptions still do", () => {
   const target = new EventTarget()
@@ -87,7 +87,8 @@ test("usage distinguishes unavailable context from zero usage and bounds meters"
   assert.equal(resetIn(null, now), "Reset time unavailable")
   assert.equal(resetIn(Infinity, now), "Reset time unavailable")
   assert.equal(resetIn(Number.MAX_VALUE, now), "Reset time unavailable")
-  assert.equal(resetIn(now / 1000 - 5, now), "Resets now")
+  assert.equal(resetIn(now / 1000 - 5, now), "Reset since last update")
+  assert.equal(resetIn(now / 1000 + 20, now), "Resets now")
   assert.equal(resetIn(now / 1000 + 45 * 60, now), "Resets in 45m")
   assert.equal(resetIn(now / 1000 + 2 * 3600 + 13 * 60, now), "Resets in 2h 13m")
 })
@@ -96,9 +97,9 @@ test("plan limits read as what is left, colored only near the limit, with pace a
   assert.equal(limitTone(74), "normal")
   assert.equal(limitTone(75), "warning")
   assert.equal(limitTone(90), "critical")
-  const limits = [{ name: "Current session", used_percent: 20, window_minutes: 300, resets_at: null }, { name: "This week", used_percent: 61, window_minutes: 10080, resets_at: null }]
-  assert.equal(bindingLimit(limits).limit.name, "This week", "the tightest limit decides what is left")
   const now = Date.UTC(2026, 9, 5, 12)
+  const limits = [{ name: "Current session", used_percent: 20, window_minutes: 300, resets_at: null }, { name: "This week", used_percent: 61, window_minutes: 10080, resets_at: null }]
+  assert.equal(bindingLimit(limits, now).limit.name, "This week", "the tightest limit decides what is left")
   // 40% through a 5-hour window, 30% used: 10 points in reserve.
   const reserve = limitPace({ name: "Session", used_percent: 30, window_minutes: 300, resets_at: now / 1000 + 180 * 60 }, now)
   assert.equal(reserve.label, "10% in reserve")
@@ -111,4 +112,22 @@ test("plan limits read as what is left, colored only near the limit, with pace a
   assert.equal(limitPace({ name: "Week", used_percent: 100, window_minutes: 10080, resets_at: now / 1000 + 3600 }, now).label, "Limit reached")
   assert.equal(limitPace({ name: "Week", used_percent: 1, window_minutes: 10080, resets_at: now / 1000 + 10080 * 60 - 60 }, now), null, "too early in the window to project")
   assert.equal(limitPace({ name: "Fable this week", used_percent: 2, window_minutes: null, resets_at: now / 1000 + 3600 }, now), null)
+})
+
+test("a window that reset since its reading has no number, and stale values say why", () => {
+  const now = Date.UTC(2026, 9, 5, 12)
+  const passed = { name: "This week", used_percent: 0, window_minutes: 10080, resets_at: now / 1000 - 60 }
+  const live = { name: "Current session", used_percent: 38, window_minutes: 300, resets_at: now / 1000 + 3600 }
+  assert.equal(limitUsed(passed, now), null)
+  assert.equal(limitLeftLabel(passed, now), "Not read since reset", "not a reassuring 100% left")
+  assert.equal(limitLeftLabel(live, now), "62% left")
+  assert.equal(limitLeftLabel({ ...live, used_percent: Number.NaN }, now), "Unavailable")
+  assert.equal(bindingLimit([passed, live], now).limit.name, "Current session", "only windows with a number compete")
+  assert.equal(bindingLimit([passed], now), null)
+
+  assert.equal(staleReason({ provider: "claude-code" }, now), null)
+  assert.equal(staleReason({ provider: "claude-code", stale: "login_refresh" }, now), "Updates after your next Claude turn")
+  assert.match(staleReason({ provider: "claude-code", stale: "throttled", retry_at: new Date(now + 5 * 60_000).toISOString() }, now), /^Claude is limiting usage checks\. Next check at /)
+  assert.equal(staleReason({ provider: "claude-code", stale: "throttled", retry_at: new Date(now - 1000).toISOString() }, now), "Claude is limiting usage checks. Kybern will try again shortly")
+  assert.equal(staleReason({ provider: "codex", stale: "unavailable" }, now), "Couldn’t read usage. Check that Codex is signed in")
 })

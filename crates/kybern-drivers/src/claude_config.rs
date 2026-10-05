@@ -132,31 +132,48 @@ fn config_dir(context: &ProbeContext) -> Option<PathBuf> {
 /// the Keychain. Windows Credential Manager logins (behind a Claude Code flag)
 /// are not read and count as not due.
 pub(crate) async fn login_needs_refresh(context: &ProbeContext) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Credentials {
-        #[serde(rename = "claudeAiOauth")]
-        oauth: Option<Login>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Login {
-        #[serde(rename = "expiresAt")]
-        expires_at: Option<u64>,
-    }
-    let Some(contents) = stored_login(context).await else { return false };
-    let Ok(credentials) = serde_json::from_slice::<Credentials>(&contents) else { return false };
-    let Some(expires_at) = credentials.oauth.and_then(|login| login.expires_at) else { return false };
+    let Some(expires_at) = stored_login(context).await.as_deref().and_then(login_expiry) else { return false };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.as_millis() as u64);
     now + 5 * 60 * 1000 >= expires_at
+}
+
+/// A stored login's JSON. The Keychain item may hold the JSON itself or its hex encoding.
+pub(crate) fn decode_login(bytes: &[u8]) -> Option<serde_json::Value> {
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    if let Ok(value) = serde_json::from_str(text) {
+        return Some(value);
+    }
+    let decoded = (0..text.len())
+        .step_by(2)
+        .map(|index| text.get(index..index + 2).and_then(|pair| u8::from_str_radix(pair, 16).ok()))
+        .collect::<Option<Vec<u8>>>()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+/// When a stored login's access token expires, in Unix milliseconds.
+fn login_expiry(bytes: &[u8]) -> Option<u64> {
+    decode_login(bytes)?.pointer("/claudeAiOauth/expiresAt")?.as_u64()
 }
 
 /// Claude Code's stored login JSON: `.credentials.json` on Linux and Windows,
 /// the Keychain item on macOS. Read only; Kybern never refreshes it, because
 /// Anthropic rotates the single-use refresh token on every redemption.
+///
+/// A Mac can have both: a file left by an older Claude Code or copied from
+/// another machine sits beside the Keychain item Claude Code keeps current.
+/// The login that expires last is the live one; reading the file alone would
+/// see an expired token forever and never read usage again.
 pub(crate) async fn stored_login(context: &ProbeContext) -> Option<Vec<u8>> {
-    let file = config_dir(context).map(|dir| dir.join(".credentials.json"));
-    match file.and_then(|file| std::fs::read(file).ok()) {
-        Some(contents) => Some(contents),
-        None => keychain_login(context).await,
+    let file = config_dir(context).and_then(|dir| std::fs::read(dir.join(".credentials.json")).ok());
+    fresher_login(file, keychain_login(context).await)
+}
+
+/// Of the credentials file and the Keychain item, the login that expires last
+/// (the Keychain item when neither says).
+fn fresher_login(file: Option<Vec<u8>>, keychain: Option<Vec<u8>>) -> Option<Vec<u8>> {
+    match (file, keychain) {
+        (Some(file), Some(keychain)) => Some(if login_expiry(&file) > login_expiry(&keychain) { file } else { keychain }),
+        (file, keychain) => file.or(keychain),
     }
 }
 
@@ -332,6 +349,30 @@ mod tests {
         assert!(login_needs_refresh(&context).await);
         std::fs::write(&credentials, "{").unwrap();
         assert!(!login_needs_refresh(&context).await, "unreadable credentials");
+    }
+
+    #[test]
+    fn a_leftover_credentials_file_never_shadows_a_fresher_keychain_login() {
+        let login = |expires_at: u64| {
+            serde_json::json!({ "claudeAiOauth": { "accessToken": expires_at.to_string(), "expiresAt": expires_at } }).to_string()
+        };
+        let hex = |text: String| text.bytes().map(|byte| format!("{byte:02x}")).collect::<String>().into_bytes();
+        let old = login(1_000).into_bytes();
+        let fresh = login(9_000).into_bytes();
+        assert_eq!(
+            fresher_login(Some(old.clone()), Some(fresh.clone())),
+            Some(fresh.clone()),
+            "the Keychain item Claude Code keeps current"
+        );
+        assert_eq!(fresher_login(Some(fresh.clone()), Some(old.clone())), Some(fresh.clone()), "a file Claude Code still writes");
+        assert_eq!(
+            fresher_login(Some(old.clone()), Some(hex(login(9_000)))),
+            Some(hex(login(9_000))),
+            "hex-encoded Keychain items compare by expiry too"
+        );
+        assert_eq!(fresher_login(Some(old.clone()), None), Some(old.clone()));
+        assert_eq!(fresher_login(None, Some(fresh.clone())), Some(fresh));
+        assert_eq!(login_expiry(&hex(login(9_000))), Some(9_000));
     }
 
     #[test]

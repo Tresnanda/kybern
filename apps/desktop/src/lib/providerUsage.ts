@@ -81,11 +81,28 @@ export function limitPace(limit: Limit, now: number): LimitPace | null {
   return { evenLeft, label: reserve > 0 ? `${reserve}% in reserve` : "On pace", short: false }
 }
 
+/** A window that reset after its last reading: how much of it is used now is unknown. */
+export function resetSinceReading(limit: Limit, now: number): boolean {
+  return limit.resets_at != null && Number.isFinite(limit.resets_at) && limit.resets_at * 1000 <= now
+}
+
+/** Percent of a window used, or null when unknown: not reported, or reset since it was read. */
+export function limitUsed(limit: Limit, now: number): number | null {
+  return resetSinceReading(limit, now) ? null : reportedPercent(limit.used_percent)
+}
+
+/** "62% left", or why there is no number. */
+export function limitLeftLabel(limit: Limit, now: number): string {
+  const used = limitUsed(limit, now)
+  if (used !== null) return `${Math.round(100 - used)}% left`
+  return resetSinceReading(limit, now) ? "Not read since reset" : "Unavailable"
+}
+
 /** The limit closest to running out: it decides how much the account has left. */
-export function bindingLimit(limits: readonly Limit[]): { limit: Limit; used: number } | null {
+export function bindingLimit(limits: readonly Limit[], now: number): { limit: Limit; used: number } | null {
   let best: { limit: Limit; used: number } | null = null
   for (const limit of limits) {
-    const used = reportedPercent(limit.used_percent)
+    const used = limitUsed(limit, now)
     if (used !== null && (!best || used > best.used)) best = { limit, used }
   }
   return best
@@ -94,6 +111,7 @@ export function bindingLimit(limits: readonly Limit[]): { limit: Limit; used: nu
 /** "Resets in 2h 14m" within a day, otherwise the weekday or date and time. */
 export function resetIn(seconds: number | null, now: number): string {
   if (seconds === null || !Number.isFinite(seconds)) return "Reset time unavailable"
+  if (seconds * 1000 <= now) return "Reset since last update"
   const minutes = Math.round((seconds * 1000 - now) / 60_000)
   if (minutes <= 0) return "Resets now"
   if (minutes < 60) return `Resets in ${minutes}m`
@@ -125,4 +143,24 @@ export const LIMITS_STALE_MS = 10 * 60_000
 export function limitsStale(entry: Pick<ProviderLimits, "updated_at" | "source">, now: number): boolean {
   const time = entry.updated_at ? Date.parse(entry.updated_at) : Number.NaN
   return entry.source === "stored" || !Number.isFinite(time) || now - time > LIMITS_STALE_MS
+}
+
+const PROVIDER_SHORT_NAMES: Record<string, string> = { "claude-code": "Claude", codex: "Codex", cursor: "Cursor" }
+
+/** Why a provider's values are not current, and what brings them back; null while reads succeed. */
+export function staleReason(entry: Pick<ProviderLimits, "provider" | "stale" | "retry_at">, now: number): string | null {
+  const name = PROVIDER_SHORT_NAMES[entry.provider] ?? PROVIDER_NAMES[entry.provider] ?? entry.provider
+  switch (entry.stale) {
+    case "login_refresh":
+      return `Updates after your next ${name} turn`
+    case "throttled": {
+      const at = entry.retry_at ? Date.parse(entry.retry_at) : Number.NaN
+      if (!Number.isFinite(at) || at <= now) return `${name} is limiting usage checks. Kybern will try again shortly`
+      return `${name} is limiting usage checks. Next check at ${new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+    }
+    case "unavailable":
+      return `Couldn’t read usage. Check that ${name} is signed in`
+    default:
+      return null
+  }
 }

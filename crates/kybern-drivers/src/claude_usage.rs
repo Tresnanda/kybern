@@ -14,9 +14,11 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use kybern_protocol::UsageLimit;
+use kybern_protocol::methods::LimitsStale;
 use serde_json::Value;
 
 use crate::ProbeContext;
+use crate::claude::UsageUnread;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const DEFAULT_BACKOFF: Duration = Duration::from_secs(5 * 60);
@@ -32,28 +34,16 @@ pub(crate) enum OauthUsage {
     },
     /// Throttled or the login is due for a refresh: keep the last values and
     /// do not try another way, which would hit the same limit or rotate tokens.
-    Wait,
-    /// No usable login or an unexpected answer: another reader may work.
-    Unavailable,
+    Wait(UsageUnread),
+    /// No usable login or an unexpected answer: another reader may work. The
+    /// text says what went wrong, for the log.
+    Unavailable(String),
 }
 
 struct Login {
     access_token: String,
     plan: Option<String>,
     has_profile_scope: bool,
-}
-
-/// The Keychain item may hold the JSON itself or its hex encoding.
-fn decode_login(bytes: &[u8]) -> Option<Value> {
-    let text = std::str::from_utf8(bytes).ok()?.trim();
-    if let Ok(value) = serde_json::from_str::<Value>(text) {
-        return Some(value);
-    }
-    let decoded = (0..text.len())
-        .step_by(2)
-        .map(|index| text.get(index..index + 2).and_then(|pair| u8::from_str_radix(pair, 16).ok()))
-        .collect::<Option<Vec<u8>>>()?;
-    serde_json::from_slice(&decoded).ok()
 }
 
 /// "max" + "default_claude_max_20x" reads as "Max (20x)".
@@ -83,34 +73,49 @@ fn login(value: &Value) -> Option<Login> {
     })
 }
 
-fn paused() -> bool {
-    PAUSED_UNTIL.lock().ok().and_then(|until| *until).is_some_and(|until| Instant::now() < until)
+/// While reads are paused: when they may run again.
+fn paused_until() -> Option<Instant> {
+    PAUSED_UNTIL.lock().ok().and_then(|until| *until).filter(|until| Instant::now() < *until)
 }
 
-fn pause(retry_after: Option<&str>) {
+fn pause(retry_after: Option<&str>) -> Instant {
     let wait =
         retry_after.and_then(|value| value.trim().parse::<u64>().ok()).map(Duration::from_secs).unwrap_or(DEFAULT_BACKOFF).min(MAX_BACKOFF);
-    tracing::debug!(seconds = wait.as_secs(), "Anthropic throttled the Claude usage read; pausing");
-    if let Ok(mut until) = PAUSED_UNTIL.lock() {
-        *until = Some(Instant::now() + wait);
+    let until = Instant::now() + wait;
+    if let Ok(mut paused) = PAUSED_UNTIL.lock() {
+        *paused = Some(until);
     }
+    until
+}
+
+fn throttled(until: Instant, detail: String) -> OauthUsage {
+    let retry_at = chrono::Duration::from_std(until.saturating_duration_since(Instant::now())).ok().map(|wait| chrono::Utc::now() + wait);
+    OauthUsage::Wait(UsageUnread { reason: LimitsStale::Throttled, retry_at, detail })
 }
 
 pub(crate) async fn read(context: &ProbeContext) -> OauthUsage {
-    if paused() {
-        return OauthUsage::Wait;
+    if let Some(until) = paused_until() {
+        return throttled(until, "usage reads are paused after Anthropic throttled one".into());
     }
-    let Some(login) = crate::claude_config::stored_login(context).await.as_deref().and_then(decode_login).as_ref().and_then(login) else {
-        return OauthUsage::Unavailable;
+    let Some(login) =
+        crate::claude_config::stored_login(context).await.as_deref().and_then(crate::claude_config::decode_login).as_ref().and_then(login)
+    else {
+        return OauthUsage::Unavailable("no Claude Code login found".into());
     };
     if !login.has_profile_scope {
         // An inference-only token (`claude setup-token`) cannot read usage.
-        return OauthUsage::Unavailable;
+        return OauthUsage::Unavailable("the Claude Code login cannot read usage (no user:profile scope)".into());
     }
     if crate::claude_config::login_needs_refresh(context).await {
-        return OauthUsage::Wait;
+        return OauthUsage::Wait(UsageUnread {
+            reason: LimitsStale::LoginRefresh,
+            retry_at: None,
+            detail: "the Claude Code login is due for a refresh; the next Claude session renews it".into(),
+        });
     }
-    let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(8)).build() else { return OauthUsage::Unavailable };
+    let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(8)).build() else {
+        return OauthUsage::Unavailable("could not start an HTTPS client".into());
+    };
     let response = match client
         .get(USAGE_URL)
         .bearer_auth(&login.access_token)
@@ -121,24 +126,24 @@ pub(crate) async fn read(context: &ProbeContext) -> OauthUsage {
         .await
     {
         Ok(response) => response,
-        Err(error) => {
-            tracing::debug!(%error, "Claude usage endpoint unreachable");
-            return OauthUsage::Unavailable;
-        }
+        Err(error) => return OauthUsage::Unavailable(format!("usage endpoint unreachable: {error}")),
     };
     let status = response.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        pause(response.headers().get("retry-after").and_then(|value| value.to_str().ok()));
-        return OauthUsage::Wait;
+        let retry_after = response.headers().get("retry-after").and_then(|value| value.to_str().ok()).map(str::to_string);
+        let until = pause(retry_after.as_deref());
+        return throttled(until, format!("Anthropic throttled the usage read (Retry-After: {})", retry_after.as_deref().unwrap_or("none")));
     }
     if !status.is_success() {
-        tracing::debug!(%status, "Claude usage request failed");
-        return OauthUsage::Unavailable;
+        return OauthUsage::Unavailable(format!("usage endpoint answered {status}"));
     }
-    let Ok(body) = response.json::<Value>().await else { return OauthUsage::Unavailable };
+    let Ok(body) = response.json::<Value>().await else {
+        return OauthUsage::Unavailable("usage endpoint answered with invalid JSON".into());
+    };
     let limits = parse_usage(&body);
     if limits.is_empty() {
-        return OauthUsage::Unavailable;
+        let keys = body.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        return OauthUsage::Unavailable(format!("usage endpoint answered without known windows (keys: {keys})"));
     }
     OauthUsage::Read { limits, plan: login.plan }
 }
@@ -218,7 +223,7 @@ mod tests {
         let json = br#"{"claudeAiOauth":{"accessToken":"t","scopes":["user:inference"]}}"#;
         let hex: String = json.iter().map(|byte| format!("{byte:02x}")).collect();
         for bytes in [json.to_vec(), hex.into_bytes()] {
-            let login = login(&decode_login(&bytes).unwrap()).unwrap();
+            let login = login(&crate::claude_config::decode_login(&bytes).unwrap()).unwrap();
             assert_eq!(login.access_token, "t");
             assert!(!login.has_profile_scope);
         }

@@ -2,7 +2,7 @@ import type { ProviderKind, ProviderUsage } from "@/protocol"
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "@/components/kit/popover"
 import { LimitMeter } from "@/components/kybern/LimitMeter"
 import { useNow } from "@/lib/hooks"
-import { contextUsage, limitLabel, limitPace, limitTone, reportedPercent, resetIn } from "@/lib/providerUsage"
+import { contextUsage, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, resetIn } from "@/lib/providerUsage"
 import { useProviderLimits } from "@/state/usageLimits"
 
 function UsageMeter({ percent, label }: { percent: number; label: string }) {
@@ -45,11 +45,11 @@ export function ProviderUsageIndicator({ usage, provider }: { usage?: ProviderUs
           <section className="provider-usage-limits" aria-label="Account limits">
             <h3 className="provider-usage-section-label">Account limits</h3>
             {limits?.length ? limits.map((limit, index) => {
-              const percent = reportedPercent(limit.used_percent)
+              const percent = limitUsed(limit, now)
               const name = limitLabel(limit, provider)
               const pace = limitPace(limit, now)
               return <div key={`${limit.name}-${index}`} className="provider-usage-limit" data-usage-tone={limitTone(percent)}>
-                <div className="provider-usage-limit-heading"><span>{name}</span><span className="tabular-nums text-muted-foreground">{percent === null ? "Unavailable" : `${Math.round(100 - percent)}% left`}</span></div>
+                <div className="provider-usage-limit-heading"><span>{name}</span><span className="tabular-nums text-muted-foreground">{limitLeftLabel(limit, now)}</span></div>
                 {percent !== null && <LimitMeter left={100 - percent} pace={pace} label={`${name} left`} />}
                 <p className="provider-usage-caption flex justify-between gap-3 tabular-nums"><span>{resetIn(limit.resets_at, now)}</span>{pace && <span data-pace-short={pace.short || undefined}>{pace.label}</span>}</p>
               </div>

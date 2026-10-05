@@ -8,7 +8,7 @@ import { LimitMeter } from "@/components/kybern/LimitMeter"
 import { ChevronDownIcon, RefreshCwIcon } from "@/lib/kit/icons"
 import { tokens, usd } from "@/lib/format"
 import { useNow } from "@/lib/hooks"
-import { PROVIDER_NAMES, limitLabel, limitPace, limitTone, limitsStale, reportedPercent, resetIn, updatedAgo } from "@/lib/providerUsage"
+import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, resetIn, staleReason, updatedAgo } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { refreshUsageLimits, useAccountLimits, useRefreshingLimits } from "@/state/usageLimits"
@@ -96,19 +96,21 @@ export function UsagePage() {
         {accountLimits.map((entry) => {
           const kind = entry.provider
           const ago = limitsStale(entry, now) ? updatedAgo(entry.updated_at, now) : null
+          const reason = staleReason(entry, now)
           return <div key={kind} className="usage-limit-card">
             <div className="usage-limit-provider">{PROVIDER_NAMES[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDER_NAMES[kind] ?? kind}</span>{entry.plan && <span className="ms-auto font-normal text-muted-foreground">{entry.plan}</span>}</div>
             {entry.limits.map((limit, index) => {
-              const percent = reportedPercent(limit.used_percent)
+              const percent = limitUsed(limit, now)
               const name = limitLabel(limit, kind)
               const pace = limitPace(limit, now)
               return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
-                <div className="usage-limit-heading"><b>{name}</b><span>{percent === null ? "Unavailable" : `${Math.round(100 - percent)}% left`}</span></div>
+                <div className="usage-limit-heading"><b>{name}</b><span>{limitLeftLabel(limit, now)}</span></div>
                 {percent !== null && <LimitMeter left={100 - percent} pace={pace} label={`${name} left`} />}
                 <p className="usage-limit-reset flex justify-between gap-3"><span>{resetIn(limit.resets_at, now)}</span>{pace && <span data-pace-short={pace.short || undefined}>{pace.label}</span>}</p>
               </div>
             })}
             {ago && <p className="usage-limit-reset">Last updated {ago}</p>}
+            {reason && <p className="usage-limit-reset">{reason}</p>}
           </div>
         })}
       </div>
