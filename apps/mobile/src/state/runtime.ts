@@ -10,6 +10,7 @@ import { attachNotes, loadNotes, resetNotes } from "./notes";
 import { attachTasks, loadTasks, resetTasks } from "./tasks";
 import {
   KybernClient,
+  PROJECTS_CHANGED_NOTIFICATION,
   httpBase,
   normalizeDaemonUrl,
   type ApprovalRequest,
@@ -18,6 +19,7 @@ import {
   type MethodName,
   type ParamsOf,
   type Project,
+  type ProjectsChangedNotification,
   type ProviderStatus,
   type QueuedMessage,
   type ResultOf,
@@ -49,6 +51,8 @@ interface State {
   queue: QueuedMessage[];
   activity: ThreadActivitySummary[];
 }
+/** Counts `projects.changed` notifications, so a slower `projects.list` cannot undo one. */
+let projectChanges = 0;
 let state: State = {
   ready: false,
   environments: [],
@@ -394,6 +398,14 @@ export function connect(id: string | null) {
   client = next;
   attachNotes(next, () => generation === thisGeneration);
   attachTasks(next, () => generation === thisGeneration);
+  // Projects added or removed elsewhere (desktop, CLI) arrive as the whole list.
+  next.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
+    if (generation !== thisGeneration || client !== next) return;
+    const projects = (params as ProjectsChangedNotification | null)?.projects;
+    if (!Array.isArray(projects)) return;
+    projectChanges++;
+    publish({ projects });
+  });
   next.onStatus((status, detail) => {
     if (generation !== thisGeneration) return;
     publish({ status, error: status === "open" ? null : (detail ?? null) });
@@ -521,6 +533,7 @@ export async function refresh() {
   }
   const events: ThreadEvent[] = [];
   indexEvents = events;
+  const projectsSeen = projectChanges;
   refreshPromise = (async () => {
     const [projects, threads, approvals, queue] = await Promise.all([
       rpc("projects.list", {}),
@@ -531,7 +544,8 @@ export async function refresh() {
     if (epoch === generation) {
       let next: State = {
         ...state,
-        projects: projects.projects,
+        // A `projects.changed` received meanwhile is newer than this list.
+        projects: projectChanges === projectsSeen ? projects.projects : state.projects,
         threads: threads.threads,
         approvals: approvals.approvals,
         queue: queue.messages,

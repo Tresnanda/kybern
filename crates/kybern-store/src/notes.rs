@@ -65,6 +65,19 @@ impl Store {
 
     /// Create a global or project note. Thread notes come from [`Store::note_update`].
     pub fn note_create(&self, scope: NoteScope, project_id: Option<ProjectId>, title: &str, body: &str) -> Result<Note> {
+        self.note_create_by(scope, project_id, title, body, None)
+    }
+
+    /// Create a global or project note, recording the thread whose agent wrote it
+    /// (`None` for the user's own notes).
+    pub fn note_create_by(
+        &self,
+        scope: NoteScope,
+        project_id: Option<ProjectId>,
+        title: &str,
+        body: &str,
+        created_by_thread: Option<ThreadId>,
+    ) -> Result<Note> {
         check_content(Some(title), Some(body))?;
         self.with(|c| {
             let project_id = match (scope, project_id) {
@@ -82,9 +95,17 @@ impl Store {
             let id = Uuid::now_v7();
             let now = Utc::now().to_rfc3339();
             c.execute(
-                "INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 1, ?6, ?6)",
-                params![id.to_string(), scope.as_str(), project_id.map(|id| id.to_string()), title, body, now],
+                "INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at, created_by_thread_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 1, ?6, ?6, ?7)",
+                params![
+                    id.to_string(),
+                    scope.as_str(),
+                    project_id.map(|id| id.to_string()),
+                    title,
+                    body,
+                    now,
+                    created_by_thread.map(|id| id.to_string())
+                ],
             )?;
             expect_note(c, id)
         })
@@ -387,7 +408,7 @@ fn check_project(c: &Connection, id: ProjectId) -> Result<()> {
 
 const NOTE_SELECT: &str = "SELECT n.id, n.scope, n.project_id, n.thread_id,
         CASE WHEN n.scope = 'thread' THEN COALESCE(t.title, n.title) ELSE n.title END,
-        n.body, n.pinned, n.revision, n.created_at, n.updated_at, n.deleted_at, n.origin
+        n.body, n.pinned, n.revision, n.created_at, n.updated_at, n.deleted_at, n.origin, n.created_by_thread_id
     FROM notes n LEFT JOIN threads t ON t.id = n.thread_id";
 
 fn query_notes<P: rusqlite::Params>(c: &Connection, clause: &str, params: P) -> Result<Vec<Note>> {
@@ -425,6 +446,7 @@ fn row_to_note(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
             updated_at: parse_time(r.get::<_, String>(9)?)?,
             deleted_at: optional_time(10)?,
             origin: r.get(11)?,
+            created_by_thread: r.get::<_, Option<String>>(12)?.map(parse_uuid).transpose()?,
         },
         body,
     })

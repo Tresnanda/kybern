@@ -29,17 +29,21 @@ use super::{Orchestrator, truncate_utf8};
 
 /// Activity-only changes reach clients at most this often per run.
 const ACTIVITY_BROADCAST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-/// What the provider's copy of one attached note may hold, and of all of them together.
+/// What the provider's copy of one attached note or task may hold, and of all of
+/// them together (notes and tasks share the budget).
 const NOTE_MENTION_MAX_BYTES: usize = 16 * 1024;
 const NOTE_MENTIONS_MAX_BYTES: usize = 48 * 1024;
 /// Path prefix of a mention that points at a note.
 pub(crate) const NOTE_MENTION_PREFIX: &str = "kybern://note/";
+/// Path prefix of a mention that points at a task. Like a note mention, it is a
+/// reference: the provider's copy carries the task, and it never changes the task.
+pub(crate) const TASK_MENTION_PREFIX: &str = "kybern://task/";
 
 fn invalid<T>(message: &str) -> Result<T> {
     Err(TaskError::Invalid(message.into()).into())
 }
 
-type TaskLocks<'a> = (MutexGuard<'a, ()>, MutexGuard<'a, ()>);
+pub(super) type TaskLocks<'a> = (MutexGuard<'a, ()>, MutexGuard<'a, ()>);
 
 impl Orchestrator {
     /// Changes to tasks, for forwarding to connected clients.
@@ -47,7 +51,7 @@ impl Orchestrator {
         self.inner.tasks_changed.subscribe()
     }
 
-    fn publish_task(&self, task: TaskItem) {
+    pub(super) fn publish_task(&self, task: TaskItem) {
         // No receivers just means no client is connected.
         let _ = self.inner.tasks_changed.send(TaskItemsChangedNotification { task: Some(task), deleted_id: None });
     }
@@ -57,7 +61,7 @@ impl Orchestrator {
     }
 
     /// The command lock, then the task lock. Always in this order.
-    fn task_locks(&self) -> Result<TaskLocks<'_>> {
+    pub(super) fn task_locks(&self) -> Result<TaskLocks<'_>> {
         let command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
         let tasks = self.inner.task_writes.lock().map_err(|_| anyhow!("task lock poisoned"))?;
         Ok((command, tasks))
@@ -99,6 +103,7 @@ impl Orchestrator {
             priority: params.priority.unwrap_or(0),
             note_ids: params.note_ids.unwrap_or_default(),
             source_note_id: params.source.as_ref().map(|source| source.note_id),
+            created_by_thread: None,
         })?;
         if let Some(source) = params.source {
             self.link_source_line(&task, &source);
@@ -163,10 +168,13 @@ impl Orchestrator {
     /// Start an agent on the task: create the thread, record the run, mark the task
     /// running and deliver the prompt with the attached notes.
     pub async fn task_item_send(&self, params: TaskItemsSendParams) -> Result<TaskItemsSendResult> {
-        let prompt = params.prompt.trim().to_owned();
-        if prompt.is_empty() {
-            return invalid("Write a prompt before sending this task to an agent.");
-        }
+        let prompt = params.prompt.as_deref().map(str::trim).unwrap_or_default().to_owned();
+        let composed = match (params.message, prompt.is_empty()) {
+            (Some(_), false) => return invalid("Send either a prompt or a message, not both."),
+            (Some(message), true) => Some(message),
+            (None, false) => None,
+            (None, true) => return invalid("Write a prompt before sending this task to an agent."),
+        };
         let (task, project_id, message, run_notes) = {
             let _tasks = self.task_lock()?;
             let store = &self.inner.store;
@@ -182,9 +190,38 @@ impl Orchestrator {
                 return invalid("Choose a project to run this task in.");
             }
             store.project_get(project_id)?.ok_or(TaskError::NotFound("Project not found. Choose another project."))?;
-            let mut parts = vec![ContentPart::Text { text: prompt }];
             let mut run_notes = Vec::new();
             let mut seen = Vec::new();
+            let parts = match composed {
+                None => vec![ContentPart::Text { text: prompt }],
+                Some(message) => {
+                    let mut parts = message.parts;
+                    // The saved follow-up is cleared below, so the daemon delivers the
+                    // exact text it clears rather than trusting a client's copy.
+                    append_pending_followup(&mut parts, task.pending_followup.as_deref());
+                    // The task enters as a reference chip: the provider's copy expands it.
+                    let reference = format!("{TASK_MENTION_PREFIX}{}", task.id);
+                    if !parts.iter().any(|part| matches!(part, ContentPart::Mention { path, .. } if *path == reference)) {
+                        parts.insert(0, task_mention(&task));
+                    }
+                    // Notes the message already mentions are sent with the run too.
+                    for part in &parts {
+                        let ContentPart::Mention { path, .. } = part else { continue };
+                        let Some(note_id) = path.strip_prefix(NOTE_MENTION_PREFIX).and_then(|id| id.parse::<NoteId>().ok()) else {
+                            continue;
+                        };
+                        if seen.contains(&note_id) {
+                            continue;
+                        }
+                        seen.push(note_id);
+                        if let Some(note) = store.note_get(note_id)?.filter(|note| note.summary.deleted_at.is_none()) {
+                            run_notes.push(TaskRunNote { note_id, revision: note.summary.revision });
+                        }
+                    }
+                    parts
+                }
+            };
+            let mut parts = parts;
             for note_id in params.note_ids.unwrap_or_default() {
                 if seen.contains(&note_id) {
                     continue;
@@ -279,11 +316,18 @@ impl Orchestrator {
         }
     }
 
-    /// Send text to the task's agent: into the latest run's thread now when it is idle,
-    /// queued when it is busy, or saved for the next run when there is no run to receive it.
+    /// Send a follow-up to the task's agent: into the latest run's thread now when it
+    /// is idle, queued when it is busy, or saved as text for the next run when there
+    /// is no run to receive it. A full message travels as is to a run; saved, its
+    /// references become readable text, and attachments are refused.
     pub async fn task_item_followup(&self, params: TaskItemsFollowupParams) -> Result<TaskItemsFollowupResult> {
-        let text = params.text.trim().to_owned();
-        if text.is_empty() {
+        let message = match (params.text, params.message) {
+            (Some(_), Some(_)) => return invalid("Send either text or a message, not both."),
+            (Some(text), None) => UserMessage::text(text.trim()),
+            (None, Some(message)) => message,
+            (None, None) => return invalid("Write a follow-up first."),
+        };
+        if !message.parts.iter().any(|part| !matches!(part, ContentPart::Text { text } if text.trim().is_empty())) {
             return invalid("Write a follow-up first.");
         }
         enum Route {
@@ -301,10 +345,14 @@ impl Orchestrator {
             };
             match thread {
                 None => {
+                    let text = followup_saved_text(&message)?;
+                    if text.is_empty() {
+                        return invalid("Write a follow-up first.");
+                    }
                     // Saved text stays one block per follow-up, a blank line apart.
                     let combined = match task.pending_followup.as_deref().map(str::trim) {
                         Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
-                        _ => text.clone(),
+                        _ => text,
                     };
                     let saved = store
                         .task_item_update(task.id, TaskPatch { pending_followup: Some(combined), ..Default::default() })
@@ -322,11 +370,11 @@ impl Orchestrator {
         match route {
             Route::Saved(task) => Ok(TaskItemsFollowupResult { task: *task, sent_to: None }),
             Route::Queue(thread_id) => {
-                self.enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id, message: UserMessage::text(text) })?;
+                self.enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id, message })?;
                 self.task_with_sent_to(params.id, thread_id)
             }
             Route::Send(thread_id) => {
-                self.send(thread_id, UserMessage::text(text)).await?;
+                self.send(thread_id, message).await?;
                 self.task_with_sent_to(params.id, thread_id)
             }
         }
@@ -485,7 +533,12 @@ impl Orchestrator {
 
     /// Change a task's status without the user-status limits, keeping its source
     /// note's checklist line in step. Returns the task when the status changed.
-    fn set_task_status_system(&self, id: TaskItemId, status: TaskStatus, only_from: Option<&[TaskStatus]>) -> Result<Option<TaskItem>> {
+    pub(super) fn set_task_status_system(
+        &self,
+        id: TaskItemId,
+        status: TaskStatus,
+        only_from: Option<&[TaskStatus]>,
+    ) -> Result<Option<TaskItem>> {
         let changed = self.inner.store.task_item_set_status(id, status, only_from)?;
         if let Some(task) = &changed {
             self.sync_note_line(task);
@@ -541,7 +594,7 @@ impl Orchestrator {
     }
 
     /// Tick or untick the source note's checklist line to match the task being done.
-    fn sync_note_line(&self, task: &TaskItem) {
+    pub(super) fn sync_note_line(&self, task: &TaskItem) {
         let Some(note_id) = task.source_note_id else { return };
         let checked = task.status == TaskStatus::Done;
         self.edit_note_body(note_id, |body| kybern_store::task_set_line_checked(body, task.id, checked));
@@ -606,15 +659,16 @@ impl Orchestrator {
         }
     }
 
-    // ---- note mentions ----
+    // ---- note and task mentions ----
 
-    /// The provider's copy of a message whose `kybern://note/<id>` mentions became
-    /// the note text, or `None` when it has none. Each note is capped at 16 KiB and
-    /// all of them at 48 KiB; a deleted or missing note becomes "Note unavailable".
+    /// The provider's copy of a message whose `kybern://note/<id>` and
+    /// `kybern://task/<id>` mentions became the note or task text, or `None` when it
+    /// has none. Each is capped at 16 KiB and all of them together at 48 KiB; a
+    /// deleted or missing note becomes "Note unavailable", a task "Task not found".
     /// The stored message keeps the mention chips.
-    pub(super) fn expand_note_mentions(&self, message: &UserMessage) -> Option<UserMessage> {
-        let is_note = |part: &ContentPart| matches!(part, ContentPart::Mention { path, .. } if path.starts_with(NOTE_MENTION_PREFIX));
-        if !message.parts.iter().any(is_note) {
+    pub(super) fn expand_item_mentions(&self, message: &UserMessage) -> Option<UserMessage> {
+        let is_item = |part: &ContentPart| matches!(part, ContentPart::Mention { path, .. } if path.starts_with(NOTE_MENTION_PREFIX) || path.starts_with(TASK_MENTION_PREFIX));
+        if !message.parts.iter().any(is_item) {
             return None;
         }
         let mut remaining = NOTE_MENTIONS_MAX_BYTES;
@@ -629,10 +683,142 @@ impl Orchestrator {
                         .and_then(|id| self.inner.store.note_get(id).ok().flatten());
                     ContentPart::Text { text: note_block(note.as_ref(), &mut remaining) }
                 }
+                ContentPart::Mention { path, .. } if path.starts_with(TASK_MENTION_PREFIX) => {
+                    let task = path[TASK_MENTION_PREFIX.len()..]
+                        .parse::<TaskItemId>()
+                        .ok()
+                        .and_then(|id| self.inner.store.task_item_get(id).ok().flatten());
+                    ContentPart::Text { text: self.task_block(task.as_ref(), &mut remaining) }
+                }
                 other => other.clone(),
             })
             .collect();
         Some(UserMessage { parts })
+    }
+
+    /// One task as prompt text, spending from the shared `remaining` byte budget.
+    /// Facts come first so a long description is what gets cut.
+    fn task_block(&self, task: Option<&TaskItem>, remaining: &mut usize) -> String {
+        let Some(task) = task else { return "Task not found".into() };
+        let store = &self.inner.store;
+        let mut text = format!(
+            "Task {}: {}\nStatus: {}\nPriority: {}\n",
+            task.key,
+            task.title,
+            status_label(task.status),
+            priority_label(task.priority)
+        );
+        if let Some(project) = task.project_id.and_then(|id| store.project_get(id).ok().flatten()) {
+            text.push_str(&format!("Project: {}\n", project.name));
+        }
+        if !task.note_ids.is_empty() {
+            let notes = task
+                .note_ids
+                .iter()
+                .map(|id| match store.note_get(*id).ok().flatten().filter(|note| note.summary.deleted_at.is_none()) {
+                    Some(note) => {
+                        let title = if note.summary.title.trim().is_empty() { "Untitled note" } else { note.summary.title.trim() };
+                        format!("{title} ({NOTE_MENTION_PREFIX}{id})")
+                    }
+                    None => format!("Note unavailable ({id})"),
+                })
+                .collect::<Vec<_>>();
+            text.push_str(&format!("Linked notes: {}\n", notes.join("; ")));
+        }
+        if let Some(run) = task.runs.last() {
+            text.push_str(&format!("Latest run: thread {} ({}). Read it with kybern_thread_read.\n", run.thread_id, run.state.as_str()));
+        }
+        text.push_str(&format!("Link: {TASK_MENTION_PREFIX}{}\n", task.id));
+        if !task.body.trim().is_empty() {
+            text.push_str("\nDescription:\n");
+            text.push_str(task.body.trim_end());
+        }
+        let allowed = NOTE_MENTION_MAX_BYTES.min(*remaining);
+        let truncated = text.len() > allowed;
+        truncate_utf8(&mut text, allowed);
+        *remaining -= text.len();
+        if truncated {
+            text.push_str("\n[truncated]");
+        }
+        text
+    }
+}
+
+/// A `kybern://task/<id>` mention chip for the task.
+pub(crate) fn task_mention(task: &TaskItem) -> ContentPart {
+    ContentPart::Mention {
+        name: task.key.clone(),
+        path: format!("{TASK_MENTION_PREFIX}{}", task.id),
+        display_name: Some(format!("{} {}", task.key, task.title)),
+    }
+}
+
+/// A follow-up as the text a task saves for its next run. References become
+/// readable text that keeps their target: a note or task keeps its `kybern://`
+/// link, a file its path, a skill its name. Attachments cannot be saved as text.
+fn followup_saved_text(message: &UserMessage) -> Result<String> {
+    let mut text = String::new();
+    for part in &message.parts {
+        match part {
+            ContentPart::Text { text: part } => text.push_str(part),
+            ContentPart::Mention { name, path, display_name } => {
+                if path.starts_with(NOTE_MENTION_PREFIX) || path.starts_with(TASK_MENTION_PREFIX) {
+                    let label = display_name.as_deref().map(str::trim).filter(|label| !label.is_empty()).unwrap_or(name);
+                    text.push_str(&format!("{label} ({path})"));
+                } else {
+                    text.push_str(&format!("@{name}"));
+                }
+            }
+            ContentPart::FileMention { path } => text.push_str(&format!("@{path}")),
+            ContentPart::Skill { name, .. } => text.push_str(&format!("${name}")),
+            ContentPart::ThreadReference { thread_id, title, .. } => {
+                text.push_str(&format!("\u{201c}{title}\u{201d} (thread {thread_id})"))
+            }
+            ContentPart::Image { .. } | ContentPart::Attachment { .. } => {
+                return invalid(
+                    "This task has no run to receive attachments. Start a new run to send them, or remove them to save this follow-up for the next run.",
+                );
+            }
+        }
+    }
+    Ok(text.trim().to_owned())
+}
+
+/// Add the task's saved follow-up to the end of a first message, a blank line
+/// after its text. A message whose text already ends with it is left alone.
+fn append_pending_followup(parts: &mut Vec<ContentPart>, pending: Option<&str>) {
+    let Some(pending) = pending.map(str::trim).filter(|text| !text.is_empty()) else { return };
+    match parts.last_mut() {
+        Some(ContentPart::Text { text }) => {
+            let existing = text.trim_end();
+            if existing.ends_with(pending) {
+                return;
+            }
+            *text = if existing.is_empty() { pending.to_owned() } else { format!("{existing}\n\n{pending}") };
+        }
+        Some(_) => parts.push(ContentPart::Text { text: format!("\n\n{pending}") }),
+        None => parts.push(ContentPart::Text { text: pending.to_owned() }),
+    }
+}
+
+pub(crate) fn status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Inbox => "Inbox",
+        TaskStatus::Todo => "To do",
+        TaskStatus::Running => "Running",
+        TaskStatus::NeedsReview => "Needs review",
+        TaskStatus::Done => "Done",
+        TaskStatus::Canceled => "Canceled",
+    }
+}
+
+pub(crate) fn priority_label(priority: u8) -> &'static str {
+    match priority {
+        1 => "Urgent",
+        2 => "High",
+        3 => "Medium",
+        4 => "Low",
+        _ => "No priority",
     }
 }
 
@@ -841,7 +1027,8 @@ mod tests {
                 use_worktree: Some(false),
                 base_branch: None,
                 project_id: None,
-                prompt: format!("{}\n\nDo it.", task.title),
+                prompt: Some(format!("{}\n\nDo it.", task.title)),
+                message: None,
                 note_ids: Some(note_ids),
             }
         }
@@ -976,7 +1163,7 @@ mod tests {
             }
         );
         // The provider's copy has the note text instead.
-        let expanded = fixture.orchestrator.expand_note_mentions(&sent).unwrap();
+        let expanded = fixture.orchestrator.expand_item_mentions(&sent).unwrap();
         assert_eq!(expanded.parts[1], ContentPart::Text { text: "Note: Spec\n\n- [ ] one\n".into() });
 
         // No agent exists in this fixture, so the turn fails and the run settles for review.
@@ -1007,9 +1194,9 @@ mod tests {
         params.project_id = Some(FREE_CHAT_PROJECT_ID);
         assert!(fixture.orchestrator.task_item_send(params.clone()).await.is_err());
         params.project_id = Some(fixture.project.id);
-        params.prompt = "  ".into();
+        params.prompt = Some("  ".into());
         assert!(fixture.orchestrator.task_item_send(params.clone()).await.is_err(), "an empty prompt");
-        params.prompt = "go".into();
+        params.prompt = Some("go".into());
         params.note_ids = Some(vec![Uuid::now_v7()]);
         assert!(fixture.orchestrator.task_item_send(params.clone()).await.is_err(), "an unknown note");
         assert!(fixture.store.threads_list(None, true).unwrap().is_empty(), "nothing was created");
@@ -1163,18 +1350,15 @@ mod tests {
         let fixture = Fixture::new();
         let task = fixture.task("Talk");
         // No run yet: saved, appended on repeat, and no thread involved.
-        let first =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: " also tests ".into() }).await.unwrap();
+        let first = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, " also tests ")).await.unwrap();
         assert_eq!((first.sent_to, first.task.pending_followup.as_deref()), (None, Some("also tests")));
-        let second =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "and docs".into() }).await.unwrap();
+        let second = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "and docs")).await.unwrap();
         assert_eq!(second.task.pending_followup.as_deref(), Some("also tests\n\nand docs"));
-        assert!(fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "  ".into() }).await.is_err());
+        assert!(fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "  ")).await.is_err());
 
         // A busy run queues the text on its thread.
         let thread = fixture.manual_run(&task);
-        let queued =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "while you work".into() }).await.unwrap();
+        let queued = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "while you work")).await.unwrap();
         assert_eq!(queued.sent_to, Some(thread.id));
         let queue = fixture.store.queue_list(Some(thread.id)).unwrap();
         assert_eq!(queue.len(), 1);
@@ -1187,7 +1371,7 @@ mod tests {
         fixture.store.thread_upsert(&idle).unwrap();
         fixture.emit(&thread, turn_completed(StopReason::Completed));
         assert_eq!(fixture.current(&task).status, TaskStatus::NeedsReview);
-        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "now this".into() }).await.unwrap();
+        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "now this")).await.unwrap();
         assert_eq!(sent.sent_to, Some(thread.id));
         assert_eq!((sent.task.status, sent.task.runs[0].state), (TaskStatus::Running, TaskRunState::Running));
         let started = fixture
@@ -1201,9 +1385,70 @@ mod tests {
         let mut archived = fixture.store.thread_get(thread.id).unwrap().unwrap();
         archived.status = ThreadStatus::Archived;
         fixture.store.thread_upsert(&archived).unwrap();
-        let saved = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "later".into() }).await.unwrap();
+        let saved = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "later")).await.unwrap();
         assert_eq!(saved.sent_to, None);
         assert!(saved.task.pending_followup.as_deref().unwrap().ends_with("later"));
+    }
+
+    #[tokio::test]
+    async fn a_full_message_follow_up_is_sent_or_queued_as_is_and_saved_as_readable_text() {
+        let fixture = Fixture::new();
+        let task = fixture.task("Talk");
+        let spec = fixture.note("Spec", "details");
+        let note_path = format!("{NOTE_MENTION_PREFIX}{}", spec.summary.id);
+        let with_refs = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: " Read ".into() },
+                ContentPart::Mention { name: "Spec".into(), path: note_path.clone(), display_name: Some("Spec".into()) },
+                ContentPart::Text { text: " and ".into() },
+                ContentPart::FileMention { path: "src/main.rs".into() },
+                ContentPart::Text { text: " with ".into() },
+                ContentPart::Skill { name: "tdd".into(), path: "/skills/tdd/SKILL.md".into() },
+            ],
+        };
+        let attachment =
+            ContentPart::Attachment { asset_id: Uuid::now_v7(), name: "shot.png".into(), media_type: "image/png".into(), size: 12 };
+        let with_attachment = UserMessage { parts: vec![ContentPart::Text { text: "See this".into() }, attachment] };
+        let message = |message: &UserMessage| TaskItemsFollowupParams { id: task.id, text: None, message: Some(message.clone()) };
+
+        // Exactly one of text or message.
+        let both = TaskItemsFollowupParams { id: task.id, text: Some("hi".into()), message: Some(with_refs.clone()) };
+        assert!(fixture.orchestrator.task_item_followup(both).await.is_err());
+        let neither = TaskItemsFollowupParams { id: task.id, text: None, message: None };
+        assert!(fixture.orchestrator.task_item_followup(neither).await.is_err());
+        let blank = UserMessage { parts: vec![ContentPart::Text { text: "  ".into() }] };
+        assert!(fixture.orchestrator.task_item_followup(message(&blank)).await.is_err());
+
+        // No run: references are saved as readable text that keeps their targets.
+        let saved = fixture.orchestrator.task_item_followup(message(&with_refs)).await.unwrap();
+        assert_eq!(saved.sent_to, None);
+        let expected = format!("Read Spec ({note_path}) and @src/main.rs with $tdd");
+        assert_eq!(saved.task.pending_followup.as_deref(), Some(expected.as_str()));
+        // Attachments cannot be saved as text: refused, and the saved text is untouched.
+        let error = fixture.orchestrator.task_item_followup(message(&with_attachment)).await.unwrap_err();
+        assert!(error.to_string().contains("Start a new run"), "{error}");
+        assert_eq!(fixture.current(&task).pending_followup.as_deref(), Some(expected.as_str()));
+
+        // A busy run queues the whole message, attachment included.
+        let thread = fixture.manual_run(&task);
+        let queued = fixture.orchestrator.task_item_followup(message(&with_attachment)).await.unwrap();
+        assert_eq!(queued.sent_to, Some(thread.id));
+        let queue = fixture.store.queue_list(Some(thread.id)).unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].message, with_attachment);
+
+        // An idle run receives the whole message: its chips start the turn.
+        let mut idle = fixture.store.thread_get(thread.id).unwrap().unwrap();
+        idle.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&idle).unwrap();
+        let sent = fixture.orchestrator.task_item_followup(message(&with_refs)).await.unwrap();
+        assert_eq!(sent.sent_to, Some(thread.id));
+        let started = fixture.store.events_for_thread(thread.id).unwrap().into_iter().any(|event| {
+            matches!(&event.payload, EventPayload::TurnStarted { message, .. }
+                if message.parts.iter().any(|part| matches!(part, ContentPart::Mention { path, .. } if *path == note_path))
+                    && message.parts.iter().any(|part| matches!(part, ContentPart::Skill { name, .. } if name == "tdd")))
+        });
+        assert!(started, "the follow-up started a turn with its chips");
     }
 
     /// The task's status and its latest run belong together: a task is Running
@@ -1235,8 +1480,7 @@ mod tests {
         fixture.drain();
         tokio::time::sleep(Duration::from_millis(5)).await;
 
-        let sent =
-            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "one more thing".into() }).await.unwrap();
+        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, "one more thing")).await.unwrap();
         assert_eq!(sent.sent_to, Some(thread.id));
         let running = fixture.current(&task);
         assert_eq!((running.status, running.runs[0].state, running.runs[0].ended_at), (TaskStatus::Running, TaskRunState::Running, None));
@@ -1354,7 +1598,7 @@ mod tests {
     async fn saved_follow_ups_are_trimmed_and_separated_by_a_blank_line() {
         let fixture = Fixture::new();
         let task = fixture.task("Notes to self");
-        let add = |text: &str| fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: text.into() });
+        let add = |text: &str| fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(task.id, text));
         assert_eq!(
             add("\n  first line\nsecond line \n\n").await.unwrap().task.pending_followup.as_deref(),
             Some("first line\nsecond line")
@@ -1370,6 +1614,42 @@ mod tests {
         // Starting a run uses it up.
         let sent = fixture.orchestrator.task_item_send(fixture.send_params(&task, vec![])).await.unwrap();
         assert_eq!(sent.task.pending_followup, None);
+    }
+
+    #[tokio::test]
+    async fn sending_a_message_delivers_the_saved_follow_up_once() {
+        let fixture = Fixture::new();
+        let first_text = |thread_id: ThreadId| {
+            fixture
+                .store
+                .events_for_thread(thread_id)
+                .unwrap()
+                .into_iter()
+                .find_map(|event| match event.payload {
+                    EventPayload::TurnStarted { message, .. } => Some(message),
+                    _ => None,
+                })
+                .expect("the first turn started")
+        };
+        let with_message = |task: &TaskItem, text: &str| TaskItemsSendParams {
+            prompt: None,
+            message: Some(UserMessage::text(text)),
+            ..fixture.send_params(task, vec![])
+        };
+        for (title, text) in [("Plain", "Do it."), ("Already there", "Do it.\n\nalso tests\n")] {
+            let task = fixture.task(title);
+            fixture
+                .store
+                .task_item_update(task.id, TaskPatch { pending_followup: Some("also tests".into()), ..Default::default() })
+                .unwrap();
+            let sent = fixture.orchestrator.task_item_send(with_message(&task, text)).await.unwrap();
+            assert_eq!(sent.task.pending_followup, None, "{title}: the saved text is used up");
+            let message = first_text(sent.thread_id);
+            assert!(matches!(&message.parts[0], ContentPart::Mention { path, .. } if path.starts_with(TASK_MENTION_PREFIX)));
+            let text = message.plain_text();
+            assert!(text.trim_end().ends_with("Do it.\n\nalso tests"), "{title}: {text:?}");
+            assert_eq!(text.matches("also tests").count(), 1, "{title}: delivered once");
+        }
     }
 
     #[tokio::test]
@@ -1501,7 +1781,7 @@ mod tests {
                 ContentPart::Mention { name: "bad".into(), path: format!("{NOTE_MENTION_PREFIX}not-an-id"), display_name: None },
             ],
         };
-        let expanded = fixture.orchestrator.expand_note_mentions(&message).unwrap();
+        let expanded = fixture.orchestrator.expand_item_mentions(&message).unwrap();
         let text = |index: usize| match &expanded.parts[index] {
             ContentPart::Text { text } => text.clone(),
             other => panic!("expected text, got {other:?}"),
@@ -1513,11 +1793,11 @@ mod tests {
         assert_eq!(big_text.len(), "Note: Big\n\n".len() + NOTE_MENTION_MAX_BYTES + "\n[truncated]".len(), "16 KiB of body per note");
         assert_eq!((text(3).as_str(), text(4).as_str(), text(6).as_str()), ("Note unavailable", "Note unavailable", "Note unavailable"));
         assert!(matches!(expanded.parts[5], ContentPart::Mention { .. }), "other mentions pass through");
-        assert!(fixture.orchestrator.expand_note_mentions(&UserMessage::text("plain")).is_none());
+        assert!(fixture.orchestrator.expand_item_mentions(&UserMessage::text("plain")).is_none());
 
         // Four big notes share 48 KiB: the first three get 16 KiB, the rest what is left (nothing).
         let message = UserMessage { parts: (0..4).map(|_| mention(big.summary.id)).collect() };
-        let expanded = fixture.orchestrator.expand_note_mentions(&message).unwrap();
+        let expanded = fixture.orchestrator.expand_item_mentions(&message).unwrap();
         let bodies: Vec<usize> = expanded
             .parts
             .iter()
@@ -1534,9 +1814,141 @@ mod tests {
 
         // A multi-byte body is cut on a character boundary.
         let wide = fixture.note("Wide", &"é".repeat(NOTE_MENTION_MAX_BYTES));
-        let expanded = fixture.orchestrator.expand_note_mentions(&UserMessage { parts: vec![mention(wide.summary.id)] }).unwrap();
+        let expanded = fixture.orchestrator.expand_item_mentions(&UserMessage { parts: vec![mention(wide.summary.id)] }).unwrap();
         let ContentPart::Text { text } = &expanded.parts[0] else { panic!() };
         assert!(text.ends_with("\n[truncated]") || text.len() <= NOTE_MENTION_MAX_BYTES + 64);
+    }
+
+    #[tokio::test]
+    async fn task_mentions_expand_to_the_task_and_share_the_budget_with_notes() {
+        let fixture = Fixture::new();
+        let spec = fixture.note("Spec", "details");
+        let task = fixture
+            .orchestrator
+            .task_item_create(TaskItemsCreateParams {
+                scope: TaskScope::Project,
+                project_id: Some(fixture.project.id),
+                title: "Fix login".into(),
+                body: Some("Redirect after sign in.\n\n- [ ] Lands on home\n- [x] Keeps session\n".into()),
+                status: Some(TaskStatus::Todo),
+                priority: Some(2),
+                note_ids: Some(vec![spec.summary.id]),
+                source: None,
+            })
+            .unwrap();
+        let run = fixture.manual_run(&task);
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "Look at".into() },
+                task_mention(&task),
+                ContentPart::Mention { name: "gone".into(), path: format!("{TASK_MENTION_PREFIX}{}", Uuid::now_v7()), display_name: None },
+            ],
+        };
+        let expanded = fixture.orchestrator.expand_item_mentions(&message).unwrap();
+        let ContentPart::Text { text } = &expanded.parts[1] else { panic!("the task became text") };
+        assert!(text.starts_with(&format!("Task {}: Fix login\nStatus: Running\nPriority: High\nProject: ade\n", task.key)), "{text}");
+        assert!(text.contains(&format!("Linked notes: Spec (kybern://note/{})", spec.summary.id)), "{text}");
+        assert!(text.contains(&format!("Latest run: thread {} (running). Read it with kybern_thread_read.", run.id)), "{text}");
+        assert!(text.ends_with("Description:\nRedirect after sign in.\n\n- [ ] Lands on home\n- [x] Keeps session"), "{text}");
+        assert_eq!(expanded.parts[2], ContentPart::Text { text: "Task not found".into() });
+        assert_eq!(message.parts[1], task_mention(&task), "the stored message keeps the chip");
+
+        // A long description is capped at 16 KiB and spends the budget notes share.
+        let long = fixture.task("Long");
+        fixture
+            .orchestrator
+            .task_item_update(TaskItemsUpdateParams {
+                id: long.id,
+                expected_revision: Some(long.revision),
+                title: None,
+                body: Some("y".repeat(NOTE_MENTION_MAX_BYTES * 2)),
+                status: None,
+                priority: None,
+                scope: None,
+                project_id: None,
+                note_ids: None,
+                pending_followup: None,
+                before_id: None,
+            })
+            .unwrap();
+        let long = fixture.current(&long);
+        let big = fixture.note("Big", &"x".repeat(NOTE_MENTION_MAX_BYTES + 100));
+        let note_mention =
+            ContentPart::Mention { name: "n".into(), path: format!("{NOTE_MENTION_PREFIX}{}", big.summary.id), display_name: None };
+        let message = UserMessage { parts: vec![task_mention(&long), task_mention(&long), note_mention.clone(), note_mention] };
+        let expanded = fixture.orchestrator.expand_item_mentions(&message).unwrap();
+        let lengths: Vec<usize> = expanded
+            .parts
+            .iter()
+            .map(|part| match part {
+                ContentPart::Text { text } => text.len(),
+                _ => 0,
+            })
+            .collect();
+        let marker = "\n[truncated]".len();
+        assert_eq!(lengths[..2], [NOTE_MENTION_MAX_BYTES + marker; 2]);
+        assert_eq!(lengths[2], "Note: Big\n\n".len() + NOTE_MENTION_MAX_BYTES + marker);
+        assert_eq!(lengths[3], "Note: Big\n\n".len() + marker, "the shared 48 KiB is spent");
+    }
+
+    #[tokio::test]
+    async fn send_with_a_message_keeps_its_parts_and_adds_the_task_reference() {
+        let fixture = Fixture::new();
+        let spec = fixture.note("Spec", "details");
+        let extra = fixture.note("Extra", "more");
+        let task = fixture.task("Fix login");
+        let mut params = fixture.send_params(&task, vec![extra.summary.id]);
+        params.prompt = None;
+        params.message = Some(UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "Start with the redirect.".into() },
+                ContentPart::Mention { name: "Spec".into(), path: format!("{NOTE_MENTION_PREFIX}{}", spec.summary.id), display_name: None },
+                ContentPart::FileMention { path: "src/login.rs".into() },
+            ],
+        });
+        let result = fixture.orchestrator.task_item_send(params).await.unwrap();
+        let events = fixture.store.events_for_thread(result.thread_id).unwrap();
+        let sent = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::TurnStarted { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .expect("the first turn started");
+        assert_eq!(sent.parts[0], task_mention(&task), "the task reference leads");
+        assert_eq!(sent.parts[1], ContentPart::Text { text: "Start with the redirect.".into() });
+        assert!(matches!(&sent.parts[3], ContentPart::FileMention { path } if path == "src/login.rs"));
+        assert!(
+            matches!(&sent.parts[4], ContentPart::Mention { path, .. } if *path == format!("{NOTE_MENTION_PREFIX}{}", extra.summary.id))
+        );
+        assert_eq!(sent.parts.len(), 5);
+        let noted: Vec<NoteId> = result.task.runs[0].notes.iter().map(|note| note.note_id).collect();
+        assert_eq!(noted, vec![spec.summary.id, extra.summary.id], "mentioned and attached notes are both recorded");
+
+        // A message that already references the task is not given a second chip.
+        let other = fixture.task("Other");
+        let mut params = fixture.send_params(&other, vec![]);
+        params.prompt = None;
+        params.message = Some(UserMessage { parts: vec![ContentPart::Text { text: "Go".into() }, task_mention(&other)] });
+        let result = fixture.orchestrator.task_item_send(params).await.unwrap();
+        let events = fixture.store.events_for_thread(result.thread_id).unwrap();
+        let sent = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::TurnStarted { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(sent.parts, vec![ContentPart::Text { text: "Go".into() }, task_mention(&other)]);
+
+        // Prompt and message together are ambiguous; neither is an empty send.
+        let third = fixture.task("Third");
+        let mut both = fixture.send_params(&third, vec![]);
+        both.message = Some(UserMessage::text("x"));
+        assert!(fixture.orchestrator.task_item_send(both).await.unwrap_err().to_string().contains("not both"));
+        let mut neither = fixture.send_params(&third, vec![]);
+        neither.prompt = None;
+        assert!(fixture.orchestrator.task_item_send(neither).await.is_err());
     }
 
     #[tokio::test]

@@ -14,6 +14,7 @@ import { openTask, setFocusedTask, setGroupCollapsed, startQuickAdd, useTasks } 
 import { isGroupCollapsed, isOpenStatus, LIST_STATUS_ORDER, latestRun, runChanges, runDuration, runOutcome, shortDuration, STATUS_LABEL, type TaskGroup } from "@/state/tasksModel"
 import { useStore } from "@/state/store"
 import { ProjectDot } from "@/lib/kit/projectDot"
+import { CreatedByThread } from "./CreatedBy"
 import { AgentMark, PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
 import { QuickAddRow } from "./QuickAdd"
 import { projectForNewTask } from "./taskActions"
@@ -236,6 +237,11 @@ function RowCells({ task, now, projectName, overlay }: { task: TaskItem; now: nu
         <TaskStatusGlyph status={task.status} animated />
       </span>
       <span className="t">{task.title || "Untitled"}</span>
+      {task.created_by_thread && (
+        <span className="ag">
+          <CreatedByThread threadId={task.created_by_thread} variant="glyph" interactive={!overlay} />
+        </span>
+      )}
       <span className="det">{detail}</span>
       <span className="proj">
         {overlay ? (

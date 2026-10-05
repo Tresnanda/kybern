@@ -1,32 +1,29 @@
 // A task's page: the title, its description (the notes editor), acceptance criteria,
-// linked notes, and the activity with live runs; a follow-up box at the foot; status,
-// priority, project, the default agent and workspace in the properties column.
+// linked notes, and the activity with live runs; the run composer at the foot
+// (TaskRunDock); status, priority and project in the properties column.
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
+import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { Popover, PopoverPopup, PopoverTrigger } from "@/components/kit/popover"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { copyText, useNow } from "@/lib/hooks"
 import { mod, PROVIDER_LABEL, relativeTime } from "@/lib/format"
-import { ArrowUpIcon, ChevronDownIcon, ChevronUpIcon, EllipsisIcon, NoteIcon, PlusIcon, WorktreeIcon, XIcon } from "@/lib/kit/icons"
-import type { NoteId, ProviderKind, TaskItem, TaskItemId } from "@/protocol"
-import { openNote, useAllNotes } from "@/state/notes"
+import { ChevronDownIcon, ChevronUpIcon, EllipsisIcon, NoteIcon, PlusIcon, XIcon } from "@/lib/kit/icons"
+import type { NoteId, TaskItem, TaskItemId } from "@/protocol"
+import { fetchNoteImage, openNote, uploadNoteImage, useAllNotes } from "@/state/notes"
 import { isEmptyThreadNote, noteTitle } from "@/state/notesModel"
 import {
   deleteTask,
   fetchTask,
-  followupTask,
   isConflict,
+  openRunComposer,
   openRunThread,
-  openSendSheet,
   openTask,
   saveTaskContent,
   setTaskNotes,
-  updateTask,
   useTasks,
-  writeSendPrefs,
 } from "@/state/tasks"
 import {
   composeTaskBody,
@@ -43,34 +40,48 @@ import {
 } from "@/state/tasksModel"
 import { errorText } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import { selectAvailableProviders } from "@/state/store"
-import { useShallow } from "zustand/react/shallow"
 import { SurfaceHeader } from "../chrome"
+import type { NoteImageHost } from "../notes/noteImage"
 import { ProjectDot } from "@/lib/kit/projectDot"
 import { AgentMark, PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
 import { TaskPriorityMenu, TaskProjectMenu, TaskStatusMenu } from "./TaskMenus"
-import { agentLabel, modelLabel, useSendDefaults } from "./sendDefaults"
+import { TaskRunDock } from "./TaskRunDock"
+import { CreatedByThread } from "./CreatedBy"
 
 // The editor (Tiptap) is the notes chunk; it loads with the first task page.
 const NoteBody = lazy(() => import("@/views/notes/NoteBody"))
 
 const SAVE_DELAY_MS = 700
 
+/** Images in a description are kept by the environment that keeps its tasks, like a note's. */
+const TASK_IMAGES: NoteImageHost = {
+  upload: (file) => uploadNoteImage("env", file),
+  load: (id, signal) => fetchNoteImage("env", id, signal),
+}
+
 export function TaskDetail({ task, siblings }: { task: TaskItem; siblings: TaskItemId[] }) {
   const index = siblings.indexOf(task.id)
   const previous = index > 0 ? siblings[index - 1] : undefined
   const next = index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : undefined
   const run = latestRun(task)
+  const composing = useTasks((s) => s.composer?.taskId === task.id && s.composer.kind === "run")
 
   return (
     <>
       <SurfaceHeader
+        dock={false}
         trailing={
           <>
-            {task.status !== "running" && (
+            {!isLiveRun(run) && (
               <Tooltip>
-                <TooltipTrigger render={<button type="button" className="tk-btn" onClick={() => openSendSheet(task.id)} />}>Send to agent</TooltipTrigger>
-                <TooltipPopup side="bottom">{mod}↵</TooltipPopup>
+                <TooltipTrigger
+                  render={<button type="button" className="tk-btn" data-run-composer-trigger={task.id} aria-expanded={composing} onClick={() => openRunComposer(task.id, "run")} />}
+                >
+                  Send to agent
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  Start a run ({mod}↵)
+                </TooltipPopup>
               </Tooltip>
             )}
             <span className="flex items-center">
@@ -112,7 +123,7 @@ export function TaskDetail({ task, siblings }: { task: TaskItem; siblings: TaskI
               <Activity task={task} />
             </div>
           </div>
-          <FollowUp task={task} run={run} />
+          <TaskRunDock key={task.id} task={task} />
         </div>
         <aside className="tk-dside" aria-label="Properties">
           <Properties task={task} />
@@ -344,7 +355,7 @@ function TaskContent({ task, meta }: { task: TaskItem; meta: ReactNode }) {
       {meta}
       <div className="tk-desc">
         <Suspense fallback={<div className="tk-desc-static">{description}</div>}>
-          <NoteBody host={host} snapshot={snapshot} variant="compact" onEditor={onEditor} placeholder="Add a description…" />
+          <NoteBody host={host} snapshot={snapshot} variant="compact" onEditor={onEditor} placeholder="Add a description. Type / for formatting" images={TASK_IMAGES} />
         </Suspense>
       </div>
       <Criteria criteria={criteria} onChange={changeCriteria} />
@@ -713,75 +724,13 @@ function Event({ glyph, glyphTone, at, now, children }: { glyph: ReactNode; glyp
   )
 }
 
-// ---- follow-up ----
-
-function FollowUp({ task, run }: { task: TaskItem; run: ReturnType<typeof latestRun> }) {
-  const [text, setText] = useState("")
-  const [busy, setBusy] = useState(false)
-  const field = useRef<HTMLTextAreaElement>(null)
-  useLayoutEffect(() => {
-    const element = field.current
-    if (!element) return
-    element.style.height = "0px"
-    element.style.height = `${Math.min(160, element.scrollHeight)}px`
-  }, [text])
-  const placeholder = !run ? "Add context for the next run…" : isLiveRun(run) ? `Queue a follow-up for Run ${run.number}…` : `Send a follow-up to Run ${run.number}…`
-  const submit = async () => {
-    const message = text.trim()
-    if (!message || busy) return
-    setBusy(true)
-    const result = await followupTask(task.id, message)
-    setBusy(false)
-    if (!result) return
-    setText("")
-    if (result.sent_to) toast(run && isLiveRun(run) ? `Queued for Run ${run.number}` : `Sent to Run ${run?.number ?? ""}`.trim(), { action: { label: "Open", onClick: () => openRunThread(result.sent_to!) } })
-    else toast("Saved for the next run")
-  }
-  return (
-    <div className="tk-follow">
-      {task.pending_followup?.trim() && (
-        <div className="tk-pending">
-          <span>Next run includes: {task.pending_followup.trim()}</span>
-          <button type="button" className="tk-tbtn" onClick={() => void updateTask(task.id, { pending_followup: "" })}>
-            Clear
-          </button>
-        </div>
-      )}
-      <div className="tk-fbox">
-        <textarea
-          ref={field}
-          rows={1}
-          value={text}
-          placeholder={placeholder}
-          aria-label={placeholder.replace("…", "")}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault()
-              void submit()
-            } else if (event.key === "Escape") {
-              event.currentTarget.blur()
-            }
-          }}
-        />
-        <button type="button" className="tk-send-round" aria-label="Send follow-up" data-ready={text.trim() ? true : undefined} disabled={!text.trim() || busy} onClick={() => void submit()}>
-          <ArrowUpIcon className="size-4" />
-        </button>
-      </div>
-    </div>
-  )
-}
-
 // ---- properties ----
 
 function Properties({ task, compact }: { task: TaskItem; compact?: boolean }) {
   const projects = useStore((s) => s.projects)
   const threads = useStore((s) => s.threads)
-  const providers = useStore(useShallow(selectAvailableProviders))
   const projectId = task.scope === "project" ? task.project_id ?? null : null
   const project = projectId ? projects[projectId] : undefined
-  const [version, setVersion] = useState(0)
-  const config = useSendDefaults(projectId, version)
   const run = latestRun(task)
   const branch = run ? threads[run.thread_id]?.worktree?.branch : undefined
 
@@ -830,76 +779,17 @@ function Properties({ task, compact }: { task: TaskItem; compact?: boolean }) {
     )
   }
 
-  const chooseAgent = (kind: ProviderKind) => {
-    writeSendPrefs(projectId, { provider: { kind, instance: "default" }, model: null, effort: null })
-    setVersion((value) => value + 1)
-  }
-  const chooseWorkspace = (worktree: boolean) => {
-    writeSendPrefs(projectId, { useWorktree: worktree })
-    setVersion((value) => value + 1)
-  }
-  const model = modelLabel(config)
   return (
     <>
       <Prop label="Status">{status}</Prop>
       <Prop label="Priority">{priority}</Prop>
       <Prop label="Project">{projectMenu}</Prop>
-      <div className="tk-side-sep" />
-      <Prop label="Agent">
-        <Menu>
-          <MenuTrigger render={<button type="button" className="v" aria-label={`Agent for runs: ${agentLabel(config)}`} />}>
-            {config.provider && (
-              <span className="mk">
-                <AgentMark kind={config.provider.kind} size={14} />
-              </span>
-            )}
-            <span className="lbl">{agentLabel(config)}</span>
-            {model && <span className="q">{model}</span>}
-          </MenuTrigger>
-          <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-48">
-            <MenuGroup>
-              <MenuGroupLabel>Agent for runs</MenuGroupLabel>
-              <MenuRadioGroup value={config.provider?.kind ?? ""} onValueChange={(value) => chooseAgent(value as ProviderKind)}>
-                {providers.map((item) => (
-                  <MenuRadioItem closeOnClick key={item.kind} value={item.kind}>
-                    <AgentMark kind={item.kind} size={14} />
-                    {PROVIDER_LABEL[item.kind]}
-                  </MenuRadioItem>
-                ))}
-              </MenuRadioGroup>
-            </MenuGroup>
-          </ComposerPickerMenuPopup>
-        </Menu>
-      </Prop>
-      <Prop label="Workspace">
-        {project?.is_git ? (
-          <Menu>
-            <MenuTrigger render={<button type="button" className="v" aria-label="Workspace for runs" />}>
-              <span className="mk">
-                <WorktreeIcon className="size-3.5" />
-              </span>
-              <span className="lbl">{config.useWorktree ? "New worktree" : "Local checkout"}</span>
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-48">
-              <MenuGroup>
-                <MenuGroupLabel>Workspace for runs</MenuGroupLabel>
-                <MenuRadioGroup value={config.useWorktree ? "worktree" : "local"} onValueChange={(value) => chooseWorkspace(value === "worktree")}>
-                  <MenuRadioItem closeOnClick value="worktree">New worktree</MenuRadioItem>
-                  <MenuRadioItem closeOnClick value="local">Local checkout</MenuRadioItem>
-                </MenuRadioGroup>
-              </MenuGroup>
-            </ComposerPickerMenuPopup>
-          </Menu>
-        ) : (
-          <span className="v" style={{ cursor: "default" }}>
-            <span className="mk">
-              <WorktreeIcon className="size-3.5" />
-            </span>
-            <span className="lbl">{project ? "Project folder" : "Chosen when sent"}</span>
-          </span>
-        )}
-      </Prop>
       {branch && <div className="tk-prop-sub">{branch}</div>}
+      {task.created_by_thread && (
+        <Prop label="Created">
+          <CreatedByThread threadId={task.created_by_thread} />
+        </Prop>
+      )}
     </>
   )
 }

@@ -304,6 +304,15 @@ impl Store {
         })
     }
 
+    /// Forget a pending operation whose write failed before changing anything, so a
+    /// retry with the same id runs again instead of reporting an uncertain outcome.
+    pub fn collaboration_operation_abandon(&self, operation_id: OperationId) -> Result<()> {
+        self.with(|c| {
+            c.execute("DELETE FROM collaboration_operations WHERE operation_id = ?1 AND state = 'pending'", [operation_id.to_string()])?;
+            Ok(())
+        })
+    }
+
     pub fn collaboration_group_put(&self, group: &CollaborationGroup) -> Result<()> {
         self.with(|c| {
             c.execute(

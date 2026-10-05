@@ -20,7 +20,7 @@ import { arrayMove } from "@dnd-kit/sortable"
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import type { TaskItem, TaskItemId, TaskStatus } from "@/protocol"
-import { moveTask, openSendSheet } from "@/state/tasks"
+import { moveTask, openRunComposer } from "@/state/tasks"
 import { dropAction, placeAt } from "@/state/tasksModel"
 
 export const containerId = (status: TaskStatus) => `col:${status}`
@@ -129,7 +129,7 @@ export function useTaskDnd(containers: Record<string, TaskItemId[]>, tasks: Reco
       if (!status || !task) return
       const action = dropAction(status)
       if (action === "send") {
-        if (task.status !== "running") openSendSheet(id)
+        if (task.status !== "running") openRunComposer(id, "run")
         return
       }
       if (action === "none") return

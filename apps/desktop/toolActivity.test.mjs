@@ -353,3 +353,16 @@ test("image generation stays a deliverable without promoting inspection screensh
   for (const name of ["imageGeneration", "image_generation", "image_gen.imagegen", "mcp__images__generate_image"]) assert.equal(isImageGenerationTool({ name }), true, name)
   for (const name of ["imageView", "view_image", "mcp__browser__screenshot", "exec_command"]) assert.equal(isImageGenerationTool({ name }), false, name)
 })
+
+test("Kybern notes and tasks tools get their own labels, icons and summary", () => {
+  const call = (name, input = {}) => ({ id: name, name, input })
+  assert.equal(toolVisualKind(call("mcp__kybern__kybern_task_create")), "task")
+  assert.equal(toolVisualKind(call("kybern_note_read")), "note")
+  assert.equal(toolLine(call("mcp__kybern__kybern_task_update", { task: "ADE-3" }), false).verb, "Updating task ADE-3")
+  assert.equal(humanizeToolName("mcp__kybern__kybern_notes_search"), "Notes")
+  const settled = (name, input) => ({ call: call(name, input), complete: true, isError: false })
+  assert.equal(
+    summarizeToolCalls([settled("mcp__kybern__kybern_notes_search", { query: "x" }), settled("mcp__kybern__kybern_task_read", { task: "ADE-1" }), settled("mcp__kybern__kybern_note_read", {})]).label,
+    "Ran 1 search and read 2 notes and tasks",
+  )
+})

@@ -1758,3 +1758,21 @@ button.note-image-pending {
     transition: none;
   }
 }
+
+/* An agent wrote this note: a bot mark on cards and rows, a "From <thread>" link in the editor. */
+.note-card-meta .note-agent {
+  margin-inline-start: auto;
+}
+.note-card-meta .note-progress + .note-agent {
+  margin-inline-start: -4px;
+}
+.note-agent {
+  flex: none;
+  color: var(--n-fg3);
+}
+.note-meta-from {
+  color: var(--n-fg2);
+}
+button.note-meta-from:hover {
+  color: var(--n-fg);
+}

@@ -48,6 +48,25 @@ const APP_TOOL_NAMES = new Set([
   "kybern_computer_act",
   "kybern_computer_screenshot",
   "kybern_computer_help",
+  "kybern_notes_search",
+  "kybern_note_read",
+  "kybern_note_create",
+  "kybern_note_append",
+  "kybern_note_update",
+  "kybern_tasks_list",
+  "kybern_task_read",
+  "kybern_task_create",
+  "kybern_task_update",
+  "kybern_task_claim",
+]);
+// Note and task writes may wait for the user's approval in Kybern.
+const APPROVAL_TOOL_NAMES = new Set([
+  "kybern_note_create",
+  "kybern_note_append",
+  "kybern_note_update",
+  "kybern_task_create",
+  "kybern_task_update",
+  "kybern_task_claim",
 ]);
 function configuredToolSet(environmentName) {
   if (process.env[environmentName] === undefined) return new Set();
@@ -267,7 +286,7 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
 
   const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", {
     signal,
-    timeout: name.startsWith("kybern_computer_") ? COMPUTER_TOOL_TIMEOUT_MS : APP_TOOL_TIMEOUT_MS,
+    timeout: name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) ? COMPUTER_TOOL_TIMEOUT_MS : APP_TOOL_TIMEOUT_MS,
   });
   if (encodedResult === undefined) {
     throw new Error(signal?.aborted ? "Kybern app tool was cancelled." : "Kybern app tool timed out.");

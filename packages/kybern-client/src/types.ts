@@ -805,6 +805,14 @@ export interface ProjectsListResult {
   projects: Project[];
 }
 
+export const PROJECTS_CHANGED_NOTIFICATION = "projects.changed";
+
+/** Sent after a project is added, updated or removed by any client or the daemon. */
+export interface ProjectsChangedNotification {
+  /** Every project after the change, in `projects.list` order. */
+  projects: Project[];
+}
+
 export interface ProjectsAddParams {
   path: string;
   name?: string;
@@ -968,6 +976,8 @@ export interface NoteSummary {
   deleted_at?: string | null;
   /** Where a deleted note came from once its project or thread was removed, e.g. "kybern" or "kybern › Fix login". */
   origin?: string | null;
+  /** The thread whose agent created the note with its native tools. Absent for notes the user wrote; agents may only append to those. */
+  created_by_thread?: ThreadId | null;
 }
 
 export interface Note extends NoteSummary {
@@ -1049,6 +1059,8 @@ export interface TaskItem {
   updated_at: string;
   /** When the status last changed. */
   status_changed_at: string;
+  /** The thread whose agent created the task with its native tools. Absent for tasks the user created; agents may only append to and check items of those. */
+  created_by_thread?: ThreadId | null;
 }
 
 export interface TaskItemsCreateParams {
@@ -1093,10 +1105,20 @@ export interface TaskItemsSendParams {
   base_branch?: string | null;
   /** Required for global tasks: where the run happens. */
   project_id?: ProjectId | null;
-  /** The (possibly edited) prompt text. */
-  prompt: string;
+  /** The (possibly edited) prompt text. Exactly one of `prompt` or `message` is required. */
+  prompt?: string;
+  /** The full first message (text, mentions, skills, files, thread references, attachments). The daemon adds a `kybern://task/<id>` mention for this task at the start when the message has none; the provider's copy expands it to the task. */
+  message?: UserMessage;
   /** Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only. Only the notes listed here are sent. A saved `pending_followup` is cleared by the send (the prompt is expected to include it). */
   note_ids?: NoteId[];
+}
+
+export interface TaskItemsFollowupParams {
+  id: TaskItemId;
+  /** Plain text. Exactly one of `text` or `message` is required. */
+  text?: string;
+  /** The full follow-up, sent or queued as is. With no run to receive it, text and references are saved as readable text; attachments are refused. */
+  message?: UserMessage;
 }
 
 export interface TaskItemsChangedNotification {
@@ -1695,7 +1717,7 @@ export interface Methods {
   "tasks.items.delete": [{ id: TaskItemId }, Empty];
   "tasks.items.restore": [{ id: TaskItemId }, TaskItem];
   "tasks.items.send": [TaskItemsSendParams, { task: TaskItem; thread_id: ThreadId }];
-  "tasks.items.followup": [{ id: TaskItemId; text: string }, { task: TaskItem; sent_to?: ThreadId | null }];
+  "tasks.items.followup": [TaskItemsFollowupParams, { task: TaskItem; sent_to?: ThreadId | null }];
   "queue.list": [{ thread_id?: ThreadId }, { messages: QueuedMessage[] }];
   "queue.remove": [
     { thread_id: ThreadId; id: MessageId },

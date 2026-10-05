@@ -4,6 +4,8 @@
 // closing it (one shared popover, per the HIG's one-popover-at-a-time rule).
 // Opening asks the daemon to re-read, so the numbers are current when looked at.
 // The card never scrolls, so the resize between providers shows no scrollbar.
+// Each ring sits in the same 36px button and 6px gap as the rail's destinations,
+// at 24px so its weight reads like their 18px icons rather than crowding them.
 // When a read fails the card says why and what brings the numbers back, and a
 // window that reset since its last reading shows no number rather than "100% left".
 
@@ -24,7 +26,7 @@ export function RailUsage() {
   const glance = providers.flatMap((entry) => (entry.limits.length > 0 ? [{ entry, used: bindingLimit(entry.limits, now)?.used ?? null }] : []))
   if (glance.length === 0) return null
   return (
-    <div role="group" aria-label="Plan usage" className="flex flex-col items-center">
+    <div role="group" aria-label="Plan usage" className="flex flex-col items-center gap-1.5">
       {glance.map(({ entry, used }) => {
         const name = PROVIDER_NAMES[entry.provider] ?? entry.provider
         return (
@@ -40,7 +42,7 @@ export function RailUsage() {
                 type="button"
                 aria-label={used === null ? `${name}: not read since reset` : `${name}: ${Math.round(100 - used)}% left`}
                 data-testid={`rail-usage-${entry.provider}`}
-                className="press relative inline-flex h-8 w-9 cursor-pointer items-center justify-center rounded-[10px] outline-hidden hover:bg-[var(--app-rail-hover)] focus-visible:ring-1 focus-visible:ring-ring data-popup-open:bg-[var(--app-rail-hover)]"
+                className="press relative inline-flex size-9 cursor-pointer items-center justify-center rounded-[10px] outline-hidden hover:bg-[var(--app-rail-hover)] focus-visible:ring-1 focus-visible:ring-ring data-popup-open:bg-[var(--app-rail-hover)]"
               />
             }
           >
@@ -62,11 +64,11 @@ export function RailUsage() {
 function UsageRing({ kind, left, tone, stale }: { kind: ProviderKind; left: number | null; tone: ReturnType<typeof limitTone>; stale: boolean }) {
   return (
     <span className="rail-usage-ring" data-usage-tone={tone} data-stale={stale || undefined}>
-      <svg aria-hidden viewBox="0 0 24 24" className="size-7 -rotate-90" fill="none">
+      <svg aria-hidden viewBox="0 0 24 24" className="size-6 -rotate-90" fill="none">
         <circle cx="12" cy="12" r="10.25" strokeWidth="2" className="rail-usage-track" />
         {left !== null && <circle cx="12" cy="12" r="10.25" strokeWidth="2" pathLength="100" strokeDasharray="100 100" strokeDashoffset={100 - left} strokeLinecap="round" className="rail-usage-arc" />}
       </svg>
-      <ProviderMark kind={kind} size={12} className="absolute" />
+      <ProviderMark kind={kind} size={11} className="absolute" />
     </span>
   )
 }

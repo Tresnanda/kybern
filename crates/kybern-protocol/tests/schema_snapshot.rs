@@ -100,6 +100,7 @@ fn notes_wire_shape_is_stable() {
             updated_at: chrono::DateTime::parse_from_rfc3339("2026-10-05T00:00:00Z").unwrap().into(),
             deleted_at: None,
             origin: None,
+            created_by_thread: None,
         },
         body: "- [x] Ship it".into(),
     };
@@ -107,7 +108,10 @@ fn notes_wire_shape_is_stable() {
     assert_eq!(json["scope"], "thread");
     assert_eq!(json["body"], "- [x] Ship it", "body sits beside the summary fields");
     assert_eq!(json["checklist"], serde_json::json!({"done": 1, "total": 3}));
-    assert!(json.get("thread_id").is_none() && json.get("deleted_at").is_none(), "absent options are omitted");
+    assert!(
+        json.get("thread_id").is_none() && json.get("deleted_at").is_none() && json.get("created_by_thread").is_none(),
+        "absent options are omitted"
+    );
     assert_eq!(serde_json::from_value::<Note>(json).unwrap(), note);
     let update: NotesUpdateParams =
         serde_json::from_value(serde_json::json!({"thread_id": uuid::Uuid::nil(), "expected_revision": 0})).unwrap();
@@ -118,6 +122,7 @@ fn notes_wire_shape_is_stable() {
 fn task_items_wire_shape_is_stable() {
     insta::assert_json_snapshot!("task_item_schema", schema_for!(TaskItem));
     insta::assert_json_snapshot!("task_items_changed_notification", schema_for!(TaskItemsChangedNotification));
+    insta::assert_json_snapshot!("task_items_followup_params", schema_for!(TaskItemsFollowupParams));
     let at: chrono::DateTime<chrono::Utc> = chrono::DateTime::parse_from_rfc3339("2026-10-05T00:00:00Z").unwrap().into();
     let task = TaskItem {
         id: uuid::Uuid::nil(),
@@ -148,6 +153,7 @@ fn task_items_wire_shape_is_stable() {
         created_at: at,
         updated_at: at,
         status_changed_at: at,
+        created_by_thread: None,
     };
     let json = serde_json::to_value(&task).unwrap();
     assert_eq!(json["status"], "needs_review");
@@ -156,7 +162,10 @@ fn task_items_wire_shape_is_stable() {
     assert_eq!(json["runs"][0]["state"], "completed");
     assert_eq!(json["runs"][0]["diff"], serde_json::json!({"added": 12, "removed": 3, "files": 2}));
     assert_eq!(json["runs"][0]["notes"][0]["revision"], 4);
-    assert!(json.get("source_note_id").is_none() && json.get("pending_followup").is_none(), "absent options are omitted");
+    assert!(
+        json.get("source_note_id").is_none() && json.get("pending_followup").is_none() && json.get("created_by_thread").is_none(),
+        "absent options are omitted"
+    );
     assert!(json["runs"][0].get("model").is_none() && json["runs"][0].get("activity").is_none());
     assert_eq!(serde_json::from_value::<TaskItem>(json).unwrap(), task);
     let update: TaskItemsUpdateParams = serde_json::from_value(serde_json::json!({"id": uuid::Uuid::nil()})).unwrap();
@@ -164,4 +173,25 @@ fn task_items_wire_shape_is_stable() {
     assert_eq!(serde_json::to_value(TaskStatus::Todo).unwrap(), "todo");
     assert_eq!(TaskItemsList::NAME, "tasks.items.list");
     assert_eq!(TASK_ITEMS_CHANGED_NOTIFICATION, "tasks.items.changed");
+    let agent_task = TaskItem { created_by_thread: Some(uuid::Uuid::nil()), ..task };
+    let json = serde_json::to_value(&agent_task).unwrap();
+    assert_eq!(json["created_by_thread"], serde_json::json!(uuid::Uuid::nil()));
+    assert_eq!(serde_json::from_value::<TaskItem>(json).unwrap(), agent_task);
+    // The prompt-only send that mobile and the CLI use still parses; a full message is additive.
+    let send: TaskItemsSendParams = serde_json::from_value(serde_json::json!({
+        "id": uuid::Uuid::nil(), "provider": {"kind": "codex", "instance": "default"}, "prompt": "Fix it"
+    }))
+    .unwrap();
+    assert_eq!((send.prompt.as_deref(), send.message.is_none()), (Some("Fix it"), true));
+    let send: TaskItemsSendParams = serde_json::from_value(serde_json::json!({
+        "id": uuid::Uuid::nil(), "provider": {"kind": "codex", "instance": "default"},
+        "message": {"parts": [{"type": "text", "text": "Fix it"}]}
+    }))
+    .unwrap();
+    assert!(send.prompt.is_none() && send.message.is_some_and(|message| message.parts.len() == 1));
+}
+
+#[test]
+fn projects_changed_notification_is_stable() {
+    insta::assert_json_snapshot!("projects_changed_notification", schema_for!(ProjectsChangedNotification));
 }

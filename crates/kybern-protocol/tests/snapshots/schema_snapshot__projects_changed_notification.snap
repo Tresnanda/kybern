@@ -1,0 +1,73 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ProjectsChangedNotification)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectsChangedNotification",
+  "description": "Params of the `projects.changed` notification, sent after a project is added,\nupdated or removed by any client or by the daemon itself.",
+  "type": "object",
+  "properties": {
+    "projects": {
+      "description": "Every project after the change, in `projects.list` order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Project"
+      }
+    }
+  },
+  "required": [
+    "projects"
+  ],
+  "$defs": {
+    "Project": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path on the daemon host.",
+          "type": "string"
+        },
+        "is_git": {
+          "type": "boolean"
+        },
+        "worktrees_default": {
+          "description": "Per-project override for \"new threads use a worktree\". Global default is off.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "task_prefix": {
+          "description": "Prefix for this project's task keys, such as `ADE`. Assigned from the\nproject name when it is added; editable through `projects.update`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "path",
+        "is_git",
+        "created_at",
+        "updated_at"
+      ]
+    }
+  }
+}

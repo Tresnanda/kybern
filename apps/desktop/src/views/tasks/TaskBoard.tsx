@@ -15,6 +15,7 @@ import type { TaskItem, TaskItemId, TaskStatus } from "@/protocol"
 import { openRunThread, openTask, setFocusedTask, startQuickAdd, useTasks } from "@/state/tasks"
 import { isOpenStatus, latestRun, runChanges, runDuration, shortActivity, shortDuration, STATUS_LABEL } from "@/state/tasksModel"
 import { ProjectDot } from "@/lib/kit/projectDot"
+import { CreatedByThread } from "./CreatedBy"
 import { AgentMark, PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
 import { QuickAddRow } from "./QuickAdd"
 import { TaskProjectChip } from "./TaskMenus"
@@ -194,6 +195,7 @@ function CardInner({ task, now, overlay }: { task: TaskItem; now: number; overla
       <div className="r1">
         {overlay ? <ProjectDot projectId={task.scope === "project" ? task.project_id : null} /> : <TaskProjectChip task={task} />}
         <span>{task.key}</span>
+        {task.created_by_thread && <CreatedByThread threadId={task.created_by_thread} variant="glyph" interactive={!overlay} className="ag" />}
         {task.priority !== 0 && (
           <span className="pr">
             <PriorityGlyph priority={task.priority} />

@@ -8,8 +8,8 @@ import { Markdown } from "@tiptap/markdown"
 import StarterKit from "@tiptap/starter-kit"
 import Suggestion, { type SuggestionOptions } from "@tiptap/suggestion"
 
-import { createNoteImage, type NoteImageOptions } from "./noteImage"
-import { filterSlashItems, type SlashItem } from "./slashItems"
+import { canAddImages, createNoteImage, type NoteImageOptions } from "./noteImage"
+import { filterSlashItems, slashItemsFor, type SlashItem } from "./slashItems"
 import { createTaskLinks, type TaskLineHost } from "./taskLinks"
 import { createTaskRef } from "./taskRef"
 
@@ -38,7 +38,7 @@ export interface SlashOptions {
 
 const defaultSuggestion: SlashOptions["suggestion"] = {
   char: "/",
-  items: ({ query }) => filterSlashItems(query),
+  items: ({ query, editor }) => filterSlashItems(query, slashItemsFor(canAddImages(editor))),
   command: ({ editor, range, props }) => props.run(editor, range),
   // Code is literal: a slash there is just a slash.
   allow: ({ state, range }) => !state.doc.resolve(range.from).parent.type.spec.code,

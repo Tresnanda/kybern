@@ -2,14 +2,11 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
-  approxTokens,
   boardColumns,
-  buildTaskPrompt,
   composeTaskBody,
   countTasks,
   dropAction,
   findTaskKeys,
-  formatTokens,
   groupTasks,
   isGroupCollapsed,
   keyMatchesQuery,
@@ -19,6 +16,7 @@ import {
   plainInline,
   rankBetween,
   readTaskPrefs,
+  arrangeTaskProjects,
   runOutcome,
   searchTasks,
   shortActivity,
@@ -172,30 +170,11 @@ test("the body splits into a description and acceptance criteria", () => {
   assert.equal(composeTaskBody("", [{ checked: false, text: "  " }]), "")
 })
 
-test("the prompt carries title, description, criteria and a saved follow-up", () => {
-  const prompt = buildTaskPrompt({
-    title: "Show a conflict banner when the CLI edits an open note",
-    description: "Keep the unsaved text.",
-    criteria: [
-      { checked: false, text: "The banner appears within a second" },
-      { checked: true, text: "Blocked on [ADE-14](kybern://task/abc)" },
-    ],
-    pendingFollowup: "Also check the mobile app.",
-  })
-  assert.equal(
-    prompt,
-    "Show a conflict banner when the CLI edits an open note.\n\nKeep the unsaved text.\n\nDone when:\n– The banner appears within a second\n– Blocked on ADE-14\n\nAlso check the mobile app.",
-  )
-  assert.equal(buildTaskPrompt({ title: "Ship it?", description: "", criteria: [] }), "Ship it?")
+test("inline Markdown reads as plain text", () => {
   assert.equal(plainInline("**Bold** `code` [link](https://x)"), "Bold code link")
 })
 
-test("context sizes read as approximate tokens", () => {
-  assert.equal(approxTokens(4400), 1100)
-  assert.equal(formatTokens(1100), "1.1k")
-  assert.equal(formatTokens(700), "0.7k")
-  assert.equal(formatTokens(30), "0.1k")
-  assert.equal(formatTokens(24_400), "24k")
+test("suggested notes search the title's longer words", () => {
   assert.equal(suggestionQuery("Show a conflict banner when the CLI edits an open note"), "conflict banner cli edits")
 })
 
@@ -254,4 +233,22 @@ test("view preferences survive bad storage", () => {
   assert.equal(prefs.filter, "project:abc")
   assert.deepEqual(prefs.collapsed, { a: true })
   assert.equal(readTaskPrefs({ filter: "bogus" }).filter, "all")
+  assert.deepEqual(readTaskPrefs(null).pinnedProjects, [])
+  assert.equal(readTaskPrefs(null).projectsCollapsed, false)
+  const pins = readTaskPrefs({ pinnedProjects: ["b", 3, "", "b", "a"], projectsCollapsed: true })
+  assert.deepEqual(pins.pinnedProjects, ["b", "a"])
+  assert.equal(pins.projectsCollapsed, true)
+  assert.deepEqual(readTaskPrefs({ pinnedProjects: "a" }).pinnedProjects, [])
+})
+
+test("the panel's projects put pins first and collapse to pins and the current one", () => {
+  const projects = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }]
+  const shape = (rows) => rows.map((row) => `${row.project.id}${row.pinned ? "*" : ""}${row.visible ? "" : "-"}`)
+  assert.deepEqual(shape(arrangeTaskProjects(projects, ["c"], false, null)), ["c*", "a", "b", "d"])
+  // Pinned projects keep the sidebar's order among themselves.
+  assert.deepEqual(shape(arrangeTaskProjects(projects, ["d", "b"], false, null)), ["b*", "d*", "a", "c"])
+  assert.deepEqual(shape(arrangeTaskProjects(projects, ["c"], true, "a")), ["c*", "a", "b-", "d-"])
+  assert.deepEqual(shape(arrangeTaskProjects(projects, [], true, null)), ["a-", "b-", "c-", "d-"])
+  // A pin for a project that is gone changes nothing.
+  assert.deepEqual(shape(arrangeTaskProjects(projects, ["zz"], true, "c")), ["a-", "b-", "c", "d-"])
 })

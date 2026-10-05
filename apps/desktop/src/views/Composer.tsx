@@ -9,7 +9,7 @@ import type { ProviderUsage } from "@/protocol"
 // Stacked panels (queued follow-ups, approval card, empty-landing tray) render
 // through `above`, inside the same column frame.
 
-import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Fragment, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
@@ -17,6 +17,7 @@ import { Button } from "@/components/kit/button"
 import { ComposerColumnFrame } from "@/components/kit/chat/ComposerColumnFrame"
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { ComposerMentionChips } from "@/components/kit/chat/ComposerMentionChips"
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
@@ -42,18 +43,37 @@ import {
 import { Kbd } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuItem, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
-import { buildStructuredTextParts, nextAttachmentLabel, structuredSegments, type AttachmentReference } from "@/lib/composerTokens"
+import { buildStructuredTextParts, createComposerMentionReference, nextAttachmentLabel, structuredSegments, type AttachmentReference, type ComposerMentionReference } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, formatEffort, isMac, mod } from "@/lib/format"
-import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, PaperclipIcon, PencilIcon, PlusIcon, PluginIcon, DeviceLaptopIcon,
+import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, NoteIcon, PaperclipIcon, PencilIcon, PlusIcon, PluginIcon, DeviceLaptopIcon,
   HandRaisedIcon, ShieldCheckIcon, ShieldIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
 import { ComposerEditor, type ComposerEditorHandle, type EditorSegment } from "@/components/kit/chat/ComposerEditor"
-import { isFreeChatProject, type ContentPart, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderStatus, type SkillInfo, type Thread, type UserMessage } from "@/protocol"
+import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderStatus, type SkillInfo, type TaskItem, type TaskItemId, type Thread, type UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import { COMPUTER_MENTION_PATH, COMPUTER_MENTION_SKILL } from "@/lib/userInput"
+import { COMPUTER_MENTION_PATH, COMPUTER_MENTION_SKILL, noteMentionPart, taskMentionPart, type MentionPart } from "@/lib/userInput"
+import { mentionTokenKind } from "@/lib/inlineTokenLabel"
+import { isHomeShared, noteClient, useNotes } from "@/state/notes"
+import { noteScopeLabel, noteTitle } from "@/state/notesModel"
+import { useTasks } from "@/state/tasks"
+import { keyMatchesQuery, PRIORITY_LABEL, STATUS_LABEL } from "@/state/tasksModel"
+import { PriorityGlyph, TaskStatusGlyph } from "./tasks/TaskGlyphs"
+import {
+  fuzzyScore,
+  MENTION_ALL_PER_KIND,
+  MENTION_FILTER_LABEL,
+  MENTION_KINDS,
+  mentionArrowsSwitchChips,
+  mentionAtCaret,
+  parseMentionQuery,
+  rankMentionNotes,
+  rankMentionTasks,
+  type MentionFilter,
+  type MentionKind,
+} from "./composerMentions"
 import { findModel, modelQualifier } from "../../../../packages/kybern-client/src/models"
 import { ModelPicker } from "@/components/kybern/ModelPicker"
 
@@ -61,6 +81,18 @@ export interface ComposerHandle {
   focus: () => void
   setText: (t: string) => void
   isEmpty: () => boolean
+  /**
+   * Insert a mention chip at the caret (or the end), followed by a space, and
+   * focus the editor. Build note and task parts with `noteMentionPart` /
+   * `taskMentionPart` from `lib/userInput`. A path already shown is left alone.
+   */
+  insertMention: (part: MentionPart) => void
+  /** Remove every chip for this mention path. */
+  removeMention: (path: string) => void
+  /** The note and task chips currently in the text, oldest pick first. */
+  mentions: () => MentionPart[]
+  /** Send what is written, as the send button would. */
+  submit: () => void
 }
 
 interface Attachment {
@@ -83,6 +115,12 @@ function labelAttachments<T extends { media_type: string; label?: string }>(list
     return { ...item, label }
   })
 }
+
+/** Saved with the draft beside the store's typed fields: note and task chips. */
+type DraftMentionExtras = { mentionReferences?: ComposerMentionReference[] }
+
+const NO_NOTES: Record<NoteId, NoteSummary> = {}
+const NO_TASKS: Record<TaskItemId, TaskItem> = {}
 
 const attachmentPart = (a: Attachment): AttachmentReference["part"] => ({ type: "attachment", asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size })
 
@@ -119,8 +157,13 @@ export interface ComposerProps {
   model?: string | null
   effort?: string | null
   onModelChange?: (model: string | undefined, effort: string | undefined) => Promise<void> | void
-  /** Enables @ file mentions. */
+  /** Enables @ file mentions and the skill catalog; also ranks this project's threads, notes and tasks first. */
   projectId?: ProjectId
+  /**
+   * Chips the composer starts with when it has no saved draft, e.g. the task on
+   * a task page. Until the person edits it, this prefill is not saved as a draft.
+   */
+  initialMentions?: readonly MentionPart[]
   /** Slash commands offered at a word boundary. */
   commands?: SlashCommand[]
   /** Panels stacked above the input surface (queued, approval, landing tray). */
@@ -154,34 +197,17 @@ const EDITOR_CLASS = cn(
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
 )
 
-const DEFAULT_PLACEHOLDER = "Ask anything, @ threads or files, $ skills, or / commands"
+const DEFAULT_PLACEHOLDER = "Ask anything, @ to mention, $ skills, or / commands"
 
 type ComposerMenuItem =
   | { id: string; type: "thread"; thread: Thread; snippet?: string | null }
+  | { id: string; type: "note"; note: NoteSummary; snippet: string | null }
+  | { id: string; type: "task"; task: TaskItem }
   | { id: string; type: "file"; path: string }
   | { id: string; type: "attachment"; attachment: Attachment }
   | { id: string; type: "command"; command: SlashCommand }
   | { id: string; type: "skill"; skill: SkillInfo }
   | { id: string; type: "plugin"; skill: SkillInfo }
-
-function fuzzyScore(value: string, query: string): number | null {
-  const haystack = value.toLowerCase()
-  const needle = query.trim().toLowerCase()
-  if (!needle) return 0
-  if (haystack === needle) return 0
-  if (haystack.startsWith(needle)) return 1
-  const boundary = haystack.search(new RegExp(`(?:^|[\\s:_-])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))
-  if (boundary >= 0) return 2 + boundary / 100
-  const included = haystack.indexOf(needle)
-  if (included >= 0) return 4 + included / 100
-  let at = 0
-  for (const character of needle) {
-    at = haystack.indexOf(character, at)
-    if (at < 0) return null
-    at += 1
-  }
-  return 10 + (haystack.length - needle.length) / 100
-}
 
 function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12, scope: "skill" | "plugin" = "skill"): SkillInfo[] {
   return skills
@@ -256,11 +282,21 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   } = props
   const [ownerStore] = useState(() => useStore)
   const [savedDraft] = useState(() => props.draftKey ? ownerStore.getState().composerDrafts[props.draftKey] : undefined)
+  // The untouched prefill from `initialMentions`; it becomes a draft once edited.
+  const [prefill] = useState(() => {
+    if (savedDraft || !props.initialMentions?.length) return null
+    const references: ComposerMentionReference[] = []
+    for (const part of props.initialMentions) {
+      const reference = createComposerMentionReference(part, references)
+      if (!references.includes(reference)) references.push(reference)
+    }
+    return { text: `${references.map((reference) => reference.token).join(" ")} `, references }
+  })
   const connected = useStore((s) => s.connection.state === "open")
   const projects = useStore((s) => s.projects)
   const threads = useStore((s) => s.threads)
   const disabled = disabledByParent || !connected
-  const [text, setText] = useState(savedDraft?.text ?? "")
+  const [text, setText] = useState(savedDraft?.text ?? prefill?.text ?? "")
   const [caret, setCaret] = useState(0)
   const [attachments, setAttachments] = useState<Attachment[]>(() => labelAttachments(savedDraft?.attachments ?? []))
   const [uploading, setUploading] = useState(0)
@@ -278,16 +314,32 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [skillCatalog, setSkillCatalog] = useState<{ key: string; skills: SkillInfo[] }>({ key: "", skills: [] })
   const [menuSel, setMenuSel] = useState<{ sig: string; index: number }>({ sig: "", index: 0 })
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
+  const [noteHits, setNoteHits] = useState<{ query: string; hits: ReadonlyMap<NoteId, string> }>({ query: "", hits: new Map() })
+  // The chip picked for one `@` (keyed by its position); a new `@` starts on All.
+  const [mentionChip, setMentionChip] = useState<{ key: string; filter: MentionFilter }>({ key: "", filter: "all" })
   const mentioned = useRef(new Set<string>(savedDraft?.mentions ?? []))
   const selectedSkills = useRef(new Map<string, SkillInfo>((savedDraft?.skills ?? []).map((skill) => [skill.name.toLowerCase(), skill])))
   const selectedThreadReferences = useRef<ComposerThreadReference[]>(savedDraft?.threadReferences ?? [])
+  const [initialMentionReferences] = useState<ComposerMentionReference[]>(() => (savedDraft as DraftMentionExtras | undefined)?.mentionReferences ?? prefill?.references ?? [])
+  const selectedMentionReferences = useRef<ComposerMentionReference[]>(initialMentionReferences)
   // Render-safe snapshot of the two refs above for the highlight layer; refreshed
   // after every pick and send so painted tokens match what buildParts will send.
-  const [tokenSources, setTokenSources] = useState(() => ({ mentions: new Set<string>(savedDraft?.mentions ?? []), skills: [...(savedDraft?.skills ?? [])], threadReferences: [...(savedDraft?.threadReferences ?? [])] }))
-  const syncTokenSources = () => setTokenSources({ mentions: new Set(mentioned.current), skills: [...selectedSkills.current.values()], threadReferences: [...selectedThreadReferences.current] })
+  const [tokenSources, setTokenSources] = useState(() => ({
+    mentions: new Set<string>(savedDraft?.mentions ?? []),
+    skills: [...(savedDraft?.skills ?? [])],
+    threadReferences: [...(savedDraft?.threadReferences ?? [])],
+    mentionReferences: [...initialMentionReferences],
+  }))
+  const syncTokenSources = () => setTokenSources({
+    mentions: new Set(mentioned.current),
+    skills: [...selectedSkills.current.values()],
+    threadReferences: [...selectedThreadReferences.current],
+    mentionReferences: [...selectedMentionReferences.current],
+  })
   const editor = useRef<ComposerEditorHandle>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const menuList = useRef<HTMLDivElement>(null)
+  const menuListId = useId()
   const previewUrls = useRef(new Set<string>())
 
   useLayoutEffect(() => {
@@ -295,16 +347,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!key) return
     ownerStore.getState().set((state) => {
       const composerDrafts = { ...state.composerDrafts }
-      if (text || attachments.length) {
-        composerDrafts[key] = {
+      if ((text || attachments.length) && !(prefill && text === prefill.text && !attachments.length)) {
+        const draft: (typeof composerDrafts)[string] & DraftMentionExtras = {
           text, attachments: attachments.map(({ id, name, media_type, size, label }) => ({ id, name, media_type, size, label })),
           mentions: [...mentioned.current], skills: [...selectedSkills.current.values()],
           threadReferences: [...selectedThreadReferences.current],
+          mentionReferences: [...selectedMentionReferences.current],
         }
+        composerDrafts[key] = draft
       } else delete composerDrafts[key]
       return { composerDrafts }
     })
-  }, [text, attachments, ownerStore, props.draftKey])
+  }, [text, attachments, ownerStore, props.draftKey, prefill])
 
   useEffect(
     () => () => {
@@ -324,11 +378,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     })
   }, [])
 
-  useImperativeHandle(ref, () => ({
-    focus: () => editor.current?.focus(),
-    setText: (t) => setTextAndCaret(t),
-    isEmpty: () => text.trim().length === 0 && attachments.length === 0,
-  }))
+  /** Remember a picked note or task so its token paints as a chip and sends as its part. */
+  const rememberMention = (part: MentionPart): ComposerMentionReference => {
+    const reference = createComposerMentionReference(part, selectedMentionReferences.current, selectedThreadReferences.current.map((item) => item.token))
+    selectedMentionReferences.current = [...selectedMentionReferences.current.filter((item) => item.part.path !== part.path), reference]
+    syncTokenSources()
+    return reference
+  }
+
 
   useEffect(() => {
     if (autoFocus) editor.current?.focus()
@@ -338,16 +395,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   // Chats without a project have no catalog; they still get `@Computer`.
   const computerUse = useStore((s) => s.settings?.computer_use?.enabled ?? false) && !!provider && provider.kind !== "codex"
-  const mention = useMemo(() => {
-    if (!projectId && attachments.length === 0 && !computerUse) return null
-    const before = text.slice(0, caret)
-    const at = before.lastIndexOf("@")
-    if (at === -1) return null
-    if (at > 0 && !/\s/.test(before[at - 1]!)) return null
-    const query = before.slice(at + 1)
-    if (/\s/.test(query)) return null
-    return { start: at, query }
-  }, [text, caret, projectId, attachments.length, computerUse])
+  // Threads, notes and tasks need no project, so `@` always opens the picker.
+  const mention = useMemo(() => mentionAtCaret(text, caret), [text, caret])
+  // `@note:login` searches notes for "login"; `term` is what every search uses.
+  const mentionScope = useMemo(() => (mention ? parseMentionQuery(mention.query) : null), [mention])
+  const term = mentionScope ? mentionScope.term : null
 
   const slash = useMemo(() => {
     const before = text.slice(0, caret)
@@ -370,25 +422,33 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [text, caret, projectId, provider])
 
   useEffect(() => {
-    if (!mention || !projectId) return
+    if (term === null) return
     let live = true
     const id = setTimeout(() => {
-      void searchFiles(projectId, mention.query, 12)
-        .then((files) => live && setFileResult({ query: mention.query, files }))
-        .catch(() => live && setFileResult({ query: mention.query, files: [] }))
-      if (mention.query) {
-        void rpc().call("threads.search", { project_id: projectId, all_projects: true, query: mention.query, limit: 12 })
-          .then((result) => live && setThreadResult({ query: mention.query, threads: result.threads }))
-          .catch(() => live && setThreadResult({ query: mention.query, threads: [] }))
-      } else {
-        setThreadResult({ query: "", threads: [] })
+      if (projectId) {
+        void searchFiles(projectId, term, 12)
+          .then((files) => live && setFileResult({ query: term, files }))
+          .catch(() => live && setFileResult({ query: term, files: [] }))
       }
+      if (!term) {
+        setThreadResult({ query: "", threads: [] })
+        setNoteHits({ query: "", hits: new Map() })
+        return
+      }
+      void rpc().call("threads.search", { project_id: projectId ?? null, all_projects: true, query: term, limit: 12 })
+        .then((result) => live && setThreadResult({ query: term, threads: result.threads }))
+        .catch(() => live && setThreadResult({ query: term, threads: [] }))
+      // Titles and previews match locally at once; the daemon adds body matches.
+      Promise.resolve()
+        .then(() => noteClient("env").call("notes.search", { query: term, limit: 8 }))
+        .then((result) => live && setNoteHits({ query: term, hits: new Map(result.results.map((hit) => [hit.id, hit.snippet])) }))
+        .catch(() => live && setNoteHits({ query: term, hits: new Map() }))
     }, 60)
     return () => {
       live = false
       clearTimeout(id)
     }
-  }, [mention, projectId])
+  }, [term, projectId])
 
   const skillCatalogKey = projectId && provider ? `${projectId}:${provider.kind}` : ""
   const needsSkills = !!skill || !!slash || !!mention
@@ -410,34 +470,71 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     () => (!projectId ? (computerUse ? [{ ...COMPUTER_MENTION_SKILL }] : []) : skillCatalog.key === skillCatalogKey ? skillCatalog.skills : []),
     [skillCatalog, skillCatalogKey, projectId, computerUse],
   )
-  const files = useMemo(() => (fileResult.query === mention?.query ? fileResult.files : []), [fileResult, mention?.query])
+  const files = useMemo(() => (fileResult.query === term ? fileResult.files : []), [fileResult, term])
   const currentThreadId = props.draftKey?.startsWith("thread:") ? props.draftKey.slice("thread:".length) : null
   const threadHits = useMemo(
-    () => mention?.query === ""
+    () => term === ""
       ? Object.values(threads)
           .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived")
           .sort((left, right) => Number(right.project_id === projectId) - Number(left.project_id === projectId) || Date.parse(right.updated_at) - Date.parse(left.updated_at))
           .slice(0, 12)
           .map((thread) => ({ thread }))
-      : threadResult.query === mention?.query
+      : threadResult.query === term
         ? threadResult.threads.filter((hit) => hit.thread.id !== currentThreadId)
         : [],
-    [currentThreadId, mention?.query, projectId, threadResult, threads],
+    [currentThreadId, term, projectId, threadResult, threads],
   )
+  // Notes and tasks are read only while the @ picker is up, so their changes never
+  // re-render an idle composer.
+  const noteFeed = useNotes((s) => (mention ? s.env.notes : NO_NOTES))
+  const taskFeed = useTasks((s) => (mention ? s.tasks : NO_TASKS))
+  const mentionNotes = useMemo(() => {
+    if (term === null) return { any: false, hits: [] }
+    // Shared Global notes live on This Mac; this environment's daemon cannot read them into a prompt.
+    const shared = isHomeShared()
+    const list = Object.values(noteFeed).filter((note) => !note.deleted_at && !(shared && note.scope === "global"))
+    return { any: list.length > 0, hits: rankMentionNotes(list, term, noteHits.query === term ? noteHits.hits : null, projectId) }
+  }, [noteFeed, noteHits, projectId, term])
+  const mentionTasks = useMemo(() => {
+    if (term === null) return { any: false, hits: [] }
+    const list = Object.values(taskFeed)
+    return { any: list.length > 0, hits: rankMentionTasks(list, term, projectId, keyMatchesQuery) }
+  }, [taskFeed, projectId, term])
   const attachmentReferences = useMemo<AttachmentReference[]>(
     () => attachments.map((a) => ({ token: `@${a.label}`, part: attachmentPart(a) })),
     [attachments],
   )
+
+  const mentionKey = mention ? `@${mention.start}` : null
+  const mentionFilter: MentionFilter = mentionScope?.kind ?? (mentionChip.key === mentionKey ? mentionChip.filter : "all")
+  const anyThread = !!mention && Object.keys(threads).length > (currentThreadId ? 1 : 0)
+  const anyPlugin = skills.some((item) => item.enabled && item.scope === "plugin")
+  // Chips for kinds that can have results; none when there is only one kind to show.
+  const mentionChips = useMemo<MentionFilter[]>(() => {
+    if (!mention) return []
+    const available: Record<MentionKind, boolean> = { thread: anyThread, note: mentionNotes.any, task: mentionTasks.any, file: !!projectId, plugin: anyPlugin }
+    const kinds = MENTION_KINDS.filter((kind) => available[kind] || kind === mentionFilter)
+    return kinds.length > 1 || mentionFilter !== "all" ? ["all", ...kinds] : []
+  }, [anyPlugin, anyThread, mention, mentionFilter, mentionNotes.any, mentionTasks.any, projectId])
+
   const menuItems = useMemo<ComposerMenuItem[]>(() => {
-    if (mention)
-      return [
-        ...attachments
-          .filter((a) => fuzzyScore(a.label, mention.query) != null || fuzzyScore(a.name, mention.query) != null)
-          .map((attachment) => ({ id: `attachment:${attachment.id}`, type: "attachment" as const, attachment })),
-        ...threadHits.map((hit) => ({ id: `thread:${hit.thread.id}`, type: "thread" as const, ...hit })),
-        ...rankSkills(skills, mention.query, 6, "plugin").map((item) => ({ id: `plugin:${item.path}`, type: "plugin" as const, skill: item })),
-        ...files.map((path) => ({ id: `file:${path}`, type: "file" as const, path })),
-      ]
+    if (mention && term !== null) {
+      const byKind: Record<MentionKind, ComposerMenuItem[]> = {
+        thread: threadHits.map((hit) => ({ id: `thread:${hit.thread.id}`, type: "thread" as const, ...hit })),
+        note: mentionNotes.hits.map(({ note, snippet }) => ({ id: `note:${note.id}`, type: "note" as const, note, snippet })),
+        task: mentionTasks.hits.map((task) => ({ id: `task:${task.id}`, type: "task" as const, task })),
+        file: files.map((path) => ({ id: `file:${path}`, type: "file" as const, path })),
+        plugin: rankSkills(skills, term, 12, "plugin").map((item) => ({ id: `plugin:${item.path}`, type: "plugin" as const, skill: item })),
+      }
+      if (mentionFilter !== "all") return byKind[mentionFilter]
+      const attachmentItems = attachments
+        .filter((a) => fuzzyScore(a.label, term) != null || fuzzyScore(a.name, term) != null)
+        .map((attachment) => ({ id: `attachment:${attachment.id}`, type: "attachment" as const, attachment }))
+      // A few of each kind; when only one kind matches, all of it.
+      const filled = MENTION_KINDS.filter((kind) => byKind[kind].length > 0).length + (attachmentItems.length > 0 ? 1 : 0)
+      const cap = filled > 1 ? MENTION_ALL_PER_KIND : Infinity
+      return [...attachmentItems, ...MENTION_KINDS.flatMap((kind) => byKind[kind].slice(0, cap))]
+    }
     if (skill) return rankSkills(skills, skill.query).map((item) => ({ id: `skill:${item.name}`, type: "skill", skill: item }))
     if (!slash) return []
     const commandItems = slash.skillOnly
@@ -451,10 +548,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           .map(({ command }) => ({ id: `command:${command.name}`, type: "command" as const, command }))
     const skillItems = rankSkills(skills, slash.query).map((item) => ({ id: `skill:${item.name}`, type: "skill" as const, skill: item }))
     return [...commandItems, ...skillItems].slice(0, 16)
-  }, [attachments, commands, files, mention, skill, skills, slash, threadHits])
-  const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? `/${slash.start}` : null
+  }, [attachments, commands, files, mention, mentionFilter, mentionNotes.hits, mentionTasks.hits, skill, skills, slash, term, threadHits])
+  const menuKey = mentionKey ?? (skill ? `$${skill.start}` : slash ? `/${slash.start}` : null)
   const menuOpen = !!menuKey && menuDismissed !== menuKey
-  const menuSignature = `${menuKey}:${menuItems.map((item) => item.id).join("|")}`
+  const menuSignature = `${menuKey}:${mention ? mentionFilter : ""}:${menuItems.map((item) => item.id).join("|")}`
   const menuIndex = menuSel.sig === menuSignature ? menuSel.index : 0
   const setMenuIndex = (f: number | ((i: number) => number)) => setMenuSel({ sig: menuSignature, index: typeof f === "function" ? f(menuIndex) : f })
 
@@ -462,6 +559,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!menuOpen) return
     menuList.current?.querySelector<HTMLElement>(`[data-menu-index="${menuIndex}"]`)?.scrollIntoView({ block: "nearest" })
   }, [menuIndex, menuOpen, menuSignature])
+
+  /** Show one kind (or All). A typed `note:` prefix gives way to the chip. */
+  const selectMentionFilter = (next: MentionFilter) => {
+    if (!mention || !mentionScope) return
+    setMentionChip({ key: `@${mention.start}`, filter: next })
+    if (mentionScope.kind && mentionScope.kind !== next) {
+      const from = mention.start + 1
+      setTextAndCaret(`${text.slice(0, from)}${text.slice(from + mentionScope.prefixLength)}`, Math.max(from, caret - mentionScope.prefixLength))
+    }
+  }
 
   const pickMention = (path: string) => {
     if (!mention) return
@@ -481,6 +588,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const reference = createComposerThreadReference(thread, selectedThreadReferences.current, projectName)
     selectedThreadReferences.current = [...selectedThreadReferences.current.filter((item) => item.part.thread_id !== thread.id), reference]
     syncTokenSources()
+    const next = `${text.slice(0, mention.start)}${reference.token} ${text.slice(caret)}`
+    setTextAndCaret(next, mention.start + reference.token.length + 1)
+  }
+  const pickKybernMention = (part: MentionPart) => {
+    if (!mention) return
+    const reference = rememberMention(part)
     const next = `${text.slice(0, mention.start)}${reference.token} ${text.slice(caret)}`
     setTextAndCaret(next, mention.start + reference.token.length + 1)
   }
@@ -516,6 +629,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const item = menuItems[i]
     if (!item) return
     if (item.type === "thread") pickThread(item.thread)
+    else if (item.type === "note") pickKybernMention(noteMentionPart({ id: item.note.id, title: noteTitle(item.note) }))
+    else if (item.type === "task") pickKybernMention(taskMentionPart(item.task))
     else if (item.type === "file") pickMention(item.path)
     else if (item.type === "attachment") pickAttachment(item.attachment)
     else if (item.type === "command") pickCommand(item.command)
@@ -529,7 +644,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   // Tokens the editor shows: the same ones buildParts will send.
   const segments = useMemo(
-    () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills], tokenSources.threadReferences, attachmentReferences),
+    () => structuredSegments(text, tokenSources.mentions, [...skills, ...tokenSources.skills], tokenSources.threadReferences, attachmentReferences, tokenSources.mentionReferences),
     [text, skills, tokenSources, attachmentReferences],
   )
 
@@ -543,7 +658,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               token:
                 segment.part.type === "thread_reference" ? "thread"
                 : segment.part.type === "skill" ? "skill"
-                : segment.part.type === "mention" ? (segment.part.path === COMPUTER_MENTION_PATH ? "computer" : "plugin")
+                : segment.part.type === "mention" ? mentionTokenKind(segment.part.path)
                 : segment.part.type === "attachment" ? "attachment"
                 : "file",
             }
@@ -554,7 +669,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const buildParts = (): ContentPart[] => {
     const skillItems = [...skills, ...selectedSkills.current.values()]
-    const parts = buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current, attachmentReferences)
+    const parts = buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current, attachmentReferences, selectedMentionReferences.current)
     // Attachments the prompt never mentions keep their old place at the end.
     const placed = new Set(parts.flatMap((part) => (part.type === "attachment" ? [part.asset_id] : [])))
     for (const a of attachments) if (!placed.has(a.id)) parts.push(attachmentPart(a))
@@ -582,6 +697,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       mentioned.current.clear()
       selectedSkills.current.clear()
       selectedThreadReferences.current = []
+      selectedMentionReferences.current = []
       syncTokenSources()
       editor.current?.focus()
     } catch (e) {
@@ -590,6 +706,33 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       setSending(false)
     }
   }
+
+  useImperativeHandle(ref, () => ({
+    focus: () => editor.current?.focus(),
+    setText: (t) => setTextAndCaret(t),
+    isEmpty: () => text.trim().length === 0 && attachments.length === 0,
+    insertMention: (part) => {
+      const shown = selectedMentionReferences.current.find((item) => item.part.path === part.path)
+      if (shown && hasToken(text, shown.token)) return
+      const reference = rememberMention(part)
+      const focused = !!editor.current?.element && document.activeElement === editor.current.element
+      const at = focused ? Math.min(caret, text.length) : text.length
+      const before = text.slice(0, at)
+      const insert = `${before && !/\s$/.test(before) ? " " : ""}${reference.token} `
+      setTextAndCaret(`${before}${insert}${text.slice(at)}`, at + insert.length)
+    },
+    removeMention: (path) => {
+      const tokens = selectedMentionReferences.current.filter((item) => item.part.path === path).map((item) => item.token)
+      if (!tokens.length) return
+      selectedMentionReferences.current = selectedMentionReferences.current.filter((item) => item.part.path !== path)
+      syncTokenSources()
+      let next = text
+      for (const token of tokens) next = next.replace(tokenPattern(token, "g"), (_match, lead: string) => lead)
+      if (next !== text) setText(next)
+    },
+    mentions: () => selectedMentionReferences.current.filter((item) => hasToken(text, item.token)).map((item) => item.part),
+    submit: () => void submit(),
+  }))
 
   const addFiles = useCallback(async (list: FileList | File[]) => {
     const arr = Array.from(list)
@@ -622,6 +765,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.nativeEvent.isComposing) return
     const steerShortcut = running && (isMac ? e.metaKey : e.ctrlKey)
+    // ←/→ switch the @ picker's chips until a term is typed; after that, and with a
+    // modifier, they move or select text as usual.
+    if (menuOpen && mention && mentionChips.length > 1 && mentionArrowsSwitchChips(mention.query) && (e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault()
+      const at = Math.max(0, mentionChips.indexOf(mentionFilter))
+      selectMentionFilter(mentionChips[(at + (e.key === "ArrowRight" ? 1 : -1) + mentionChips.length) % mentionChips.length]!)
+      return
+    }
     if (menuOpen && menuItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault()
@@ -676,15 +827,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       : { ...m, description: "Disable Cursor’s sandbox and automatic review" })
     : MODES
   const modeInfo = modes.find((m) => m.mode === mode) ?? modes[0]!
-  const menuLoading = mention ? !!projectId && (fileResult.query !== mention.query || threadResult.query !== mention.query) : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
-  const menuEmptyText = menuLoading
-    ? mention
-      ? "Searching project files…"
-      : "Loading agent skills…"
-    : mention
-      ? mention.query
-        ? "No matching threads or files"
-        : "Type to search threads and project files"
+  const wantsMention = (kind: MentionKind) => mentionFilter === "all" || mentionFilter === kind
+  const menuLoading = mention && term !== null
+    ? (wantsMention("file") && !!projectId && fileResult.query !== term) || (wantsMention("thread") && !!term && threadResult.query !== term)
+    : (!!skill || !!slash) && skillCatalog.key !== skillCatalogKey
+  const menuEmptyText = mention && term !== null
+    ? menuLoading ? "Searching…" : mentionEmptyText(mentionFilter, term, !!projectId)
+    : menuLoading
+      ? "Loading agent skills…"
       : skill
         ? "No matching skills"
         : "No matching commands or skills"
@@ -762,8 +912,22 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           <div className={cn(COMPOSER_EDITOR_PADDING_CLASS_NAME, menuOpen && "overflow-visible")}>
             {menuOpen && (
               <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
-                <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME} role="listbox">
-                  <div ref={menuList} className="max-h-[min(22rem,45vh)] scroll-py-1 overflow-y-auto overscroll-contain p-1.5">
+                <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME}>
+                  {mention && mentionChips.length > 1 && (
+                    <ComposerMentionChips
+                      chips={mentionChips.map((id) => ({ id, label: MENTION_FILTER_LABEL[id] }))}
+                      active={mentionFilter}
+                      onSelect={selectMentionFilter}
+                      controls={menuListId}
+                    />
+                  )}
+                  <div
+                    ref={menuList}
+                    id={menuListId}
+                    role="listbox"
+                    aria-label={mention ? `Mention ${mentionFilter === "all" ? "anything" : MENTION_FILTER_LABEL[mentionFilter].toLowerCase()}` : slash ? "Commands and skills" : "Skills"}
+                    className="max-h-[min(22rem,45vh)] scroll-py-1 overflow-y-auto overscroll-contain p-1.5"
+                  >
                     {menuItems.length === 0 ? (
                       <p className="px-2.5 py-2 text-[length:var(--app-font-size-ui-sm,11px)] leading-relaxed text-muted-foreground/60">{menuEmptyText}</p>
                     ) : (
@@ -771,12 +935,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         const active = i === menuIndex
                         const previous = menuItems[i - 1]
                         const sectionOf = (entry: ComposerMenuItem | undefined) =>
-                          !entry ? null : entry.type === "thread" ? "Threads" : entry.type === "attachment" ? "Attachments" : entry.type === "file" ? "Files" : entry.type === "command" ? "Commands" : entry.type === "plugin" ? "Plugins" : "Skills"
+                          !entry ? null : entry.type === "thread" ? "Threads" : entry.type === "note" ? "Notes" : entry.type === "task" ? "Tasks" : entry.type === "attachment" ? "Attachments" : entry.type === "file" ? "Files" : entry.type === "command" ? "Commands" : entry.type === "plugin" ? "Plugins" : "Skills"
                         const section = sectionOf(item)
                         const previousSection = sectionOf(previous)
                         const title =
                           item.type === "thread"
                             ? item.thread.title || "Untitled thread"
+                            : item.type === "note"
+                            ? noteTitle(item.note)
+                            : item.type === "task"
+                            ? item.task.title.trim() || "Untitled task"
                             : item.type === "attachment"
                             ? `@${item.attachment.label}`
                             : item.type === "file"
@@ -786,10 +954,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               : item.type === "plugin"
                                 ? item.skill.display_name ?? titleCase(item.skill.name)
                                 : item.skill.display_name ?? titleCase(item.skill.name)
-                        const description = item.type === "thread" ? item.snippet : item.type === "attachment" ? item.attachment.name : item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
+                        const description = item.type === "thread" ? item.snippet : item.type === "note" ? item.snippet ?? item.note.preview : item.type === "attachment" ? item.attachment.name : item.type === "command" ? item.command.hint : item.type === "skill" || item.type === "plugin" ? item.skill.description : null
                         return (
                           <Fragment key={item.id}>
-                            {section !== previousSection && (
+                            {(!mention || mentionFilter === "all") && section !== previousSection && (
                               <div className={cn("px-2.5 pb-1 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground/60", i > 0 ? "pt-2.5" : "pt-1")}>
                                 {section}
                               </div>
@@ -804,9 +972,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                               onClick={() => pick(i)}
                               className={cn("w-full", COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME, active && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME)}
                             >
-                              <span className={cn("flex size-4 shrink-0 items-center justify-center [&_[stroke]]:[stroke-width:2]", active ? "text-foreground" : "text-foreground/85")}>
+                              <span className={cn("flex size-4 shrink-0 items-center justify-center", item.type !== "task" && "[&_[stroke]]:[stroke-width:2]", active ? "text-foreground" : "text-foreground/85")}>
                                 {item.type === "thread" ? (
                                   <MessageCircleIcon className="size-4" />
+                                ) : item.type === "note" ? (
+                                  <NoteIcon className="size-4" />
+                                ) : item.type === "task" ? (
+                                  <TaskStatusGlyph status={item.task.status} size={14} title={STATUS_LABEL[item.task.status]} />
                                 ) : item.type === "attachment" ? (
                                   <FileEntryIcon pathValue={item.attachment.name} kind="file" mimeType={item.attachment.media_type} className="size-4" />
                                 ) : item.type === "file" ? (
@@ -824,6 +996,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                     regular weight, its description inline in muted ink. Hierarchy is
                                     carried by colour, not by a heavier title weight. */}
                                 <span className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+                                  {item.type === "task" && (
+                                    <span className="shrink-0 text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums text-muted-foreground/60">{item.task.key}</span>
+                                  )}
                                   <span className="max-w-[60%] shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground">{title}</span>
                                   {description && description !== title && (
                                     <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/70">{description}</span>
@@ -831,6 +1006,23 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                                 </span>
                                 {item.type === "thread" ? (
                                   <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{isFreeChatProject(item.thread.project_id) ? "Free chat" : projects[item.thread.project_id]?.name ?? "Project"}</span>
+                                ) : item.type === "note" ? (
+                                  <span className="flex max-w-[38%] shrink-0 items-baseline gap-1.5 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">
+                                    {item.note.checklist.total > 0 && (
+                                      <span className="shrink-0 tabular-nums" title={`${item.note.checklist.done} of ${item.note.checklist.total} done`}>{item.note.checklist.done}/{item.note.checklist.total}</span>
+                                    )}
+                                    <span className="min-w-0 truncate">{noteScopeLabel(item.note, projects, threads)}</span>
+                                  </span>
+                                ) : item.type === "task" ? (
+                                  <span className="flex max-w-[38%] shrink-0 items-center gap-1.5 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">
+                                    {item.task.priority !== 0 && (
+                                      <span className="flex shrink-0 text-muted-foreground/70" title={PRIORITY_LABEL[item.task.priority]}>
+                                        <PriorityGlyph priority={item.task.priority} size={12} />
+                                        <span className="sr-only">{PRIORITY_LABEL[item.task.priority]}</span>
+                                      </span>
+                                    )}
+                                    <span className="min-w-0 truncate">{item.task.scope === "global" || !item.task.project_id ? "Global" : projects[item.task.project_id]?.name ?? "Project"}</span>
+                                  </span>
                                 ) : item.type === "file" ? (
                                   <span className="max-w-[38%] shrink-0 truncate text-end text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/45">{parentPath(item.path)}</span>
                                 ) : item.type === "attachment" ? null : item.type === "command" ? (
@@ -1212,6 +1404,31 @@ function RemoveButton({ name, onClick }: { name: string; onClick: () => void }) 
     </button>
   )
 }
+
+function mentionEmptyText(filter: MentionFilter, term: string, hasProject: boolean): string {
+  const query = term.trim()
+  switch (filter) {
+    case "all":
+      return query ? `No results for “${query}”` : "Type to search threads, notes, tasks, and files"
+    case "thread":
+      return query ? "No matching threads" : "No other threads yet"
+    case "note":
+      return query ? "No matching notes" : "No notes yet"
+    case "task":
+      return query ? "No matching tasks" : "No tasks yet"
+    case "file":
+      return !hasProject ? "Open a project chat to mention its files" : query ? "No matching files" : "No files in this project"
+    case "plugin":
+      return query ? "No matching plugins" : "No plugins for this agent"
+  }
+}
+
+/** A token standing alone in the text, with the one space it was inserted with. */
+function tokenPattern(token: string, flags = ""): RegExp {
+  return new RegExp(`(^|\\s)${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s,.;:!?]|$) ?`, flags)
+}
+
+const hasToken = (text: string, token: string) => tokenPattern(token).test(text)
 
 function titleCase(s: string): string {
   return s

@@ -4,6 +4,7 @@ import {
   Heading1Icon,
   Heading2Icon,
   Heading3Icon,
+  ImageIcon,
   ListBulletIcon,
   ListNumberIcon,
   ListChecksIcon,
@@ -25,4 +26,5 @@ export const SLASH_ICONS: Record<SlashIcon, LucideIcon> = {
   quote: QuoteIcon,
   code: CodeBlockIcon,
   divider: MinusIcon,
+  image: ImageIcon,
 }

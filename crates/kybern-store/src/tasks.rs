@@ -25,7 +25,7 @@ pub const GLOBAL_TASK_PREFIX: &str = "TSK";
 /// Longest accepted task title.
 pub const TASK_TITLE_MAX_CHARS: usize = 300;
 /// Largest accepted task body.
-pub const TASK_BODY_MAX_BYTES: usize = 256 * 1024;
+pub const TASK_BODY_MAX_BYTES: usize = 512 * 1024;
 /// How long a deleted task stays restorable.
 pub const TASK_RETENTION_DAYS: i64 = 30;
 const FOLLOWUP_MAX_BYTES: usize = 64 * 1024;
@@ -62,6 +62,8 @@ pub struct NewTask {
     pub note_ids: Vec<NoteId>,
     /// The note whose checklist line this task came from; it is also linked.
     pub source_note_id: Option<NoteId>,
+    /// The thread whose agent created the task; `None` for the user's own tasks.
+    pub created_by_thread: Option<ThreadId>,
 }
 
 /// Changes to a task. Every field is optional; absent means unchanged.
@@ -163,8 +165,8 @@ impl Store {
             let now = Utc::now().to_rfc3339();
             tx.execute(
                 "INSERT INTO task_items(id, key, project_id, title, body, status, priority, rank, source_note_id, revision,
-                                        created_at, updated_at, status_changed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?10, ?10)",
+                                        created_at, updated_at, status_changed_at, created_by_thread_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?10, ?10, ?11)",
                 params![
                     id.to_string(),
                     key,
@@ -175,7 +177,8 @@ impl Store {
                     new.priority,
                     end_rank(&tx, status, None)?,
                     new.source_note_id.map(|id| id.to_string()),
-                    now
+                    now,
+                    new.created_by_thread.map(|id| id.to_string())
                 ],
             )?;
             write_note_links(&tx, id, &note_ids)?;
@@ -820,7 +823,7 @@ fn check_content(title: Option<&str>, body: Option<&str>) -> Result<()> {
         return invalid("This title is too long. Keep it under 300 characters and try again.");
     }
     if body.is_some_and(|body| body.len() > TASK_BODY_MAX_BYTES) {
-        return invalid("This description is too long. Keep it under 256 KB and try again.");
+        return invalid("This description is too long. Keep it under 512 KB and try again.");
     }
     Ok(())
 }
@@ -835,7 +838,7 @@ fn check_priority(priority: TaskPriority) -> Result<()> {
 // ---- rows ----
 
 const ITEM_SELECT: &str = "SELECT id, key, project_id, title, body, status, priority, rank, source_note_id, pending_followup,
-        revision, created_at, updated_at, status_changed_at, deleted_at FROM task_items";
+        revision, created_at, updated_at, status_changed_at, deleted_at, created_by_thread_id FROM task_items";
 
 fn parse_enum<T: DeserializeOwned>(value: String) -> rusqlite::Result<T> {
     serde_json::from_value(serde_json::Value::String(value)).map_err(other)
@@ -861,6 +864,7 @@ fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<(TaskItem, Option<Date
         created_at: parse_time(r.get::<_, String>(11)?)?,
         updated_at: parse_time(r.get::<_, String>(12)?)?,
         status_changed_at: parse_time(r.get::<_, String>(13)?)?,
+        created_by_thread: r.get::<_, Option<String>>(15)?.map(parse_uuid).transpose()?,
     };
     let deleted_at = r.get::<_, Option<String>>(14)?.map(parse_time).transpose()?;
     Ok((item, deleted_at))
@@ -1112,6 +1116,7 @@ mod tests {
             priority: 0,
             note_ids: Vec::new(),
             source_note_id: None,
+            created_by_thread: None,
         }
     }
 
@@ -1124,6 +1129,55 @@ mod tests {
 
     fn titles(store: &Store, status: TaskStatus) -> Vec<String> {
         store.task_items_list().unwrap().into_iter().filter(|t| t.status == status).map(|t| t.title).collect()
+    }
+
+    #[test]
+    fn agent_authorship_survives_the_migration_and_round_trips() {
+        // A v14 database (tasks, no authorship) gains the column with every old row unattributed.
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate_to(&conn, 14).unwrap();
+        conn.execute_batch(
+            "INSERT INTO task_items(id, key, title, status, rank, revision, created_at, updated_at, status_changed_at)
+               VALUES ('00000000-0000-7000-8000-000000000001', 'TSK-1', 'Old', 'inbox', 1024, 1,
+                       '2026-10-01T00:00:00+00:00', '2026-10-01T00:00:00+00:00', '2026-10-01T00:00:00+00:00');
+             INSERT INTO notes(id, scope, title, body, revision, created_at, updated_at)
+               VALUES ('00000000-0000-7000-8000-000000000002', 'global', 'Old note', '', 1, '2026-10-01T00:00:00+00:00', '2026-10-01T00:00:00+00:00');",
+        )
+        .unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let authors: Vec<Option<String>> = conn
+            .prepare("SELECT created_by_thread_id FROM task_items UNION ALL SELECT created_by_thread_id FROM notes")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(authors, vec![None, None]);
+
+        let store = Store::open_in_memory().unwrap();
+        let ade = project(&store, "ade");
+        let agent = thread(&store, &ade);
+        let user_task = store.task_item_create(new_task(Some(&ade), "Mine")).unwrap();
+        assert_eq!(user_task.created_by_thread, None);
+        let agent_task =
+            store.task_item_create(NewTask { created_by_thread: Some(agent.id), ..new_task(Some(&ade), "Filed by an agent") }).unwrap();
+        assert_eq!(agent_task.created_by_thread, Some(agent.id));
+        assert_eq!(store.task_item_get(agent_task.id).unwrap().unwrap().created_by_thread, Some(agent.id));
+        let listed = store.task_items_list().unwrap();
+        assert_eq!(listed.iter().find(|task| task.id == agent_task.id).unwrap().created_by_thread, Some(agent.id));
+
+        let user_note = store.note_create(NoteScope::Project, Some(ade.id), "Mine", "").unwrap();
+        assert_eq!(user_note.summary.created_by_thread, None);
+        let agent_note = store.note_create_by(NoteScope::Project, Some(ade.id), "Findings", "x", Some(agent.id)).unwrap();
+        assert_eq!(store.note_get(agent_note.summary.id).unwrap().unwrap().summary.created_by_thread, Some(agent.id));
+        let edited = store.note_update(crate::NoteTarget::Id(agent_note.summary.id), 1, None, Some("y")).unwrap();
+        assert_eq!(edited.summary.created_by_thread, Some(agent.id), "edits keep the author");
+
+        // Descriptions now take as much as notes do.
+        let big = "x".repeat(TASK_BODY_MAX_BYTES);
+        assert!(store.task_item_create(NewTask { body: big.clone(), ..new_task(None, "Big") }).is_ok());
+        let error = task_error(store.task_item_create(NewTask { body: big + "x", ..new_task(None, "Too big") }));
+        assert_eq!(error, TaskError::Invalid("This description is too long. Keep it under 512 KB and try again.".into()));
     }
 
     #[test]

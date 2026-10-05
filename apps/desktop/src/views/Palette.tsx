@@ -84,20 +84,25 @@ export function Palette() {
         ),
         run: () => newThread(),
       },
-      {
-        id: "dock",
-        label: "Toggle right sidebar",
-        keywords: "panel dock changes terminal",
-        group: "Suggested",
-        icon: <PanelRightCloseIcon className="size-[15px]" />,
-        meta: (
-          <KbdGroup className="shrink-0">
-            <Kbd>{mod}</Kbd>
-            <Kbd>J</Kbd>
-          </KbdGroup>
-        ),
-        run: () => set((s) => ({ rightOpen: !s.rightOpen })),
-      },
+      // Notes and Tasks have no dock.
+      ...(selected.kind === "notes" || selected.kind === "tasks"
+        ? []
+        : [
+            {
+              id: "dock",
+              label: "Toggle right sidebar",
+              keywords: "panel dock changes terminal",
+              group: "Suggested" as const,
+              icon: <PanelRightCloseIcon className="size-[15px]" />,
+              meta: (
+                <KbdGroup className="shrink-0">
+                  <Kbd>{mod}</Kbd>
+                  <Kbd>J</Kbd>
+                </KbdGroup>
+              ),
+              run: () => set((s) => ({ rightOpen: !s.rightOpen })),
+            },
+          ]),
       ...(selected.kind === "thread"
         ? [
             {

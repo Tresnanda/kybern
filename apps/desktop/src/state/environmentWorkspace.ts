@@ -3,7 +3,7 @@
 import type { AppState, RightTab } from "./store"
 import { readSidebarFilter } from "./sidebarOrganize"
 
-const rightTabIds: RightTab[] = ["collaboration", "activity", "changes", "terminal", "explorer", "artifacts"]
+const rightTabIds: RightTab[] = ["collaboration", "activity", "changes", "terminal", "explorer", "artifacts", "notes", "tasks"]
 
 export const workspaceKey = (environmentId: string) =>
   `kybern.workspace.v1:${environmentId}`

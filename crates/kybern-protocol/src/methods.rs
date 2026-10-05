@@ -219,6 +219,16 @@ pub struct ProjectsRemoveParams {
 }
 method!(ProjectsRemove, "projects.remove", Some(Scope::OrchestrationOperate), ProjectsRemoveParams, Empty);
 
+pub const PROJECTS_CHANGED_NOTIFICATION: &str = "projects.changed";
+
+/// Params of the `projects.changed` notification, sent after a project is added,
+/// updated or removed by any client or by the daemon itself.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsChangedNotification {
+    /// Every project after the change, in `projects.list` order.
+    pub projects: Vec<Project>,
+}
+
 // ---- threads ----
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -1856,6 +1866,10 @@ pub struct NoteSummary {
     /// such as "kybern" or "kybern › Fix login".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// The thread whose agent created the note with its native tools. Absent for
+    /// notes the user wrote; agents may only append to those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_thread: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2117,6 +2131,10 @@ pub struct TaskItem {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// When the status last changed.
     pub status_changed_at: chrono::DateTime<chrono::Utc>,
+    /// The thread whose agent created the task with its native tools. Absent for
+    /// tasks the user created; agents may only append to and check items of those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_thread: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2228,8 +2246,14 @@ pub struct TaskItemsSendParams {
     /// Required for global tasks: the project the run happens in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
-    /// The (possibly edited) prompt text.
-    pub prompt: String,
+    /// The (possibly edited) prompt text. Exactly one of `prompt` or `message` is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// The full first message (text, mentions, skills, files, thread references,
+    /// attachments). The daemon adds a `kybern://task/<id>` mention for this task
+    /// at the start when the message has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<UserMessage>,
     /// Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note_ids: Option<Vec<NoteId>>,
@@ -2244,12 +2268,26 @@ method!(TaskItemsSend, "tasks.items.send", Some(Scope::OrchestrationOperate), Ta
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsFollowupParams {
     pub id: TaskItemId,
-    pub text: String,
+    /// Plain text. Exactly one of `text` or `message` is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The full follow-up (text, mentions, skills, files, thread references,
+    /// attachments), sent or queued as is. When no run can receive it, a message
+    /// of text and references is saved as readable text for the next run; one
+    /// with attachments is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<UserMessage>,
+}
+impl TaskItemsFollowupParams {
+    /// A plain-text follow-up.
+    pub fn text(id: TaskItemId, text: impl Into<String>) -> Self {
+        Self { id, text: Some(text.into()), message: None }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsFollowupResult {
     pub task: TaskItem,
-    /// The run thread that received the text, sent now or queued. Absent when it was saved for the next run.
+    /// The run thread that received the follow-up, sent now or queued. Absent when it was saved for the next run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sent_to: Option<ThreadId>,
 }

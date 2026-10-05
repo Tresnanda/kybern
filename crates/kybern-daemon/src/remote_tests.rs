@@ -552,6 +552,53 @@ async fn next_tasks_changed(client: &Client) -> TaskItemsChangedNotification {
     }
 }
 
+async fn next_projects_changed(client: &Client) -> ProjectsChangedNotification {
+    let mut notifications = client.notifications.lock().await;
+    loop {
+        let notification =
+            tokio::time::timeout(Duration::from_secs(3), futures::StreamExt::next(&mut *notifications)).await.unwrap().unwrap();
+        if notification.method == PROJECTS_CHANGED_NOTIFICATION {
+            return serde_json::from_value(notification.params).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn project_changes_reach_every_client() {
+    let host = Host::start().await;
+    let desktop = host.client().await;
+    let phone = host.client().await;
+    let folder = host.root.join("shop");
+    std::fs::create_dir_all(&folder).unwrap();
+
+    let added = desktop
+        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: Some("Shop".into()) })
+        .await
+        .unwrap();
+    let announced = next_projects_changed(&phone).await;
+    assert!(announced.projects.iter().any(|project| project.id == added.id && project.name == "Shop"), "the new project is announced");
+    // Adding the same folder again changes nothing, so nothing is announced for it.
+    desktop.call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: None }).await.unwrap();
+
+    desktop
+        .call::<ProjectsUpdate>(ProjectsUpdateParams {
+            project_id: added.id,
+            name: Some("Storefront".into()),
+            worktrees_default: None,
+            task_prefix: None,
+        })
+        .await
+        .unwrap();
+    let renamed = next_projects_changed(&phone).await;
+    assert_eq!(renamed.projects.iter().find(|project| project.id == added.id).map(|project| project.name.as_str()), Some("Storefront"));
+
+    desktop.call::<ProjectsRemove>(ProjectsRemoveParams { project_id: added.id }).await.unwrap();
+    let removed = next_projects_changed(&phone).await;
+    assert!(removed.projects.iter().all(|project| project.id != added.id), "the removed project is gone from the list");
+    // The acting client hears about its own changes too, so every window stays in step.
+    assert!(next_projects_changed(&desktop).await.projects.iter().any(|project| project.id == added.id));
+}
+
 fn task_create(project_id: Option<ProjectId>, title: &str) -> TaskItemsCreateParams {
     TaskItemsCreateParams {
         scope: if project_id.is_some() { TaskScope::Project } else { TaskScope::Global },
@@ -641,12 +688,13 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
         use_worktree: None,
         base_branch: None,
         project_id: None,
-        prompt: " ".into(),
+        prompt: Some(" ".into()),
+        message: None,
         note_ids: None,
     };
     let rejected = phone.call_raw(TaskItemsSend::NAME, serde_json::to_value(empty_prompt).unwrap()).await.unwrap_err().to_string();
     assert!(rejected.contains(&format!("code {}", codes::INVALID_PARAMS)), "{rejected}");
-    let saved = phone.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: created.id, text: "also tests".into() }).await.unwrap();
+    let saved = phone.call::<TaskItemsFollowup>(TaskItemsFollowupParams::text(created.id, "also tests")).await.unwrap();
     assert_eq!((saved.sent_to, saved.task.pending_followup.as_deref()), (None, Some("also tests")));
     assert_eq!(next_tasks_changed(&phone).await.task.unwrap().pending_followup.as_deref(), Some("also tests"));
 
@@ -668,7 +716,7 @@ async fn a_follow_up_over_rpc_reopens_the_run_and_every_broadcast_keeps_task_and
     next_tasks_changed(&phone).await;
 
     // Before any run, follow-ups are saved: trimmed, one blank line apart.
-    let call = |text: &str| desktop.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: task.id, text: text.into() });
+    let call = |text: &str| desktop.call::<TaskItemsFollowup>(TaskItemsFollowupParams::text(task.id, text));
     assert_eq!(call("  first \n").await.unwrap().task.pending_followup.as_deref(), Some("first"));
     assert_eq!(call("\nsecond\n\n").await.unwrap().task.pending_followup.as_deref(), Some("first\n\nsecond"));
     next_tasks_changed(&phone).await;
@@ -702,7 +750,7 @@ async fn a_follow_up_over_rpc_reopens_the_run_and_every_broadcast_keeps_task_and
     tokio::time::sleep(Duration::from_millis(5)).await;
 
     // The thread is busy, so the follow-up is queued on it; when the queued turn starts, the run reopens.
-    let queued = desktop.call::<TaskItemsFollowup>(TaskItemsFollowupParams { id: task.id, text: "while you work".into() }).await.unwrap();
+    let queued = desktop.call::<TaskItemsFollowup>(TaskItemsFollowupParams::text(task.id, "while you work")).await.unwrap();
     assert_eq!(queued.sent_to, Some(thread.id));
     assert_eq!(host.state.store.queue_list(Some(thread.id)).unwrap().len(), 1);
     emit(started());

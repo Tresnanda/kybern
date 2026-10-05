@@ -69,7 +69,7 @@ export type Connection =
   | { state: "reconnecting"; detail?: string }
   | { state: "failed"; detail: string }
 
-export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts"
+export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks"
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {

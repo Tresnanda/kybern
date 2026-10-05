@@ -13,7 +13,7 @@ import type { TaskItem, TaskItemId } from "@/protocol"
 import {
   closeTaskMenu,
   deleteTask,
-  openSendSheet,
+  openRunComposer,
   openTask,
   openTaskMenu,
   refreshTasks,
@@ -34,7 +34,6 @@ import {
 import { orderProjects } from "@/state/sidebarOrganize"
 import { useStore } from "@/state/store"
 import { SurfaceHeader } from "../chrome"
-import { SendSheet } from "./SendSheet"
 import { TaskBoard } from "./TaskBoard"
 import { TaskDetail } from "./TaskDetail"
 import { TaskList } from "./TaskList"
@@ -117,14 +116,13 @@ export function TasksView() {
   return (
     <div className="tk-page font-system-ui">
       {!taskId && (
-        <SurfaceHeader trailing={<ListControls board={board} />}>
+        <SurfaceHeader dock={false} trailing={<ListControls board={board} />}>
           <h1 className="tk-title">{title}</h1>
         </SurfaceHeader>
       )}
       {content}
       {!taskId && loaded && supported && prefs.showHints && all.length > 0 && <HintBar />}
       <KeyboardMenus />
-      <SendSheet />
     </div>
   )
 }
@@ -258,6 +256,11 @@ function editable(target: EventTarget | null): boolean {
   return element.tagName === "INPUT" || element.tagName === "TEXTAREA" || element.isContentEditable || !!element.closest("[role=menu], [role=dialog], [role=listbox]")
 }
 
+function richText(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null
+  return !!element?.isContentEditable || !!element?.closest?.("[role=menu], [role=dialog], [role=listbox]")
+}
+
 function useTaskKeys({ sequence, columns, openId }: { sequence: TaskItemId[]; columns: { tasks: TaskItem[] }[] | null; openId: TaskItemId | undefined }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -265,15 +268,16 @@ function useTaskKeys({ sequence, columns, openId }: { sequence: TaskItemId[]; co
       const store = useStore.getState()
       if (store.settingsOpen || store.paletteOpen || store.selected.kind !== "tasks") return
       const tasks = useTasks.getState()
-      if (tasks.sheet || tasks.menu) return
+      if (tasks.menu) return
       const meta = event.metaKey || event.ctrlKey
       const typing = editable(event.target)
       const current = openId ?? tasks.focusedId ?? undefined
 
-      // ⌘↵ and ⌘⌫ act on the focused (or open) task, even from the search field.
-      if (meta && event.key === "Enter" && current && !(typing && openId)) {
+      // ⌘↵ and ⌘⌫ act on the focused (or open) task, even from the search field. On a
+      // task's page ⌘↵ opens its composer, except in rich text, where ⌘↵ is the editor's.
+      if (meta && event.key === "Enter" && !event.shiftKey && current && !(openId && richText(event.target))) {
         event.preventDefault()
-        openSendSheet(current)
+        openRunComposer(current)
         return
       }
       if (meta && event.key === "Backspace" && current && !typing) {
@@ -285,7 +289,8 @@ function useTaskKeys({ sequence, columns, openId }: { sequence: TaskItemId[]; co
         else if (after) focusTask(after)
         return
       }
-      if (typing || meta || event.altKey) return
+      // Letters typed around the run composer (its tray, its chips) stay with it.
+      if (typing || meta || event.altKey || (event.target as HTMLElement | null)?.closest?.(".tk-dock")) return
 
       const key = event.key.toLowerCase()
       if (key === "c" && !event.shiftKey) {

@@ -5,7 +5,8 @@ import { Textarea } from "@/components/kit/textarea"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
 import { Markdown } from "@/components/kybern/Markdown"
-import { computerConsent, connectorApproval, connectorApprovalResponse, isUserInput, type ConnectorApproval } from "@/lib/userInput"
+import { computerConsent, connectorApproval, connectorApprovalResponse, isUserInput, notesTasksConsent, type ConnectorApproval, type NotesTasksConsent } from "@/lib/userInput"
+import { splitChecklistPreview } from "@/lib/agentItemTools"
 import { UserInputPanel } from "./UserInputPanel"
 import { TextSwap } from "@/components/kybern/motion"
 // Thread route: Header (provider glyph, title, Hand off,
@@ -57,6 +58,8 @@ import {
   UsersIcon,
   XIcon,
   DeviceLaptopIcon,
+  ListChecksIcon,
+  NoteIcon,
 } from "@/lib/kit/icons"
 import { ComputerLiveView } from "./ComputerLiveView"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles"
@@ -356,7 +359,7 @@ export function ThreadView({
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
-                    connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
+                    connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
                   )}
                 </ComposerPanelStack>
               }
@@ -645,6 +648,98 @@ export function ComputerApprovalPanel({ consent, count, onChoose, onAlways }: { 
   )
 }
 
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`
+
+/** The quiet line under the prompt: only what the daemon's summary does not already say. */
+function notesTasksMeta(consent: NotesTasksConsent): string[] {
+  switch (consent.action) {
+    case "create_task":
+      return [
+        "Lands in Inbox",
+        ...(consent.priority > 0 && consent.priorityLabel ? [`${consent.priorityLabel} priority`] : []),
+        ...(consent.criteria > 0 ? [plural(consent.criteria, "criterion", "criteria")] : []),
+      ]
+    case "update_note":
+      return [
+        ...(consent.title ? [`New title “${consent.title}”`] : []),
+        ...(consent.preview ? ["Replaces the text"] : []),
+      ]
+    case "claim_task":
+      return ["Shows as Running while this chat works on it"]
+    default:
+      return []
+  }
+}
+
+const NOTES_TASKS_CHECKLIST_LIMIT = 5
+
+/** New text, a few lines at most; the fade says there is more. */
+function NotesTasksPreview({ text, items }: { text: string; items: { text: string; checked: boolean }[] }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [overflows, setOverflows] = useState(false)
+  useLayoutEffect(() => {
+    const node = box.current
+    if (node) setOverflows(node.scrollHeight > node.clientHeight + 1)
+  }, [text])
+  const shown = items.slice(0, NOTES_TASKS_CHECKLIST_LIMIT)
+  return (
+    <div className="mt-2 rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-[12px] leading-[1.45] text-foreground/85">
+      {text && (
+        <div
+          ref={box}
+          className={cn(
+            "max-h-[4.35em] overflow-hidden break-words whitespace-pre-wrap",
+            overflows && "[mask-image:linear-gradient(to_bottom,black_55%,transparent)]",
+          )}
+        >
+          {text}
+        </div>
+      )}
+      {shown.length > 0 && (
+        <ul aria-label="Acceptance criteria" className={cn("flex flex-col gap-0.5", text && "mt-1.5")}>
+          {shown.map((item, index) => (
+            <li key={index} className="flex min-w-0 items-center gap-2">
+              <span aria-hidden className={cn("size-3 shrink-0 rounded-[3px] border border-current opacity-45", item.checked && "bg-current")} />
+              <span className="min-w-0 truncate">{item.text}</span>
+            </li>
+          ))}
+          {items.length > shown.length && <li className="ps-5 text-muted-foreground/65">{plural(items.length - shown.length, "more criterion", "more criteria")}</li>}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** Kybern's own consent before an agent files or changes a note or task. Same digits as other approvals. */
+export function NotesTasksApprovalPanel({ consent, count, onChoose }: { consent: NotesTasksConsent; count: number; onChoose: (n: number) => void }) {
+  const Icon = consent.kind === "task" ? ListChecksIcon : NoteIcon
+  const meta = notesTasksMeta(consent)
+  const preview = useMemo(() => splitChecklistPreview(consent.preview), [consent.preview])
+  const hasPreview = preview.text.length > 0 || preview.items.length > 0
+  return (
+    <ComposerStackedPanel className="composer-approval-panel t-panel-enter px-3.5 py-3">
+      <div className="flex items-start gap-3">
+        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] text-muted-foreground">
+          <Icon className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1 pt-px">
+          <p className="flex items-start gap-2 text-[13px] leading-snug font-medium text-balance text-foreground/90">
+            <span className="min-w-0 break-words">{consent.summary ? `${consent.summary}?` : consent.kind === "task" ? "Allow this change to a task?" : "Allow this change to a note?"}</span>
+            {count > 1 && (
+              <span className="mt-px flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium text-[var(--color-text-foreground-secondary)] tabular-nums">
+                1/{count}
+              </span>
+            )}
+          </p>
+          {meta.length > 0 && <p className="mt-0.5 truncate text-[12px] leading-relaxed text-muted-foreground/65">{meta.join(" · ")}</p>}
+          {hasPreview && <NotesTasksPreview text={preview.text} items={preview.items} />}
+        </div>
+      </div>
+      <ApprovalActions primaryLabel="Allow once" primaryShortcut={1} sessionShortcut={2} sessionLabel="Allow for this thread" onChoose={onChoose} />
+    </ComposerStackedPanel>
+  )
+}
+
 /** Consent for a harness to drive an app on this machine. Same card as other approvals, so the digits work the same. */
 export function ConnectorApprovalPanel({ approval, connector, count, onChoose }: { approval: ApprovalRequest; connector: ConnectorApproval; count: number; onChoose: (n: number) => void }) {
   const canPersist = connector.persist.includes("session")
@@ -671,10 +766,12 @@ export function ConnectorApprovalPanel({ approval, connector, count, onChoose }:
 }
 
 /** Keep the common decision visible and less frequent scope/stop actions grouped. */
-function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, onChoose, className, always }: {
+function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, sessionLabel, onChoose, className, always }: {
   primaryLabel: string
   primaryShortcut: number
   sessionShortcut?: number
+  /** Shows the session allowance as a button with this label instead of a menu item. */
+  sessionLabel?: string
   onChoose: (choice: number) => void
   className?: string
   /** A remembered allowance, e.g. "Always allow Calculator". */
@@ -684,12 +781,13 @@ function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, onCho
     <Menu>
       <MenuTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="More approval options"><EllipsisIcon /></Button>} />
       <ComposerPickerMenuPopup align="start" side="top">
-        {sessionShortcut !== undefined && <MenuItem onClick={() => onChoose(sessionShortcut)}>Allow for this session<MenuShortcut>{sessionShortcut}</MenuShortcut></MenuItem>}
+        {sessionShortcut !== undefined && !sessionLabel && <MenuItem onClick={() => onChoose(sessionShortcut)}>Allow for this session<MenuShortcut>{sessionShortcut}</MenuShortcut></MenuItem>}
         {always && <MenuItem onClick={always.onChoose}>{always.label}</MenuItem>}
         <MenuItem onClick={() => onChoose(4)}>Cancel turn<MenuShortcut>4</MenuShortcut></MenuItem>
       </ComposerPickerMenuPopup>
     </Menu>
     <Button type="button" variant="chrome-outline" size="sm" onClick={() => onChoose(3)}>Decline<kbd className="text-[0.85em] opacity-60" aria-hidden="true">3</kbd></Button>
+    {sessionShortcut !== undefined && sessionLabel && <Button type="button" variant="chrome-outline" size="sm" onClick={() => onChoose(sessionShortcut)}>{sessionLabel}<kbd className="text-[0.85em] opacity-60" aria-hidden="true">{sessionShortcut}</kbd></Button>}
     <Button type="button" size="sm" onClick={() => onChoose(primaryShortcut)}>{primaryLabel}<kbd className="text-[0.85em] opacity-60" aria-hidden="true">{primaryShortcut}</kbd></Button>
   </div>
 }

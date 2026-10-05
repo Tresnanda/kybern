@@ -1,5 +1,5 @@
-// Tasks model: statuses, keys, grouping, ranks, the body's acceptance criteria and
-// the Send prompt. Pure helpers, so the list's organization is testable without React.
+// Tasks model: statuses, keys, grouping, ranks and the body's acceptance criteria.
+// Pure helpers, so the list's organization is testable without React.
 import type { NoteId, ProjectId, TaskItem, TaskItemId, TaskPriority, TaskRun, TaskStatus } from "@/protocol"
 
 // ---- statuses and priorities ----
@@ -439,31 +439,6 @@ export function plainInline(text: string): string {
   return text.replace(/\[([^\]]+)\]\((?:[^)\s]+)\)/g, "$1").replace(/(\*\*|__)(.+?)\1/g, "$2").replace(/`([^`]+)`/g, "$1")
 }
 
-// ---- the Send prompt and context size ----
-
-export function buildTaskPrompt(input: { title: string; description: string; criteria: Criterion[]; pendingFollowup?: string | null }): string {
-  const title = input.title.trim()
-  const parts = [title && !/[.!?:…]$/.test(title) ? `${title}.` : title]
-  const description = input.description.trim()
-  if (description) parts.push(description)
-  const criteria = input.criteria.map((criterion) => plainInline(criterion.text).trim()).filter(Boolean)
-  if (criteria.length) parts.push(["Done when:", ...criteria.map((text) => `– ${text}`)].join("\n"))
-  const followup = input.pendingFollowup?.trim()
-  if (followup) parts.push(followup)
-  return parts.filter(Boolean).join("\n\n")
-}
-
-/** About four characters a token: enough to say whether context is small or large. */
-export const approxTokens = (chars: number): number => Math.ceil(Math.max(0, chars) / 4)
-
-/** "0.7k", "1.8k", "24k". */
-export function formatTokens(tokens: number): string {
-  if (tokens <= 0) return "0k"
-  if (tokens < 100) return "0.1k"
-  if (tokens < 10_000) return `${(Math.round(tokens / 100) / 10).toFixed(1)}k`
-  return `${Math.round(tokens / 1000)}k`
-}
-
 /** Words worth searching notes for: the title's longer words, minus filler. */
 export function suggestionQuery(title: string): string {
   const stop = new Set(["the", "and", "for", "with", "when", "into", "from", "that", "this", "should", "make", "show", "add", "fix", "use", "new", "open"])
@@ -501,6 +476,10 @@ export interface TaskViewPrefs {
   filter: TaskFilter
   /** Group open/closed overrides, by group key. Done and Canceled start closed. */
   collapsed: Record<string, boolean>
+  /** Projects pinned to the top of the panel's Projects list. */
+  pinnedProjects: string[]
+  /** The panel's Projects list shows only pinned projects and the one being viewed. */
+  projectsCollapsed: boolean
 }
 
 export const DEFAULT_TASK_PREFS: TaskViewPrefs = {
@@ -512,6 +491,8 @@ export const DEFAULT_TASK_PREFS: TaskViewPrefs = {
   showHints: true,
   filter: "all",
   collapsed: {},
+  pinnedProjects: [],
+  projectsCollapsed: false,
 }
 
 const oneOf = <T extends string>(value: unknown, options: readonly T[], fallback: T): T =>
@@ -537,7 +518,28 @@ export function readTaskPrefs(value: unknown): TaskViewPrefs {
     showHints: flag("showHints"),
     filter,
     collapsed,
+    pinnedProjects: Array.isArray(stored.pinnedProjects) ? [...new Set(stored.pinnedProjects.filter((id): id is string => typeof id === "string" && id.length > 0))] : [],
+    projectsCollapsed: flag("projectsCollapsed"),
   }
+}
+
+/**
+ * The panel's Projects list: pinned projects first, each part in the sidebar's order.
+ * Collapsed, only pinned projects and the one being viewed stay visible; the rest
+ * keep their place so they can animate back in.
+ */
+export function arrangeTaskProjects<T extends { id: string }>(
+  projects: readonly T[],
+  pinned: readonly string[],
+  collapsed: boolean,
+  currentId: string | null,
+): { project: T; pinned: boolean; visible: boolean }[] {
+  const pins = new Set(pinned)
+  const rows = projects.map((project) => {
+    const isPinned = pins.has(project.id)
+    return { project, pinned: isPinned, visible: !collapsed || isPinned || project.id === currentId }
+  })
+  return [...rows.filter((row) => row.pinned), ...rows.filter((row) => !row.pinned)]
 }
 
 /** Done and Canceled groups start closed; everything else starts open. */

@@ -27,7 +27,7 @@ pub const APP_TOOL_TITLE_PREFIX: &str = "kybern_app_tool_request:";
 pub const ALLOW_ONCE: &str = "Allow once";
 pub const ALLOW_ALWAYS: &str = "Always allow this exact call";
 pub const DENY: &str = "Deny";
-pub const APP_TOOL_NAMES: [&str; 23] = [
+pub const APP_TOOL_NAMES: [&str; 33] = [
     "kybern_thread_context",
     "kybern_workspace_diff",
     "kybern_read_file",
@@ -51,6 +51,16 @@ pub const APP_TOOL_NAMES: [&str; 23] = [
     "kybern_computer_act",
     "kybern_computer_screenshot",
     "kybern_computer_help",
+    "kybern_notes_search",
+    "kybern_note_read",
+    "kybern_note_create",
+    "kybern_note_append",
+    "kybern_note_update",
+    "kybern_tasks_list",
+    "kybern_task_read",
+    "kybern_task_create",
+    "kybern_task_update",
+    "kybern_task_claim",
 ];
 pub const DEFAULT_APP_TOOL_NAMES: [&str; 7] = [
     "kybern_thread_context",

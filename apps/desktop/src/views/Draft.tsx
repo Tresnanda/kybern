@@ -7,10 +7,10 @@ import { useShallow } from "zustand/react/shallow"
 
 import { Logo } from "@/components/kybern/bits"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
-import { Menu, MenuCheckboxItem, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
-import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
+import { COMPOSER_TRAY_CHIP_CLASS_NAME as TRAY_CHIP_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/kit/menu"
 import { useLocalStorage } from "@/lib/hooks"
-import { AnalyticsIcon, CheckIcon, ChevronDownIcon, ClockIcon, DeviceLaptopIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon, WorktreeIcon } from "@/lib/kit/icons"
+import { AnalyticsIcon, CheckIcon, ChevronDownIcon, ClockIcon, FolderIcon, FolderOpenIcon, MessageCircleIcon, PaperclipIcon, SettingsIcon, UsersIcon } from "@/lib/kit/icons"
 import { isLaunching } from "@/lib/launch"
 import { cn } from "@/lib/utils"
 import type { PaneId } from "@/state/splitView"
@@ -23,6 +23,7 @@ import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from ".
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { SurfaceHeader } from "./chrome"
 import { ProjectPicker } from "./ProjectPicker"
+import { BranchTrayChip, ProjectTrayChip, WorkspaceTrayChip } from "./trayChips"
 
 export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }: { projectId?: ProjectId; paneId?: PaneId; onProjectChange?: (id: ProjectId) => void; purpose?: "thread" | "coordinator" }) {
   const environmentId = useStore((s) => s.environmentId)
@@ -228,90 +229,20 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                       </MenuGroup>
                     </ComposerPickerMenuPopup>
                   </Menu>
-                ) : <Menu>
-                  <MenuTrigger render={<button type="button" aria-label="Switch project" className={TRAY_CHIP_CLASS_NAME} />}>
-                    <FolderIcon className="size-3.5 shrink-0" />
-                    <span className="min-w-0 truncate">{project!.name}</span>
-                    <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
-                  </MenuTrigger>
-                  <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="min-w-56">
-                    <MenuGroup>
-                      <MenuGroupLabel>Project</MenuGroupLabel>
-                      {projectList.map((p) => (
-                        <MenuItem key={p.id} onClick={() => onProjectChange ? onProjectChange(p.id) : useStore.getState().selectDraft(p.id, coordinatorDraft ? "coordinator" : "thread")}>
-                          <FolderIcon />
-                          <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                          {p.id === projectId && <CheckIcon className="size-3.5 shrink-0" />}
-                        </MenuItem>
-                      ))}
-                    </MenuGroup>
-                  </ComposerPickerMenuPopup>
-                </Menu>}
+                ) : (
+                  <ProjectTrayChip
+                    projectId={projectId ?? null}
+                    projects={projectList}
+                    onPick={(id) => onProjectChange ? onProjectChange(id) : useStore.getState().selectDraft(id, coordinatorDraft ? "coordinator" : "thread")}
+                  />
+                )}
 
-                {!freeChat && !coordinatorDraft && <Menu>
-                  <MenuTrigger render={<button type="button" aria-label="Choose where the thread runs" className={cn(TRAY_CHIP_CLASS_NAME, useWorktree && "text-[var(--color-text-foreground)]")} />}>
-                    {useWorktree ? <WorktreeIcon className="size-3.5 shrink-0" /> : <DeviceLaptopIcon className="size-3.5 shrink-0" />}
-                    <span className="min-w-0 truncate">{useWorktree ? "New worktree" : "Checkout"}</span>
-                    <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
-                  </MenuTrigger>
-                  <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="w-64 min-w-64">
-                    <MenuGroup>
-                      <MenuGroupLabel>Run in</MenuGroupLabel>
-                      <MenuRadioGroup value={useWorktree ? "worktree" : "local"} onValueChange={(v) => setWorktree(v === "worktree")}>
-                        <MenuRadioItem value="local">
-                          <DeviceLaptopIcon className="size-3.5" />
-                          <span className="min-w-0 flex-1 truncate">Checkout</span>
-                          <span className="shrink-0 text-muted-foreground/70">{parentPath(project!.path)}</span>
-                        </MenuRadioItem>
-                        <MenuRadioItem value="worktree" disabled={!isGit}>
-                          <WorktreeIcon className="size-3.5" />
-                          <span className="min-w-0 flex-1 truncate">New worktree</span>
-                          {!isGit && <span className="shrink-0 text-muted-foreground/70">Needs git</span>}
-                        </MenuRadioItem>
-                      </MenuRadioGroup>
-                    </MenuGroup>
-                  </ComposerPickerMenuPopup>
-                </Menu>}
+                {!freeChat && !coordinatorDraft && (
+                  <WorkspaceTrayChip useWorktree={useWorktree} isGit={isGit} checkoutHint={parentPath(project!.path)} onChange={setWorktree} />
+                )}
 
                 {!freeChat && !coordinatorDraft && isGit && (
-                  <Menu onOpenChange={(open) => open && loadBranches()}>
-                    <MenuTrigger render={<button type="button" aria-label="Choose a branch" className={cn(TRAY_CHIP_CLASS_NAME, baseBranch && "text-[var(--color-text-foreground)]")} />}>
-                      <GitBranchIcon className="size-3.5 shrink-0" />
-                      <span className="min-w-0 truncate">{baseBranch ?? branches?.current ?? "Current branch"}</span>
-                      <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
-                    </MenuTrigger>
-                    <ComposerPickerMenuPopup align="start" side="top" sideOffset={8} className="w-72 min-w-72">
-                      <MenuGroup>
-                        <MenuGroupLabel>{useWorktree ? "Fork the worktree from" : "Branch"}</MenuGroupLabel>
-                        {branches === null ? (
-                          <MenuItem disabled>
-                            <span className="text-muted-foreground">Loading branches…</span>
-                          </MenuItem>
-                        ) : branches.branches.length === 0 ? (
-                          <MenuItem disabled>
-                            <span className="text-muted-foreground">No branches yet. Make a first commit.</span>
-                          </MenuItem>
-                        ) : (
-                          <MenuRadioGroup value={baseBranch ?? branches.current ?? ""} onValueChange={(v) => setBaseBranch(v === branches.current ? null : (v as string))}>
-                            {branches.branches.map((b) => (
-                              <MenuRadioItem key={b.name} value={b.name}>
-                                <GitBranchIcon className="size-3.5" />
-                                <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                                {b.is_current && <span className="shrink-0 text-muted-foreground/70">current</span>}
-                              </MenuRadioItem>
-                            ))}
-                          </MenuRadioGroup>
-                        )}
-                      </MenuGroup>
-                      <MenuSeparator />
-                      <MenuGroup>
-                        <MenuCheckboxItem checked={useWorktree} onCheckedChange={(checked) => setWorktree(checked)}>
-                          <WorktreeIcon className="size-3.5" />
-                          <span className="min-w-0 flex-1 truncate">Create a worktree from this branch</span>
-                        </MenuCheckboxItem>
-                      </MenuGroup>
-                    </ComposerPickerMenuPopup>
-                  </Menu>
+                  <BranchTrayChip branches={branches} baseBranch={baseBranch} useWorktree={useWorktree} onOpen={loadBranches} onBranch={setBaseBranch} onWorktree={setWorktree} />
                 )}
               </LandingTray>
             }
@@ -353,9 +284,6 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
     </div>
   )
 }
-
-/** Pressable tray chip: the toolbar picker capsule with a chevron, capped so long branch names truncate. */
-const TRAY_CHIP_CLASS_NAME = cn(COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME, "max-w-64 min-w-0 shrink")
 
 function parentPath(p: string): string {
   const i = p.lastIndexOf("/")

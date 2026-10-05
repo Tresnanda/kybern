@@ -156,6 +156,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 state.store.project_set_task_prefix(p.project_id, prefix).map_err(task_err)?;
             }
             state.store.project_update(&project).map_err(internal)?;
+            state.orchestrator.publish_projects();
             ok(state.store.project_get(p.project_id).map_err(internal)?.unwrap_or(project))
         }
         ProjectsRemove::NAME => {
