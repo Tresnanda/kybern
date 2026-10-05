@@ -14,7 +14,7 @@ before touching UI.
 | `crates/kybern-git` | Snapshots, diffs, worktrees via the `git` CLI. |
 | `crates/kybern-drivers` | One module per agent: `claude`, `codex`, `opencode`, `pi` (also omp), `cursor`. All implement `AgentDriver` + `AgentSession` from `lib.rs`. |
 | `crates/kybern` | The shipped package: `kybernd` and `kybern` binaries as thin wrappers over the two library crates below. |
-| `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`, `computer/` (computer use). |
+| `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`, `usage.rs` (account plan limits: one cache fed by turn-free live reads and turn reports, pushed as `usage.limits.changed`), `computer/` (computer use). |
 | `crates/kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell. |
 | `crates/kybern-cli` | The `kybern` CLI (`lib.rs`). Also the integration harness. |
 | `apps/desktop` | Desktop app. `src-tauri` is the Tauri 2 shell (crate `kybern-desktop`: resolves or spawns `kybernd`, exposes `endpoint`/`data_dir_path`). `src/` is the React app (see below). |
@@ -29,7 +29,7 @@ The old GPUI client is on the `gpui` branch. Do not port its views back.
 | --- | --- |
 | `protocol/` | TypeScript wire types + the WebSocket JSON-RPC client. Keep `types.ts` in step with `kybern-protocol`. |
 | `state/` | `store.ts` (zustand), `rpc.ts` (boot, subscriptions, actions), `transcript.ts` (folds events into blocks and turn groups), `nav.ts`. Stateful modules reload the page on HMR through `lib/hot.ts`. |
-| `views/` | One file per surface: `NavRail` (app rail: Home, Notes, Tasks, Pull requests, Usage, Settings), `Sidebar` (thread panel), `notes/` (Notes gallery, focused editor, quick capture, Save to note), `tasks/` (Tasks list, board, task page, Send to agent sheet), `Draft` (home), `Thread`, `Transcript`, `Composer`, `RightPanel` (dock), `Terminal`, `Explorer`, `Environment`, `PullRequests`, `Palette`, `SettingsDialog`, `Handoff`, `chrome` (headers, toggles), `chatLayout` (shared column gutter). |
+| `views/` | One file per surface: `NavRail` (app rail: Home, Notes, Tasks, Pull requests, Usage, Settings; `RailUsage` plan-usage rings above Settings, fed by `state/usageLimits.ts`), `Sidebar` (thread panel), `notes/` (Notes gallery, focused editor, quick capture, Save to note), `tasks/` (Tasks list, board, task page, Send to agent sheet), `Draft` (home), `Thread`, `Transcript`, `Composer`, `RightPanel` (dock), `Terminal`, `Explorer`, `Environment`, `PullRequests`, `Palette`, `SettingsDialog`, `Handoff`, `chrome` (headers, toggles), `chatLayout` (shared column gutter). |
 | `components/kit/` | UI primitives. `components/kit/chat/` holds the composer/transcript helpers and the `composerPickerStyles` class constants. |
 | `components/beui/` | BeUI components, vendored (MIT): message scroller with rail, file tree. |
 | `components/kybern/` | Our own pieces: `DiffView`, `Markdown` (shiki), `ResizeHandle`, `bits`. |

@@ -79,19 +79,13 @@
 .usage-state p { max-width: 54ch; color: var(--muted-foreground); }
 .usage-skeleton { height: 150px; border-radius: 10px; background: var(--color-background-button-secondary); }
 .usage-limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(15.5rem, 1fr)); gap: 14px; }
-.usage-limit-card { display: grid; gap: 16px; padding: 16px; border: 1px solid var(--color-border); border-radius: 12px; }
+.usage-limit-card { display: grid; align-content: start; gap: 16px; padding: 16px; border: 1px solid var(--color-border); border-radius: 12px; }
 .usage-limit-provider { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
 .usage-limit { display: grid; gap: 7px; }
 .usage-limit-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; }
 .usage-limit-heading b { font-weight: 500; }
 .usage-limit-heading span { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.usage-limit-meter { height: 6px; border-radius: 999px; overflow: hidden; background: var(--color-background-button-secondary); }
-.usage-limit-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--foreground); opacity: .55; transform-origin: left; transition: transform var(--duration-slow, .5s) var(--ease-smooth-out, ease-out); }
-[dir="rtl"] .usage-limit-meter > span { transform-origin: right; }
-.usage-limit[data-usage-tone="warning"] .usage-limit-meter > span { background: var(--warning); opacity: 1; }
-.usage-limit[data-usage-tone="critical"] .usage-limit-meter > span { background: var(--destructive); opacity: 1; }
 .usage-limit-reset { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-@media (prefers-reduced-motion: reduce) { .usage-limit-meter > span { transition: none; } }
 .usage-plan-value { display: grid; gap: 8px; padding: 18px; border: 1px solid var(--color-border); border-radius: 12px; }
 .usage-plan-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
 .usage-plan-title { font-size: 13px; font-weight: 600; }

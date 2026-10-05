@@ -1,6 +1,6 @@
 // App rail: the narrow column of destinations beside the thread sidebar.
 // Home (chats), Notes, Tasks, Pull requests, and Usage at the top; Settings at the foot, with
-// an update badge above it when a new release is ready.
+// the plan usage glance and, when a new release is ready, an update badge above it.
 // It stays put when the sidebar collapses and while Settings is open, so every
 // destination is one click away.
 
@@ -17,6 +17,7 @@ import { loadThread } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { useTasks } from "@/state/tasks"
 import { RailUpdateButton } from "@/views/AppUpdate"
+import { RailUsage } from "@/views/RailUsage"
 
 type Destination = "home" | "notes" | "tasks" | "pulls" | "usage"
 
@@ -61,6 +62,7 @@ export function NavRail() {
         <RailButton icon={AnalyticsIcon} label="Usage" active={destination === "usage"} onClick={() => go("usage")} />
       </div>
       <div data-tauri-drag-region="false" className="no-drag mt-auto flex flex-col items-center gap-1.5">
+        <RailUsage />
         <RailUpdateButton />
         <RailButton icon={SettingsIcon} label="Settings" shortcut={[mod, ","]} active={settingsOpen} activeFill onClick={() => useStore.getState().set(settingsOpen ? { settingsOpen: false } : { settingsOpen: true, settingsTab: "general" })} />
       </div>

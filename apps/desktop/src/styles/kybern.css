@@ -763,6 +763,55 @@ html[data-window-material="opaque"] {
 [data-usage-tone="warning"] .provider-usage-meter > span { background: var(--warning); }
 [data-usage-tone="critical"] .provider-usage-meter > span { background: var(--destructive); }
 
+/* Plan limit bar: drains as it is used, with a tick where even spending would be. */
+.limit-meter { position: relative; padding-block: 3px; }
+.limit-meter-track {
+  height: 0.25rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.limit-meter-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--foreground) 65%, transparent);
+  transform-origin: left;
+  transition: transform 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+[dir="rtl"] .limit-meter-track > span { transform-origin: right; }
+.limit-meter-pace {
+  position: absolute;
+  inset-block: 0;
+  width: 1.5px;
+  margin-inline-start: -0.75px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--foreground) 45%, transparent);
+}
+[data-usage-tone="warning"] .limit-meter-track > span { background: var(--warning); }
+[data-usage-tone="critical"] .limit-meter-track > span { background: var(--destructive); }
+[data-pace-short] { color: var(--warning); }
+@media (prefers-reduced-motion: reduce) { .limit-meter-track > span { transition: none; } }
+
+/* Rail usage glance: one ring per provider, filled with what is left of its
+   tightest limit. Status colors appear only near a limit. */
+.rail-usage-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity var(--duration-fast, 150ms) ease;
+}
+.rail-usage-ring[data-stale] { opacity: 0.5; }
+.rail-usage-track { stroke: color-mix(in srgb, var(--foreground) 12%, transparent); }
+.rail-usage-arc {
+  stroke: color-mix(in srgb, var(--foreground) 62%, transparent);
+  transition: stroke-dashoffset 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.rail-usage-ring[data-usage-tone="warning"] .rail-usage-arc { stroke: var(--warning); }
+.rail-usage-ring[data-usage-tone="critical"] .rail-usage-arc { stroke: var(--destructive); }
+@media (prefers-reduced-motion: reduce) { .rail-usage-arc { transition: none; } }
+
 /* Questions share the composer's surface, UI type, and alignment. Keep the
    question prominent and the action reachable when a request needs scrolling. */
 .thread-composer,

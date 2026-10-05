@@ -1,6 +1,9 @@
 import type { ProviderKind, ProviderUsage } from "@/protocol"
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "@/components/kit/popover"
-import { contextUsage, limitLabel, reportedPercent, resetLabel } from "@/lib/providerUsage"
+import { LimitMeter } from "@/components/kybern/LimitMeter"
+import { useNow } from "@/lib/hooks"
+import { contextUsage, limitLabel, limitPace, limitTone, reportedPercent, resetIn } from "@/lib/providerUsage"
+import { useProviderLimits } from "@/state/usageLimits"
 
 function UsageMeter({ percent, label }: { percent: number; label: string }) {
   return (
@@ -12,6 +15,11 @@ function UsageMeter({ percent, label }: { percent: number; label: string }) {
 
 export function ProviderUsageIndicator({ usage, provider }: { usage?: ProviderUsage; provider?: ProviderKind }) {
   const context = contextUsage(usage?.context)
+  // Limits belong to the account: use the daemon's live values, not the last
+  // ones this thread happened to report. The thread's copy covers older daemons.
+  const account = useProviderLimits(provider)
+  const limits = account?.limits.length ? account.limits : usage?.limits
+  const now = useNow(60_000)
   const label = context ? `${Math.round(context.percent)}% of context used` : "Context usage unavailable"
   const tone = context && context.percent >= 95 ? "critical" : context && context.percent >= 80 ? "warning" : "normal"
   return (
@@ -36,13 +44,14 @@ export function ProviderUsageIndicator({ usage, provider }: { usage?: ProviderUs
           </section>
           <section className="provider-usage-limits" aria-label="Account limits">
             <h3 className="provider-usage-section-label">Account limits</h3>
-            {usage?.limits?.length ? usage.limits.map((limit, index) => {
+            {limits?.length ? limits.map((limit, index) => {
               const percent = reportedPercent(limit.used_percent)
               const name = limitLabel(limit, provider)
-              return <div key={`${limit.name}-${index}`} className="provider-usage-limit" data-usage-tone={percent !== null && percent >= 95 ? "critical" : "normal"}>
-                <div className="provider-usage-limit-heading"><span>{name}</span><span className="tabular-nums text-muted-foreground">{percent === null ? "Unavailable" : `${Math.round(percent)}% used`}</span></div>
-                {percent !== null && <UsageMeter percent={percent} label={`${name} limit used`} />}
-                <p className="provider-usage-caption">{resetLabel(limit.resets_at)}</p>
+              const pace = limitPace(limit, now)
+              return <div key={`${limit.name}-${index}`} className="provider-usage-limit" data-usage-tone={limitTone(percent)}>
+                <div className="provider-usage-limit-heading"><span>{name}</span><span className="tabular-nums text-muted-foreground">{percent === null ? "Unavailable" : `${Math.round(100 - percent)}% left`}</span></div>
+                {percent !== null && <LimitMeter left={100 - percent} pace={pace} label={`${name} left`} />}
+                <p className="provider-usage-caption flex justify-between gap-3 tabular-nums"><span>{resetIn(limit.resets_at, now)}</span>{pace && <span data-pace-short={pace.short || undefined}>{pace.label}</span>}</p>
               </div>
             }) : <p className="provider-usage-caption">Account limits haven’t been reported yet.</p>}
           </section>
