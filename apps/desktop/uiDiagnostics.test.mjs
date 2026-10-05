@@ -3,7 +3,7 @@ import test from "node:test"
 
 import { installRuntimeErrorReporting, isResizeObserverNotice } from "./src/lib/runtimeErrors.ts"
 import { observeResizeFrame } from "./src/lib/resizeObserver.ts"
-import { contextUsage, limitLabel, reportedPercent, resetLabel } from "./src/lib/providerUsage.ts"
+import { bindingLimit, contextUsage, limitLabel, limitPace, limitTone, reportedPercent, resetIn } from "./src/lib/providerUsage.ts"
 
 test("native resize notifications do not become interface errors; real exceptions still do", () => {
   const target = new EventTarget()
@@ -83,7 +83,32 @@ test("usage distinguishes unavailable context from zero usage and bounds meters"
   assert.equal(limitLabel({ window_minutes: 10080, name: "Primary" }), "Weekly")
   assert.equal(limitLabel({ window_minutes: 300, name: "Secondary" }), "5-hour")
   assert.equal(limitLabel({ window_minutes: null, name: "Organization" }), "Organization")
-  assert.equal(resetLabel(null), "Reset time unavailable")
-  assert.equal(resetLabel(Infinity), "Reset time unavailable")
-  assert.equal(resetLabel(Number.MAX_VALUE), "Reset time unavailable")
+  const now = Date.UTC(2026, 9, 5, 12)
+  assert.equal(resetIn(null, now), "Reset time unavailable")
+  assert.equal(resetIn(Infinity, now), "Reset time unavailable")
+  assert.equal(resetIn(Number.MAX_VALUE, now), "Reset time unavailable")
+  assert.equal(resetIn(now / 1000 - 5, now), "Resets now")
+  assert.equal(resetIn(now / 1000 + 45 * 60, now), "Resets in 45m")
+  assert.equal(resetIn(now / 1000 + 2 * 3600 + 13 * 60, now), "Resets in 2h 13m")
+})
+
+test("plan limits read as what is left, colored only near the limit, with pace against time", () => {
+  assert.equal(limitTone(74), "normal")
+  assert.equal(limitTone(75), "warning")
+  assert.equal(limitTone(90), "critical")
+  const limits = [{ name: "Current session", used_percent: 20, window_minutes: 300, resets_at: null }, { name: "This week", used_percent: 61, window_minutes: 10080, resets_at: null }]
+  assert.equal(bindingLimit(limits).limit.name, "This week", "the tightest limit decides what is left")
+  const now = Date.UTC(2026, 9, 5, 12)
+  // 40% through a 5-hour window, 30% used: 10 points in reserve.
+  const reserve = limitPace({ name: "Session", used_percent: 30, window_minutes: 300, resets_at: now / 1000 + 180 * 60 }, now)
+  assert.equal(reserve.label, "10% in reserve")
+  assert.equal(Math.round(reserve.evenLeft), 60)
+  assert.equal(reserve.short, false)
+  // 25% through a week, 50% used: at this rate it runs out halfway through.
+  const short = limitPace({ name: "Week", used_percent: 50, window_minutes: 10080, resets_at: now / 1000 + 0.75 * 10080 * 60 }, now)
+  assert.equal(short.short, true)
+  assert.equal(short.label, "Runs out in 1d 18h")
+  assert.equal(limitPace({ name: "Week", used_percent: 100, window_minutes: 10080, resets_at: now / 1000 + 3600 }, now).label, "Limit reached")
+  assert.equal(limitPace({ name: "Week", used_percent: 1, window_minutes: 10080, resets_at: now / 1000 + 10080 * 60 - 60 }, now), null, "too early in the window to project")
+  assert.equal(limitPace({ name: "Fable this week", used_percent: 2, window_minutes: null, resets_at: now / 1000 + 3600 }, now), null)
 })

@@ -1,4 +1,4 @@
-import type { ProviderKind, ProviderUsage } from "@/protocol"
+import type { ProviderKind, ProviderLimits, ProviderUsage } from "@/protocol"
 
 export function reportedPercent(value: number): number | null {
   return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : null
@@ -31,9 +31,98 @@ export function limitLabel(limit: NonNullable<ProviderUsage["limits"]>[number], 
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : "Usage limit"
 }
 
-export function resetLabel(seconds: number | null): string {
+type Limit = NonNullable<ProviderUsage["limits"]>[number]
+
+export const PROVIDER_NAMES: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", cursor: "Cursor", opencode: "OpenCode", pi: "pi", omp: "Oh My Pi" }
+
+/** Status color only near a limit: 25% left warns, 10% left is critical. */
+export function limitTone(percent: number | null): "normal" | "warning" | "critical" {
+  if (percent === null) return "normal"
+  if (percent >= 90) return "critical"
+  if (percent >= 75) return "warning"
+  return "normal"
+}
+
+function duration(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000))
+  if (minutes < 60) return `${minutes}m`
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+  return `${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`
+}
+
+export type LimitPace = {
+  /** Share of the window still to come, 0–100: where even spending would leave the bar. */
+  evenLeft: number
+  /** Short status: "12% in reserve", "Runs out in 3h 10m", "Limit reached". */
+  label: string
+  /** True when, at this rate, the limit runs out before it resets. */
+  short: boolean
+}
+
+/**
+ * Compare usage with time: a window that is 40% through and 30% used is 10
+ * points in reserve. When spending outruns the window, project when the
+ * limit runs out at the current rate. Needs a window length and reset time,
+ * and skips the first 5% of a window, where one turn swings the projection.
+ */
+export function limitPace(limit: Limit, now: number): LimitPace | null {
+  const used = reportedPercent(limit.used_percent)
+  if (used === null || !limit.window_minutes || limit.resets_at == null) return null
+  const windowMs = limit.window_minutes * 60_000
+  const remainingMs = limit.resets_at * 1000 - now
+  if (remainingMs <= 0 || remainingMs > windowMs) return null
+  const elapsed = 1 - remainingMs / windowMs
+  if (elapsed < 0.05) return null
+  const evenLeft = (1 - elapsed) * 100
+  if (used >= 100) return { evenLeft, label: "Limit reached", short: true }
+  const reserve = Math.round(elapsed * 100 - used)
+  const msToFull = used > 0 ? (100 - used) / (used / (elapsed * windowMs)) : Number.POSITIVE_INFINITY
+  if (msToFull < remainingMs) return { evenLeft, label: `Runs out in ${duration(msToFull)}`, short: true }
+  return { evenLeft, label: reserve > 0 ? `${reserve}% in reserve` : "On pace", short: false }
+}
+
+/** The limit closest to running out: it decides how much the account has left. */
+export function bindingLimit(limits: readonly Limit[]): { limit: Limit; used: number } | null {
+  let best: { limit: Limit; used: number } | null = null
+  for (const limit of limits) {
+    const used = reportedPercent(limit.used_percent)
+    if (used !== null && (!best || used > best.used)) best = { limit, used }
+  }
+  return best
+}
+
+/** "Resets in 2h 14m" within a day, otherwise the weekday or date and time. */
+export function resetIn(seconds: number | null, now: number): string {
   if (seconds === null || !Number.isFinite(seconds)) return "Reset time unavailable"
+  const minutes = Math.round((seconds * 1000 - now) / 60_000)
+  if (minutes <= 0) return "Resets now"
+  if (minutes < 60) return `Resets in ${minutes}m`
+  if (minutes < 24 * 60) return `Resets in ${Math.floor(minutes / 60)}h ${minutes % 60}m`
   const date = new Date(seconds * 1000)
   if (!Number.isFinite(date.getTime())) return "Reset time unavailable"
-  return `Resets ${date.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`
+  const options: Intl.DateTimeFormatOptions = minutes < 6 * 24 * 60
+    ? { weekday: "short", hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric" }
+  return `Resets ${date.toLocaleString(undefined, options)}`
+}
+
+/** Age of a provider's values: "just now", "4 min ago", "3 h ago". */
+export function updatedAgo(updatedAt: string | undefined, now: number): string | null {
+  if (!updatedAt) return null
+  const time = Date.parse(updatedAt)
+  if (!Number.isFinite(time)) return null
+  const minutes = Math.floor((now - time) / 60_000)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return `${hours} h ago`
+  return `${Math.floor(hours / 24)} days ago`
+}
+
+/** Values older than this are shown as possibly out of date. */
+export const LIMITS_STALE_MS = 10 * 60_000
+
+export function limitsStale(entry: Pick<ProviderLimits, "updated_at" | "source">, now: number): boolean {
+  const time = entry.updated_at ? Date.parse(entry.updated_at) : Number.NaN
+  return entry.source === "stored" || !Number.isFinite(time) || now - time > LIMITS_STALE_MS
 }

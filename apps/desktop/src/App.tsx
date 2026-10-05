@@ -44,6 +44,7 @@ import { createAndOpenNote } from "@/state/notes"
 import { openQuickNote } from "@/state/quickNote"
 import { TasksSidebar } from "@/views/tasks/TasksSidebar"
 import { useTasksSync } from "@/views/tasks/useTasksSync"
+import { useUsageLimitsSync } from "@/views/useUsageLimitsSync"
 import { newTaskHere } from "@/views/tasks/taskActions"
 
 // The Notes page (editor and all) loads when it is first opened, not at launch.
@@ -104,6 +105,7 @@ function Workspace() {
   const [titlebarSlot, setTitlebarSlot] = useState<HTMLDivElement | null>(null)
   useNotesSync()
   useTasksSync()
+  useUsageLimitsSync()
 
   useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen })

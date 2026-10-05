@@ -1,65 +1,33 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/kit/button"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/kit/input-group"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { ProviderMark } from "@/components/kybern/bits"
+import { LimitMeter } from "@/components/kybern/LimitMeter"
 import { ChevronDownIcon, RefreshCwIcon } from "@/lib/kit/icons"
 import { tokens, usd } from "@/lib/format"
-import { limitLabel, reportedPercent, resetLabel } from "@/lib/providerUsage"
+import { useNow } from "@/lib/hooks"
+import { PROVIDER_NAMES, limitLabel, limitPace, limitTone, limitsStale, reportedPercent, resetIn, updatedAgo } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
+import { refreshUsageLimits, useUsageLimits } from "@/state/usageLimits"
 import { SurfaceHeader } from "./chrome"
-import type { ProviderKind, ProviderLimits, ProviderUsage, UsageGroup, UsageSummaryResult } from "@/protocol"
-
-type ReportedLimit = NonNullable<ProviderUsage["limits"]>[number]
-
-function limitTone(percent: number | null): "normal" | "warning" | "critical" {
-  if (percent === null) return "normal"
-  if (percent >= 95) return "critical"
-  if (percent >= 80) return "warning"
-  return "normal"
-}
+import type { ProviderKind, UsageGroup, UsageSummaryResult } from "@/protocol"
 
 type Period = "7" | "30" | "all"
 const PERIODS: Record<Period, string> = { "7": "Last 7 days", "30": "Last 30 days", all: "All time" }
-const PROVIDERS: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", cursor: "Cursor", opencode: "OpenCode", pi: "pi", omp: "Oh My Pi" }
 const dayLabel = (key: string, includeYear = false) => new Date(`${key}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC", ...(includeYear ? { year: "numeric" } as const : {}) })
 const count = (row: UsageSummaryResult["total"]) => row.usage.input_tokens + row.usage.output_tokens
 
 export function UsagePage() {
   const environmentId = useStore((s) => s.environmentId)
   const connection = useStore((s) => s.connection.state)
-  const threads = useStore((s) => s.threads)
-  const transcripts = useStore((s) => s.transcripts)
-  // Plan limits arrive live per thread (5-hour / weekly). Show the freshest known
-  // window per provider — latest reset time wins, then higher reported usage.
-  const providerLimits = useMemo(() => {
-    const byProvider = new Map<ProviderKind, Map<string, ReportedLimit>>()
-    for (const [id, transcript] of Object.entries(transcripts)) {
-      const limits = transcript?.providerUsage?.limits
-      const kind = threads[id]?.provider?.kind
-      if (!limits?.length || !kind) continue
-      const windows = byProvider.get(kind) ?? new Map<string, ReportedLimit>()
-      for (const limit of limits) {
-        const windowKey = String(limit.window_minutes ?? limit.name)
-        const prev = windows.get(windowKey)
-        const fresher = !prev
-          || (limit.resets_at ?? 0) > (prev.resets_at ?? 0)
-          || ((limit.resets_at ?? 0) === (prev.resets_at ?? 0) && limit.used_percent > prev.used_percent)
-        if (fresher) windows.set(windowKey, limit)
-      }
-      byProvider.set(kind, windows)
-    }
-    return [...byProvider.entries()].map(([kind, windows]) => ({
-      kind,
-      limits: [...windows.values()].sort((a, b) => (a.window_minutes ?? Number.MAX_SAFE_INTEGER) - (b.window_minutes ?? Number.MAX_SAFE_INTEGER)),
-    }))
-  }, [threads, transcripts])
-  // Authoritative limits from the daemon's store — available without opening a
-  // thread or prompting first. Falls back to the live per-thread values while it
-  // loads (or if an older daemon lacks the method).
-  const [storedLimits, setStoredLimits] = useState<{ environmentId: string; providers: ProviderLimits[] } | null>(null)
+  // Account limits come from the daemon's shared cache and update live
+  // (see state/usageLimits.ts); this page only renders them.
+  const limitProviders = useUsageLimits((s) => s.providers)
+  const limitsRefreshing = useUsageLimits((s) => s.refreshing.length > 0)
+  const now = useNow(15_000)
   const [period, setPeriod] = useState<Period>("30")
   const [group, setGroup] = useState<UsageGroup>("provider")
   const [revision, refresh] = useState(0)
@@ -69,8 +37,19 @@ export function UsagePage() {
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null)
   const scope = `${environmentId}:${connection}:${period}:${group}`
   const key = `${scope}:${revision}`
+  // A finished turn adds to the totals: reload them quietly, keeping the
+  // current figures on screen and any error to an explicit refresh.
+  const running = useStore((s) => Object.values(s.threads).reduce((n, thread) => n + (thread.status === "running" ? 1 : 0), 0))
+  const [settled, setSettled] = useState(0)
+  const lastRunning = useRef(running)
+  useEffect(() => {
+    if (running < lastRunning.current) setSettled((value) => value + 1)
+    lastRunning.current = running
+  }, [running])
+  const loadedKey = useRef<string | null>(null)
   useEffect(() => {
     let canceled = false
+    const silent = loadedKey.current === key
     const now = new Date()
     const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
     start.setUTCDate(start.getUTCDate() - Number(period === "all" ? 30 : period) + 1)
@@ -83,25 +62,12 @@ export function UsagePage() {
       return { key, scope, summary: totals, days: daily, end: now.toISOString().slice(0, 10) }
     }
     void load().then((next) => {
-      if (!canceled) { setResult(next); setFailure(null) }
-    }).catch((error) => { if (!canceled) setFailure({ key, message: errorText(error) }) })
+      if (!canceled) { loadedKey.current = key; setResult(next); setFailure(null) }
+    }).catch((error) => { if (!canceled && !silent) setFailure({ key, message: errorText(error) }) })
     return () => { canceled = true }
-  }, [key, scope, period, group])
-  useEffect(() => {
-    if (connection !== "open") return
-    let canceled = false
-    rpc().call("usage.limits", {}).then((result) => {
-      if (!canceled) setStoredLimits({ environmentId, providers: result.providers })
-    }).catch(() => { /* older daemon lacks the method: keep the per-thread fallback */ })
-    return () => { canceled = true }
-  }, [environmentId, connection, revision])
-  // The daemon's usage.limits is authoritative (store's last-reported values plus
-  // a live Codex read); use the live per-thread values only until it loads or if
-  // an older daemon lacks the method.
-  const accountLimits = (storedLimits?.environmentId === environmentId
-    ? storedLimits.providers.map((entry) => ({ kind: entry.provider, limits: entry.limits }))
-    : providerLimits
-  ).filter((entry) => entry.limits.length > 0)
+  }, [key, scope, period, group, settled])
+  const accountLimits = limitProviders.filter((entry) => entry.limits.length > 0)
+  const newest = accountLimits.reduce<string | undefined>((latest, entry) => (entry.updated_at && (!latest || entry.updated_at > latest) ? entry.updated_at : latest), undefined)
   // Never show the previous filter's totals under the next filter's label.
   const data = result?.scope === scope ? result : null
   const error = failure?.key === key ? failure.message : null
@@ -121,23 +87,30 @@ export function UsagePage() {
         <ComposerPickerMenuPopup align="start"><MenuGroup><MenuRadioGroup value={period} onValueChange={(next) => setPeriod(next as Period)}>{Object.entries(PERIODS).map(([value, label]) => <MenuRadioItem key={value} value={value}>{label}</MenuRadioItem>)}</MenuRadioGroup></MenuGroup></ComposerPickerMenuPopup>
       </Menu>
     <div className="usage-segments" role="group" aria-label="Group usage by">{([['provider', 'Agent'], ['model', 'Model'], ['day', 'Day']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={group === value} onClick={() => setGroup(value)}>{label}</button>)}</div>
-      <Button variant="ghost" size="sm" disabled={loading} onClick={() => refresh(value => value + 1)}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
+      <Button variant="ghost" size="sm" disabled={loading} onClick={() => { refresh(value => value + 1); refreshUsageLimits() }}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
     </div>
 
     {accountLimits.length > 0 && <section aria-label="Account limits">
-      <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label">Last reported by your agents</span></div>
+      <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label" aria-live="polite">{limitsRefreshing ? "Updating…" : newest ? `Updated ${updatedAgo(newest, now)}` : null}</span></div>
       <div className="usage-limits">
-        {accountLimits.map(({ kind, limits }) => <div key={kind} className="usage-limit-card">
-          <div className="usage-limit-provider">{PROVIDERS[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDERS[kind] ?? kind}</span></div>
-          {limits.map((limit, index) => {
-            const percent = reportedPercent(limit.used_percent)
-            return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
-              <div className="usage-limit-heading"><b>{limitLabel(limit, kind)}</b><span>{percent === null ? "Unavailable" : `${Math.round(percent)}% used`}</span></div>
-              <div className="usage-limit-meter"><span style={{ transform: `scaleX(${(percent ?? 0) / 100})` }} /></div>
-              <p className="usage-limit-reset">{resetLabel(limit.resets_at)}</p>
-            </div>
-          })}
-        </div>)}
+        {accountLimits.map((entry) => {
+          const kind = entry.provider
+          const ago = limitsStale(entry, now) ? updatedAgo(entry.updated_at, now) : null
+          return <div key={kind} className="usage-limit-card">
+            <div className="usage-limit-provider">{PROVIDER_NAMES[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDER_NAMES[kind] ?? kind}</span>{entry.plan && <span className="ms-auto font-normal text-muted-foreground">{entry.plan}</span>}</div>
+            {entry.limits.map((limit, index) => {
+              const percent = reportedPercent(limit.used_percent)
+              const name = limitLabel(limit, kind)
+              const pace = limitPace(limit, now)
+              return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
+                <div className="usage-limit-heading"><b>{name}</b><span>{percent === null ? "Unavailable" : `${Math.round(100 - percent)}% left`}</span></div>
+                {percent !== null && <LimitMeter left={100 - percent} pace={pace} label={`${name} left`} />}
+                <p className="usage-limit-reset flex justify-between gap-3"><span>{resetIn(limit.resets_at, now)}</span>{pace && <span data-pace-short={pace.short || undefined}>{pace.label}</span>}</p>
+              </div>
+            })}
+            {ago && <p className="usage-limit-reset">Last updated {ago}</p>}
+          </div>
+        })}
       </div>
     </section>}
 
@@ -161,7 +134,7 @@ export function UsagePage() {
       </section>}
       <section aria-label="Usage breakdown">
         <div className="usage-section-heading"><h2>Breakdown</h2></div>
-        {rows.length > 0 && <table className="usage-table"><thead><tr><th scope="col">{group === "provider" ? "Agent" : group === "model" ? "Model" : "Day (UTC)"}</th><th scope="col" className="usage-turns">Turns</th><th scope="col">Tokens</th><th scope="col">Cost</th></tr></thead><tbody>{rows.slice(0, rowLimit).map(row => <tr key={row.key}><td><div className="usage-row-name">{group === "provider" && PROVIDERS[row.key] && <ProviderMark kind={row.key as ProviderKind} size={14} className="size-3.5 shrink-0" />}<span>{group === "provider" ? PROVIDERS[row.key] ?? row.key : group === "day" ? dayLabel(row.key, true) : row.key === "(default)" ? "Default model" : row.key}</span></div><div className="usage-row-meter" aria-hidden="true"><span style={{ width: `${count(row) / max * 100}%` }} /></div></td><td className="usage-turns">{row.turns.toLocaleString()}</td><td title={count(row).toLocaleString()}>{tokens(count(row))}</td><td>{usd(row.cost_usd)}</td></tr>)}</tbody></table>}
+        {rows.length > 0 && <table className="usage-table"><thead><tr><th scope="col">{group === "provider" ? "Agent" : group === "model" ? "Model" : "Day (UTC)"}</th><th scope="col" className="usage-turns">Turns</th><th scope="col">Tokens</th><th scope="col">Cost</th></tr></thead><tbody>{rows.slice(0, rowLimit).map(row => <tr key={row.key}><td><div className="usage-row-name">{group === "provider" && PROVIDER_NAMES[row.key] && <ProviderMark kind={row.key as ProviderKind} size={14} className="size-3.5 shrink-0" />}<span>{group === "provider" ? PROVIDER_NAMES[row.key] ?? row.key : group === "day" ? dayLabel(row.key, true) : row.key === "(default)" ? "Default model" : row.key}</span></div><div className="usage-row-meter" aria-hidden="true"><span style={{ width: `${count(row) / max * 100}%` }} /></div></td><td className="usage-turns">{row.turns.toLocaleString()}</td><td title={count(row).toLocaleString()}>{tokens(count(row))}</td><td>{usd(row.cost_usd)}</td></tr>)}</tbody></table>}
         {rows.length > rowLimit && <Button variant="ghost" size="sm" onClick={() => setRowLimit(value => value + 20)}>Show more</Button>}
       </section>
       <p className="settings-note">Turns recorded by this Kybern daemon. Cost is each agent's own figure — on a subscription (Claude, Codex) it's the pay-as-you-go equivalent, not your actual bill, and some agents report none. Cache tokens count toward cost but are listed separately.</p>
