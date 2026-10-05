@@ -3301,11 +3301,14 @@ impl Orchestrator {
 
     // ---- persistence helpers ----
 
-    fn emit(&self, thread_id: ThreadId, turn_id: Option<TurnId>, payload: EventPayload) -> Result<ThreadEvent> {
+    pub(crate) fn emit(&self, thread_id: ThreadId, turn_id: Option<TurnId>, payload: EventPayload) -> Result<ThreadEvent> {
         let collaboration_failure = match &payload {
             EventPayload::TurnFailed { error } => Some(error.clone()),
             _ => None,
         };
+        // For a task run's thread the task lock spans the append and the task update,
+        // so its events reach the task in the order they were stored.
+        let task_order = self.task_event_guard(thread_id, &payload);
         let ev = self.inner.store.event_append(thread_id, turn_id, payload)?;
         if matches!(
             ev.payload,
@@ -3314,7 +3317,10 @@ impl Orchestrator {
             self.inner.queue_wakeup.notify_one();
         }
         let _ = self.inner.events.send(ev.clone());
-        self.track_task_run(&ev);
+        if task_order.is_some() {
+            self.track_task_run(&ev);
+        }
+        drop(task_order);
         if let Some(error) = collaboration_failure {
             self.record_collaboration_turn_failure(thread_id, &error)?;
         }

@@ -92,6 +92,22 @@ pub struct TaskRunPatch {
     pub only_from: Option<Vec<TaskRunState>>,
 }
 
+/// The status a task takes together with a change to its run.
+#[derive(Debug, Clone)]
+pub struct TaskStatusChange {
+    pub status: TaskStatus,
+    /// Apply only while the task has one of these statuses.
+    pub only_from: Option<Vec<TaskStatus>>,
+}
+
+/// What [`Store::task_run_update`] changed, and the task afterwards.
+#[derive(Debug, Clone)]
+pub struct TaskRunUpdate {
+    pub task: TaskItem,
+    pub run_changed: bool,
+    pub status_changed: bool,
+}
+
 impl Store {
     /// Every task that has not been deleted, in column order (rank).
     pub fn task_items_list(&self) -> Result<Vec<TaskItem>> {
@@ -458,6 +474,20 @@ impl Store {
     /// Apply a patch to the run of `thread_id`. Returns the task as it is now,
     /// or `None` when the thread is not a task run or nothing changed.
     pub fn task_run_patch(&self, thread_id: ThreadId, patch: TaskRunPatch) -> Result<Option<TaskItem>> {
+        Ok(self.task_run_update(thread_id, patch, None)?.map(|update| update.task))
+    }
+
+    /// Patch the run of `thread_id` and, in the same transaction, move its task to
+    /// `status`. Readers see the run and the task change together, never a task
+    /// that is running next to a run that already finished. The task follows only
+    /// its latest run: a run that a newer one replaced changes the task's status
+    /// no more. `None` when the thread is not a task run or nothing changed.
+    pub fn task_run_update(
+        &self,
+        thread_id: ThreadId,
+        patch: TaskRunPatch,
+        status: Option<TaskStatusChange>,
+    ) -> Result<Option<TaskRunUpdate>> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             let found: Option<(String, u32)> = tx
@@ -486,25 +516,40 @@ impl Store {
             if let Some(diff) = patch.diff {
                 next.diff = diff;
             }
-            if next == run {
+            let run_changed = next != run;
+            if run_changed {
+                tx.execute(
+                    "UPDATE task_runs SET state = ?3, activity = ?4, ended_at = ?5, diff_added = ?6, diff_removed = ?7, diff_files = ?8
+                     WHERE task_id = ?1 AND number = ?2",
+                    params![
+                        task_id,
+                        number,
+                        next.state.as_str(),
+                        next.activity,
+                        next.ended_at.map(|at| at.to_rfc3339()),
+                        next.diff.map(|diff| diff.added),
+                        next.diff.map(|diff| diff.removed),
+                        next.diff.map(|diff| diff.files),
+                    ],
+                )?;
+            }
+            let latest = before.runs.iter().map(|run| run.number).max() == Some(number);
+            let status_changed = match status {
+                Some(change)
+                    if latest
+                        && before.status != change.status
+                        && change.only_from.as_ref().is_none_or(|from| from.contains(&before.status)) =>
+                {
+                    set_status(&tx, id, change.status)?;
+                    true
+                }
+                _ => false,
+            };
+            if !run_changed && !status_changed {
                 return Ok(None);
             }
-            tx.execute(
-                "UPDATE task_runs SET state = ?3, activity = ?4, ended_at = ?5, diff_added = ?6, diff_removed = ?7, diff_files = ?8
-                 WHERE task_id = ?1 AND number = ?2",
-                params![
-                    task_id,
-                    number,
-                    next.state.as_str(),
-                    next.activity,
-                    next.ended_at.map(|at| at.to_rfc3339()),
-                    next.diff.map(|diff| diff.added),
-                    next.diff.map(|diff| diff.removed),
-                    next.diff.map(|diff| diff.files),
-                ],
-            )?;
             tx.commit()?;
-            Ok(Some(expect_item(c, id)?))
+            Ok(Some(TaskRunUpdate { task: expect_item(c, id)?, run_changed, status_changed }))
         })
     }
 
@@ -1473,6 +1518,59 @@ mod tests {
         assert_eq!(store.task_item_get(task.id).unwrap().unwrap().runs.len(), 1);
         // A rolled-back latest run frees its number: nothing ever referenced it.
         assert_eq!(store.task_run_start(task.id, t2.id, &provider, None, &[]).unwrap().runs[1].number, 2);
+    }
+
+    #[test]
+    fn a_run_and_its_task_status_change_in_one_step_and_only_the_latest_run_moves_the_task() {
+        let store = Store::open_in_memory().unwrap();
+        let ade = project(&store, "ade");
+        let task = store.task_item_create(new_task(Some(&ade), "Ship")).unwrap();
+        let (t1, t2) = (thread(&store, &ade), thread(&store, &ade));
+        let provider = ProviderInstance::default_for(ProviderKind::ClaudeCode);
+        store.task_run_start(task.id, t1.id, &provider, None, &[]).unwrap();
+        let finish = |status_from: Option<Vec<TaskStatus>>| {
+            (
+                TaskRunPatch { state: Some(TaskRunState::Completed), ended_at: Some(Some(Utc::now())), ..Default::default() },
+                Some(TaskStatusChange { status: TaskStatus::NeedsReview, only_from: status_from }),
+            )
+        };
+
+        let (patch, status) = finish(Some(vec![TaskStatus::Running]));
+        let update = store.task_run_update(t1.id, patch, status).unwrap().unwrap();
+        assert_eq!((update.run_changed, update.status_changed), (true, true));
+        assert_eq!((update.task.status, update.task.runs[0].state), (TaskStatus::NeedsReview, TaskRunState::Completed));
+        // Reopening: the run and the task go back to running together, ended_at cleared.
+        let reopen = TaskRunPatch { state: Some(TaskRunState::Running), ended_at: Some(None), ..Default::default() };
+        let update =
+            store.task_run_update(t1.id, reopen, Some(TaskStatusChange { status: TaskStatus::Running, only_from: None })).unwrap().unwrap();
+        assert_eq!(
+            (update.task.status, update.task.runs[0].state, update.task.runs[0].ended_at),
+            (TaskStatus::Running, TaskRunState::Running, None)
+        );
+
+        // `only_from` leaves a status the user set alone; the run still ends.
+        store.task_item_update(task.id, TaskPatch { status: Some(TaskStatus::Done), ..Default::default() }).unwrap();
+        let (patch, status) = finish(Some(vec![TaskStatus::Running]));
+        let update = store.task_run_update(t1.id, patch, status).unwrap().unwrap();
+        assert_eq!((update.run_changed, update.status_changed, update.task.status), (true, false, TaskStatus::Done));
+
+        // A newer run owns the task: the older run's thread no longer changes its status.
+        store.task_run_start(task.id, t2.id, &provider, None, &[]).unwrap();
+        let reopen = TaskRunPatch { state: Some(TaskRunState::Running), ended_at: Some(None), ..Default::default() };
+        let (patch, status) = finish(None);
+        store.task_run_update(t2.id, patch, status).unwrap().unwrap();
+        let update =
+            store.task_run_update(t1.id, reopen, Some(TaskStatusChange { status: TaskStatus::Running, only_from: None })).unwrap().unwrap();
+        assert_eq!((update.run_changed, update.status_changed), (true, false));
+        assert_eq!(
+            (update.task.status, update.task.runs[0].state, update.task.runs[1].state),
+            (TaskStatus::NeedsReview, TaskRunState::Running, TaskRunState::Completed)
+        );
+        // Nothing to change, nothing returned.
+        let same = TaskRunPatch { state: Some(TaskRunState::Completed), ..Default::default() };
+        let review = TaskStatusChange { status: TaskStatus::NeedsReview, only_from: None };
+        assert!(store.task_run_update(t2.id, same, Some(review)).unwrap().is_none());
+        assert!(store.task_run_update(Uuid::now_v7(), TaskRunPatch::default(), None).unwrap().is_none());
     }
 
     #[test]

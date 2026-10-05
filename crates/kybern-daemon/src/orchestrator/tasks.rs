@@ -21,7 +21,7 @@ use kybern_protocol::methods::{
     TaskRunState, TaskStatus,
 };
 use kybern_protocol::*;
-use kybern_store::{NewTask, NoteTarget, TaskError, TaskPatch, TaskRunPatch};
+use kybern_store::{NewTask, NoteTarget, TaskError, TaskPatch, TaskRunPatch, TaskStatusChange};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -226,8 +226,15 @@ impl Orchestrator {
             let _locks = self.task_locks()?;
             let store = &self.inner.store;
             store.task_run_start(task.id, thread.id, &thread.provider, thread.model.as_deref(), &run_notes)?;
-            // The saved follow-up is part of this prompt now.
-            let started = store.task_item_update(task.id, TaskPatch { pending_followup: Some(String::new()), ..Default::default() })?;
+            // The saved follow-up is part of this prompt now. Text saved since the
+            // task was read (while the thread was being made) is not, so it stays.
+            let current = store.task_item_get(task.id)?.ok_or(TaskError::NotFound("Task not found. It may have been deleted."))?;
+            let remaining = match (current.pending_followup.as_deref(), task.pending_followup.as_deref()) {
+                (Some(now), Some(consumed)) => now.strip_prefix(consumed).unwrap_or(now).trim().to_owned(),
+                (Some(now), None) => now.to_owned(),
+                (None, _) => String::new(),
+            };
+            let started = store.task_item_update(task.id, TaskPatch { pending_followup: Some(remaining), ..Default::default() })?;
             self.track_task_thread(thread.id);
             if previous_status == TaskStatus::Done {
                 self.sync_note_line(&started);
@@ -294,8 +301,9 @@ impl Orchestrator {
             };
             match thread {
                 None => {
-                    let combined = match task.pending_followup.as_deref() {
-                        Some(existing) if !existing.trim().is_empty() => format!("{existing}\n\n{text}"),
+                    // Saved text stays one block per follow-up, a blank line apart.
+                    let combined = match task.pending_followup.as_deref().map(str::trim) {
+                        Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
                         _ => text.clone(),
                     };
                     let saved = store
@@ -331,15 +339,19 @@ impl Orchestrator {
 
     // ---- run tracking ----
 
-    pub(super) fn track_task_thread(&self, thread_id: ThreadId) {
+    pub(crate) fn track_task_thread(&self, thread_id: ThreadId) {
         self.inner.task_threads.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(thread_id);
     }
 
-    /// Follow a thread's events for the task it runs. Called for every emitted event,
-    /// so everything but the few kinds that matter returns before touching the store.
-    pub(super) fn track_task_run(&self, event: &ThreadEvent) {
+    /// The task lock, taken before an event of a task run's thread is stored, or
+    /// `None` for threads and events the tracker ignores. Holding it from the
+    /// append to [`Self::apply_task_run_event`] applies a thread's events to its
+    /// task in the order they were stored, and keeps readers that take the lock
+    /// from seeing an event stored but not yet applied. The lock is innermost
+    /// (command, then task), so this is safe under the command lock.
+    pub(super) fn task_event_guard(&self, thread_id: ThreadId, payload: &EventPayload) -> Option<MutexGuard<'_, ()>> {
         if !matches!(
-            event.payload,
+            payload,
             EventPayload::TurnStarted { .. }
                 | EventPayload::ToolCallStarted { .. }
                 | EventPayload::ApprovalRequested { .. }
@@ -349,21 +361,28 @@ impl Orchestrator {
                 | EventPayload::TurnFailed { .. }
                 | EventPayload::CheckpointUpdated { .. }
         ) {
-            return;
+            return None;
         }
-        if !self.inner.task_threads.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&event.thread_id) {
-            return;
+        if !self.inner.task_threads.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&thread_id) {
+            return None;
         }
+        Some(self.inner.task_writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
+    /// Follow a stored event of a task run's thread. The caller holds the task lock
+    /// ([`Self::task_event_guard`]); a failure is logged, never returned, so it cannot break the thread.
+    pub(super) fn track_task_run(&self, event: &ThreadEvent) {
         if let Err(error) = self.apply_task_run_event(event) {
             tracing::warn!(thread_id = %event.thread_id, %error, "could not update the task run for this thread");
         }
     }
 
     fn apply_task_run_event(&self, event: &ThreadEvent) -> Result<()> {
-        let _tasks = self.task_lock()?;
         let store = &self.inner.store;
         let thread_id = event.thread_id;
-        let Some((task_id, _)) = store.task_run_for_thread(thread_id)? else { return Ok(()) };
+        if store.task_run_for_thread(thread_id)?.is_none() {
+            return Ok(());
+        }
         let live = [TaskRunState::Running, TaskRunState::Waiting];
         let mut activity_only = false;
         let mut settle_status = false;
@@ -434,20 +453,21 @@ impl Orchestrator {
         };
 
         let ending = matches!(event.payload, EventPayload::TurnCompleted { .. } | EventPayload::TurnFailed { .. });
-        let mut changed = store.task_run_patch(thread_id, patch)?.is_some();
-        if settle_status {
-            // Starting overrides any status; ending only moves a task still owned by the run.
-            let status = if ending {
-                self.set_task_status_system(task_id, TaskStatus::NeedsReview, Some(&[TaskStatus::Running]))?
+        // The run and its task change in one transaction: a new turn reopens both
+        // (whatever the status was, even Done), and the end of a turn moves a task
+        // still owned by the run to Needs review, leaving one the user moved alone.
+        let status = settle_status.then(|| {
+            if ending {
+                TaskStatusChange { status: TaskStatus::NeedsReview, only_from: Some(vec![TaskStatus::Running]) }
             } else {
-                self.set_task_status_system(task_id, TaskStatus::Running, None)?
-            };
-            changed |= status.is_some();
+                TaskStatusChange { status: TaskStatus::Running, only_from: None }
+            }
+        });
+        let Some(update) = store.task_run_update(thread_id, patch, status)? else { return Ok(()) };
+        if update.status_changed {
+            self.sync_note_line(&update.task);
         }
-        if !changed {
-            return Ok(());
-        }
-        let Some(task) = store.task_item_get(task_id)? else { return Ok(()) };
+        let task = update.task;
         let now = Instant::now();
         let mut published = self.inner.task_published.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if activity_only && published.get(&thread_id).is_some_and(|at| now.duration_since(*at) < ACTIVITY_BROADCAST_INTERVAL) {
@@ -1184,6 +1204,172 @@ mod tests {
         let saved = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "later".into() }).await.unwrap();
         assert_eq!(saved.sent_to, None);
         assert!(saved.task.pending_followup.as_deref().unwrap().ends_with("later"));
+    }
+
+    /// The task's status and its latest run belong together: a task is Running
+    /// while the run is live and in Needs review once it is not.
+    fn assert_in_step(task: &TaskItem, context: &str) {
+        let run = task.runs.last().expect("a run");
+        match task.status {
+            TaskStatus::Running => assert!(run.state.is_live(), "{context}: task running next to a {:?} run", run.state),
+            TaskStatus::NeedsReview => assert!(!run.state.is_live(), "{context}: task in review next to a {:?} run", run.state),
+            _ => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_reopens_a_settled_run_even_when_the_user_marked_it_done() {
+        let mut fixture = Fixture::new();
+        let task = fixture.task("Talk");
+        let thread = fixture.manual_run(&task);
+        fixture.emit(&thread, turn_started());
+        fixture.emit(&thread, turn_completed(StopReason::Completed));
+        let settled = fixture.current(&task);
+        assert_eq!((settled.status, settled.runs[0].state), (TaskStatus::NeedsReview, TaskRunState::Completed));
+        let first_end = settled.runs[0].ended_at.expect("the run ended");
+        // The user accepted the work; a later follow-up is an explicit request for more.
+        fixture.orchestrator.task_item_update(update(task.id, TaskStatus::Done)).unwrap();
+        let mut idle = fixture.store.thread_get(thread.id).unwrap().unwrap();
+        idle.status = ThreadStatus::Idle;
+        fixture.store.thread_upsert(&idle).unwrap();
+        fixture.drain();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let sent =
+            fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: "one more thing".into() }).await.unwrap();
+        assert_eq!(sent.sent_to, Some(thread.id));
+        let running = fixture.current(&task);
+        assert_eq!((running.status, running.runs[0].state, running.runs[0].ended_at), (TaskStatus::Running, TaskRunState::Running, None));
+        assert_eq!((sent.task.status, sent.task.runs[0].state), (TaskStatus::Running, TaskRunState::Running), "the reply shows it too");
+        let published = fixture.drain();
+        let last = published.iter().rev().find_map(|change| change.task.as_ref()).expect("a broadcast");
+        assert_eq!((last.status, last.runs[0].state, last.runs[0].ended_at), (TaskStatus::Running, TaskRunState::Running, None));
+        assert!(published.iter().filter_map(|change| change.task.as_ref()).all(|task| {
+            assert_in_step(task, "follow-up broadcast");
+            true
+        }));
+
+        // The turn ends (here the missing agent fails it): back to review with a newer end.
+        let reviewed = fixture.wait_for(&task, |task| task.status == TaskStatus::NeedsReview).await;
+        assert_ne!(reviewed.runs[0].state, TaskRunState::Running);
+        assert!(reviewed.runs[0].ended_at.expect("ended again") > first_end, "the end time moves to the new turn");
+        let last = fixture.drain().into_iter().rev().find_map(|change| change.task).expect("a broadcast");
+        assert_eq!((last.status, last.runs[0].ended_at), (TaskStatus::NeedsReview, reviewed.runs[0].ended_at));
+    }
+
+    #[tokio::test]
+    async fn an_older_run_does_not_move_the_task_once_a_newer_run_exists() {
+        let fixture = Fixture::new();
+        let task = fixture.task("Twice");
+        let first = fixture.manual_run(&task);
+        fixture.emit(&first, turn_started());
+        fixture.emit(&first, turn_completed(StopReason::Completed));
+        let second = fixture.manual_run(&task);
+        fixture.emit(&second, turn_started());
+        fixture.emit(&second, turn_completed(StopReason::Completed));
+        assert_eq!(fixture.current(&task).status, TaskStatus::NeedsReview);
+
+        // Someone continues the first run's thread directly: that run reopens, the task follows the latest run.
+        fixture.emit(&first, turn_started());
+        let current = fixture.current(&task);
+        assert_eq!(
+            (current.runs[0].state, current.runs[1].state, current.status),
+            (TaskRunState::Running, TaskRunState::Completed, TaskStatus::NeedsReview)
+        );
+        fixture.emit(&first, turn_completed(StopReason::Completed));
+        assert_eq!(fixture.current(&task).status, TaskStatus::NeedsReview);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_task_and_its_run_are_never_observed_out_of_step_while_a_fast_turn_ends() {
+        let mut fixture = Fixture::new();
+        for round in 0..25 {
+            let task = fixture.task(&format!("Fast {round}"));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let reader = {
+                let (store, id, stop) = (fixture.store.clone(), task.id, stop.clone());
+                tokio::spawn(async move {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        if let Some(task) = store.task_item_get(id).unwrap().filter(|task| !task.runs.is_empty()) {
+                            assert_in_step(&task, "store read");
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+            };
+            // No agent exists here, so the first turn fails at once: the fastest turn there is.
+            let result = fixture.orchestrator.task_item_send(fixture.send_params(&task, vec![])).await.unwrap();
+            assert_in_step(&result.task, "send result");
+            let settled = fixture.wait_for(&task, |task| task.status == TaskStatus::NeedsReview).await;
+            assert_in_step(&settled, "settled");
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            reader.await.unwrap();
+            for change in fixture.drain() {
+                if let Some(task) = change.task.filter(|published| published.id == task.id && !published.runs.is_empty()) {
+                    assert_in_step(&task, "broadcast");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn events_reach_the_task_in_the_order_they_were_stored() {
+        let fixture = Fixture::new();
+        let task = fixture.task("Racing");
+        let thread = fixture.manual_run(&task);
+        let orchestrator = fixture.orchestrator.clone();
+        for round in 0..200 {
+            // A turn ends on one thread while the next one starts on another.
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let (a, b) = (orchestrator.clone(), orchestrator.clone());
+            let (ba, bb) = (barrier.clone(), barrier);
+            let id = thread.id;
+            let ender = std::thread::spawn(move || {
+                ba.wait();
+                a.emit(id, Some(Uuid::nil()), turn_completed(StopReason::Completed)).unwrap().seq
+            });
+            let starter = std::thread::spawn(move || {
+                bb.wait();
+                b.emit(id, Some(Uuid::nil()), turn_started()).unwrap().seq
+            });
+            let (ended, started) = (ender.join().unwrap(), starter.join().unwrap());
+            let current = fixture.current(&task);
+            if started > ended {
+                assert_eq!(
+                    (current.status, current.runs[0].state),
+                    (TaskStatus::Running, TaskRunState::Running),
+                    "round {round}: started last"
+                );
+            } else {
+                assert_eq!(
+                    (current.status, current.runs[0].state),
+                    (TaskStatus::NeedsReview, TaskRunState::Completed),
+                    "round {round}: ended last"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_follow_ups_are_trimmed_and_separated_by_a_blank_line() {
+        let fixture = Fixture::new();
+        let task = fixture.task("Notes to self");
+        let add = |text: &str| fixture.orchestrator.task_item_followup(TaskItemsFollowupParams { id: task.id, text: text.into() });
+        assert_eq!(
+            add("\n  first line\nsecond line \n\n").await.unwrap().task.pending_followup.as_deref(),
+            Some("first line\nsecond line")
+        );
+        assert_eq!(
+            add("  third\t\n").await.unwrap().task.pending_followup.as_deref(),
+            Some("first line\nsecond line\n\nthird"),
+            "one blank line between saves, nothing trailing"
+        );
+        // Text that was saved with stray whitespace before still joins cleanly.
+        fixture.store.task_item_update(task.id, TaskPatch { pending_followup: Some("kept".into()), ..Default::default() }).unwrap();
+        assert_eq!(add("more").await.unwrap().task.pending_followup.as_deref(), Some("kept\n\nmore"));
+        // Starting a run uses it up.
+        let sent = fixture.orchestrator.task_item_send(fixture.send_params(&task, vec![])).await.unwrap();
+        assert_eq!(sent.task.pending_followup, None);
     }
 
     #[tokio::test]
