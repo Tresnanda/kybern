@@ -1,32 +1,28 @@
 // The Tasks panel: the thread panel's replacement while the Tasks page is open.
-// A header with New task, search, the status views with counts, projects with their
-// dots, and a quiet line about agents at work.
+// A header with New task, search, the status views with counts, every project with
+// its dot (empty ones too, so a project can be chosen before it has tasks) and a
+// hover "+" to add one, and a quiet line about agents at work.
 import { useMemo, type ReactNode } from "react"
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { useNow } from "@/lib/hooks"
-import { ListChecksIcon, NewThreadIcon, SearchIcon } from "@/lib/kit/icons"
-import { orderProjects } from "@/state/sidebarOrganize"
+import { AddPlusIcon, ListChecksIcon, NewThreadIcon, SearchIcon } from "@/lib/kit/icons"
 import { setTaskFilter, setTaskQuery, useAllTasks, useTasks } from "@/state/tasks"
 import { countTasks, type TaskFilter } from "@/state/tasksModel"
 import { useStore } from "@/state/store"
 import { ProjectDot } from "@/lib/kit/projectDot"
+import { useAddProject } from "../useAddProject"
 import { TaskStatusGlyph } from "./TaskGlyphs"
-import { newTaskHere } from "./taskActions"
+import { newTaskHere, useTaskProjects } from "./taskActions"
 
 export function TasksSidebar() {
   const tasks = useAllTasks()
   const filter = useTasks((s) => s.prefs.filter)
   const query = useTasks((s) => s.query)
-  const projects = useStore((s) => s.projects)
-  const projectOrder = useStore((s) => s.projectOrder)
+  const projects = useTaskProjects()
   const openTaskId = useStore((s) => (s.selected.kind === "tasks" ? s.selected.taskId : undefined))
   const now = useNow(60_000)
   const counts = useMemo(() => countTasks(tasks, now), [tasks, now])
-  const withTasks = useMemo(() => {
-    const used = new Set(tasks.filter((task) => task.scope === "project" && task.project_id).map((task) => task.project_id!))
-    return orderProjects(Object.values(projects), projectOrder).filter((project) => used.has(project.id))
-  }, [tasks, projects, projectOrder])
 
   const choose = (next: TaskFilter) => {
     setTaskFilter(next)
@@ -34,6 +30,8 @@ export function TasksSidebar() {
     if (openTaskId) useStore.getState().selectTasks()
   }
   const current = (value: TaskFilter) => !openTaskId && filter === value
+  // A project added here opens its tasks.
+  const addProject = useAddProject((project) => choose(`project:${project.id}`))
 
   return (
     <nav aria-label="Tasks" className="tk-panel font-system-ui">
@@ -73,11 +71,17 @@ export function TasksSidebar() {
         <NavRow current={current("running")} onClick={() => choose("running")} glyph={<TaskStatusGlyph status="running" mono />} label="Running" count={counts.running} />
         <NavRow current={current("needs_review")} onClick={() => choose("needs_review")} glyph={<TaskStatusGlyph status="needs_review" mono />} label="Needs review" count={counts.needs_review} />
         <NavRow current={current("done")} onClick={() => choose("done")} glyph={<TaskStatusGlyph status="done" mono />} label="Recently done" count={counts.done} />
-        <div className="tk-nav-label" id="tk-projects-label">
-          Projects
+        <div className="tk-nav-label" data-empty={projects.length === 0 || undefined}>
+          <span id="tk-projects-label">Projects</span>
+          <Tooltip>
+            <TooltipTrigger render={<button type="button" className="tk-nav-add" aria-label="Add project" onClick={addProject.add} />}>
+              <AddPlusIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="right">Add project</TooltipPopup>
+          </Tooltip>
         </div>
         <div role="group" aria-labelledby="tk-projects-label">
-          {withTasks.map((project) => (
+          {projects.map((project) => (
             <NavRow
               key={project.id}
               current={current(`project:${project.id}`)}
@@ -101,6 +105,7 @@ export function TasksSidebar() {
           </span>
         </button>
       )}
+      {addProject.dialog}
     </nav>
   )
 }

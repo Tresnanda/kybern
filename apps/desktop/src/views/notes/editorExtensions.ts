@@ -8,6 +8,7 @@ import { Markdown } from "@tiptap/markdown"
 import StarterKit from "@tiptap/starter-kit"
 import Suggestion, { type SuggestionOptions } from "@tiptap/suggestion"
 
+import { createNoteImage, type NoteImageOptions } from "./noteImage"
 import { filterSlashItems, type SlashItem } from "./slashItems"
 import { createTaskLinks, type TaskLineHost } from "./taskLinks"
 import { createTaskRef } from "./taskRef"
@@ -57,6 +58,7 @@ export function createNoteExtensions(
   slash: SlashOptions["suggestion"]["render"],
   placeholder: string,
   tasks: { view: NodeViewRenderer; lines: TaskLineHost },
+  images: NoteImageOptions,
 ): AnyExtension[] {
   return [
     StarterKit.configure({
@@ -78,6 +80,8 @@ export function createNoteExtensions(
     // `[ADE-14](kybern://task/<id>)`: a live task reference, linked from typed and pasted keys.
     createTaskRef(tasks.view),
     createTaskLinks(tasks.lines),
+    // `![](kybern://asset/<id>)`: an image kept by the note's daemon; pasting or dropping one adds it.
+    createNoteImage(images),
     Placeholder.configure({
       placeholder: ({ node }) => (node.type.name === "heading" ? `Heading ${node.attrs.level}` : placeholder),
       showOnlyCurrent: true,

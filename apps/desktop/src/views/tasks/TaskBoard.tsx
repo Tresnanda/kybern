@@ -17,6 +17,7 @@ import { isOpenStatus, latestRun, runChanges, runDuration, shortActivity, shortD
 import { ProjectDot } from "@/lib/kit/projectDot"
 import { AgentMark, PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
 import { QuickAddRow } from "./QuickAdd"
+import { TaskProjectChip } from "./TaskMenus"
 import { projectForNewTask } from "./taskActions"
 import { containerId, useTaskDnd } from "./useTaskDnd"
 
@@ -137,12 +138,12 @@ const TaskCard = memo(function TaskCard({ task, now, focused }: { task: TaskItem
 function CardContent({ task, now, overlay }: { task: TaskItem; now: number; overlay?: boolean }) {
   return (
     <div className="tk-card" data-overlay={overlay || undefined} data-closed={!isOpenStatus(task.status) || undefined}>
-      <CardInner task={task} now={now} />
+      <CardInner task={task} now={now} overlay={overlay} />
     </div>
   )
 }
 
-function CardInner({ task, now }: { task: TaskItem; now: number }) {
+function CardInner({ task, now, overlay }: { task: TaskItem; now: number; overlay?: boolean }) {
   const run = latestRun(task)
   const changes = run ? runChanges(run) : null
   let footer: React.ReactNode = null
@@ -191,7 +192,7 @@ function CardInner({ task, now }: { task: TaskItem; now: number }) {
   return (
     <>
       <div className="r1">
-        <ProjectDot projectId={task.scope === "project" ? task.project_id : null} />
+        {overlay ? <ProjectDot projectId={task.scope === "project" ? task.project_id : null} /> : <TaskProjectChip task={task} />}
         <span>{task.key}</span>
         {task.priority !== 0 && (
           <span className="pr">

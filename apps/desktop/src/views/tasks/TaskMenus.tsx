@@ -1,6 +1,6 @@
 // Status, priority and project pickers for a task. Each opens from its own trigger,
 // or, for the S and P shortcuts, anchored to the focused row with no trigger at all.
-import type { ReactElement, ReactNode } from "react"
+import type { ReactElement, ReactNode, SyntheticEvent } from "react"
 
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuGroupLabel, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
@@ -10,6 +10,7 @@ import { PRIORITY_LABEL, PRIORITY_MENU_ORDER, STATUS_LABEL, USER_STATUSES } from
 import { useStore } from "@/state/store"
 import { ProjectDot } from "@/lib/kit/projectDot"
 import { PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
+import { useTaskProjects } from "./taskActions"
 
 interface PickerProps {
   /** The element that opens the menu. Omit it to open from `anchor` while `open`. */
@@ -80,8 +81,7 @@ export function TaskPriorityMenu({ task, ...props }: PickerProps & { task: TaskI
 }
 
 export function TaskProjectMenu({ task, ...props }: PickerProps & { task: TaskItem }) {
-  const projects = useStore((s) => s.projects)
-  const list = Object.values(projects).sort((a, b) => a.name.localeCompare(b.name))
+  const list = useTaskProjects()
   const current = task.scope === "project" && task.project_id ? task.project_id : "global"
   return (
     <Picker
@@ -101,5 +101,30 @@ export function TaskProjectMenu({ task, ...props }: PickerProps & { task: TaskIt
         </MenuRadioItem>
       ))}
     </Picker>
+  )
+}
+
+const stop = (event: SyntheticEvent) => event.stopPropagation()
+
+/**
+ * The project on a list row or board card: its dot (and, on rows, its name), opening
+ * the project picker in place. Clicks, drags and keys stay here, including those from
+ * the portaled menu, so choosing a project never opens or drags the task.
+ */
+export function TaskProjectChip({ task, showName }: { task: TaskItem; showName?: boolean }) {
+  const projectId = task.scope === "project" ? task.project_id ?? null : null
+  const name = useStore((s) => (projectId ? s.projects[projectId]?.name ?? "Project" : "Global"))
+  return (
+    <span className="contents" onClick={stop} onPointerDown={stop} onKeyDown={stop}>
+      <TaskProjectMenu
+        task={task}
+        trigger={
+          <button type="button" className="tk-proj-chip" aria-label={`Project: ${name}. Change project`}>
+            <ProjectDot projectId={projectId} />
+            {showName && <span>{name}</span>}
+          </button>
+        }
+      />
+    </span>
   )
 }

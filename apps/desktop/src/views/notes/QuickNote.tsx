@@ -13,10 +13,18 @@ import { mod } from "@/lib/format"
 import { CheckIcon, ChevronDownIcon } from "@/lib/kit/icons"
 import { ProjectDot } from "@/lib/kit/projectDot"
 import { FREE_CHAT_PROJECT_ID } from "@/protocol"
+import { fetchNoteImage, noteSourceForHome, uploadNoteImage } from "@/state/notes"
 import { closeQuickNote, setQuickNote, useQuickNote } from "@/state/quickNote"
 import { orderProjects } from "@/state/sidebarOrganize"
 import { useStore } from "@/state/store"
 import type { NoteBodyHost, NoteBodySnapshot } from "./NoteBody"
+import type { NoteImageHost } from "./noteImage"
+
+// Images go to where the note will be kept, read when they are pasted.
+const quickImages: NoteImageHost = {
+  upload: (file) => uploadNoteImage(noteSourceForHome(useQuickNote.getState().home), file),
+  load: (id, signal) => fetchNoteImage(noteSourceForHome(useQuickNote.getState().home), id, signal),
+}
 
 // The same editor as the Notes page (slash menu, format bar, checklists), loaded when the panel first opens.
 const NoteBody = lazy(() => import("./NoteBody"))
@@ -99,7 +107,7 @@ function QuickNoteForm() {
         className="quick-note-title"
       />
       <Suspense fallback={<div className="min-h-24" aria-hidden="true" />}>
-        <NoteBody host={host} snapshot={snapshot} variant="compact" onEditor={onEditor} placeholder="Write something. Type / for formatting" className="quick-note-editor" />
+        <NoteBody host={host} snapshot={snapshot} variant="compact" onEditor={onEditor} placeholder="Write something. Type / for formatting" images={quickImages} className="quick-note-editor" />
       </Suspense>
       <div className="quick-note-foot">
         <p className="quick-note-hint">

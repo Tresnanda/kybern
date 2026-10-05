@@ -53,6 +53,7 @@ import {
   Comment01Icon as HiMessageCircle,
   Moon02Icon as HiMoon,
   Attachment01Icon as HiPaperclip,
+  Image01Icon as HiImage,
   PlusSignIcon as HiPlus,
   RefreshIcon as HiRefresh,
   RotateLeft01Icon as HiRotateCcw,
@@ -259,6 +260,7 @@ export const EyeIcon = hugeIcon(HiEye);
 export const CodeIcon: LucideIcon = hugeIcon(HcCode);
 export const EyeOpenIcon: LucideIcon = hugeIcon(HiEye);
 export const PaperclipIcon = hugeIcon(HiPaperclip);
+export const ImageIcon = hugeIcon(HiImage);
 export const ArchiveIcon = hugeIcon(HiArchive);
 export const BrainIcon = hugeIcon(HiBrain);
 export const FileIcon = hugeIcon(HiFile);

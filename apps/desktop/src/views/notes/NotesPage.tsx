@@ -1,6 +1,6 @@
 // The Notes page: the gallery of every note, or one note as a focused document.
-// Notes use the whole workspace card, so the thread panel steps aside while the
-// page is open (⌘B still brings it back) and returns as it was when you leave.
+// Notes use the whole workspace card: the app shows no side panel here (App.tsx),
+// and the thread panel returns as it was when you leave.
 import { useEffect } from "react"
 
 import { useNoteSummary, useNotes, useNotesReady } from "@/state/notes"
@@ -16,15 +16,6 @@ export function NotesView() {
   useEffect(() => {
     if (noteId) useNotes.setState({ lastOpenId: noteId })
   }, [noteId])
-
-  // The thread panel steps aside for Notes and comes back as it was.
-  useEffect(() => {
-    const wasOpen = useStore.getState().sidebarOpen
-    if (wasOpen) useStore.getState().set({ sidebarOpen: false })
-    return () => {
-      if (wasOpen) useStore.getState().set({ sidebarOpen: true })
-    }
-  }, [])
 
   // A note that is gone (purged elsewhere, or on another environment) leaves the gallery showing.
   const missing = !!noteId && loaded && !summary

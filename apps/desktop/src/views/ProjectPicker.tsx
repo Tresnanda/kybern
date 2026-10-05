@@ -16,7 +16,7 @@ import { Spinner } from "@/components/kybern/bits"
 import { activeEnvironment } from "@/state/environments"
 import { addProject, errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import type { ProjectsBrowseResult } from "@/protocol"
+import type { Project, ProjectsBrowseResult } from "@/protocol"
 import {
   ENVIRONMENT_DIALOG,
   ENVIRONMENT_HINT,
@@ -26,20 +26,23 @@ import {
 export function ProjectPicker({
   open,
   onOpenChange,
+  onAdded,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** What happens with the new project; by default its home screen opens. */
+  onAdded?: (project: Project) => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className={ENVIRONMENT_DIALOG}>
-        <PickerContents onDone={() => onOpenChange(false)} />
+        <PickerContents onDone={() => onOpenChange(false)} onAdded={onAdded} />
       </DialogPopup>
     </Dialog>
   )
 }
 
-function PickerContents({ onDone }: { onDone: () => void }) {
+function PickerContents({ onDone, onAdded }: { onDone: () => void; onAdded?: (project: Project) => void }) {
   const [path, setPath] = useState("")
   const [listing, setListing] = useState<ProjectsBrowseResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -177,7 +180,8 @@ function PickerContents({ onDone }: { onDone: () => void }) {
             try {
               if (store !== useStore || client !== rpc()) return
               const project = await addProject(path)
-              store.getState().selectDraft(project.id)
+              if (onAdded) onAdded(project)
+              else store.getState().selectDraft(project.id)
               onDone()
             } catch (e) {
               setError(errorText(e))

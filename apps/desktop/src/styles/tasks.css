@@ -320,6 +320,33 @@
   font-weight: 500;
   color: var(--task-fg3);
 }
+/* "+ Add project" beside the Projects label: shown while the panel is hovered, or always while there are none. */
+.tk-nav-add {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  margin: 0 -4px -3px auto;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--task-fg3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-quick) var(--ease-out), background-color var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out);
+}
+.tk-panel:hover .tk-nav-add,
+.tk-nav-label[data-empty] .tk-nav-add,
+.tk-nav-add:focus-visible,
+.tk-nav-add[data-popup-open] {
+  opacity: 1;
+}
+.tk-nav-add:hover {
+  background: var(--task-fill);
+  color: var(--task-fg);
+}
+.tk-nav-add:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
+  outline-offset: 0;
+}
 .tk-foot {
   display: flex;
   flex: none;
@@ -569,6 +596,38 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The project on a row or card: a quiet button that opens the project picker. */
+.tk-proj-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  margin: -3px -6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out);
+}
+.tk-proj-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tk-proj-chip:hover,
+.tk-proj-chip[data-popup-open] {
+  background: var(--task-fill);
+  color: var(--task-fg);
+}
+.tk-proj-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
+  outline-offset: 0;
+}
+.tk-card .tk-proj-chip {
+  margin: -4px;
+  padding: 4px;
 }
 .tk-row .age {
   width: 34px;
