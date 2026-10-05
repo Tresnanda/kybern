@@ -641,7 +641,8 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
         use_worktree: None,
         base_branch: None,
         project_id: None,
-        prompt: " ".into(),
+        prompt: Some(" ".into()),
+        message: None,
         note_ids: None,
     };
     let rejected = phone.call_raw(TaskItemsSend::NAME, serde_json::to_value(empty_prompt).unwrap()).await.unwrap_err().to_string();

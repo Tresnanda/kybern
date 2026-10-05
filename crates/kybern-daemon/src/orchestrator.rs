@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::config::Paths;
 use crate::settings::SettingsStore;
 
+mod agent_items;
 mod notes;
 mod tasks;
 
@@ -2164,6 +2165,9 @@ impl Orchestrator {
                 };
                 return self.inner.computer.execute(ctx, name, arguments).await;
             }
+            if agent_items::is_tool(name) {
+                return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
+            }
             if name.starts_with("kybern_collaboration_") || name == "kybern_thread_send" {
                 let object = arguments.as_object_mut().ok_or_else(|| anyhow!("tool arguments must be a JSON object"))?;
                 let existing_group = self.inner.store.collaboration_group_for_thread(thread_id)?;
@@ -2709,6 +2713,10 @@ struct Inner {
     task_threads: std::sync::Mutex<HashSet<ThreadId>>,
     /// When a run's task was last published, to space out activity-only updates.
     task_published: std::sync::Mutex<HashMap<ThreadId, Instant>>,
+    /// Agent notes-and-tasks grants and per-turn task counts.
+    agent_items: std::sync::Mutex<agent_items::AgentItemState>,
+    /// Serializes agent notes-and-tasks writes with their operation receipts.
+    agent_item_ops: Mutex<()>,
 }
 
 struct LiveSession {
@@ -2754,15 +2762,28 @@ struct DaemonApproval {
     turn_id: TurnId,
     key: String,
     decision: tokio::sync::watch::Sender<Option<ApprovalDecision>>,
+    /// The operation that used this card's one-time answer. Only a retry of that
+    /// operation may reuse the card; any other call with the same key opens a new one.
+    consumed_by: Option<Uuid>,
+}
+
+/// How a daemon-owned approval card was answered.
+enum DaemonAnswer {
+    Decided(ApprovalDecision),
+    /// The turn ended (and denied the card) before the user answered.
+    TurnEnded,
+    /// No answer within the wait; the card stays open for a retry.
+    Pending,
 }
 
 impl Orchestrator {
     /// The copy of a user message a provider receives. Kybern-only mentions become
-    /// text: `@Computer` an instruction, a `kybern://note/<id>` mention the note.
+    /// text: `@Computer` an instruction, a `kybern://note/<id>` mention the note, a
+    /// `kybern://task/<id>` mention the task.
     /// Everything else passes through unchanged; the stored message keeps the chips.
     fn provider_message<'a>(&self, message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
         let computer = crate::computer::ComputerUse::expand_mention(message, live.computer_tools);
-        match self.expand_note_mentions(computer.as_ref().unwrap_or(message)) {
+        match self.expand_item_mentions(computer.as_ref().unwrap_or(message)) {
             Some(expanded) => std::borrow::Cow::Owned(expanded),
             None => match computer {
                 Some(expanded) => std::borrow::Cow::Owned(expanded),
@@ -2953,6 +2974,8 @@ impl Orchestrator {
                 task_writes: std::sync::Mutex::new(()),
                 task_threads: std::sync::Mutex::new(task_threads),
                 task_published: std::sync::Mutex::new(HashMap::new()),
+                agent_items: std::sync::Mutex::new(Default::default()),
+                agent_item_ops: Mutex::new(()),
             }),
         }
     }
@@ -4438,34 +4461,73 @@ impl Orchestrator {
     ) -> Result<crate::computer::ConsentAnswer> {
         use crate::computer::{ConsentAnswer, Mode};
         let key = format!("{}:{:?}", request.bundle_id.as_deref().unwrap_or(&request.app.to_lowercase()), request.mode);
-        let mut receiver = {
+        let foreground = request.mode == Mode::Foreground;
+        let input = serde_json::json!({
+            "app": request.app,
+            "bundle_id": request.bundle_id,
+            "mode": if foreground { "foreground" } else { "background" },
+            "action": request.first_action,
+        });
+        let summary = if foreground {
+            format!("Let this chat use your cursor and keyboard in {}", request.app)
+        } else {
+            format!("Let this chat control {} in the background", request.app)
+        };
+        let (_, answer) =
+            self.ask_daemon_approval(thread_id, turn_id, live, key, crate::computer::APPROVAL_TOOL, input, summary, None).await?;
+        Ok(match answer {
+            DaemonAnswer::Decided(ApprovalDecision::AllowAlways) => ConsentAnswer::Session,
+            DaemonAnswer::Decided(ApprovalDecision::Submit { response })
+                if response.get("scope").and_then(serde_json::Value::as_str) == Some("always") =>
+            {
+                ConsentAnswer::Always
+            }
+            DaemonAnswer::Decided(ApprovalDecision::Deny { reason }) => ConsentAnswer::Denied(reason),
+            DaemonAnswer::Decided(_) => ConsentAnswer::Turn,
+            DaemonAnswer::TurnEnded => ConsentAnswer::Denied(Some("the turn ended".into())),
+            DaemonAnswer::Pending => ConsentAnswer::Pending,
+        })
+    }
+
+    /// Open (or, for a retry with the same `key` in the same turn, reuse) a
+    /// daemon-owned approval card and wait for the answer. The card resolves in
+    /// the daemon, not the provider, and keeps its answer until the turn ends.
+    /// A card another `operation` consumed (see [`Self::consume_daemon_approval`])
+    /// is not reused. Returns the card's id with the answer.
+    #[allow(clippy::too_many_arguments)]
+    async fn ask_daemon_approval(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &Arc<LiveSession>,
+        key: String,
+        tool_name: &str,
+        input: serde_json::Value,
+        summary: String,
+        operation: Option<Uuid>,
+    ) -> Result<(ApprovalId, DaemonAnswer)> {
+        let (card, mut receiver) = {
             let mut approvals = live.daemon_approvals.lock().await;
-            match approvals.values().find(|entry| entry.turn_id == turn_id && entry.key == key) {
-                Some(entry) => entry.decision.subscribe(),
+            let reusable = approvals.iter().find(|(_, entry)| {
+                entry.turn_id == turn_id && entry.key == key && entry.consumed_by.is_none_or(|by| Some(by) == operation)
+            });
+            match reusable {
+                Some((id, entry)) => (*id, entry.decision.subscribe()),
                 None => {
-                    let foreground = request.mode == Mode::Foreground;
                     let approval = ApprovalRequest {
                         id: Uuid::now_v7(),
                         thread_id,
                         turn_id,
                         tool_call_id: None,
-                        tool_name: crate::computer::APPROVAL_TOOL.into(),
-                        input: serde_json::json!({
-                            "app": request.app,
-                            "bundle_id": request.bundle_id,
-                            "mode": if foreground { "foreground" } else { "background" },
-                            "action": request.first_action,
-                        }),
-                        summary: if foreground {
-                            format!("Let this chat use your cursor and keyboard in {}", request.app)
-                        } else {
-                            format!("Let this chat control {} in the background", request.app)
-                        },
+                        tool_name: tool_name.into(),
+                        input,
+                        summary,
                         suggestions: Vec::new(),
                         created_at: Utc::now(),
                     };
                     let (sender, receiver) = tokio::sync::watch::channel(None);
-                    approvals.insert(approval.id, DaemonApproval { turn_id, key, decision: sender });
+                    let card = approval.id;
+                    approvals.insert(card, DaemonApproval { turn_id, key, decision: sender, consumed_by: None });
                     drop(approvals);
                     if let Some(turn) = live.turn.lock().await.as_mut() {
                         turn.active_messages.remove(&EventOrigin::Root);
@@ -4477,25 +4539,33 @@ impl Orchestrator {
                         t.status = ThreadStatus::AwaitingApproval;
                         self.update_thread(t)?;
                     }
-                    receiver
+                    (card, receiver)
                 }
             }
         };
         let decision = tokio::time::timeout(crate::computer::CONSENT_WAIT, receiver.wait_for(Option::is_some)).await;
-        Ok(match decision {
+        let answer = match decision {
             Ok(Ok(decision)) => match decision.clone() {
-                Some(ApprovalDecision::AllowAlways) => ConsentAnswer::Session,
-                Some(ApprovalDecision::Submit { response })
-                    if response.get("scope").and_then(serde_json::Value::as_str) == Some("always") =>
-                {
-                    ConsentAnswer::Always
-                }
-                Some(ApprovalDecision::Deny { reason }) => ConsentAnswer::Denied(reason),
-                Some(_) => ConsentAnswer::Turn,
-                None => ConsentAnswer::Pending,
+                Some(decision) => DaemonAnswer::Decided(decision),
+                None => DaemonAnswer::Pending,
             },
-            Ok(Err(_)) => ConsentAnswer::Denied(Some("the turn ended".into())),
-            Err(_) => ConsentAnswer::Pending,
+            Ok(Err(_)) => DaemonAnswer::TurnEnded,
+            Err(_) => DaemonAnswer::Pending,
+        };
+        Ok((card, answer))
+    }
+
+    /// Spend a card's one-time answer on `operation`. False when another
+    /// operation already spent it; a retry of the same operation may spend it again.
+    async fn consume_daemon_approval(&self, live: &LiveSession, card: ApprovalId, operation: Uuid) -> Result<bool> {
+        let mut approvals = live.daemon_approvals.lock().await;
+        let entry = approvals.get_mut(&card).ok_or_else(|| anyhow!("The turn ended before this change was made. Nothing was saved."))?;
+        Ok(match entry.consumed_by {
+            None => {
+                entry.consumed_by = Some(operation);
+                true
+            }
+            Some(by) => by == operation,
         })
     }
 
@@ -4962,6 +5032,15 @@ impl Orchestrator {
                 "kybern_collaboration_cancel",
                 "kybern_collaboration_context_read",
                 "kybern_collaboration_context_put",
+                "kybern_notes_search",
+                "kybern_note_read",
+                "kybern_note_create",
+                "kybern_note_append",
+                "kybern_note_update",
+                "kybern_tasks_list",
+                "kybern_task_read",
+                "kybern_task_create",
+                "kybern_task_update",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -5323,7 +5402,10 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if name == "kybern_collaboration_wait" || crate::computer::ComputerUse::is_tool(&name) {
+                let timeout = if name == "kybern_collaboration_wait"
+                    || crate::computer::ComputerUse::is_tool(&name)
+                    || agent_items::WRITE_TOOLS.contains(&name.as_str())
+                {
                     Duration::from_secs(65)
                 } else {
                     crate::app_tools::REQUEST_TIMEOUT
@@ -6806,6 +6888,466 @@ mod tests {
         assert!(fixture.orchestrator.respond_approval(approval_id, ApprovalDecision::AllowOnce).await.is_err());
         fixture.orchestrator.resolve_finished_requests(thread.id, turn_id, &live).await.unwrap();
         assert!(live.daemon_approvals.lock().await.is_empty());
+    }
+
+    impl Fixture {
+        /// A thread in `mode` with an active turn, ready for native tool calls.
+        async fn tool_thread(&self, mode: PermissionMode) -> (Thread, Arc<LiveSession>) {
+            let mut thread = self.thread(ThreadStatus::Idle);
+            thread.permission_mode = mode;
+            self.store.thread_upsert(&thread).unwrap();
+            let (live, _) = self.active_app_tool_session(&thread).await;
+            (thread, live)
+        }
+
+        async fn tool(
+            &self,
+            thread: &Thread,
+            live: &LiveSession,
+            call: &str,
+            name: &str,
+            args: serde_json::Value,
+        ) -> anyhow::Result<serde_json::Value> {
+            self.orchestrator.execute_native_app_tool_call(thread.id, live.session_instance_id, call, name, args).await
+        }
+    }
+
+    #[tokio::test]
+    async fn agents_edit_only_their_own_notes_and_tasks_and_never_close_tasks() {
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let notes_changed = fixture.orchestrator.subscribe_notes();
+        let mut tasks_changed = fixture.orchestrator.subscribe_tasks();
+
+        // The user's note: append only.
+        let user_note = fixture
+            .orchestrator
+            .note_create(methods::NotesCreateParams {
+                scope: methods::NoteScope::Project,
+                project_id: Some(fixture.project.id),
+                title: Some("Plan".into()),
+                body: Some("Ship it".into()),
+            })
+            .unwrap();
+        let error = fixture
+            .tool(&thread, &live, "u1", "kybern_note_update", json!({"note_id": user_note.summary.id, "body": "mine now"}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("only append"), "{error}");
+        let appended = fixture
+            .tool(&thread, &live, "a1", "kybern_note_append", json!({"note_id": user_note.summary.id, "text": "Found the bug."}))
+            .await
+            .unwrap();
+        assert_eq!((appended["action"].clone(), appended["agent_editable"].clone()), (json!("appended"), json!(false)));
+        assert_eq!(fixture.store.note_get(user_note.summary.id).unwrap().unwrap().body, "Ship it\n\nFound the bug.");
+        // Without a note id the thread's own note is created and appended to.
+        fixture.tool(&thread, &live, "a2", "kybern_note_append", json!({"text": "First"})).await.unwrap();
+        fixture.tool(&thread, &live, "a3", "kybern_note_append", json!({"text": "Second"})).await.unwrap();
+        assert_eq!(fixture.store.note_for_thread(thread.id).unwrap().unwrap().body, "First\n\nSecond");
+
+        // An agent's note: fully editable, attributed, linked.
+        let created = fixture.tool(&thread, &live, "c1", "kybern_note_create", json!({"title": "Findings", "body": "one"})).await.unwrap();
+        let note_id: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
+        assert_eq!(created["link"], json!(format!("kybern://note/{note_id}")));
+        assert_eq!(created["created_by_thread"], json!(thread.id));
+        assert_eq!(created["scope"], json!("project"));
+        // Replacing text needs the revision it was based on.
+        let error =
+            fixture.tool(&thread, &live, "u2-blind", "kybern_note_update", json!({"note_id": note_id, "body": "blind"})).await.unwrap_err();
+        assert!(error.to_string().contains("Pass expected_revision") && error.to_string().contains("kybern_note_read"), "{error}");
+        let revision = created["revision"].as_i64().unwrap();
+        let error = fixture
+            .tool(
+                &thread,
+                &live,
+                "u2-stale",
+                "kybern_note_update",
+                json!({"note_id": note_id, "body": "stale", "expected_revision": revision - 1}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("changed since you read it"), "{error}");
+        assert_eq!(fixture.store.note_get(note_id).unwrap().unwrap().body, "one", "a rejected update writes nothing");
+        fixture
+            .tool(
+                &thread,
+                &live,
+                "u2",
+                "kybern_note_update",
+                json!({"note_id": note_id, "title": "Findings v2", "body": "two", "expected_revision": revision}),
+            )
+            .await
+            .unwrap();
+        let note = fixture.store.note_get(note_id).unwrap().unwrap();
+        assert_eq!((note.summary.title.as_str(), note.body.as_str()), ("Findings v2", "two"));
+        assert!(notes_changed.len() >= 4, "every write is published");
+
+        // The user's task: append, check, priority; no title, no close, no review without a run.
+        let user_task = fixture
+            .orchestrator
+            .task_item_create(methods::TaskItemsCreateParams {
+                scope: methods::TaskScope::Project,
+                project_id: Some(fixture.project.id),
+                title: "Fix login".into(),
+                body: Some("Redirect.\n\n- [ ] Lands on home\n- [ ] Has a test\n".into()),
+                status: Some(methods::TaskStatus::Todo),
+                priority: None,
+                note_ids: None,
+                source: None,
+            })
+            .unwrap();
+        while tasks_changed.try_recv().is_ok() {}
+        let error =
+            fixture.tool(&thread, &live, "t1", "kybern_task_update", json!({"task": user_task.key, "title": "Mine"})).await.unwrap_err();
+        assert!(error.to_string().contains("cannot replace its title"), "{error}");
+        for status in ["done", "canceled"] {
+            let error = fixture
+                .tool(&thread, &live, status, "kybern_task_update", json!({"task": user_task.key, "status": status}))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("Only the user closes a task"), "{error}");
+        }
+        let error = fixture
+            .tool(&thread, &live, "t2", "kybern_task_update", json!({"task": user_task.key, "status": "needs_review"}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Claim it with kybern_task_claim first"), "{error}");
+        let updated = fixture
+            .tool(
+                &thread,
+                &live,
+                "t3",
+                "kybern_task_update",
+                json!({"task": user_task.key, "append": "Safari only.", "check": [1], "priority": 2}),
+            )
+            .await
+            .unwrap();
+        assert_eq!((updated["criteria_done"].clone(), updated["priority"].clone()), (json!(1), json!(2)));
+        let task = fixture.store.task_item_get(user_task.id).unwrap().unwrap();
+        assert_eq!(task.body, "Redirect.\n\nSafari only.\n\n- [x] Lands on home\n- [ ] Has a test\n");
+        assert!(tasks_changed.try_recv().is_ok(), "the update is published");
+
+        // Claiming links this chat as the run; then it may hand the task over for review.
+        let claimed = fixture.tool(&thread, &live, "k1", "kybern_task_claim", json!({"task": user_task.key})).await.unwrap();
+        assert_eq!((claimed["action"].clone(), claimed["status"].clone()), (json!("claimed"), json!("running")));
+        let task = fixture.store.task_item_get(user_task.id).unwrap().unwrap();
+        assert_eq!(task.runs.last().map(|run| run.thread_id), Some(thread.id));
+        let context = fixture.tool(&thread, &live, "ctx", "kybern_thread_context", json!({})).await.unwrap();
+        assert_eq!(context["task"]["key"], json!(user_task.key), "the context names the task this chat runs");
+        let reviewed = fixture
+            .tool(
+                &thread,
+                &live,
+                "t4",
+                "kybern_task_update",
+                json!({"task": format!("kybern://task/{}", user_task.id), "status": "needs_review"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reviewed["status"], json!("needs_review"));
+        // Another chat cannot claim a task whose run is live.
+        let (other, other_live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let second = fixture
+            .orchestrator
+            .task_item_create(methods::TaskItemsCreateParams {
+                scope: methods::TaskScope::Global,
+                project_id: None,
+                title: "Busy".into(),
+                body: None,
+                status: None,
+                priority: None,
+                note_ids: None,
+                source: None,
+            })
+            .unwrap();
+        fixture.tool(&other, &other_live, "k2", "kybern_task_claim", json!({"task": second.key})).await.unwrap();
+        let error = fixture.tool(&thread, &live, "k3", "kybern_task_claim", json!({"task": second.key})).await.unwrap_err();
+        assert!(error.to_string().contains("already works on"), "{error}");
+
+        // An agent's task lands in the Inbox, attributed, and is fully editable.
+        let filed = fixture
+            .tool(
+                &thread,
+                &live,
+                "n1",
+                "kybern_task_create",
+                json!({"title": "Flaky test", "description": "Seen twice.", "criteria": ["Passes 20 runs"], "priority": 3}),
+            )
+            .await
+            .unwrap();
+        assert_eq!((filed["status"].clone(), filed["created_by_thread"].clone()), (json!("inbox"), json!(thread.id)));
+        let filed_id: Uuid = serde_json::from_value(filed["id"].clone()).unwrap();
+        assert_eq!(fixture.store.task_item_get(filed_id).unwrap().unwrap().body, "Seen twice.\n\n- [ ] Passes 20 runs\n");
+        fixture.tool(&thread, &live, "n2", "kybern_task_update", json!({"task": filed["key"], "title": "Flaky login test"})).await.unwrap();
+        // A retried call returns the first result instead of filing twice.
+        let retried = fixture
+            .tool(
+                &thread,
+                &live,
+                "n1",
+                "kybern_task_create",
+                json!({"title": "Flaky test", "description": "Seen twice.", "criteria": ["Passes 20 runs"], "priority": 3}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retried["id"], filed["id"]);
+        let reads = fixture.tool(&thread, &live, "r1", "kybern_tasks_list", json!({"query": "flaky"})).await.unwrap();
+        assert_eq!(reads["tasks"].as_array().unwrap().len(), 1);
+        let read = fixture.tool(&thread, &live, "r2", "kybern_task_read", json!({"task": user_task.key})).await.unwrap();
+        assert_eq!(read["criteria"][0], json!({"number": 1, "text": "Lands on home", "checked": true}));
+        let search = fixture.tool(&thread, &live, "r3", "kybern_notes_search", json!({"query": "findings"})).await.unwrap();
+        assert_eq!(search["notes"][0]["id"], json!(note_id));
+
+        // The daemon stops a turn after ten filed tasks.
+        for index in 1..super::agent_items::MAX_TASK_CREATES_PER_TURN {
+            fixture
+                .tool(&thread, &live, &format!("cap{index}"), "kybern_task_create", json!({"title": format!("Follow-up {index}")}))
+                .await
+                .unwrap();
+        }
+        let error = fixture.tool(&thread, &live, "cap-over", "kybern_task_create", json!({"title": "One too many"})).await.unwrap_err();
+        assert!(error.to_string().contains("ask the user"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn supervised_note_and_task_writes_ask_and_remember_allow_for_this_thread() {
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::Supervised).await;
+        // Reads never ask.
+        fixture.tool(&thread, &live, "list", "kybern_tasks_list", json!({})).await.unwrap();
+        assert!(live.daemon_approvals.lock().await.is_empty());
+
+        let creating = {
+            let (orchestrator, thread_id, session) = (fixture.orchestrator.clone(), thread.id, live.session_instance_id);
+            tokio::spawn(async move {
+                orchestrator
+                    .execute_native_app_tool_call(thread_id, session, "c1", "kybern_task_create", json!({"title": "Fix flaky login test"}))
+                    .await
+            })
+        };
+        let approval_id = loop {
+            if let Some(id) = live.daemon_approvals.lock().await.keys().next().copied() {
+                break id;
+            }
+            tokio::task::yield_now().await;
+        };
+        let (request, _) = fixture.store.approval_get(approval_id).unwrap().unwrap();
+        assert_eq!(request.tool_name, "kybern_notes_tasks");
+        assert_eq!(request.summary, "Create task 'Fix flaky login test' in fixture");
+        assert_eq!((request.input["action"].clone(), request.input["tool"].clone()), (json!("create_task"), json!("kybern_task_create")));
+        assert!(fixture.store.task_items_list().unwrap().is_empty(), "nothing is filed before the user answers");
+        fixture.orchestrator.respond_approval(approval_id, ApprovalDecision::AllowAlways).await.unwrap();
+        let created = creating.await.unwrap().unwrap();
+        assert_eq!(created["title"], json!("Fix flaky login test"));
+        // "Allow for this thread" covers later writes without another card.
+        fixture.tool(&thread, &live, "c2", "kybern_note_append", json!({"text": "noted"})).await.unwrap();
+        assert_eq!(live.daemon_approvals.lock().await.len(), 1);
+
+        // A denial in another supervised thread is reported and writes nothing.
+        let (other, other_live) = fixture.tool_thread(PermissionMode::AcceptEdits).await;
+        let denied = {
+            let (orchestrator, thread_id, session) = (fixture.orchestrator.clone(), other.id, other_live.session_instance_id);
+            tokio::spawn(async move {
+                orchestrator
+                    .execute_native_app_tool_call(thread_id, session, "d1", "kybern_note_create", json!({"title": "Nope", "body": ""}))
+                    .await
+            })
+        };
+        let approval_id = loop {
+            if let Some(id) = other_live.daemon_approvals.lock().await.keys().next().copied() {
+                break id;
+            }
+            tokio::task::yield_now().await;
+        };
+        fixture.orchestrator.respond_approval(approval_id, ApprovalDecision::Deny { reason: None }).await.unwrap();
+        let error = denied.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("The user declined"), "{error}");
+        assert!(fixture.store.notes_list().unwrap().iter().all(|note| note.title != "Nope"));
+    }
+
+    impl Fixture {
+        fn user_task(&self, title: &str, status: methods::TaskStatus) -> methods::TaskItem {
+            let task = self
+                .orchestrator
+                .task_item_create(methods::TaskItemsCreateParams {
+                    scope: methods::TaskScope::Project,
+                    project_id: Some(self.project.id),
+                    title: title.into(),
+                    body: None,
+                    status: Some(methods::TaskStatus::Todo),
+                    priority: None,
+                    note_ids: None,
+                    source: None,
+                })
+                .unwrap();
+            if status != methods::TaskStatus::Todo {
+                self.store.task_item_set_status(task.id, status, None).unwrap();
+            }
+            self.store.task_item_get(task.id).unwrap().unwrap()
+        }
+
+        /// The first daemon approval card of `live` that is not in `seen`.
+        async fn next_card(&self, live: &LiveSession, seen: &[ApprovalId]) -> ApprovalId {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(id) = live.daemon_approvals.lock().await.keys().find(|id| !seen.contains(id)).copied() {
+                        break id;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("an approval card opens")
+        }
+
+        fn spawn_tool(
+            &self,
+            thread: &Thread,
+            live: &LiveSession,
+            call: &str,
+            name: &'static str,
+            args: serde_json::Value,
+        ) -> tokio::task::JoinHandle<anyhow::Result<serde_json::Value>> {
+            let (orchestrator, thread_id, session, call) =
+                (self.orchestrator.clone(), thread.id, live.session_instance_id, call.to_owned());
+            tokio::spawn(async move { orchestrator.execute_native_app_tool_call(thread_id, session, &call, name, args).await })
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_status_changes_never_reopen_pull_back_or_hand_over_a_stale_run() {
+        use methods::TaskStatus;
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        // Inbox and To do only move between each other.
+        let inbox = fixture.user_task("Triage", TaskStatus::Inbox);
+        let moved = fixture.tool(&thread, &live, "m1", "kybern_task_update", json!({"task": inbox.key, "status": "todo"})).await.unwrap();
+        assert_eq!(moved["status"], json!("todo"));
+        // Closed, running and in-review tasks are never moved back.
+        for status in [TaskStatus::Done, TaskStatus::Canceled, TaskStatus::Running, TaskStatus::NeedsReview] {
+            let task = fixture.user_task("Settled", status);
+            for target in ["inbox", "todo"] {
+                let error = fixture
+                    .tool(
+                        &thread,
+                        &live,
+                        &format!("{status:?}-{target}"),
+                        "kybern_task_update",
+                        json!({"task": task.key, "status": target}),
+                    )
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("only between Inbox and To do"), "{status:?} -> {target}: {error}");
+                assert_eq!(fixture.store.task_item_get(task.id).unwrap().unwrap().status, status);
+            }
+        }
+
+        // The handover needs the task Running...
+        let task = fixture.user_task("Fix login", TaskStatus::Todo);
+        fixture.tool(&thread, &live, "k1", "kybern_task_claim", json!({"task": task.key})).await.unwrap();
+        fixture.store.task_item_set_status(task.id, TaskStatus::Todo, None).unwrap();
+        let error = fixture
+            .tool(&thread, &live, "h1", "kybern_task_update", json!({"task": task.key, "status": "needs_review"}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not Running"), "{error}");
+        assert_eq!(fixture.store.task_item_get(task.id).unwrap().unwrap().status, TaskStatus::Todo);
+
+        // ...and this chat's run to be the latest one.
+        let (newer, _) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        fixture.store.task_run_start(task.id, newer.id, &newer.provider, None, &[]).unwrap();
+        let error = fixture
+            .tool(&thread, &live, "h2", "kybern_task_update", json!({"task": task.key, "status": "needs_review"}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("newer run"), "{error}");
+        assert_eq!(fixture.store.task_item_get(task.id).unwrap().unwrap().status, TaskStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn parallel_task_creates_stop_at_the_cap_even_while_cards_are_open() {
+        let fixture = Fixture::new();
+        let cap = super::agent_items::MAX_TASK_CREATES_PER_TURN as usize;
+        // Full access: parallel calls race straight to the store.
+        let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let calls: Vec<_> = (0..cap + 5)
+            .map(|index| {
+                fixture.spawn_tool(&thread, &live, &format!("p{index}"), "kybern_task_create", json!({"title": format!("Task {index}")}))
+            })
+            .collect();
+        let mut filed = 0;
+        for call in calls {
+            match call.await.unwrap() {
+                Ok(_) => filed += 1,
+                Err(error) => assert!(error.to_string().contains("the most allowed"), "{error}"),
+            }
+        }
+        assert_eq!(filed, cap);
+        assert_eq!(fixture.store.task_items_list().unwrap().len(), cap);
+
+        // Supervised: creates waiting on a card hold their slot, so no eleventh card opens.
+        let (thread, live) = fixture.tool_thread(PermissionMode::Supervised).await;
+        let calls: Vec<_> = (0..cap + 2)
+            .map(|index| {
+                fixture.spawn_tool(&thread, &live, &format!("s{index}"), "kybern_task_create", json!({"title": format!("Card {index}")}))
+            })
+            .collect();
+        let mut cards = Vec::new();
+        while cards.len() < cap {
+            cards.push(fixture.next_card(&live, &cards).await);
+        }
+        for card in &cards {
+            fixture.orchestrator.respond_approval(*card, ApprovalDecision::AllowOnce).await.unwrap();
+        }
+        let mut filed = 0;
+        for call in calls {
+            if call.await.unwrap().is_ok() {
+                filed += 1;
+            }
+        }
+        assert_eq!(filed, cap);
+        assert_eq!(live.daemon_approvals.lock().await.len(), cap, "the calls over the cap never asked");
+    }
+
+    #[tokio::test]
+    async fn allow_once_covers_one_write_and_only_its_retry() {
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::Supervised).await;
+        let append = json!({"text": "Same line"});
+        let first = fixture.spawn_tool(&thread, &live, "a1", "kybern_note_append", append.clone());
+        let card = fixture.next_card(&live, &[]).await;
+        fixture.orchestrator.respond_approval(card, ApprovalDecision::AllowOnce).await.unwrap();
+        let written = first.await.unwrap().unwrap();
+        // A retry of the same call returns its receipt without asking.
+        let retried = fixture.tool(&thread, &live, "a1", "kybern_note_append", append.clone()).await.unwrap();
+        assert_eq!(retried, written);
+        assert_eq!(live.daemon_approvals.lock().await.len(), 1);
+        // An identical second write needs its own answer.
+        let second = fixture.spawn_tool(&thread, &live, "a2", "kybern_note_append", append.clone());
+        let second_card = fixture.next_card(&live, &[card]).await;
+        assert!(!second.is_finished(), "the second write waits for the user");
+        fixture.orchestrator.respond_approval(second_card, ApprovalDecision::AllowOnce).await.unwrap();
+        second.await.unwrap().unwrap();
+        assert_eq!(fixture.store.note_for_thread(thread.id).unwrap().unwrap().body, "Same line\n\nSame line");
+
+        // Two identical calls waiting on one card: the answer covers one of them.
+        let both = [
+            fixture.spawn_tool(&thread, &live, "b1", "kybern_note_append", json!({"text": "Twin"})),
+            fixture.spawn_tool(&thread, &live, "b2", "kybern_note_append", json!({"text": "Twin"})),
+        ];
+        let shared = fixture.next_card(&live, &[card, second_card]).await;
+        // Let both calls reach the card before it is answered.
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+        fixture.orchestrator.respond_approval(shared, ApprovalDecision::AllowOnce).await.unwrap();
+        let again = fixture.next_card(&live, &[card, second_card, shared]).await;
+        fixture.orchestrator.respond_approval(again, ApprovalDecision::AllowOnce).await.unwrap();
+        for call in both {
+            call.await.unwrap().unwrap();
+        }
+        assert_eq!(fixture.store.note_for_thread(thread.id).unwrap().unwrap().body, "Same line\n\nSame line\n\nTwin\n\nTwin");
+        assert_eq!(live.daemon_approvals.lock().await.len(), 4);
     }
 
     #[tokio::test]

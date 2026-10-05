@@ -152,9 +152,12 @@ impl AgentDriver for ClaudeDriver {
                 let provider_name = claude_tool_name(bridge, tool);
                 cmd.args(["--disallowedTools", &provider_name]);
             }
-            // Kybern asks per-app consent for computer use itself, so a
-            // second harness prompt for the same call would only add noise.
-            for tool in bridge.tools().filter(|tool| tool.name.starts_with("kybern_computer_")) {
+            // Kybern asks per-app consent for computer use, and approves note
+            // and task writes, itself, so a second harness prompt for the same
+            // call would only add noise. Note and task reads are harmless.
+            for tool in bridge.tools().filter(|tool| {
+                tool.name.starts_with("kybern_computer_") || tool.name.starts_with("kybern_note") || tool.name.starts_with("kybern_task")
+            }) {
                 cmd.args(["--allowedTools", &claude_tool_name(bridge, &tool.name)]);
             }
             if bridge.restrictions.require_enforcement {

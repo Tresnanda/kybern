@@ -96,6 +96,14 @@ expression: schema_for!(NotesChangedNotification)
             "string",
             "null"
           ]
+        },
+        "created_by_thread": {
+          "description": "The thread whose agent created the note with its native tools. Absent for\nnotes the user wrote; agents may only append to those.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
         }
       },
       "required": [

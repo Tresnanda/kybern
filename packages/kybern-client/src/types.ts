@@ -968,6 +968,8 @@ export interface NoteSummary {
   deleted_at?: string | null;
   /** Where a deleted note came from once its project or thread was removed, e.g. "kybern" or "kybern › Fix login". */
   origin?: string | null;
+  /** The thread whose agent created the note with its native tools. Absent for notes the user wrote; agents may only append to those. */
+  created_by_thread?: ThreadId | null;
 }
 
 export interface Note extends NoteSummary {
@@ -1049,6 +1051,8 @@ export interface TaskItem {
   updated_at: string;
   /** When the status last changed. */
   status_changed_at: string;
+  /** The thread whose agent created the task with its native tools. Absent for tasks the user created; agents may only append to and check items of those. */
+  created_by_thread?: ThreadId | null;
 }
 
 export interface TaskItemsCreateParams {
@@ -1093,8 +1097,10 @@ export interface TaskItemsSendParams {
   base_branch?: string | null;
   /** Required for global tasks: where the run happens. */
   project_id?: ProjectId | null;
-  /** The (possibly edited) prompt text. */
-  prompt: string;
+  /** The (possibly edited) prompt text. Exactly one of `prompt` or `message` is required. */
+  prompt?: string;
+  /** The full first message (text, mentions, skills, files, thread references, attachments). The daemon adds a `kybern://task/<id>` mention for this task at the start when the message has none; the provider's copy expands it to the task. */
+  message?: UserMessage;
   /** Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only. Only the notes listed here are sent. A saved `pending_followup` is cleared by the send (the prompt is expected to include it). */
   note_ids?: NoteId[];
 }

@@ -1856,6 +1856,10 @@ pub struct NoteSummary {
     /// such as "kybern" or "kybern › Fix login".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// The thread whose agent created the note with its native tools. Absent for
+    /// notes the user wrote; agents may only append to those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_thread: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2117,6 +2121,10 @@ pub struct TaskItem {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// When the status last changed.
     pub status_changed_at: chrono::DateTime<chrono::Utc>,
+    /// The thread whose agent created the task with its native tools. Absent for
+    /// tasks the user created; agents may only append to and check items of those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_thread: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2228,8 +2236,14 @@ pub struct TaskItemsSendParams {
     /// Required for global tasks: the project the run happens in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
-    /// The (possibly edited) prompt text.
-    pub prompt: String,
+    /// The (possibly edited) prompt text. Exactly one of `prompt` or `message` is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// The full first message (text, mentions, skills, files, thread references,
+    /// attachments). The daemon adds a `kybern://task/<id>` mention for this task
+    /// at the start when the message has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<UserMessage>,
     /// Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note_ids: Option<Vec<NoteId>>,

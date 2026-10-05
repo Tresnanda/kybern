@@ -47,6 +47,12 @@ pub(crate) fn prepare_native_operation(
             | "kybern_collaboration_report"
             | "kybern_collaboration_cancel"
             | "kybern_collaboration_context_put"
+            | "kybern_note_create"
+            | "kybern_note_append"
+            | "kybern_note_update"
+            | "kybern_task_create"
+            | "kybern_task_update"
+            | "kybern_task_claim"
     ) {
         return Ok(None);
     }
@@ -114,6 +120,16 @@ impl AppTools {
         let thread = self.thread(thread_id)?;
         let project = self.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("owning project no longer exists"))?;
         let notes = self.store.thread_notes(thread_id)?;
+        // The task this thread is a run of, if any.
+        let task = match self.store.task_run_for_thread(thread_id)? {
+            Some((task_id, number)) => self.store.task_item_get(task_id)?.map(|task| {
+                json!({
+                    "id": task.id, "key": task.key, "title": task.title, "status": task.status, "run_number": number,
+                    "link": format!("kybern://task/{}", task.id),
+                })
+            }),
+            None => None,
+        };
         Ok(json!({
             "thread": {
                 "id": thread.id,
@@ -137,6 +153,7 @@ impl AppTools {
                 "worktrees_default": project.worktrees_default,
             },
             "notes": notes,
+            "task": task,
             "collaboration": {
                 "available": true,
                 "guidance": "Use kybern_threads_search and kybern_thread_read to inspect prior chats without waking them. Use kybern_thread_send for an addressed durable message. kybern_collaboration_spawn creates a managed Kybern child chat; group setup is automatic. Provider-native subagents and external plugins remain separate options."
@@ -270,7 +287,7 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
         })
     };
     let mut definitions = vec![
-        NativeToolDefinition { name: "kybern_thread_context".into(), description: "Read the active Kybern thread, project, user notes, and available harness/profile/model/effort choices. Use these choices when selecting a worker; a loading catalog refreshes in the background.".into(), input_schema: object(json!({}), &[]) },
+        NativeToolDefinition { name: "kybern_thread_context".into(), description: "Read the active Kybern thread, project, user notes, the task this thread runs (if any), and available harness/profile/model/effort choices. Use these choices when selecting a worker; a loading catalog refreshes in the background.".into(), input_schema: object(json!({}), &[]) },
         NativeToolDefinition { name: "kybern_workspace_diff".into(), description: "Read the active thread worktree diff.".into(), input_schema: object(json!({"turn_id":{"type":["string","null"],"format":"uuid"},"path":{"type":["string","null"]},"include_patch":{"type":"boolean"}}), &[]) },
         NativeToolDefinition { name: "kybern_read_file".into(), description: "Read a relative file in the active thread workspace.".into(), input_schema: object(json!({"path":{"type":"string"},"max_bytes":{"type":"integer","minimum":1}}), &["path"]) },
         NativeToolDefinition { name: "kybern_list_files".into(), description: "List a relative directory in the active thread workspace.".into(), input_schema: object(json!({"path":{"type":["string","null"]}}), &[]) },
@@ -304,6 +321,7 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
             "operation_id":{"type":"string","format":"uuid"},"entry_id":{"type":["string","null"],"format":"uuid"},"key":{"type":"string"},"kind":{"enum":["plan","decision","research","result_reference"]},"body":{"type":"string"},"expected_revision":{"type":["integer","null"]},"source_refs":{"type":"array","items":{"type":"string"}}
         }), &["operation_id","key","kind","body"]) },
     ];
+    definitions.extend(notes_tasks_tool_definitions());
     for tool in &mut definitions {
         if tool.input_schema["properties"].get("operation_id").is_none() {
             continue;
@@ -322,6 +340,58 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
         tool.description.push_str(" Kybern handles operation IDs; omit operation_id. Use request_key for a retryable label if needed.");
     }
     definitions
+}
+
+/// How agents may use the user's notes and tasks; repeated in every write tool.
+const NOTES_TASKS_POLICY: &str = "Notes and tasks belong to the user: create them only when the user asks, except that you may file up to 3 follow-up tasks per turn for out-of-scope problems you notice. Always tell the user what you filed or changed. You cannot delete notes or tasks, or mark a task Done or Canceled; the user closes tasks. The user may be asked to approve.";
+
+/// Tools for the user's notes and tasks. They run in the orchestrator, which owns
+/// the approvals, the per-turn limit and the change notifications.
+fn notes_tasks_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
+    use kybern_drivers::NativeToolDefinition;
+    let object = |properties: Value, required: &[&str]| {
+        json!({
+            "type": "object", "additionalProperties": false, "properties": properties, "required": required
+        })
+    };
+    let uuid = |description: &str| json!({"type":"string","format":"uuid","description":description});
+    let optional_uuid = |description: &str| json!({"type":["string","null"],"format":"uuid","description":description});
+    let operation = json!({"type":"string","format":"uuid"});
+    let task_ref = json!({"type":"string","description":"Task key such as ADE-14, task id, or kybern://task/<id> link."});
+    let criterion = json!({"type":"array","items":{"type":["string","integer"]},"description":"Acceptance criteria by text, or by 1-based number from kybern_task_read."});
+    let priority = json!({"type":["integer","null"],"minimum":0,"maximum":4,"description":"0 none, 1 urgent, 2 high, 3 medium, 4 low."});
+    let write = |text: &str| format!("{text} {NOTES_TASKS_POLICY}");
+    vec![
+        NativeToolDefinition { name: "kybern_notes_search".into(), description: "Search the user's Kybern notes by title and text, or list recent notes when query is empty. Searches every project unless project_id is given. Returns ids, titles, snippets, and kybern://note links; read one with kybern_note_read. Read-only.".into(), input_schema: object(json!({
+            "query":{"type":["string","null"]}, "project_id": optional_uuid("Only notes of this project."), "limit":{"type":"integer","minimum":1,"maximum":50}
+        }), &[]) },
+        NativeToolDefinition { name: "kybern_note_read".into(), description: "Read one Kybern note's markdown body. agent_editable is true only for notes an agent created; you may rewrite those with kybern_note_update, and only append to the user's own notes. Read-only.".into(), input_schema: object(json!({"note_id": uuid("Note id.")}), &["note_id"]) },
+        NativeToolDefinition { name: "kybern_note_create".into(), description: write("Create a Kybern note in this thread's project (a global note when the chat has no project, or with scope global)."), input_schema: object(json!({
+            "operation_id": operation, "title":{"type":"string"}, "body":{"type":"string","description":"Markdown."}, "scope":{"enum":["project","global",null]}
+        }), &["title","body"]) },
+        NativeToolDefinition { name: "kybern_note_append".into(), description: write("Append markdown to a Kybern note, a blank line after its current text. Without note_id it appends to this thread's own note, creating it if needed. Works on the user's notes too; use it to record findings or decisions the user wants kept."), input_schema: object(json!({
+            "operation_id": operation, "note_id": optional_uuid("Omit for this thread's note."), "text":{"type":"string","description":"Markdown to append."}
+        }), &["text"]) },
+        NativeToolDefinition { name: "kybern_note_update".into(), description: write("Replace the title or body of a note an agent created (agent_editable). The user's own notes can only be appended to with kybern_note_append. Call kybern_note_read first and pass its revision as expected_revision; if the note changed since, nothing is saved and you read it again."), input_schema: object(json!({
+            "operation_id": operation, "note_id": uuid("Note id."), "title":{"type":["string","null"]}, "body":{"type":["string","null"],"description":"Markdown; replaces the whole body."}, "expected_revision":{"type":"integer","description":"The revision kybern_note_read returned."}
+        }), &["note_id","expected_revision"]) },
+        NativeToolDefinition { name: "kybern_tasks_list".into(), description: "List the user's Kybern tasks. Defaults to open tasks (inbox, to do, running, needs review) of this thread's project plus global tasks; pass project_id for another project, status to filter (open, all, or one status), and query to match key, title, or description. Read-only.".into(), input_schema: object(json!({
+            "project_id": optional_uuid("Tasks of this project (and global tasks)."), "status":{"enum":["open","all","inbox","todo","running","needs_review","done","canceled",null]}, "query":{"type":["string","null"]}, "limit":{"type":"integer","minimum":1,"maximum":200}
+        }), &[]) },
+        NativeToolDefinition { name: "kybern_task_read".into(), description: "Read a Kybern task: description, numbered acceptance criteria, linked notes, and runs (read a run's chat with kybern_thread_read). agent_editable is true only for tasks an agent created. Read-only.".into(), input_schema: object(json!({"task": task_ref}), &["task"]) },
+        NativeToolDefinition { name: "kybern_task_create".into(), description: write("File a task in the user's Inbox, in this thread's project unless scope or project_id says otherwise. criteria become the acceptance checklist; note_ids link notes for context. At most 10 per turn."), input_schema: object(json!({
+            "operation_id": operation, "title":{"type":"string"}, "description":{"type":["string","null"],"description":"Markdown."}, "criteria":{"type":"array","items":{"type":"string"}},
+            "priority": priority, "scope":{"enum":["project","global",null]}, "project_id": optional_uuid("File in this project."), "note_ids":{"type":"array","items":{"type":"string","format":"uuid"}}
+        }), &["title"]) },
+        NativeToolDefinition { name: "kybern_task_update".into(), description: write("Update a Kybern task. On any task you may append to the description, check or uncheck acceptance criteria, change priority, and move it between inbox and todo while it is in one of them. Set status needs_review only from the chat running the task's latest run, while it is running, to hand your work over. Replacing the title or description works only on tasks an agent created."), input_schema: object(json!({
+            "operation_id": operation, "task": task_ref, "title":{"type":["string","null"]}, "description":{"type":["string","null"],"description":"Markdown; replaces the whole description, checklist included."},
+            "append":{"type":["string","null"],"description":"Markdown added to the description, above the checklist."}, "check": criterion.clone(), "uncheck": criterion, "priority": priority,
+            "status":{"enum":["inbox","todo","needs_review",null]}
+        }), &["task"]) },
+        NativeToolDefinition { name: "kybern_task_claim".into(), description: write("Link this chat to a Kybern task as its run: the task shows Running and moves to Needs review when your turn ends. Claim only a task the user asked you to work on. Fails when another chat's run is live or the task is closed."), input_schema: object(json!({
+            "operation_id": operation, "task": task_ref
+        }), &["task"]) },
+    ]
 }
 
 pub(crate) fn parse<T: for<'de> Deserialize<'de>>(arguments: Value) -> Result<T> {

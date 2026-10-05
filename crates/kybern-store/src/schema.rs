@@ -335,6 +335,13 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (task_id, note_id)
     );
     ",
+    // v15: notes and tasks an agent created through its native tools remember the
+    // thread that made them. Items the user creates leave it empty. No foreign key:
+    // the item outlives the thread.
+    "
+    ALTER TABLE notes ADD COLUMN created_by_thread_id TEXT;
+    ALTER TABLE task_items ADD COLUMN created_by_thread_id TEXT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

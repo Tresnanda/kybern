@@ -1677,7 +1677,8 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                     use_worktree: if worktree { Some(true) } else { None },
                     base_branch: branch,
                     project_id,
-                    prompt,
+                    prompt: Some(prompt),
+                    message: None,
                     note_ids: Some(task.note_ids.clone()),
                 })
                 .await?;
