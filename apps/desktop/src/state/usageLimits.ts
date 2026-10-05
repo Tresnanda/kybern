@@ -14,6 +14,7 @@ import { reloadOnHotUpdate } from "@/lib/hot"
 import type { KybernClient } from "@/protocol"
 import { USAGE_LIMITS_CHANGED_NOTIFICATION, type ProviderKind, type ProviderLimits, type UsageLimitsResult } from "@/protocol"
 import { activeRuntime } from "@/state/rpc"
+import { useStore } from "@/state/store"
 
 const POLL_MS = 60_000
 
@@ -72,9 +73,27 @@ export function refreshUsageLimits() {
   ask(client, generation, true)
 }
 
+const NONE: ProviderLimits[] = []
+const NOT_REFRESHING: ProviderKind[] = []
+
+/**
+ * Limits for the environment this window shows. Right after a switch the feed
+ * still holds the previous environment's account until the new one attaches;
+ * those values never render under the new environment.
+ */
+export function useAccountLimits(): ProviderLimits[] {
+  const environmentId = useStore((s) => s.environmentId)
+  return useUsageLimits((s) => (s.ownerKey === environmentId ? s.providers : NONE))
+}
+
+export function useRefreshingLimits(): ProviderKind[] {
+  const environmentId = useStore((s) => s.environmentId)
+  return useUsageLimits((s) => (s.ownerKey === environmentId ? s.refreshing : NOT_REFRESHING))
+}
+
 /** The current limits for one provider, or undefined before any are known. */
 export function useProviderLimits(kind: ProviderKind | undefined): ProviderLimits | undefined {
-  return useUsageLimits((s) => (kind ? s.providers.find((entry) => entry.provider === kind) : undefined))
+  return useAccountLimits().find((entry) => entry.provider === kind)
 }
 
 reloadOnHotUpdate(import.meta.hot)
