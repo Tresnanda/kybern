@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0
+
+<!-- kybern-release-title: Notes, Tasks and live plan usage -->
+<!-- kybern-release-summary: Write notes, turn them into tasks an agent can pick up, and see how much of your Claude, Codex and Cursor plans is left, right in the app rail. -->
+
+- Add Notes: global, project and thread notes, with a gallery and a focused writing page. Mention a note to give an agent its contents. Existing thread notes move over automatically, and deleted notes stay in Recently deleted for 30 days.
+- Add Tasks: a list and board with Linear-style statuses and drag and drop. Send to agent starts a conversation from a task with your notes as context, and the task moves to Running and then Needs review on its own. Checklist lines in a note can become tasks.
+- See how much of your Claude Code, Codex and Cursor plans is left in the app rail. Hover a ring for each limit, when it resets, and whether you're on pace to run out before then. Limits now refresh within a minute and after every turn instead of going stale, and Cursor's plan usage appears for the first time.
+- Run new Cursor conversations on Cursor's official SDK, with streaming, sub-agents, model variants and resume. New chats offer Auto-review or Full access. Set it up with `kybern cursor install` and `kybern cursor login`; it needs Node.js 22.13 or later. Existing Cursor chats keep working as before.
+- Find models faster in large catalogs: one searchable picker with recent and starred models, sections by backend, and an effort slider. The composer names the backend when two models share a name.
+- Redesign the window: Home, Notes, Tasks, Pull requests and Usage sit in an app rail beside one rounded workspace.
+- Fix Oh My Pi background commands staying "running" after they finished, and report timeouts and failed exits as failed.
+- Fix conversation titles and commit messages silently using Codex when Claude Code was selected.
+
 ## 0.5.9
 
 <!-- kybern-release-title: Stay signed in to Claude and Codex -->
