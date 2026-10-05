@@ -29,7 +29,7 @@ The old GPUI client is on the `gpui` branch. Do not port its views back.
 | --- | --- |
 | `protocol/` | TypeScript wire types + the WebSocket JSON-RPC client. Keep `types.ts` in step with `kybern-protocol`. |
 | `state/` | `store.ts` (zustand), `rpc.ts` (boot, subscriptions, actions), `transcript.ts` (folds events into blocks and turn groups), `nav.ts`. Stateful modules reload the page on HMR through `lib/hot.ts`. |
-| `views/` | One file per surface: `Sidebar`, `Draft` (home), `Thread`, `Transcript`, `Composer`, `RightPanel` (dock), `Terminal`, `Explorer`, `Environment`, `PullRequests`, `Palette`, `SettingsDialog`, `Handoff`, `chrome` (headers, toggles), `chatLayout` (shared column gutter). |
+| `views/` | One file per surface: `NavRail` (app rail: Home, Notes, Tasks, Pull requests, Usage, Settings), `Sidebar` (thread panel), `notes/` (Notes gallery, focused editor, quick capture, Save to note), `tasks/` (Tasks list, board, task page, Send to agent sheet), `Draft` (home), `Thread`, `Transcript`, `Composer`, `RightPanel` (dock), `Terminal`, `Explorer`, `Environment`, `PullRequests`, `Palette`, `SettingsDialog`, `Handoff`, `chrome` (headers, toggles), `chatLayout` (shared column gutter). |
 | `components/kit/` | UI primitives. `components/kit/chat/` holds the composer/transcript helpers and the `composerPickerStyles` class constants. |
 | `components/beui/` | BeUI components, vendored (MIT): message scroller with rail, file tree. |
 | `components/kybern/` | Our own pieces: `DiffView`, `Markdown` (shiki), `ResizeHandle`, `bits`. |
