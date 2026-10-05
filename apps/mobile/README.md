@@ -118,6 +118,29 @@ automatically; agents read them only through the Kybern thread-context tool.
 Notes need a computer running a Kybern with `notes.*` methods; an older one shows
 an update prompt.
 
+## Tasks
+
+**Tasks** (routes `todo`, `todo-item`, `todo-send`) opens from the home header,
+the Threads screen, the iPad sidebar, and a project's page (filtered to that
+project). It lists the computer's tasks (`tasks.items.*`) grouped by status:
+Running, Needs review, To do, Inbox, then Done and Canceled collapsed. A row shows
+the status glyph, title, priority, key (ADE-14), and what its run is doing, its
+diff, or its project. The field at the top adds a task to Inbox in the selected
+project, or Global. Long-press a row to mark it done, change status or priority,
+send it, or delete it with **Undo**. Status, priority and checklist changes show
+at once and roll back if the computer refuses them; run-owned statuses (Running,
+Needs review) follow `tasks.items.changed`.
+
+A task opens with its properties, description (Markdown, edited as plain text
+with **Edit**), acceptance criteria you can tick, linked notes, runs, and a
+follow-up field that sends into the latest run or saves context for the next one.
+**Send to agent** opens a sheet with the project's last agent and model (else the
+computer's defaults), a new worktree for git projects, a project choice for
+Global tasks, linked notes as context, and an editable prompt. **Start** runs in
+the background; **Start and open** opens the run. A `kybern://task/<id>` link in a
+note renders as the task's live glyph and key. The thread screen's runtime work
+list is titled **Agents & processes** to keep it apart from Tasks.
+
 ## Follow-ups
 
 During a turn, **Queue follow-up** sends the prompt after the current work

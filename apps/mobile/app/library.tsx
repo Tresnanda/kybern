@@ -20,6 +20,8 @@ import { Platform, RefreshControl, TextInput, View } from "react-native";
 import { Alert } from "../src/ui/Alert";
 import { type Thread, PROVIDER_DISPLAY_NAME } from "../src/state/protocol";
 import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
+import { useTasks } from "../src/state/tasks";
+import { activitySummary } from "../src/state/tasksModel";
 import {
   Empty,
   ErrorBanner,
@@ -35,6 +37,7 @@ import { type, useTheme } from "../src/ui/theme";
 
 export default function Library() {
   const app = useApp();
+  const taskActivity = activitySummary(useTasks().tasks);
   const { colors } = useTheme();
   const { regular } = useLayout();
   const [query, setQuery] = useState("");
@@ -315,6 +318,12 @@ export default function Library() {
                 borderColor: colors.line,
               }}
             >
+              <Row
+                title="Tasks"
+                icon="checklist"
+                detail={taskActivity || undefined}
+                onPress={() => router.push("/todo")}
+              />
               <Row
                 title="Notes"
                 icon="doc.text"

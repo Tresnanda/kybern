@@ -23,6 +23,8 @@ import {
 import { Empty, Icon, IconButton, Row, styles, T, Tap } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { type, useTheme } from "../ui/theme";
+import { useTasks } from "../state/tasks";
+import { activitySummary } from "../state/tasksModel";
 
 const MAX_PROJECT_THREADS = 8;
 
@@ -172,6 +174,7 @@ function ProjectGroup({
 // owns the collapse/resize animation; this always fills its column.
 export function Sidebar() {
   const app = useApp();
+  const taskActivity = activitySummary(useTasks().tasks);
   const { colors } = useTheme();
   const { toggleSidebar } = useLayout();
   const insets = useSafeAreaInsets();
@@ -362,6 +365,12 @@ export function Sidebar() {
             borderColor: colors.line,
           }}
         >
+          <Row
+            title="Tasks"
+            icon="checklist"
+            detail={taskActivity || undefined}
+            onPress={() => router.navigate("/todo")}
+          />
           <Row
             title="Notes"
             icon="doc.text"

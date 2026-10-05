@@ -7,12 +7,14 @@ import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
 import { Icon, IconButton, T, styles } from "./primitives";
 import { useTheme } from "./theme";
+import { taskLinkId } from "../state/tasksModel";
+import { TaskRef } from "./TaskRef";
 
 export function openLink(url: string) {
   if (/^(https?:|mailto:)/i.test(url))
     void Linking.openURL(url).catch(() => {});
 }
-function Inline({ text }: { text: string }) {
+function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
   const { colors } = useTheme();
   const fileContext = useContext(ChatFileContext);
   return (
@@ -23,7 +25,7 @@ function Inline({ text }: { text: string }) {
           if (part.startsWith("**") && part.endsWith("**"))
             return (
               <Text key={i} style={{ fontWeight: "600" }}>
-                {<Inline text={part.slice(2, -2)} />}
+                {<Inline text={part.slice(2, -2)} checklist={checklist} />}
               </Text>
             );
           if (part.startsWith("`") && part.endsWith("`"))
@@ -40,6 +42,11 @@ function Inline({ text }: { text: string }) {
               </Text>
             );
           const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
+          const taskId = link ? taskLinkId(link[2]!) : null;
+          if (link && taskId)
+            return (
+              <TaskRef key={i} id={taskId} label={link[1]!} checklist={checklist} />
+            );
           if (link)
             return (
               <Text
@@ -322,7 +329,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
                   textDecorationLine: checked ? "line-through" : "none",
                 }}
               >
-                <Inline text={task ? task[2]! : (match?.[3] ?? line)} />
+                <Inline text={task ? task[2]! : (match?.[3] ?? line)} checklist={!!task} />
               </T>
             </View>
           );

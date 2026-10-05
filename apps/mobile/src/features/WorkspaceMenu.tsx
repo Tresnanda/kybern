@@ -363,7 +363,7 @@ export function WorkspacePill({
             </Tap>
           ))}
           <Tap
-            label={`Open tasks and agents${activeTasks ? `, ${activeTasks} active` : ""}`}
+            label={`Open agents and processes${activeTasks ? `, ${activeTasks} active` : ""}`}
             onPress={() =>
               router.push({ pathname: "/tasks", params: { threadId } })
             }

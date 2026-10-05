@@ -27,7 +27,7 @@ export default function Tasks() {
               ? "Agent activity"
               : task
                 ? "Task activity"
-                : "Tasks & agents",
+                : "Agents & processes",
         }}
       />
       {task ? (
@@ -111,7 +111,7 @@ export default function Tasks() {
             ))}
           {!snapshot.tasks.length && (
             <Empty
-              title="No tasks yet"
+              title="Nothing running yet"
               detail="Agents and background processes appear here when the harness starts them."
             />
           )}
