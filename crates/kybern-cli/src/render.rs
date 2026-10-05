@@ -47,7 +47,8 @@ pub fn providers(list: &[ProviderStatus]) {
 
 pub fn projects(list: &[Project]) {
     for p in list {
-        println!("{}  {:<20} {}{}", p.id, p.name, p.path, if p.is_git { "" } else { "  (not git)" });
+        let prefix = p.task_prefix.as_deref().map(|prefix| format!("  [{prefix}]")).unwrap_or_default();
+        println!("{}  {:<20} {}{}{}", p.id, p.name, p.path, if p.is_git { "" } else { "  (not git)" }, prefix);
     }
 }
 
@@ -71,6 +72,74 @@ pub fn notes(list: &[NoteSummary]) {
         let preview =
             if note.preview.is_empty() { String::new() } else { format!("  {}", note.preview.chars().take(60).collect::<String>()) };
         println!("{}  {:<8} {}{}{}{}", note.id, scope, title, if note.pinned { "  📌" } else { "" }, checklist, preview);
+    }
+}
+
+pub fn task_status(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Inbox => "inbox",
+        TaskStatus::Todo => "todo",
+        TaskStatus::Running => "running",
+        TaskStatus::NeedsReview => "needs review",
+        TaskStatus::Done => "done",
+        TaskStatus::Canceled => "canceled",
+    }
+}
+
+const PRIORITY_LABELS: [&str; 5] = ["-", "urgent", "high", "medium", "low"];
+
+pub fn tasks(list: &[TaskItem]) {
+    for task in list {
+        let run = match task.runs.last() {
+            Some(run) if run.state.is_live() => {
+                let activity = run.activity.as_deref().map(|activity| format!(" {activity}")).unwrap_or_default();
+                format!("  [run {}: {}{}]", run.number, run.state.as_str(), activity)
+            }
+            Some(run) => match run.diff {
+                Some(diff) => {
+                    format!("  [run {}: {} +{} -{} in {} files]", run.number, run.state.as_str(), diff.added, diff.removed, diff.files)
+                }
+                None => format!("  [run {}: {}]", run.number, run.state.as_str()),
+            },
+            None => String::new(),
+        };
+        println!(
+            "{:<8} {:<13} {:<6} {}{}",
+            task.key,
+            task_status(task.status),
+            PRIORITY_LABELS.get(usize::from(task.priority)).copied().unwrap_or("-"),
+            task.title,
+            run
+        );
+    }
+}
+
+pub fn task(task: &TaskItem) {
+    println!("{}  {}", task.key, task.title);
+    println!(
+        "status    {}\npriority  {}\nscope     {}{}",
+        task_status(task.status),
+        PRIORITY_LABELS.get(usize::from(task.priority)).copied().unwrap_or("-"),
+        match task.scope {
+            TaskScope::Global => "global",
+            TaskScope::Project => "project",
+        },
+        task.project_id.map(|id| format!(" {id}")).unwrap_or_default()
+    );
+    println!("updated   {}", task.updated_at.to_rfc3339());
+    if !task.note_ids.is_empty() {
+        println!("notes     {}", task.note_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(" "));
+    }
+    if let Some(followup) = &task.pending_followup {
+        println!("follow-up {}", followup.replace('\n', " "));
+    }
+    if !task.body.trim().is_empty() {
+        println!("\n{}", task.body.trim_end());
+    }
+    for run in &task.runs {
+        let diff = run.diff.map(|diff| format!("  +{} -{} in {} files", diff.added, diff.removed, diff.files)).unwrap_or_default();
+        let activity = run.activity.as_deref().map(|activity| format!("  {activity}")).unwrap_or_default();
+        println!("\nrun {}  {}  {}  thread {}{}{}", run.number, run.state.as_str(), run.provider.kind, run.thread_id, diff, activity);
     }
 }
 

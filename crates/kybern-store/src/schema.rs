@@ -279,6 +279,62 @@ const MIGRATIONS: &[&str] = &[
     FROM thread_notes n JOIN threads t ON t.id = n.thread_id
     WHERE trim(n.text) != '';
     ",
+    // v14: user tasks. No foreign key to projects or notes: a task outlives its
+    // project (it is soft deleted with it) and a note link is only a reference.
+    // `task_counters` hands out each key number once, so a key is never reused even
+    // after its task is purged. Projects get a `task_prefix`; existing projects are
+    // backfilled by the store when it opens (the derivation lives in Rust).
+    "
+    ALTER TABLE projects ADD COLUMN task_prefix TEXT;
+    CREATE UNIQUE INDEX projects_task_prefix ON projects(task_prefix) WHERE task_prefix IS NOT NULL;
+    CREATE TABLE task_counters (
+        prefix TEXT PRIMARY KEY,
+        next INTEGER NOT NULL
+    );
+    CREATE TABLE task_items (
+        id TEXT PRIMARY KEY,
+        key TEXT NOT NULL UNIQUE,
+        project_id TEXT,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        rank REAL NOT NULL,
+        source_note_id TEXT,
+        pending_followup TEXT,
+        revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        status_changed_at TEXT NOT NULL,
+        deleted_at TEXT
+    );
+    CREATE INDEX task_items_status ON task_items(status, rank);
+    CREATE INDEX task_items_project ON task_items(project_id);
+    CREATE INDEX task_items_deleted ON task_items(deleted_at);
+    CREATE TABLE task_runs (
+        task_id TEXT NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        thread_id TEXT NOT NULL UNIQUE,
+        provider_kind TEXT NOT NULL,
+        provider_instance TEXT NOT NULL,
+        model TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        state TEXT NOT NULL,
+        activity TEXT,
+        diff_added INTEGER,
+        diff_removed INTEGER,
+        diff_files INTEGER,
+        notes TEXT NOT NULL DEFAULT '[]',
+        PRIMARY KEY (task_id, number)
+    );
+    CREATE TABLE task_item_notes (
+        task_id TEXT NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
+        note_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        PRIMARY KEY (task_id, note_id)
+    );
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

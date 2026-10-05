@@ -484,6 +484,7 @@ mod tests {
                 path: root.to_string_lossy().into(),
                 is_git: false,
                 worktrees_default: None,
+                task_prefix: None,
                 created_at: now,
                 updated_at: now,
             };

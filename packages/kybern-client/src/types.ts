@@ -163,6 +163,8 @@ export interface Project {
   path: string;
   is_git: boolean;
   worktrees_default?: boolean | null;
+  /** Prefix for this project's task keys, e.g. "ADE". */
+  task_prefix?: string | null;
   created_at: DateTime;
   updated_at: DateTime;
 }
@@ -813,6 +815,8 @@ export interface ProjectsUpdateParams {
   name?: string;
   /** `null` clears the override. */
   worktrees_default?: boolean | null;
+  /** 2–5 letters A-Z (uppercased), unique across projects, "TSK" reserved. Existing task keys keep their old prefix. Absent or null leaves it as it is. */
+  task_prefix?: string | null;
 }
 
 export interface ProjectsRemoveParams {
@@ -988,6 +992,116 @@ export interface NotesUpdateParams {
   /** Ignored for thread notes. */
   title?: string | null;
   body?: string | null;
+}
+
+// ---- user tasks ("tasks.items.*"; `tasks.list` is runtime agent work) ----
+
+export const TASK_ITEMS_CHANGED_NOTIFICATION = "tasks.items.changed";
+
+export type TaskItemId = Uuid;
+export type TaskScope = "global" | "project";
+/** `running` and `needs_review` are owned by the latest run; the rest are set by the user. */
+export type TaskStatus = "inbox" | "todo" | "running" | "needs_review" | "done" | "canceled";
+/** 0 none, 1 urgent, 2 high, 3 medium, 4 low (Linear order). */
+export type TaskPriority = 0 | 1 | 2 | 3 | 4;
+
+export interface TaskRun {
+  thread_id: ThreadId;
+  /** 1-based within the task. */
+  number: number;
+  provider: ProviderInstance;
+  model?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  /** Live: "running" | "waiting" (approval or question). Settled: "completed" | "failed" | "interrupted". */
+  state: "running" | "waiting" | "completed" | "failed" | "interrupted";
+  /** What the agent is doing now, e.g. "Editing crates/kybern-drivers/src/cursor.rs". Running runs only. */
+  activity?: string | null;
+  /** Lines added/removed by the run's changes, when known. */
+  diff?: { added: number; removed: number; files: number } | null;
+  /** Notes sent with this run and the revision each was at. */
+  notes?: { note_id: NoteId; revision: number }[];
+}
+
+export interface TaskItem {
+  id: TaskItemId;
+  /** Display id such as "ADE-14"; global tasks use "TSK". Never reused. */
+  key: string;
+  scope: TaskScope;
+  project_id?: ProjectId | null;
+  title: string;
+  /** Markdown: description, optionally followed by acceptance criteria as a checklist. */
+  body: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  /** Position within its status column (ascending). */
+  rank: number;
+  /** Notes attached as context. */
+  note_ids: NoteId[];
+  /** The note whose checklist line created this task, if any. */
+  source_note_id?: NoteId | null;
+  /** Saved follow-up text to include in the next run (when no run is idle to receive it). */
+  pending_followup?: string | null;
+  runs: TaskRun[];
+  /** Content revision for title/body edits; conflicts use CONFLICT (-32004). */
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  /** When the status last changed. */
+  status_changed_at: string;
+}
+
+export interface TaskItemsCreateParams {
+  scope: TaskScope;
+  project_id?: ProjectId | null;
+  title: string;
+  body?: string;
+  /** Default "inbox". Only user statuses are accepted. */
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  note_ids?: NoteId[];
+  /** Create from a checklist line: the daemon rewrites that line to carry `[KEY](kybern://task/<id>)`. */
+  source?: { note_id: NoteId; line_text: string } | null;
+}
+
+export interface TaskItemsUpdateParams {
+  id: TaskItemId;
+  /** Required when title or body change. */
+  expected_revision?: number | null;
+  title?: string | null;
+  body?: string | null;
+  /** User statuses only: inbox, todo, done, canceled. A status without `before_id` places the task at the end of that column. */
+  status?: TaskStatus | null;
+  priority?: TaskPriority | null;
+  /** Move between Global and a project (re-keys only if it has no runs). */
+  scope?: TaskScope | null;
+  project_id?: ProjectId | null;
+  note_ids?: NoteId[] | null;
+  /** Replaces the saved follow-up; an empty string clears it. */
+  pending_followup?: string | null;
+  /** Place before this task in the target status column (it must be in that column). */
+  before_id?: TaskItemId | null;
+}
+
+export interface TaskItemsSendParams {
+  id: TaskItemId;
+  provider: ProviderInstance;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  use_worktree?: boolean | null;
+  base_branch?: string | null;
+  /** Required for global tasks: where the run happens. */
+  project_id?: ProjectId | null;
+  /** The (possibly edited) prompt text. */
+  prompt: string;
+  /** Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only. Only the notes listed here are sent. A saved `pending_followup` is cleared by the send (the prompt is expected to include it). */
+  note_ids?: NoteId[];
+}
+
+export interface TaskItemsChangedNotification {
+  task?: TaskItem | null;
+  deleted_id?: TaskItemId | null;
 }
 
 export interface NotesChangedNotification {
@@ -1552,6 +1666,14 @@ export interface Methods {
   "notes.restore": [{ id: NoteId }, NoteSummary];
   "notes.purge": [{ id: NoteId }, Empty];
   "notes.search": [{ query: string; limit?: number | null }, { results: { id: NoteId; snippet: string }[] }];
+  "tasks.items.list": [Empty, { tasks: TaskItem[] }];
+  "tasks.items.get": [{ id?: TaskItemId | null; key?: string | null }, { task?: TaskItem | null }];
+  "tasks.items.create": [TaskItemsCreateParams, TaskItem];
+  "tasks.items.update": [TaskItemsUpdateParams, TaskItem];
+  "tasks.items.delete": [{ id: TaskItemId }, Empty];
+  "tasks.items.restore": [{ id: TaskItemId }, TaskItem];
+  "tasks.items.send": [TaskItemsSendParams, { task: TaskItem; thread_id: ThreadId }];
+  "tasks.items.followup": [{ id: TaskItemId; text: string }, { task: TaskItem; sent_to?: ThreadId | null }];
   "queue.list": [{ thread_id?: ThreadId }, { messages: QueuedMessage[] }];
   "queue.remove": [
     { thread_id: ThreadId; id: MessageId },

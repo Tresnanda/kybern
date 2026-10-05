@@ -198,6 +198,10 @@ pub struct Project {
     /// Per-project override for "new threads use a worktree". Global default is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktrees_default: Option<bool>,
+    /// Prefix for this project's task keys, such as `ADE`. Assigned from the
+    /// project name when it is added; editable through `projects.update`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_prefix: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -189,6 +189,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: NoteCmd,
     },
+    /// Plan work as tasks and send them to an agent.
+    Task {
+        #[command(subcommand)]
+        cmd: TaskCmd,
+    },
     /// Print a thread's transcript.
     Show {
         thread: String,
@@ -390,6 +395,83 @@ enum NoteCmd {
     Restore { id: String },
     /// Find notes whose title or text contains the words.
     Search { query: Vec<String> },
+}
+
+#[derive(Subcommand)]
+enum TaskCmd {
+    /// List tasks by status. Done and canceled tasks are hidden unless asked for.
+    List {
+        /// Only this status: inbox, todo, running, needs-review, done or canceled.
+        #[arg(long, value_parser = parse_task_status)]
+        status: Option<TaskStatus>,
+        /// Only this project's tasks (name, path or id).
+        #[arg(long)]
+        project: Option<String>,
+        /// Include done and canceled tasks.
+        #[arg(long, short)]
+        all: bool,
+    },
+    /// Print a task, its linked notes and its runs.
+    Show {
+        /// Key such as ADE-14, or an id.
+        task: String,
+    },
+    /// Create a task. Without --project it is a global task.
+    New {
+        title: String,
+        /// Project name, path or id.
+        #[arg(long)]
+        project: Option<String>,
+        /// Read the markdown description from this file (`-` reads stdin).
+        #[arg(long)]
+        file: Option<String>,
+        /// inbox (default), todo, done or canceled.
+        #[arg(long, value_parser = parse_task_status)]
+        status: Option<TaskStatus>,
+        /// 0 none, 1 urgent, 2 high, 3 medium, 4 low.
+        #[arg(long)]
+        priority: Option<u8>,
+    },
+    /// Change a task's title, description, status or priority.
+    Edit {
+        task: String,
+        #[arg(long)]
+        title: Option<String>,
+        /// Read the new markdown description from this file (`-` reads stdin).
+        #[arg(long)]
+        file: Option<String>,
+        /// inbox, todo, done or canceled.
+        #[arg(long, value_parser = parse_task_status)]
+        status: Option<TaskStatus>,
+        #[arg(long)]
+        priority: Option<u8>,
+    },
+    /// Mark a task done.
+    Done { task: String },
+    /// Start an agent on a task, in the background. Follow it with `kybern task show`.
+    Send {
+        task: String,
+        /// Agent to run; defaults to the default provider in settings.
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        #[arg(long, value_parser = parse_mode)]
+        mode: Option<PermissionMode>,
+        /// Run in a new git worktree.
+        #[arg(long)]
+        worktree: bool,
+        /// Branch to start from.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Project to run in. Required for a global task.
+        #[arg(long)]
+        project: Option<String>,
+        /// Prompt text; defaults to the task's title and description.
+        prompt: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -797,6 +879,7 @@ pub async fn run() -> Result<()> {
             }
         }
         Cmd::Note { cmd } => note_command(&client, cmd, json).await?,
+        Cmd::Task { cmd } => task_command(&client, cmd, json).await?,
         Cmd::Queue { cmd } => match cmd {
             QueueCmd::List { thread } => {
                 let result = client.call::<QueueList>(QueueListParams { thread_id: thread.map(|id| id.parse()).transpose()? }).await?;
@@ -1424,6 +1507,170 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
             }
             for hit in result.results.iter().filter(|_| !json) {
                 println!("{}  {}", hit.id, hit.snippet);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_task_status(value: &str) -> Result<TaskStatus, String> {
+    match value.to_ascii_lowercase().replace('_', "-").as_str() {
+        "inbox" => Ok(TaskStatus::Inbox),
+        "todo" | "to-do" => Ok(TaskStatus::Todo),
+        "running" => Ok(TaskStatus::Running),
+        "needs-review" | "review" => Ok(TaskStatus::NeedsReview),
+        "done" => Ok(TaskStatus::Done),
+        "canceled" | "cancelled" => Ok(TaskStatus::Canceled),
+        other => Err(format!("unknown status {other}; use inbox, todo, running, needs-review, done or canceled")),
+    }
+}
+
+/// A task by key (`ADE-14`) or id.
+async fn resolve_task(client: &Client, key: &str) -> Result<TaskItem> {
+    let params = match key.parse::<TaskItemId>() {
+        Ok(id) => TaskItemsGetParams { id: Some(id), key: None },
+        Err(_) => TaskItemsGetParams { id: None, key: Some(key.to_owned()) },
+    };
+    client.call::<TaskItemsGet>(params).await?.task.ok_or_else(|| anyhow!("task {key} not found; run `kybern task list --all` for keys"))
+}
+
+async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
+    match cmd {
+        TaskCmd::List { status, project, all } => {
+            let project_id = match &project {
+                Some(project) => Some(resolve_project(client, project, false).await?),
+                None => None,
+            };
+            let mut tasks = client.call::<TaskItemsList>(Empty {}).await?.tasks;
+            tasks.retain(|task| {
+                project_id.is_none_or(|id| task.project_id == Some(id))
+                    && match status {
+                        Some(status) => task.status == status,
+                        None => all || !matches!(task.status, TaskStatus::Done | TaskStatus::Canceled),
+                    }
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&TaskItemsListResult { tasks })?);
+            } else if tasks.is_empty() {
+                println!("No tasks. Create one with `kybern task new \"Fix the login redirect\"`.");
+            } else {
+                render::tasks(&tasks);
+            }
+        }
+        TaskCmd::Show { task } => {
+            let task = resolve_task(client, &task).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&task)?);
+            } else {
+                render::task(&task);
+            }
+        }
+        TaskCmd::New { title, project, file, status, priority } => {
+            let project_id = match &project {
+                Some(project) => Some(resolve_project(client, project, false).await?),
+                None => None,
+            };
+            let task = client
+                .call::<TaskItemsCreate>(TaskItemsCreateParams {
+                    scope: if project_id.is_some() { TaskScope::Project } else { TaskScope::Global },
+                    project_id,
+                    title,
+                    body: file.as_deref().map(read_input).transpose()?,
+                    status,
+                    priority,
+                    note_ids: None,
+                    source: None,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&task)?);
+            } else {
+                println!("{}  {}", task.key, task.title);
+            }
+        }
+        TaskCmd::Edit { task, title, file, status, priority } => {
+            if title.is_none() && file.is_none() && status.is_none() && priority.is_none() {
+                return Err(anyhow!("nothing to change; pass --title, --file, --status or --priority"));
+            }
+            let current = resolve_task(client, &task).await?;
+            let task = client
+                .call::<TaskItemsUpdate>(TaskItemsUpdateParams {
+                    id: current.id,
+                    expected_revision: Some(current.revision),
+                    title,
+                    body: file.as_deref().map(read_input).transpose()?,
+                    status,
+                    priority,
+                    scope: None,
+                    project_id: None,
+                    note_ids: None,
+                    pending_followup: None,
+                    before_id: None,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&task)?);
+            } else {
+                println!("{}  {}  {}", task.key, render::task_status(task.status), task.title);
+            }
+        }
+        TaskCmd::Done { task } => {
+            let current = resolve_task(client, &task).await?;
+            let task = client
+                .call::<TaskItemsUpdate>(TaskItemsUpdateParams {
+                    id: current.id,
+                    expected_revision: None,
+                    title: None,
+                    body: None,
+                    status: Some(TaskStatus::Done),
+                    priority: None,
+                    scope: None,
+                    project_id: None,
+                    note_ids: None,
+                    pending_followup: None,
+                    before_id: None,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&task)?);
+            } else {
+                println!("{}  done", task.key);
+            }
+        }
+        TaskCmd::Send { task, provider, model, effort, mode, worktree, branch, project, prompt } => {
+            let task = resolve_task(client, &task).await?;
+            let project_id = match &project {
+                Some(project) => Some(resolve_project(client, project, false).await?),
+                None => None,
+            };
+            let provider = match provider {
+                Some(provider) => provider.parse::<ProviderKind>().map_err(|e: String| anyhow!(e))?,
+                None => client.call::<SettingsGet>(Empty {}).await?.default_provider,
+            };
+            let prompt = if prompt.is_empty() {
+                let body = task.body.trim();
+                if body.is_empty() { task.title.clone() } else { format!("{}\n\n{body}", task.title) }
+            } else {
+                join_prompt(prompt)?
+            };
+            let sent = client
+                .call::<TaskItemsSend>(TaskItemsSendParams {
+                    id: task.id,
+                    provider: ProviderInstance::default_for(provider),
+                    model,
+                    effort,
+                    permission_mode: mode,
+                    use_worktree: if worktree { Some(true) } else { None },
+                    base_branch: branch,
+                    project_id,
+                    prompt,
+                    note_ids: Some(task.note_ids.clone()),
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&sent)?);
+            } else {
+                println!("{} started on thread {}. Follow it with `kybern task show {}`.", sent.task.key, sent.thread_id, sent.task.key);
             }
         }
     }

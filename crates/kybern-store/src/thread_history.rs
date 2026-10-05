@@ -512,6 +512,7 @@ mod tests {
                 path: format!("/tmp/{id}"),
                 is_git: false,
                 worktrees_default: Some(false),
+                task_prefix: None,
                 created_at: now,
                 updated_at: now,
             })

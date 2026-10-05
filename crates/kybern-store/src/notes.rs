@@ -275,18 +275,19 @@ impl Store {
         })
     }
 
-    /// Remove a project, moving its notes to Recently deleted in the same transaction
-    /// so a failed removal never leaves them half deleted. Returns the notes that changed.
-    pub fn project_remove(&self, project_id: ProjectId) -> Result<Vec<NoteSummary>> {
+    /// Remove a project, moving its notes and tasks to Recently deleted in the same
+    /// transaction so a failed removal never leaves them half deleted.
+    pub fn project_remove(&self, project_id: ProjectId) -> Result<crate::ProjectRemoval> {
         if is_free_chat_project(project_id) {
             anyhow::bail!("the free-chat workspace cannot be removed");
         }
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
-            let changed = soft_delete_project_notes(&tx, project_id)?;
+            let notes = soft_delete_project_notes(&tx, project_id)?;
+            let tasks = crate::tasks::soft_delete_project_tasks(&tx, project_id)?;
             tx.execute("DELETE FROM projects WHERE id = ?1", [project_id.to_string()])?;
             tx.commit()?;
-            Ok(changed)
+            Ok(crate::ProjectRemoval { notes, tasks })
         })
     }
 
@@ -496,7 +497,7 @@ fn is_divider(line: &str) -> bool {
 }
 
 /// The text after a bullet (`-`, `*`, `+`) or numbered (`1.`, `1)`) list marker.
-fn list_item(line: &str) -> Option<&str> {
+pub(crate) fn list_item(line: &str) -> Option<&str> {
     if let Some(rest) = line.strip_prefix(['-', '*', '+']) {
         return rest.strip_prefix(' ').map(str::trim_start);
     }
@@ -615,6 +616,7 @@ mod tests {
             path: format!("/tmp/{}", Uuid::now_v7()),
             is_git: false,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -659,8 +661,8 @@ mod tests {
     fn migration_copies_non_empty_thread_notes_and_keeps_the_old_table() {
         // Build the v12 schema, add old-style notes, then let the real migrator finish.
         let conn = Connection::open_in_memory().unwrap();
-        let all = crate::schema::migration_count();
-        crate::schema::migrate_to(&conn, all - 1).unwrap();
+        // v12 is the schema before notes (v13) arrived; later migrations must not matter here.
+        crate::schema::migrate_to(&conn, 12).unwrap();
         conn.execute_batch(
             "INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES ('p1', 'kybern', '/k', 0, '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00');
              INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, permission_mode, status, cwd, created_at, updated_at, last_seq, pinned)
@@ -804,7 +806,7 @@ mod tests {
 
         assert_eq!(store.notes_soft_delete_for_project(other.id).unwrap().len(), 1, "scoped to the project asked for");
         store.note_restore(unrelated.summary.id).unwrap();
-        let changed = store.project_remove(project.id).unwrap();
+        let changed = store.project_remove(project.id).unwrap().notes;
         assert_eq!(changed.len(), 2);
         assert!(store.project_get(project.id).unwrap().is_none());
         assert!(store.project_remove(kybern_protocol::FREE_CHAT_PROJECT_ID).is_err());

@@ -6,11 +6,16 @@
 mod notes;
 mod projection;
 mod schema;
+mod tasks;
 mod thread_history;
 mod transcript_page;
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
+};
+pub use tasks::{
+    GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,
+    derive_task_prefix, task_link_lines, task_link_source_line, task_set_line_checked,
 };
 pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHistorySearchPage};
 pub use transcript_page::{transcript_page, transcript_page_ref};
@@ -183,6 +188,13 @@ fn append_collaboration_events_in_transaction(tx: &Transaction<'_>, group_id: Gr
     members.into_iter().map(|id| append_event_in_transaction(tx, id.parse()?, None, payload.clone())).collect()
 }
 
+/// What removing a project moved to Recently deleted.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectRemoval {
+    pub notes: Vec<methods::NoteSummary>,
+    pub tasks: Vec<methods::TaskItemId>,
+}
+
 #[derive(Clone)]
 pub struct Store {
     conn: Arc<Mutex<Connection>>,
@@ -229,6 +241,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         schema::migrate(&conn)?;
+        tasks::ensure_project_prefixes(&conn)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -1182,7 +1195,8 @@ impl Store {
 
     pub fn project_insert(&self, p: &Project) -> Result<()> {
         self.with(|c| {
-            c.execute(
+            let tx = c.unchecked_transaction()?;
+            tx.execute(
                 "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
@@ -1195,6 +1209,9 @@ impl Store {
                     p.updated_at.to_rfc3339()
                 ],
             )?;
+            // Every project gets a task prefix; an explicit one is kept when it is valid and free.
+            tasks::assign_project_prefix(&tx, p.id, &p.name, p.task_prefix.as_deref())?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -1222,7 +1239,7 @@ impl Store {
     pub fn project_get(&self, id: ProjectId) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at FROM projects WHERE id = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix FROM projects WHERE id = ?1",
                 [id.to_string()],
                 row_to_project,
             )
@@ -1233,7 +1250,7 @@ impl Store {
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at FROM projects WHERE path = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
@@ -1244,7 +1261,7 @@ impl Store {
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix
                  FROM projects WHERE id != ?1 ORDER BY name",
             )?;
             let rows = st.query_map([FREE_CHAT_PROJECT_ID.to_string()], row_to_project)?;
@@ -2391,6 +2408,7 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         path: r.get(2)?,
         is_git: r.get(3)?,
         worktrees_default: r.get(4)?,
+        task_prefix: r.get(7)?,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
     })
@@ -2664,6 +2682,7 @@ mod tests {
             path: format!("/tmp/{}", Uuid::now_v7()),
             is_git: false,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -2759,6 +2778,7 @@ mod tests {
             path: "/tmp/import".into(),
             is_git: false,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -2827,6 +2847,7 @@ mod tests {
             path: "/tmp/demo".into(),
             is_git: false,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
@@ -2966,6 +2987,7 @@ mod tests {
             path: format!("/tmp/{}", Uuid::now_v7()),
             is_git: false,
             worktrees_default: None,
+            task_prefix: None,
             created_at: now,
             updated_at: now,
         };
