@@ -10,7 +10,7 @@ import { IconSwap } from "@/components/kybern/motion"
 import { Toggle } from "@/components/kit/toggle"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
-import { HistoryBackIcon, HistoryForwardIcon, LayoutSidebarIcon, NewThreadIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
+import { ArrowLeftIcon, ArrowRightIcon, LayoutSidebarIcon, NewThreadIcon, PanelRightCloseIcon, WindowIcon, type LucideIcon } from "@/lib/kit/icons"
 import { mod } from "@/lib/format"
 import { isTauri } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -130,7 +130,7 @@ const SIDEBAR_TRIGGER_CLASS_NAME = cn(
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 )
 
-/** Back/forward (or a single new-thread action when collapsed), then the sidebar toggle. */
+/** The sidebar toggle first, so it never moves, then back/forward (or a single new-thread action when collapsed). */
 export function SidebarLeadingControls({ className }: { className?: string }) {
   const { open, toggleSidebar } = useSidebar()
   return (
@@ -138,6 +138,22 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
       data-tauri-drag-region="false"
       className={cn("no-drag flex shrink-0 items-center gap-0", className)}
     >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={SIDEBAR_TRIGGER_CLASS_NAME}
+              aria-label="Toggle thread sidebar"
+              onClick={toggleSidebar}
+            />
+          }
+        >
+          <LayoutSidebarIcon className="size-4" />
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">Toggle sidebar ({mod}B)</TooltipPopup>
+      </Tooltip>
       {isTauri() && (
         <IconSwap
           active={open ? "a" : "b"}
@@ -157,7 +173,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                     />
                   }
                 >
-                  <HistoryBackIcon className="size-[18px]" />
+                  <ArrowLeftIcon className="size-4" />
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">Back ({mod}[)</TooltipPopup>
               </Tooltip>
@@ -174,7 +190,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                     />
                   }
                 >
-                  <HistoryForwardIcon className="size-[18px]" />
+                  <ArrowRightIcon className="size-4" />
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">Forward ({mod}])</TooltipPopup>
               </Tooltip>
@@ -203,22 +219,6 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
           }
         />
       )}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={SIDEBAR_TRIGGER_CLASS_NAME}
-              aria-label="Toggle thread sidebar"
-              onClick={toggleSidebar}
-            />
-          }
-        >
-          <LayoutSidebarIcon className="size-[18px]" />
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">Toggle sidebar ({mod}B)</TooltipPopup>
-      </Tooltip>
     </div>
   )
 }
@@ -289,12 +289,15 @@ export function SurfaceHeader({
   inline,
   children,
   trailing,
+  dock = true,
 }: {
   minimal?: boolean
   environment?: boolean
   inline?: boolean
   children?: ReactNode
   trailing?: ReactNode
+  /** The right sidebar toggle. Pages without a thread panel (Notes) leave it out. */
+  dock?: boolean
 }) {
   const slot = useContext(TitlebarSlotContext)
   const titlebar = !inline && slot !== null
@@ -317,7 +320,7 @@ export function SurfaceHeader({
         >
           {trailing}
           {environment && <EnvironmentToggle />}
-          <DockToggle />
+          {dock && <DockToggle />}
         </div>
       </div>
     </div>

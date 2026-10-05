@@ -7,7 +7,7 @@ import { activeEnvironment } from "@/state/environments"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
-import { ThreadNotes } from "./ThreadNotes"
+import { ThreadNotePanel } from "./notes/ThreadNotePanel"
 import { Spinner } from "@/components/kybern/bits"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
@@ -30,6 +30,7 @@ import {
   GitHubIcon,
   GitPullRequestIcon,
   LayoutSidebarIcon,
+  NoteIcon,
   SettingsIcon,
   WorktreeIcon,
 } from "@/lib/kit/icons"
@@ -38,6 +39,8 @@ import { cn } from "@/lib/utils"
 import type { ThreadId } from "@/protocol"
 import { errorText, loadDiff, loadGitStatus } from "@/state/rpc"
 import { diffKey, useStore } from "@/state/store"
+import { openNote, useNotes } from "@/state/notes"
+import { isEmptyThreadNote } from "@/state/notesModel"
 
 /** Chat content is inset by this much while the panel is docked (288px card + 24px gutters). */
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312
@@ -111,23 +114,41 @@ function LabeledSection({ label, children }: { label: string; children: React.Re
   )
 }
 
-function CollapsibleSection({ label, open, onToggle, children }: { label: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
+function CollapsibleSection({ label, open, onToggle, trailing, children }: { label: string; open: boolean; onToggle: () => void; trailing?: React.ReactNode; children: React.ReactNode }) {
   return (
     <>
       <EnvironmentSectionDivider />
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="group/section flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)]"
-      >
-        <span className={cn(SECTION_LABEL_INLINE, "min-w-0 truncate")}>{label}</span>
-        <DisclosureChevron open={open} className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60" />
-      </button>
+      <div className="relative">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={onToggle}
+          className="group/section flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)]"
+        >
+          <span className={cn(SECTION_LABEL_INLINE, "min-w-0 truncate")}>{label}</span>
+          <DisclosureChevron open={open} className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60" />
+        </button>
+        {/* Beside the chevron, outside the toggle: a button inside a button is not valid. */}
+        {trailing && <div className="absolute inset-y-0 end-7 flex items-center">{trailing}</div>}
+      </div>
       <DisclosureRegion open={open}>
         <div className="flex flex-col pt-0.5">{children}</div>
       </DisclosureRegion>
     </>
+  )
+}
+
+/** Opens this thread's note in the Notes page. Only offered once the note has something in it. */
+function OpenThreadNote({ threadId }: { threadId: ThreadId }) {
+  const note = useNotes((s) => {
+    for (const candidate of Object.values(s.env.notes)) if (candidate.thread_id === threadId) return candidate
+    return undefined
+  })
+  if (!note || note.deleted_at || isEmptyThreadNote(note)) return null
+  return (
+    <IconButton variant="ghost" size="icon-xs" label="Open in Notes" tooltip="Open in Notes" className="size-5" onClick={() => openNote(note.id)}>
+      <NoteIcon className="size-3.5" />
+    </IconButton>
   )
 }
 
@@ -350,8 +371,8 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
             )}
 
             {show("notes") && (
-              <CollapsibleSection label="Notes" open={notesOpen} onToggle={() => setNotesOpen(!notesOpen)}>
-                <ThreadNotes key={threadId} threadId={threadId} />
+              <CollapsibleSection label="Notes" open={notesOpen} onToggle={() => setNotesOpen(!notesOpen)} trailing={<OpenThreadNote threadId={threadId} />}>
+                <ThreadNotePanel key={threadId} threadId={threadId} />
               </CollapsibleSection>
             )}
           </div>

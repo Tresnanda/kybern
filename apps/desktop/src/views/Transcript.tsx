@@ -62,6 +62,7 @@ import {
   GlobeIcon,
   HammerIcon,
   McpIcon,
+  NoteIcon,
   PanelRightCloseIcon,
   PencilIcon,
   SearchIcon,
@@ -73,6 +74,7 @@ import {
 import { cn } from "@/lib/utils"
 import type { ApprovalRequest, ContentPart, Diff, JsonValue, RuntimeTask, ThreadId } from "@/protocol"
 import { activeRuntime, errorText, hydrateToolOutput, retainToolOutput, loadDiff, loadFileDiff, revertTo } from "@/state/rpc"
+import { openSaveToNote, textToSave } from "@/state/saveToNote"
 import { createTurnTasksSelector, diffKey, isRuntimeTaskActive, useStore } from "@/state/store"
 import { consumeTranscriptAnchor, peekTranscriptAnchor, registerTranscriptAnchor, windowHoldsTranscript } from "@/state/windowSurfaceState"
 import { buildWorkHierarchy, createTurnGrouper, shouldRevealLiveText, type Block, type TurnGroup, type WorkHierarchy } from "@/state/transcript"
@@ -805,6 +807,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
             {settled && (group.answer || group.end) && (
               <div className="chat-paint-host mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]" style={META}>
                 <CopyAction text={group.answer?.text ?? ""} />
+                <SaveToNoteAction text={group.answer?.text ?? ""} />
                 {group.end?.at && <time dateTime={group.end.at} title={new Date(group.end.at).toLocaleString()} className="tabular-nums">{clockTime(group.end.at)}</time>}
               </div>
             )}
@@ -894,6 +897,24 @@ function CopyAction({ text }: { text: string }) {
       }}
     >
       <IconSwap active={copied ? "b" : "a"} a={<CopyIcon className="size-[1.125em]" />} b={<CheckIcon className="size-[1.125em] text-success" />} />
+    </MessageActionButton>
+  )
+}
+
+/** Opens the shared "Save to note" picker beside this button. Nothing is built until it is pressed. */
+function SaveToNoteAction({ text }: { text: string }) {
+  const threadId = useContext(ImageThreadContext)
+  return (
+    <MessageActionButton
+      label="Save to note"
+      tooltip="Save to note"
+      disabled={!text || !threadId}
+      onClick={(event) => {
+        const button = event.currentTarget
+        if (threadId) openSaveToNote({ anchor: button, threadId, ...textToSave(button, text) })
+      }}
+    >
+      <NoteIcon className="size-[1.125em]" />
     </MessageActionButton>
   )
 }
@@ -1014,6 +1035,7 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
             <time dateTime={at} title={new Date(at).toLocaleString()} className={cn("tabular-nums", HOVER_REVEAL)}>{clockTime(at)}</time>
             <div className={cn("flex items-center gap-2", HOVER_REVEAL)}>
               <CopyAction text={text} />
+              <SaveToNoteAction text={text} />
             </div>
           </div>
       </div>

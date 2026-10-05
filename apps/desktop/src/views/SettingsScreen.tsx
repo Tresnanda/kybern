@@ -43,6 +43,7 @@ import { SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
 import type { BackgroundSettings, ComputerForeground, ComputerNote, ComputerPermission, ComputerStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
+import { setGlobalNotesHome, useGlobalNotesHome } from "@/lib/notesPrefs"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
@@ -68,7 +69,7 @@ const NAV_GROUPS: { label: string; tabs: Tab[] }[] = [
 ]
 
 const SEARCH_TERMS: Record<Tab, string> = {
-  general: "default agent permissions worktree thread titles close workspace",
+  general: "default agent permissions worktree thread titles close workspace notes global shared separate",
   notifications: "alerts sound permission work finishes fails input",
   background: "idle memory warm shells daemon battery power activity",
   agents: "provider harness install updates claude codex cursor opencode pi omp profiles",
@@ -295,7 +296,27 @@ function General() {
         </Row>
         <AskBeforeCloseRow />
       </Section>
+      <Section title="Notes">
+        <GlobalNotesRow />
+      </Section>
     </>
+  )
+}
+
+function GlobalNotesRow() {
+  const home = useGlobalNotesHome()
+  return (
+    <Row title="Global notes" description="Notes that belong to no project. Shared keeps one set on this Mac for every environment window. Switching never moves or deletes a note.">
+      <SettingsPicker
+        label="Global notes"
+        value={home}
+        onChange={setGlobalNotesHome}
+        options={[
+          { value: "shared", label: "Shared across environments" },
+          { value: "separate", label: "Separate per environment" },
+        ]}
+      />
+    </Row>
   )
 }
 

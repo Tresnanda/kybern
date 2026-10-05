@@ -109,6 +109,23 @@ export async function saveImageFile(data: Uint8Array, defaultPath: string): Prom
   return invoke<boolean>("save_image_file", data, { headers: { "X-Kybern-File-Name": name } })
 }
 
+/**
+ * Ask where to save a text file, then write it. Resolves to false when the
+ * dialog is dismissed. The destination is chosen natively in the shell, so the
+ * page never supplies a path. In a browser it downloads the file instead.
+ */
+export async function saveTextFile(fileName: string, contents: string): Promise<boolean> {
+  if (!isTauri()) {
+    const url = URL.createObjectURL(new Blob([contents], { type: "text/markdown;charset=utf-8" }))
+    const link = Object.assign(document.createElement("a"), { href: url, download: fileName })
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    return true
+  }
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<boolean>("save_text_file", { fileName, contents })
+}
+
 export async function writeImageClipboard(data: Uint8Array): Promise<void> {
   if (!isTauri()) throw new Error("Native image copying is not available in this window.")
   const { invoke } = await import("@tauri-apps/api/core")
