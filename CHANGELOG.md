@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1
+
+<!-- kybern-release-title: Projects in Notes and Tasks, images in notes -->
+<!-- kybern-release-summary: Pick a project before you write a note or task, paste images into notes, and keep Claude plan usage current. -->
+
+- Choose a project in Tasks and Notes. Every project appears in the Tasks sidebar, and a task's project dot on a list row or board card opens the project picker. New note can start a note in any project. A "+" in both places adds a project without leaving the page.
+- Paste, drop or insert images into notes. They're stored on the machine that keeps the note.
+- Fix Claude plan usage staying stale on Macs that still have an old Claude credentials file. When usage can't be read, the usage card now says why and what brings it back. A limit that reset since its last reading no longer shows as 100% left.
+- Notes use the whole window, without the chat sidebar, and the note header has more room.
+- Fix a scrollbar flashing while moving between plan usage rings.
+
 ## 0.6.0
 
 <!-- kybern-release-title: Notes, Tasks and live plan usage -->
