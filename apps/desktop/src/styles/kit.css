@@ -121,6 +121,86 @@
     backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
+  /* ─── Window frame + workspace card ───────────────────────────────────────────
+     The title bar and the app rail are one frame on the window material (the shell
+     background; native vibrancy when translucent). The workspace sits on top of it
+     as one rounded card: the thread panel is its leading section and the content
+     surface the rest, split by the content's leading edge. The card stops short of
+     the window's trailing and bottom edges by --app-frame-inset. */
+  .app-nav-rail {
+    --app-rail-idle: color-mix(in srgb, var(--color-text-foreground, var(--foreground)) 62%, transparent);
+    --app-rail-hover: color-mix(in srgb, var(--color-text-foreground, var(--foreground)) 6%, transparent);
+    --app-rail-active: color-mix(in srgb, var(--color-text-foreground, var(--foreground)) 10%, transparent);
+  }
+
+  :is(.app-sidebar-panel, .workspace-card) {
+    --app-card-radius: 12px;
+    --app-card-edge: --alpha(var(--color-black) / 10%);
+  }
+
+  .dark :is(.app-sidebar-panel, .workspace-card) {
+    --app-card-edge: --alpha(var(--color-white) / 8%);
+  }
+
+  @media (prefers-contrast: more) {
+    :is(.app-sidebar-panel, .workspace-card) {
+      --app-card-edge: var(--color-border);
+    }
+  }
+
+  /* Title bar over the content column. A short divider marks where the panel
+     meets the content, the way the source list meets the toolbar on macOS. */
+  .app-titlebar-slot[data-panel-open]::before,
+  .settings-titlebar::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 0;
+    top: 50%;
+    width: 1px;
+    height: 20px;
+    translate: 0 -50%;
+    background: --alpha(var(--color-black) / 10%);
+    pointer-events: none;
+  }
+
+  .dark .app-titlebar-slot[data-panel-open]::before,
+  .dark .settings-titlebar::before {
+    background: --alpha(var(--color-white) / 9%);
+  }
+
+  .app-sidebar-panel {
+    background: var(--app-sidebar-surface, var(--card));
+    -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+    border-start-start-radius: var(--app-card-radius);
+    border-end-start-radius: var(--app-card-radius);
+    /* Top, leading, and bottom strokes; the content's leading edge is the divider.
+       Inset strokes follow the corners and add no layout width. */
+    box-shadow:
+      inset 0 0.6px 0 var(--app-card-edge),
+      inset 0.6px 0 0 var(--app-card-edge),
+      inset 0 -0.6px 0 var(--app-card-edge);
+  }
+
+  /* Scoped past the generic content-seam rules below, which square the card. */
+  [data-sidebar-side="left"] .chat-content-card.workspace-card {
+    --seam-line: var(--app-card-edge);
+    border-radius: 0;
+    border-start-end-radius: var(--app-card-radius);
+    border-end-end-radius: var(--app-card-radius);
+    transition: border-radius 200ms var(--ease-drawer, cubic-bezier(0.32, 0.72, 0, 1));
+  }
+
+  /* With the panel collapsed the content is the whole card. */
+  [data-sidebar-side="left"] .settings-workspace:has(> [data-slot="sidebar"][data-state="collapsed"]) .chat-content-card.workspace-card {
+    border-radius: var(--app-card-radius);
+  }
+
+  [data-sidebar-side="left"] .chat-content-card.workspace-card::before {
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 0.6px var(--seam-line);
+  }
+
   /* Small circular icon badges that sit directly on the sidebar surface inside
      thread rows — the meta-chip stack, the handoff provider avatar, the terminal
      count badge. They take the SAME material as the sidebar (translucent or
@@ -166,9 +246,6 @@
     z-index: 1;
     pointer-events: none;
     border-radius: 0;
-    /* Fade the seam divider with the slide (collapsed rule sets opacity:0) — `display`
-       can't transition, so opacity is what keeps this in step with the animation. */
-    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   /* A single inset stroke produces the straight content edge without adding
@@ -179,14 +256,6 @@
 
   [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card {
     --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
-  }
-
-  /* Sidebar collapsed (offcanvas): drop the divider because the content fills the
-     window edge-to-edge. Use the direct-child combinator so the nested right dock
-     cannot drive the main content seam. */
-  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
-    .chat-content-card::before {
-    opacity: 0;
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────

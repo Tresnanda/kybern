@@ -15,7 +15,8 @@ import {
   DialogTitle,
 } from "@/components/kit/dialog"
 import { IconButton } from "@/components/kit/icon-button"
-import { SidebarMenuButton, SidebarMenuItem } from "@/components/kit/sidebar"
+import { Popover, PopoverDescription, PopoverPopup, PopoverTitle, PopoverTrigger } from "@/components/kit/popover"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import {
   canSelfUpdate,
@@ -27,12 +28,10 @@ import {
 } from "@/lib/appUpdate"
 import {
   ArrowRightIcon,
-  ArrowUpCircleIcon,
+  DownloadIcon,
   ArrowUpRightIcon,
-  InfoIcon,
   XIcon,
 } from "@/lib/kit/icons"
-import { SIDEBAR_ROW_HOVER_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { releasePresentation } from "@/lib/releaseNotes"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
@@ -202,8 +201,14 @@ function UpdateAction({ className }: { className?: string }) {
   )
 }
 
-/** A persistent, one-click update entry beside Settings. The note button reopens details. */
-export function SidebarUpdateButton() {
+/**
+ * The app rail's update entry, above Settings, shown only when a release is
+ * ready. Updating restarts Kybern and the agents on this machine, so the badge
+ * opens a small card instead of installing on one click; the card keeps
+ * progress and retry in place. The badge is also where release details return
+ * focus once their dialog closes.
+ */
+export function RailUpdateButton() {
   const version = useAppUpdate((state) => state.version)
   const phase = useAppUpdate((state) => state.phase)
   const progress = useAppUpdate((state) => state.progress)
@@ -218,48 +223,63 @@ export function SidebarUpdateButton() {
       : errorKind === "install"
         ? "Retry update"
         : "Update and restart"
+  const shortVersion = version.replace(/^v/, "")
   return (
-    <SidebarMenuItem>
-      <div
-        data-testid="sidebar-update"
-        className="flex min-w-0 items-center gap-1 rounded-xl bg-[var(--color-background-button-secondary)] p-1"
-      >
-        <SidebarMenuButton
-          aria-label={label}
-          disabled={busy}
-          onClick={() => void installAppUpdate()}
-          title="Installs the update and restarts Kybern and the agents running on this machine."
-          className={cn(
-            "!h-auto min-h-10 min-w-0 flex-1 gap-2 !px-2 !py-1.5",
-            SIDEBAR_ROW_HOVER_CLASS_NAME
-          )}
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <button
+                  type="button"
+                  data-testid="rail-update"
+                  data-update-details-trigger="sidebar"
+                  aria-label={`Update available: Kybern v${shortVersion}`}
+                  className="press relative inline-flex size-9 cursor-pointer items-center justify-center rounded-[10px] outline-hidden hover:bg-[var(--app-rail-hover)] focus-visible:ring-1 focus-visible:ring-ring"
+                />
+              }
+            />
+          }
         >
-          {busy ? (
-            <Spinner size={16} />
-          ) : (
-            <ArrowUpCircleIcon className="size-4 shrink-0" />
-          )}
-          <span className="flex min-w-0 flex-col gap-0.5 text-start">
-            <span className="text-[length:var(--app-font-size-ui,12px)] leading-snug font-medium tabular-nums">
-              {label}
-            </span>
-            <span className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground">
-              Kybern v{version.replace(/^v/, "")}
-            </span>
+          <span className="inline-flex size-7 items-center justify-center rounded-full bg-[var(--color-text-accent)] text-white">
+            {busy ? <Spinner size={14} /> : <DownloadIcon className="size-4" />}
           </span>
-        </SidebarMenuButton>
-        <IconButton
-          data-update-details-trigger="sidebar"
-          label="See what’s new"
-          tooltip="See what’s new"
-          size="icon-sm"
-          className="!size-8 shrink-0 !rounded-lg"
-          onClick={showDetails}
-        >
-          <InfoIcon className="size-4" />
-        </IconButton>
-      </div>
-    </SidebarMenuItem>
+        </TooltipTrigger>
+        <TooltipPopup side="right" sideOffset={6}>
+          {busy ? label : `Kybern v${shortVersion} is ready`}
+        </TooltipPopup>
+      </Tooltip>
+      <PopoverPopup side="right" align="end" sideOffset={10} className="w-72 font-system-ui">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <PopoverTitle className="text-[length:var(--app-font-size-ui,13px)] font-medium leading-snug">
+              Kybern v{shortVersion} is ready
+            </PopoverTitle>
+            <PopoverDescription className="text-[length:var(--app-font-size-ui,12px)] leading-relaxed text-pretty">
+              {errorKind === "install"
+                ? "The last update didn’t install. Try again, or see the release details."
+                : "Updating restarts Kybern and the agents running on this machine."}
+            </PopoverDescription>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={showDetails}>
+              See what’s new
+            </Button>
+            <Button
+              size="sm"
+              aria-label={label}
+              disabled={busy}
+              onClick={() => void installAppUpdate()}
+              className="tabular-nums"
+            >
+              {busy && <Spinner size={14} />}
+              {label}
+            </Button>
+          </div>
+        </div>
+      </PopoverPopup>
+    </Popover>
   )
 }
 

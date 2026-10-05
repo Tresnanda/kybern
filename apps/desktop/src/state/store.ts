@@ -126,7 +126,10 @@ export interface AppState {
     | { kind: "thread"; id: ThreadId }
     | { kind: "draft"; draft: Draft }
     | { kind: "pulls" }
+    | { kind: "usage" }
     | { kind: "none" }
+  /** The chat (thread or draft) to return to when Home is chosen from another page. */
+  homeSelection: { kind: "thread"; id: ThreadId } | { kind: "draft"; draft: Draft } | null
   /** Persisted recursive pane tree for showing up to four chat threads together. */
   splitView: SplitView | null
   sidebarOpen: boolean
@@ -148,7 +151,7 @@ export interface AppState {
   sessionsProjectId: ProjectId | null
   paletteOpen: boolean
   settingsOpen: boolean
-  settingsTab: "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "usage" | "about"
+  settingsTab: "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
   collapsedProjects: Record<ProjectId, boolean>
   /** Project order the user dragged into place. Empty means alphabetical. */
   projectOrder: ProjectId[]
@@ -187,6 +190,9 @@ export interface AppActions {
   selectDraft: (projectId: ProjectId, purpose?: "thread" | "coordinator") => void
   selectFreeDraft: () => void
   selectPulls: () => void
+  selectUsage: () => void
+  /** Return to the last chat, or the home screen when none is left. */
+  selectHome: () => void
   /** Record that a thread needs attention (bell + sidebar unread marker). */
   pushNotification: (threadId: ThreadId, kind: NotificationKind, seq: number, at: string) => void
   /** Clear a thread's notification (it has been opened / acknowledged). */
@@ -273,6 +279,12 @@ function reconcileNotificationDismissalForEvent(
   }
 }
 
+/** Keep the chat Home should return to when leaving it for another page. */
+function rememberHome(state: AppState): AppState["homeSelection"] {
+  const selected = state.selected
+  return selected.kind === "thread" || selected.kind === "draft" ? selected : state.homeSelection
+}
+
 export function createEnvironmentStore(
   environmentId: string
 ): EnvironmentStore {
@@ -296,6 +308,7 @@ export function createEnvironmentStore(
     diffs: {},
     gitStatuses: {},
     selected: { kind: "none" },
+    homeSelection: null,
     splitView: readPersistedSplitView(environmentId),
     sidebarOpen: true,
     notificationFilter: false,
@@ -438,7 +451,22 @@ export function createEnvironmentStore(
     },
     selectPulls: () => {
       persistSplitView(null)
-      set({ selected: { kind: "pulls" }, splitView: null })
+      set((s) => ({ selected: { kind: "pulls" }, splitView: null, homeSelection: rememberHome(s) }))
+    },
+    selectUsage: () => {
+      persistSplitView(null)
+      set((s) => ({ selected: { kind: "usage" }, splitView: null, homeSelection: rememberHome(s) }))
+    },
+    selectHome: () => {
+      const s = get()
+      const home = s.homeSelection
+      if (s.selected.kind !== "pulls" && s.selected.kind !== "usage") return s.selectFreeDraft()
+      if (home?.kind === "thread" && s.threads[home.id]?.status !== "archived" && s.threads[home.id]) return s.selectThread(home.id)
+      if (home?.kind === "draft" && (!home.draft.projectId || s.projects[home.draft.projectId])) {
+        persistSplitView(null)
+        return set({ selected: home, splitView: null })
+      }
+      s.selectFreeDraft()
     },
     splitFocusedPane: (direction, threadId, side = "second") => {
       const state = get()
