@@ -1,12 +1,13 @@
 import { useEffect } from "react"
 
-import { attachTasksFeed } from "@/state/tasks"
+import { attachTasksFeed, closeRunComposerOffPage } from "@/state/tasks"
 import { activeRuntime } from "@/state/rpc"
 import { useStore } from "@/state/store"
 
 /**
  * Keep this window's tasks current: list them when the connection opens (and again
- * after every reconnect) and follow `tasks.items.changed`. Mount once, in the workspace.
+ * after every reconnect) and follow `tasks.items.changed`. Also hides a task's run
+ * composer once its page is left. Mount once, in the workspace.
  */
 export function useTasksSync() {
   const open = useStore((s) => s.connection.state === "open")
@@ -21,4 +22,6 @@ export function useTasksSync() {
     }
     return attachTasksFeed(client, environmentId)
   }, [open, environmentId])
+  const selected = useStore((s) => s.selected)
+  useEffect(() => closeRunComposerOffPage(selected), [selected])
 }

@@ -299,7 +299,7 @@ export function SurfaceHeader({
   inline?: boolean
   children?: ReactNode
   trailing?: ReactNode
-  /** The right sidebar toggle. Pages without a thread panel (Notes) leave it out. */
+  /** The right sidebar toggle. Full pages without a dock (Notes, Tasks) leave it out. */
   dock?: boolean
 }) {
   const slot = useContext(TitlebarSlotContext)

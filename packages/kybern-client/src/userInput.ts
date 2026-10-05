@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "./types.ts"
+import type { ApprovalRequest, ContentPart } from "./types.ts"
 
 export const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -76,6 +76,43 @@ export const COMPUTER_MENTION_SKILL = {
   enabled: true,
 } as const
 
+/** A `{ type: "mention" }` content part: plugins, `@Computer`, and Kybern notes and tasks. */
+export type MentionPart = Extract<ContentPart, { type: "mention" }>
+
+/** Notes mentioned in a prompt: the daemon expands `kybern://note/<id>` to the note's text in the provider's copy. */
+export const NOTE_MENTION_PREFIX = "kybern://note/"
+/** Tasks mentioned in a prompt: the daemon expands `kybern://task/<id>` to the task's details in the provider's copy. */
+export const TASK_MENTION_PREFIX = "kybern://task/"
+
+export const noteMentionPath = (id: string): string => `${NOTE_MENTION_PREFIX}${id}`
+export const taskMentionPath = (id: string): string => `${TASK_MENTION_PREFIX}${id}`
+
+/** What a Kybern mention path points at, or null for a plugin or any other path. */
+export function parseKybernMention(path: string): { kind: "note" | "task"; id: string } | { kind: "computer" } | null {
+  if (path === COMPUTER_MENTION_PATH) return { kind: "computer" }
+  for (const [kind, prefix] of [["note", NOTE_MENTION_PREFIX], ["task", TASK_MENTION_PREFIX]] as const) {
+    if (path.startsWith(prefix)) {
+      const id = path.slice(prefix.length).trim()
+      return id ? { kind, id } : null
+    }
+  }
+  return null
+}
+
+const mentionLabel = (value: string, fallback: string) => value.replace(/\s+/g, " ").trim() || fallback
+
+/** The mention part for a note. The chip reads as the note's title. */
+export function noteMentionPart(note: { id: string; title: string }): MentionPart {
+  const title = mentionLabel(note.title, "Untitled note")
+  return { type: "mention", name: title, path: noteMentionPath(note.id), display_name: title }
+}
+
+/** The mention part for a task. The chip reads as its key and title ("ADE-14 Fix login"). */
+export function taskMentionPart(task: { id: string; key: string; title: string }): MentionPart {
+  const title = mentionLabel(task.title, "Untitled task")
+  return { type: "mention", name: title, path: taskMentionPath(task.id), display_name: task.key ? `${task.key} ${title}` : title }
+}
+
 /** Kybern's own consent for computer use, asked by the daemon rather than a harness. */
 export function computerConsent(approval: ApprovalRequest): { app: string; foreground: boolean } | null {
   if (approval.tool_name !== "kybern_computer_use") return null
@@ -86,4 +123,55 @@ export function computerConsent(approval: ApprovalRequest): { app: string; foreg
 /** The accept reply for a connector approval; `persist` asks the harness not to ask again in that scope. */
 export function connectorApprovalResponse(persist: "session" | null): unknown {
   return persist ? { action: "accept", content: {}, _meta: { persist } } : { action: "accept", content: {} }
+}
+
+/** `tool_name` of the daemon's approval card for an agent writing notes or tasks. */
+export const NOTES_TASKS_APPROVAL_TOOL = "kybern_notes_tasks"
+
+export type NotesTasksAction = "create_note" | "append_note" | "update_note" | "create_task" | "update_task" | "claim_task"
+
+/** Kybern's own consent before an agent files or changes a note or task. */
+export interface NotesTasksConsent {
+  action: NotesTasksAction
+  kind: "note" | "task"
+  /** The daemon's one line, e.g. "Create task 'Fix login' in ade". */
+  summary: string
+  /** The new title, for creates and renames. */
+  title: string | null
+  /** The project a new item goes to; null for a global one. */
+  project: string | null
+  /** The existing note or task a change applies to. */
+  target: { id: string; key: string | null; title: string } | null
+  /** What an update changes, in the daemon's words. */
+  changes: string[]
+  /** New text: a body, an append, or a task's description and checklist. */
+  preview: string
+  priority: number
+  priorityLabel: string | null
+  /** How many acceptance criteria a new task has. */
+  criteria: number
+}
+
+const NOTES_TASKS_ACTIONS: readonly NotesTasksAction[] = ["create_note", "append_note", "update_note", "create_task", "update_task", "claim_task"]
+
+export function notesTasksConsent(approval: ApprovalRequest): NotesTasksConsent | null {
+  if (approval.tool_name !== NOTES_TASKS_APPROVAL_TOOL) return null
+  const input = record(approval.input)
+  const action = string(input.action) as NotesTasksAction
+  if (!NOTES_TASKS_ACTIONS.includes(action)) return null
+  const target = record(input.target)
+  const targetId = string(target.id)
+  return {
+    action,
+    kind: action.endsWith("_task") ? "task" : "note",
+    summary: approval.summary,
+    title: string(input.title) || null,
+    project: string(input.project) || null,
+    target: targetId ? { id: targetId, key: string(target.key) || null, title: string(target.title) } : null,
+    changes: array(input.changes).filter((item): item is string => typeof item === "string"),
+    preview: string(input.preview),
+    priority: typeof input.priority === "number" ? input.priority : 0,
+    priorityLabel: string(input.priority_label) || null,
+    criteria: typeof input.criteria === "number" ? input.criteria : 0,
+  }
 }

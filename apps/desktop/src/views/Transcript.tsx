@@ -5,13 +5,17 @@ import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
 import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
-import { COMPUTER_MENTION_PATH, computerConsent, connectorApproval, isUserInput } from "@/lib/userInput"
+import { computerConsent, connectorApproval, isUserInput, notesTasksConsent, parseKybernMention } from "@/lib/userInput"
+import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, type AgentItemTool, type AgentNoteResult, type AgentTaskResult } from "@/lib/agentItemTools"
+import { AgentItemCard } from "./AgentItemCard"
+import { openNote } from "@/state/notes"
+import { openTask } from "@/state/tasks"
 // Transcript pane:
 // centered 46rem column, user bubbles at 80% width, a cohesive live-work group,
 // settled "Worked for" disclosure, markdown answers with a tiny action footer,
 // and the "Edited N files" card.
 
-import { memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { createContext, memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { FileDiffBody } from "@/components/kybern/DiffView"
@@ -61,6 +65,7 @@ import {
   GitHubIcon,
   GlobeIcon,
   HammerIcon,
+  ListChecksIcon,
   McpIcon,
   NoteIcon,
   PanelRightCloseIcon,
@@ -124,6 +129,8 @@ interface AgentActivityDetail {
 interface SettledWorkPresentation {
   agentBlocks: Block[]
   disclosureBlocks: Block[]
+  /** The notes and tasks this turn's agent filed or changed, latest write per item. */
+  itemWrites: { id: string; result: AgentNoteResult | AgentTaskResult }[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
 }
@@ -167,10 +174,20 @@ function settledWorkPresentation(blocks: readonly Block[], tasks: readonly Runti
     ) agentBlocks.push(block)
     else disclosureBlocks.push(block)
   }
+  const writes = new Map<string, { id: string; result: AgentNoteResult | AgentTaskResult }>()
+  for (const block of hierarchy.roots) {
+    if (block.kind !== "tool" || !block.complete || block.isError || !agentItemTool(block.call.name)?.write) continue
+    const result = agentItemWriteResult(parseAgentItemResult(block.output))
+    if (!result) continue
+    const key = `${result.kind}:${result.id}`
+    writes.delete(key)
+    writes.set(key, { id: block.call.id, result })
+  }
 
   return {
     agentBlocks,
     disclosureBlocks,
+    itemWrites: [...writes.values()],
     tasksByToolCall,
     childrenByParent: hierarchy.childrenByParent,
   }
@@ -760,13 +777,15 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                   </CollapsibleTrigger>
                   <CollapsiblePanel>
                     <div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
-                      <WorkRows
-                        blocks={settledWork.disclosureBlocks}
-                        tasksByToolCall={settledWork.tasksByToolCall}
-                        childrenByParent={settledWork.childrenByParent}
-                        compact
-                        onOpenAgentActivity={onOpenAgentActivity}
-                      />
+                      <ItemCardsBelowAnswer.Provider value={true}>
+                        <WorkRows
+                          blocks={settledWork.disclosureBlocks}
+                          tasksByToolCall={settledWork.tasksByToolCall}
+                          childrenByParent={settledWork.childrenByParent}
+                          compact
+                          onOpenAgentActivity={onOpenAgentActivity}
+                        />
+                      </ItemCardsBelowAnswer.Provider>
                     </div>
                   </CollapsiblePanel>
                 </Collapsible>
@@ -794,6 +813,12 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
               <p className="chat-paint-host text-muted-foreground" style={TEXT}>
                 Stopped.
               </p>
+            )}
+
+            {settledWork.itemWrites.length > 0 && (
+              <div className="chat-paint-host mt-2 space-y-1.5" data-agent-items>
+                {settledWork.itemWrites.map((write) => <AgentItemCard key={write.id} result={write.result} style={CHAT_FONT} inset={false} />)}
+              </div>
             )}
 
             {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast && settled} />}
@@ -963,6 +988,15 @@ function CollaborationMessageNotice({ text }: { text: string }) {
   </div>
 }
 
+/** A sent note or task chip opens its page; plugins and `@Computer` are plain chips. */
+function mentionToken(part: Extract<ContentPart, { type: "mention" }>): InlineTokenValue {
+  const target = parseKybernMention(part.path)
+  const title = part.display_name ?? part.name
+  if (target?.kind === "note") return { kind: "note", label: `Open ${title || "note"}`, onClick: () => openNote(target.id) }
+  if (target?.kind === "task") return { kind: "task", label: `Open ${title || "task"}`, onClick: () => openTask(target.id) }
+  return target?.kind === "computer" ? "computer" : "plugin"
+}
+
 function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: string }) {
   // Structured parts (skills, plugin and file mentions) sit inline in the
   // message at the position they were typed, so the bubble is rebuilt as one
@@ -996,7 +1030,8 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
         if (!token) continue
         tokens.set(token, p.type === "thread_reference"
           ? { kind: "thread", label: `Open ${p.title || "referenced thread"}`, onClick: () => void openThreadReference(p.thread_id) }
-          : p.type === "skill" ? "skill" : p.type === "mention" ? (p.path === COMPUTER_MENTION_PATH ? "computer" : "plugin") : "file")
+          : p.type === "mention" ? mentionToken(p)
+          : p.type === "skill" ? "skill" : "file")
         text += token
       }
     }
@@ -1044,9 +1079,13 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
 }
 
 function workIcon(kind: ToolVisualKind, isError: boolean) {
-  if (isError && !["github", "web", "mcp", "skill", "computer"].includes(kind))
+  if (isError && !["github", "web", "mcp", "skill", "computer", "note", "task"].includes(kind))
     return <CircleAlertIcon className="size-4 text-muted-foreground/50" />
   switch (kind) {
+    case "note":
+      return <NoteIcon className="size-3.5" />
+    case "task":
+      return <ListChecksIcon className="size-3.5" />
     case "github":
       return <GitHubIcon className="size-3.5" />
     case "web":
@@ -1146,6 +1185,9 @@ function approvalRowText(approval: ApprovalRequest, decision: { decision: string
   }
   if (isUserInput(approval))
     return decision ? (decision.decision === "deny" ? "Input request declined" : "Answers submitted") : "Waiting for your input"
+  const notesTasks = notesTasksConsent(approval)
+  if (notesTasks && notesTasks.summary)
+    return `${decision ? (decision.decision === "deny" ? "Declined: " : "Allowed: ") : "Waiting to allow: "}${notesTasks.summary}`
   return `${decision ? (decision.decision === "deny" ? "Declined " : "Approved ") : "Waiting to approve "}${approval.summary || approval.tool_name}`
 }
 
@@ -1179,6 +1221,7 @@ function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string
       block.complete &&
       !block.isError &&
       !isAgentLaunchBlock(block, linkedTask) &&
+      !agentItemTool(block.call.name)?.write &&
       (!linkedTask || !isRuntimeTaskActive(linkedTask))
     ) {
       tools.push(block)
@@ -1428,6 +1471,9 @@ const WorkRow = memo(function WorkRow({
   }
 })
 
+/** Inside a settled turn the item cards sit under the answer, so rows skip their own. */
+const ItemCardsBelowAnswer = createContext(false)
+
 function ToolRow({
   block,
   task,
@@ -1444,15 +1490,23 @@ function ToolRow({
   showTimestamp?: boolean
 }) {
   const [open, setOpen] = useTranscriptRowState("open", false)
+  const cardsBelowAnswer = useContext(ItemCardsBelowAnswer)
   const active = !!task && isRuntimeTaskActive(task)
-  const { activity, visual, surface, screenshots, label, hasOutput } = useMemo(() => {
+  const { activity, visual, surface, screenshots, label, hasOutput, item, itemWrite } = useMemo(() => {
     const activity = toolLine(block.call, block.complete && !active)
     const visual = toolVisualKind(block.call, activity)
     const surface = toolSurface(block.call, block.output)
+    const item = agentItemTool(block.call.name)
+    const itemResult = item && block.complete && !block.isError ? parseAgentItemResult(block.output) : null
+    // A settled write shows its card in place of the raw result.
+    const itemWrite = item?.write ? agentItemWriteResult(itemResult) : null
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
-    const label = surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
-    return { activity, visual, surface, screenshots, label, hasOutput: hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted }
+    const label = item
+      ? agentItemLabel(item, block.call.input, itemResult, block.complete && !active, block.isError)
+      : surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
+    const hasOutput = !itemWrite && (hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted)
+    return { activity, visual, surface, screenshots, label, hasOutput, item, itemWrite }
   }, [block, active])
   const childBlocks = childrenByParent.get(block.call.id) ?? []
   const hasChildActivity = childBlocks.length > 0
@@ -1495,6 +1549,7 @@ function ToolRow({
           ? <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/tool-row:text-foreground" />
           : canExpand && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
       </button>
+      {itemWrite && !cardsBelowAnswer && <AgentItemCard result={itemWrite} style={CHAT_FONT} />}
       {canExpand && (
         <DisclosureRegion open={open} contentClassName="ms-[1.375rem] min-w-0 pt-1.5">
           {hasChildActivity && (
@@ -1510,7 +1565,7 @@ function ToolRow({
           {hasOutput && (
             <section aria-label={hasChildActivity ? "Result" : undefined}>
               {hasChildActivity && <p className="pb-1 font-system-ui text-[11px] leading-5 text-muted-foreground/45">Result</p>}
-              <ToolResult block={block} surface={surface} screenshots={screenshots} />
+              <ToolResult block={block} surface={surface} item={item} screenshots={screenshots} />
             </section>
           )}
         </DisclosureRegion>
@@ -1520,7 +1575,7 @@ function ToolRow({
 }
 
 /** Mounted by DisclosureRegion only while open or completing its exit. */
-function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface: ToolSurface | null; screenshots: string[] }) {
+function ToolResult({ block, surface, item = null, screenshots }: { block: ToolBlock; surface: ToolSurface | null; item?: AgentItemTool | null; screenshots: string[] }) {
   const threadId = useContext(ImageThreadContext)
   const connected = useStore((state) => state.connection.state === "open")
   useEffect(() => {
@@ -1530,7 +1585,12 @@ function ToolResult({ block, surface, screenshots }: { block: ToolBlock; surface
   useEffect(() => {
     if (connected && threadId && (block.outputOmitted || block.streamOmitted)) void hydrateToolOutput(threadId, block.call.id, block.seq)
   }, [connected, threadId, block])
-  const out = useMemo(() => surface ? surfaceOutputText(block.output) : outputText(block.output, block.stream), [surface, block.output, block.stream])
+  const out = useMemo(() => {
+    if (surface) return surfaceOutputText(block.output)
+    const text = outputText(block.output, block.stream)
+    // Notes and tasks tools answer in one line of JSON; indent it to read.
+    return item ? agentItemResultText(text) : text
+  }, [surface, item, block.output, block.stream])
   if ((block.outputOmitted || block.streamOmitted) && !out.trim() && screenshots.length === 0) {
     return <p className="font-system-ui text-[13px] text-muted-foreground/70">Loading the saved result.</p>
   }

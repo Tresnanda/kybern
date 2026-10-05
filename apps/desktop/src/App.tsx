@@ -105,7 +105,9 @@ function Workspace() {
   // Notes use the whole card: no panel there, while the sidebar preference waits for the next page.
   const panelless = selected.kind === "notes"
   const panelOpen = sidebarOpen && !panelless
-  const rightOpen = useStore((s) => s.rightOpen)
+  // Notes and Tasks are full pages with no dock. The preference is kept, so the dock returns on threads.
+  const dockless = selected.kind === "notes" || selected.kind === "tasks"
+  const rightOpen = useStore((s) => s.rightOpen) && !dockless
   const settingsOpen = useStore((s) => s.settingsOpen)
   const reducedMotion = useReducedMotion()
   const [keyboardNavigation, setKeyboardNavigation] = useState(false)
@@ -117,7 +119,7 @@ function Workspace() {
   useUsageLimitsSync()
 
   useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && !panelless })
-  useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen })
+  useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen && !dockless })
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })
   // On the Notes page ⌘N starts a note in the section you are in; everywhere else, a thread.
   useHotkey("mod+n", () => {

@@ -1,11 +1,11 @@
-// Inline token for a `$skill`, `@plugin`, `@thread`, `@file` or `@image1` inside message text.
+// Inline token for a `$skill`, `@plugin`, `@thread`, `@note`, `@task`, `@file` or `@image1` inside message text.
 // Tokens read as colored text led by an icon, with no box behind them. The raw
 // sigil and a thread's quotes are dropped for display. Sent bubbles render this
 // component; the composer builds the same markup with `InlineTokenIcon` and
 // `inlineTokenLabel` so the two always match.
 
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
-import { DeviceLaptopIcon, MessageCircleIcon, PluginIcon, SkillCubeIcon } from "@/lib/kit/icons"
+import { DeviceLaptopIcon, ListChecksIcon, MessageCircleIcon, NoteIcon, PluginIcon, SkillCubeIcon } from "@/lib/kit/icons"
 import { inlineTokenLabel, type InlineTokenKind } from "@/lib/inlineTokenLabel"
 import { cn } from "@/lib/utils"
 
@@ -27,6 +27,10 @@ export function InlineTokenIcon({ kind, text }: { kind: InlineTokenKind; text: s
       return <DeviceLaptopIcon aria-hidden />
     case "thread":
       return <MessageCircleIcon aria-hidden />
+    case "note":
+      return <NoteIcon aria-hidden />
+    case "task":
+      return <ListChecksIcon aria-hidden />
     case "attachment":
       return <FileEntryIcon pathValue={text.slice(1)} kind="file" mimeType={text.startsWith("@image") ? "image/png" : null} />
     default:

@@ -1,6 +1,8 @@
 // The "/" menu: what can be inserted and how it is found by typing.
 import type { Editor, Range } from "@tiptap/core"
 
+import { chooseImageFiles } from "./noteImage.ts"
+
 export type SlashIcon =
   | "text"
   | "heading1"
@@ -12,6 +14,7 @@ export type SlashIcon =
   | "quote"
   | "code"
   | "divider"
+  | "image"
 
 export interface SlashItem {
   id: string
@@ -38,6 +41,24 @@ export const SLASH_ITEMS: SlashItem[] = [
   { id: "code", title: "Code block", shortcut: "```", keywords: ["pre", "snippet", "```"], icon: "code", run: (e, r) => at(e, r).toggleCodeBlock().run() },
   { id: "divider", title: "Divider", shortcut: "---", keywords: ["hr", "rule", "line", "separator", "---"], icon: "divider", run: (e, r) => at(e, r).setHorizontalRule().run() },
 ]
+
+/** Adds an image from a file, where the editor can keep images (notes, quick capture, task descriptions). */
+export const SLASH_IMAGE_ITEM: SlashItem = {
+  id: "image",
+  title: "Image",
+  shortcut: "",
+  keywords: ["picture", "photo", "screenshot", "upload", "file", "img"],
+  icon: "image",
+  run: (e, r) => {
+    at(e, r).run()
+    chooseImageFiles(e)
+  },
+}
+
+/** The "/" menu for one editor: the blocks, and Image where images can be kept. */
+export function slashItemsFor(canAddImages: boolean): readonly SlashItem[] {
+  return canAddImages ? [...SLASH_ITEMS, SLASH_IMAGE_ITEM] : SLASH_ITEMS
+}
 
 /** Items for what has been typed after "/": title matches first, then keywords. */
 export function filterSlashItems(query: string, items: readonly SlashItem[] = SLASH_ITEMS): SlashItem[] {

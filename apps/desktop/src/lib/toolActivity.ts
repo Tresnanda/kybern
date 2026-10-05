@@ -2,6 +2,7 @@
 // Keeps the wire payload untouched while deriving a concise, tense-aware activity row.
 
 import type { JsonValue, ToolCall } from "@/protocol"
+import { agentItemLabel, agentItemTool } from "./agentItemTools"
 import { toolSurface } from "./toolSurface"
 
 type JsonRecord = Record<string, unknown>
@@ -260,6 +261,8 @@ function titleCaseWords(value: string): string {
 export function humanizeToolName(name: string): string {
   const lower = name.toLowerCase()
   if (lower === "web__run") return "Web search"
+  const item = agentItemTool(name)
+  if (item) return item.kind === "note" ? "Notes" : "Tasks"
   const namespaced = name.split("__").filter(Boolean)
   const slashNamespaced = name.startsWith("mcp:")
     ? name.slice(4).split("/").filter(Boolean)
@@ -662,6 +665,9 @@ export function toolLine(call: ToolCall, complete = true): ToolActivityLine {
   const readableName = namespaced ? humanizeToolName(name) : ""
   const input = call.input
 
+  const item = agentItemTool(name)
+  if (item) return line("other", "", complete, false, agentItemLabel(item, input, null, complete, false))
+
   if (!WEB_SEARCH_TOOLS.has(tool) && (matchesTool(COMMAND_TOOLS, tool, leaf) || leaf === "execcommand")) {
     const actions = commandActions(input)
     for (const action of actions) {
@@ -783,6 +789,8 @@ export type ToolVisualKind =
   | "mcp"
   | "skill"
   | "computer"
+  | "note"
+  | "task"
 
 /** Pick a recognizable 16px glyph before falling back to the activity kind. */
 export function toolVisualKind(
@@ -797,6 +805,8 @@ export function toolVisualKind(
     inputString(call.input, ["command", "cmd"])
   if (name.includes("github") || isGitCommand(rawCommand)) return "github"
   if (toolSurface(call)?.kind === "computer") return "computer"
+  const item = agentItemTool(call.name)
+  if (item) return item.kind
   if (/browser|playwright|computer|cua[_:]/.test(name)) return "web"
   if (name === "web__run" || WEB_SEARCH_TOOLS.has(tool) || activity.kind === "fetch")
     return "web"
@@ -830,7 +840,7 @@ export interface ToolCallSummary {
   entryCount: number
 }
 
-type SummaryCategory = "command" | "edit" | "read" | "search" | "agent" | "computer" | "tool"
+type SummaryCategory = "command" | "edit" | "read" | "search" | "agent" | "computer" | "item" | "itemWrite" | "tool"
 
 const SUMMARY_ORDER: readonly SummaryCategory[] = [
   "command",
@@ -839,6 +849,8 @@ const SUMMARY_ORDER: readonly SummaryCategory[] = [
   "search",
   "agent",
   "computer",
+  "item",
+  "itemWrite",
   "tool",
 ]
 
@@ -856,7 +868,7 @@ export function summarizeToolCalls(
   const fileKeys = new Map<SummaryCategory, Set<string>>()
   for (const item of items) {
     const activity = toolLine(item.call, true)
-    const category = toolSurface(item.call)?.kind === "computer" ? "computer" : summaryCategory(activity.kind)
+    const category = toolSurface(item.call)?.kind === "computer" ? "computer" : agentItemCategory(item.call) ?? summaryCategory(activity.kind)
     if (category === "read" || category === "edit") {
       const keys = summaryFileKeys(item.call, activity)
       if (keys.length > 0) {
@@ -880,6 +892,14 @@ export function summarizeToolCalls(
     visual: toolVisualKind(items[0]!.call),
     entryCount: items.length,
   }
+}
+
+/** Kybern notes and tasks: searches count with searches, the rest as items read or changed. */
+function agentItemCategory(call: ToolCall): SummaryCategory | null {
+  const tool = agentItemTool(call.name)
+  if (!tool) return null
+  if (tool.write) return "itemWrite"
+  return tool.name === "notes_search" || tool.name === "tasks_list" ? "search" : "item"
 }
 
 function summaryCategory(kind: ToolActivityKind): SummaryCategory {
@@ -930,6 +950,10 @@ function summaryPhrase(category: SummaryCategory, count: number): string {
       return `delegated ${count} ${plural("task")}`
     case "computer":
       return `used your computer ${count} ${plural("time")}`
+    case "item":
+      return `read ${count} ${plural("note or task", "notes and tasks")}`
+    case "itemWrite":
+      return `changed ${count} ${plural("note or task", "notes and tasks")}`
     case "tool":
       return `used ${count} ${plural("tool")}`
   }

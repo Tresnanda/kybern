@@ -33,6 +33,7 @@ import type { NoteImageHost } from "./noteImage"
 import type { NoteTaskContext } from "./noteTaskActions"
 import { NoteToolbar } from "./NoteToolbar"
 import { SaveStatus } from "./SaveStatus"
+import { CreatedByThread } from "../tasks/CreatedBy"
 import { useNoteSession } from "./useNoteSession"
 
 // The editor itself (Tiptap and its extensions) is its own chunk.
@@ -430,6 +431,12 @@ function MetaLine({ summary, threadId, status }: { summary: NoteSummary | null; 
         <>
           {dot}
           <span>Pinned</span>
+        </>
+      )}
+      {summary.created_by_thread && (
+        <>
+          {dot}
+          <CreatedByThread threadId={summary.created_by_thread} className="note-meta-from" />
         </>
       )}
       {dot}

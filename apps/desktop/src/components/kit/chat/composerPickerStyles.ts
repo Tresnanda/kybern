@@ -30,6 +30,9 @@ export const COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME = `${COMPOSER_TOOLB
 
 export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 ${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
 
+/** Pressable chip in the tray above a composer: the toolbar capsule, capped so long branch names truncate. */
+export const COMPOSER_TRAY_CHIP_CLASS_NAME = `${COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} max-w-64 min-w-0 shrink`;
+
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
   "[--available-height:min(20rem,55vh)]";

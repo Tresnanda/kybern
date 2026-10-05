@@ -16,7 +16,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { FileDiffCard } from "@/components/kybern/DiffView"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { plural } from "@/lib/format"
-import { ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, UsersIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
+import { AppsIcon, ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, ListChecksIcon, NoteIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, UsersIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
@@ -28,6 +28,8 @@ import { ActivityPane } from "./Activity"
 import { CollaborationPane } from "./Collaboration"
 import { ExplorerPane } from "./Explorer"
 import { TerminalWorkspace } from "./Terminal"
+import { NotesDockPanel } from "./dock/NotesDockPanel"
+import { TasksDockPanel } from "./dock/TasksDockPanel"
 import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME, DOCK_HEADER_ICON_BUTTON_CLASS } from "./chrome"
 
 const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} dock-tab-shape inline-flex min-w-0 items-center !gap-0 !px-0`
@@ -37,9 +39,13 @@ const DOCK_PANELS = [
   { id: "activity", label: "Activity", Icon: WorkflowIcon },
   { id: "changes", label: "Diff", Icon: DiffIcon },
   { id: "terminal", label: "Terminal", Icon: TerminalIcon },
-  { id: "artifacts", label: "Artifacts", Icon: FoldersIcon },
+  { id: "artifacts", label: "Artifacts", Icon: AppsIcon },
   { id: "explorer", label: "Explorer", Icon: FoldersIcon },
+  { id: "notes", label: "Notes", Icon: NoteIcon },
+  { id: "tasks", label: "Tasks", Icon: ListChecksIcon },
 ] as const
+/** Panes that follow the project (or Global) rather than a thread, so they work on Home too. */
+const THREADLESS_TABS: readonly RightTab[] = ["notes", "tasks"]
 
 const ENV_ROW =
   "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground)] outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
@@ -123,9 +129,20 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
       <div className="relative min-h-0 flex-1">
         {tabs.length === 0 ? (
           <div className="flex h-full items-center justify-center p-6 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">Add a panel with +.</div>
-        ) : !threadId ? (
-          <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its activity, changes, and terminal.</div>
         ) : (
+          <>
+            {tabs.includes("notes") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "notes" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "notes"} aria-hidden={tab !== "notes"}>
+              <NotesDockPanel threadId={threadId} active={workspaceActive && tab === "notes"} />
+            </div>}
+            {tabs.includes("tasks") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "tasks" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "tasks"} aria-hidden={tab !== "tasks"}>
+              <TasksDockPanel threadId={threadId} active={workspaceActive && tab === "tasks"} />
+            </div>}
+            {!threadId && tab && !THREADLESS_TABS.includes(tab) && (
+              <div className="absolute inset-0 z-[1] flex items-center justify-center p-6 text-center text-sm text-muted-foreground">Open a thread to see its activity, changes, and terminal.</div>
+            )}
+          </>
+        )}
+        {tabs.length > 0 && threadId && (
           <>
             {tabs.includes("collaboration") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "collaboration" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "collaboration"} aria-hidden={tab !== "collaboration"}>
               <CollaborationPane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />

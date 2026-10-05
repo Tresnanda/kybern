@@ -1,4 +1,4 @@
-/* Tasks: list, board, task page and the Send sheet.
+/* Tasks: list, board, task page and its run composer.
    Five type sizes (12 meta · 13 UI · 15 reading/sheet title · 17 section · 28 display),
    tabular numerals, structure from surface steps and spacing instead of borders.
    Color lives only in status glyphs, project dots and the urgent mark. Ink steps are
@@ -26,9 +26,6 @@
   --task-card-hover: var(--task-main);
   --task-shadow-card: 0 0 0 0.5px rgb(0 0 0 / 0.09), 0 1px 2px rgb(0 0 0 / 0.05), 0 2px 6px -2px rgb(0 0 0 / 0.04);
   --task-shadow-card-hover: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 4px 14px -4px rgb(0 0 0 / 0.12);
-  --task-sheet: var(--task-main);
-  --task-shadow-sheet: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 30px 80px -10px rgb(0 0 0 / 0.28), 0 10px 24px rgb(0 0 0 / 0.08);
-  --task-scrim: rgb(30 30 30 / 0.18);
   --task-check-on: rgb(0 0 0 / 0.36);
   --task-solid: var(--foreground);
   --task-on-solid: var(--task-main);
@@ -55,9 +52,6 @@
   --task-card-hover: color-mix(in srgb, var(--task-main), #fff 5.5%);
   --task-shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.035), 0 1px 2px rgb(0 0 0 / 0.25);
   --task-shadow-card-hover: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 6px 18px -6px rgb(0 0 0 / 0.5);
-  --task-sheet: color-mix(in srgb, var(--task-main), #fff 5%);
-  --task-shadow-sheet: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 30px 80px -10px rgb(0 0 0 / 0.7), 0 10px 24px rgb(0 0 0 / 0.35);
-  --task-scrim: rgb(0 0 0 / 0.42);
   --task-check-on: rgb(255 255 255 / 0.42);
   --task-seg-on: var(--task-sel);
   --task-seg-on-shadow: none;
@@ -346,6 +340,48 @@
 .tk-nav-add:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
   outline-offset: 0;
+}
+/* Global is a scope, not a status: a little apart from the views above it. */
+.tk-nav-global {
+  margin-top: 8px;
+}
+/* The Projects heading folds the list down to pinned projects and the one being viewed. */
+.tk-nav-disclose {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 -3px -4px;
+  padding: 0 4px;
+  border-radius: 5px;
+  color: inherit;
+  cursor: pointer;
+  transition: color var(--duration-quick) var(--ease-out), scale var(--duration-quick) var(--ease-out);
+}
+.tk-nav-disclose:hover {
+  color: var(--task-fg2);
+}
+.tk-nav-disclose:active {
+  scale: 0.96;
+}
+.tk-nav-disclose:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
+  outline-offset: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tk-nav-disclose {
+    transition: color var(--duration-quick) var(--ease-out);
+  }
+  .tk-nav-disclose:active {
+    scale: none;
+  }
+}
+/* Pinned projects carry a quiet pin, as pinned threads do. */
+.tk-nav-row .pin {
+  flex: none;
+  margin-inline-end: -3px;
+  color: var(--task-fg3);
+  opacity: 0.7;
 }
 .tk-foot {
   display: flex;
@@ -940,7 +976,8 @@
 .tk-dcol {
   width: min(620px, 100% - 48px);
   margin: 0 auto;
-  padding: 48px 0 140px;
+  /* Room for the dock at the foot, so the last lines scroll clear of it. */
+  padding: 48px 0 max(140px, calc(var(--tk-dock-h, 0px) + 32px));
 }
 .tk-dtitle {
   display: block;
@@ -1199,85 +1236,136 @@
   background: var(--task-fill);
 }
 
-.tk-follow {
+/* The dock at the page's foot: nothing, a draft pill, the one-line follow-up field,
+   or the composer. It floats over the description; the column's bottom padding
+   follows its height (--tk-dock-h) so nothing stays covered. */
+.tk-dock {
   position: absolute;
+  z-index: 2;
   inset-inline: 0;
   bottom: 0;
-  padding: 28px 0 20px;
-  background: linear-gradient(to bottom, transparent, var(--task-main) 28px);
+  padding-bottom: 16px;
   pointer-events: none;
 }
-.tk-follow > * {
+.tk-dock[data-filled] {
+  padding-top: 28px;
+  background: linear-gradient(to bottom, transparent, var(--task-main) 28px);
+}
+.tk-dock-col {
+  display: grid;
+  width: min(660px, 100% - 32px);
+  margin: 0 auto;
   pointer-events: auto;
 }
-.tk-pending {
+.tk-dock-col > * {
+  min-width: 0;
+  grid-area: 1 / 1;
+  align-self: end;
+}
+.tk-dock-line {
   display: flex;
-  width: min(620px, 100% - 48px);
-  margin: 0 auto 8px;
-  align-items: baseline;
-  gap: 8px;
+  width: calc(100% * 14 / 15);
+  min-height: 24px;
+  margin: 0 auto 6px;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
   font-size: 12px;
   color: var(--task-fg3);
 }
-.tk-pending span {
+.tk-dock-line > .lbl {
+  flex: none;
+  padding-inline-end: 2px;
+}
+.tk-dock-line > .t {
   min-width: 0;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tk-dock-pill {
+  display: flex;
+  width: fit-content;
+  height: 30px;
+  margin: 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 10px;
+  border-radius: 999px;
+  background: var(--task-card);
+  box-shadow: var(--task-shadow-card);
+  font-size: 12px;
+  color: var(--task-fg2);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: box-shadow var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out), scale var(--duration-micro) var(--ease-out);
+}
+.tk-dock-pill:hover {
+  box-shadow: var(--task-shadow-card-hover);
+  color: var(--task-fg1);
+}
+.tk-dock-pill:active {
+  scale: 0.96;
+}
+.tk-dock-pill:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
+  outline-offset: 1px;
+}
+.tk-dock-pill b {
+  font-weight: 500;
+  color: var(--task-fg);
+}
+.tk-dock-pill + .tk-fbox {
+  margin-top: 8px;
+}
+/* The follow-up field, collapsed: reads like a composer waiting for a click. */
 .tk-fbox {
   display: flex;
-  width: min(620px, 100% - 48px);
-  min-height: 48px;
-  margin: 0 auto;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 9px 9px 9px 16px;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
   border-radius: 14px;
   background: var(--task-fill);
   box-shadow: inset 0 0 0 0.5px var(--task-hair);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--task-fg3);
+  text-align: start;
+  cursor: text;
+  transition: box-shadow var(--duration-quick) var(--ease-out);
 }
 :root:not(.dark) .tk-fbox {
   background: var(--task-main);
   box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 2px 8px -2px rgb(0 0 0 / 0.06);
 }
-.tk-fbox textarea {
-  min-width: 0;
-  flex: 1;
-  align-self: center;
-  max-height: 160px;
-  resize: none;
-  background: transparent;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--task-fg);
+.tk-fbox:focus-visible {
   outline: none;
-}
-.tk-fbox textarea::placeholder {
-  color: var(--task-fg3);
-}
-.tk-fbox:focus-within {
   box-shadow: inset 0 0 0 0.5px var(--task-hair), 0 0 0 1.5px color-mix(in srgb, var(--ring) 40%, transparent);
 }
-.tk-send-round {
-  display: grid;
-  width: 30px;
-  height: 30px;
+.tk-fbox .mk {
+  display: flex;
   flex: none;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--task-fill);
-  color: var(--task-fg3);
-  cursor: pointer;
-  transition: background-color var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out);
+  color: var(--task-fg2);
 }
-.tk-send-round[data-ready] {
-  background: var(--task-solid);
-  color: var(--task-on-solid);
+.tk-fbox .t {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.tk-send-round:disabled {
-  cursor: default;
+.tk-fbox .tag {
+  flex: none;
+  font-size: 12px;
+  color: var(--task-fg2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tk-dock-pill:active {
+    scale: none;
+  }
 }
 
 .tk-dside {
@@ -1347,11 +1435,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tk-side-sep {
-  height: 1px;
-  margin: 14px 0;
-  background: var(--task-hair);
-}
 .tk-props-inline {
   display: none;
   flex-wrap: wrap;
@@ -1367,305 +1450,6 @@
   }
   .tk-props-inline {
     display: flex;
-  }
-}
-
-/* ---------- Send sheet ---------- */
-
-.tk-sheet-layer {
-  position: fixed;
-  z-index: 45;
-  top: var(--app-titlebar-height, 46px);
-  inset-inline-start: var(--app-rail-width, 52px);
-  inset-inline-end: var(--app-frame-inset, 8px);
-  bottom: var(--app-frame-inset, 8px);
-  overflow: hidden;
-  border-radius: 12px;
-}
-.tk-scrim {
-  position: absolute;
-  inset: 0;
-  background: var(--task-scrim);
-}
-.tk-sheet {
-  position: absolute;
-  top: 0;
-  inset-inline-start: 50%;
-  display: flex;
-  width: min(560px, 100% - 32px);
-  max-height: calc(100% - 24px);
-  flex-direction: column;
-  margin-inline-start: calc(min(560px, 100% - 32px) / -2);
-  padding: 22px 24px 20px;
-  border-radius: 0 0 14px 14px;
-  background: var(--task-sheet);
-  box-shadow: var(--task-shadow-sheet);
-  color: var(--task-fg1);
-  font-size: 13px;
-}
-.tk-sheet-body {
-  min-height: 0;
-  flex: 1;
-  overflow-y: auto;
-  margin: 0 -24px;
-  padding: 0 24px;
-}
-.tk-sheet h1 {
-  font-size: 15px;
-  line-height: 20px;
-  font-weight: 600;
-  letter-spacing: -0.006em;
-  color: var(--task-fg);
-}
-.tk-sheet .subt {
-  margin-top: 3px;
-  overflow: hidden;
-  font-size: 13px;
-  color: var(--task-fg3);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tk-summary {
-  display: flex;
-  width: 100%;
-  height: 40px;
-  margin-top: 18px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 12px;
-  border-radius: 9px;
-  background: var(--task-fill);
-  font-size: 13px;
-  color: var(--task-fg);
-  text-align: start;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.tk-summary .mk {
-  display: flex;
-  color: var(--task-fg1);
-}
-.tk-summary .q {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--task-fg2);
-}
-.tk-summary .chev {
-  margin-inline-start: auto;
-  color: var(--task-fg3);
-  transition: rotate var(--duration-fast) var(--ease-out);
-}
-.tk-summary[aria-expanded="true"] .chev {
-  rotate: 180deg;
-}
-.tk-summary:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
-}
-.tk-config {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  margin-top: 6px;
-  padding: 4px 12px;
-  border-radius: 9px;
-  background: var(--task-fill);
-  row-gap: 0;
-}
-.tk-config .k {
-  display: flex;
-  height: 32px;
-  align-items: center;
-  font-size: 12px;
-  color: var(--task-fg3);
-}
-.tk-config .v {
-  display: flex;
-  min-width: 0;
-  height: 28px;
-  margin: 2px 0 2px -6px;
-  align-items: center;
-  gap: 8px;
-  justify-self: start;
-  padding: 0 6px;
-  border-radius: 6px;
-  color: var(--task-fg1);
-  white-space: nowrap;
-  cursor: pointer;
-}
-.tk-config .v:hover,
-.tk-config .v[data-popup-open] {
-  background: var(--task-fill);
-}
-.tk-config .v .q {
-  color: var(--task-fg3);
-}
-.tk-config .v:disabled {
-  cursor: default;
-  color: var(--task-fg2);
-  background: transparent;
-}
-.tk-slabel {
-  display: flex;
-  margin: 22px 0 6px;
-  align-items: baseline;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--task-fg);
-}
-.tk-slabel .r {
-  margin-inline-start: auto;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--task-fg3);
-  font-variant-numeric: tabular-nums;
-}
-.tk-slabel button.r {
-  border-radius: 5px;
-  cursor: pointer;
-}
-.tk-slabel button.r:hover {
-  color: var(--task-fg1);
-}
-.tk-crow {
-  display: flex;
-  width: 100%;
-  height: 30px;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--task-fg1);
-  text-align: start;
-  cursor: pointer;
-}
-.tk-crow[data-suggested] {
-  color: var(--task-fg2);
-}
-.tk-crow .box {
-  display: grid;
-  width: 16px;
-  height: 16px;
-  flex: none;
-  place-items: center;
-  border-radius: 4.5px;
-  box-shadow: inset 0 0 0 1.5px var(--task-fg4);
-}
-.tk-crow[aria-checked="true"] .box {
-  background: var(--task-solid);
-  box-shadow: none;
-  color: var(--task-on-solid);
-}
-.tk-crow:focus-visible {
-  outline: none;
-}
-.tk-crow:focus-visible .box {
-  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
-  outline-offset: 1px;
-}
-.tk-crow .n {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tk-crow .sz {
-  font-size: 12px;
-  color: var(--task-fg3);
-  font-variant-numeric: tabular-nums;
-}
-.tk-sublabel {
-  display: flex;
-  height: 24px;
-  margin-top: 6px;
-  align-items: center;
-  font-size: 12px;
-  color: var(--task-fg3);
-}
-.tk-prompt {
-  display: block;
-  width: 100%;
-  min-height: 120px;
-  max-height: 40vh;
-  resize: none;
-  padding: 12px 14px;
-  border-radius: 9px;
-  background: var(--task-fill);
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--task-fg1);
-  outline: none;
-  field-sizing: content;
-}
-.tk-prompt:focus-visible {
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring) 40%, transparent);
-}
-.tk-sfoot {
-  display: flex;
-  flex: none;
-  margin-top: 20px;
-  align-items: center;
-  gap: 8px;
-}
-.tk-sfoot .note {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--task-fg3);
-}
-.tk-b {
-  display: inline-flex;
-  height: 30px;
-  flex: none;
-  align-items: center;
-  padding: 0 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--task-fg1);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color var(--duration-quick) var(--ease-out), scale var(--duration-micro) var(--ease-out);
-}
-.tk-b:hover {
-  background: var(--task-fill);
-}
-.tk-b:active {
-  scale: 0.96;
-}
-.tk-b:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
-  outline-offset: 1px;
-}
-.tk-b[data-variant="alt"] {
-  background: var(--task-fill);
-}
-.tk-b[data-variant="alt"]:hover {
-  background: var(--task-sel);
-}
-.tk-b[data-variant="primary"] {
-  padding: 0 18px;
-  background: var(--task-solid);
-  color: var(--task-on-solid);
-}
-.tk-b[data-variant="primary"]:hover {
-  background: color-mix(in srgb, var(--task-solid) 88%, transparent);
-}
-.tk-b:disabled {
-  opacity: 0.45;
-  pointer-events: none;
-}
-.tk-error {
-  margin-top: 12px;
-  font-size: 12px;
-  color: var(--destructive);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tk-b:active {
-    scale: none;
   }
 }
 
@@ -1736,4 +1520,18 @@
   border-radius: 50%;
   background: var(--task-run);
   pointer-events: none;
+}
+
+/* An agent filed this task: the bot mark after the title, its thread in the tooltip. */
+.tk-row .ag {
+  display: flex;
+  flex: none;
+  align-items: center;
+  margin-inline: 2px 6px;
+  color: var(--task-fg3);
+}
+.tk-card .r1 .ag {
+  margin-block: -2px;
+  margin-inline-start: -3px;
+  color: var(--task-fg3);
 }

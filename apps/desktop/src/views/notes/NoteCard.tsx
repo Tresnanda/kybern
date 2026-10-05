@@ -14,6 +14,7 @@ import { ageLabel, noteTitle, purgeLabel, splitMatches } from "@/state/notesMode
 import { useStore } from "@/state/store"
 import { useTaskRef } from "@/state/tasks"
 import { standaloneTaskKeys } from "@/state/tasksModel"
+import { CreatedByThread } from "../tasks/CreatedBy"
 import { TaskStatusGlyph } from "../tasks/TaskGlyphs"
 import { NoteMenuItems } from "./NoteMenu"
 import { NoteThumb } from "./NoteThumb"
@@ -101,6 +102,7 @@ function Meta({ note, scope, now }: { note: NoteSummary; scope: NoteScopeInfo; n
           </span>
         </span>
       )}
+      {note.created_by_thread && <CreatedByThread threadId={note.created_by_thread} variant="glyph" interactive={false} className="note-agent" />}
     </>
   )
 }
@@ -160,6 +162,7 @@ function NoteListRowView({ note, scope, tabStop, now, query, snippet, onPurge }:
           <span className="truncate">
             <Highlight text={noteTitle(note)} query={query} />
           </span>
+          {note.created_by_thread && <CreatedByThread threadId={note.created_by_thread} variant="glyph" interactive={false} className="note-agent" />}
         </span>
         <span className="note-row-excerpt">{text ? <Excerpt text={text} query={query} /> : null}</span>
         {note.deleted_at ? (

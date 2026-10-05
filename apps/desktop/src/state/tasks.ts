@@ -1,6 +1,6 @@
 // Tasks data layer: the active environment's tasks (listed on connect, kept current by
 // `tasks.items.changed`, listed again after a reconnect), the actions that change them,
-// and the Tasks page's own UI state (view preferences, focus, quick add, Send sheet).
+// and the Tasks page's own UI state (view preferences, focus, quick add, the run composer).
 import { useMemo } from "react"
 import { toast } from "sonner"
 import { create } from "zustand"
@@ -25,9 +25,10 @@ import {
   type TaskPriority,
   type TaskStatus,
   type ThreadId,
+  type UserMessage,
 } from "@/protocol"
 import { activeRuntime, errorText, loadThread } from "./rpc"
-import { useStore } from "./store"
+import { useStore, type AppState } from "./store"
 import {
   DEFAULT_TASK_PREFS,
   isLiveRun,
@@ -48,8 +49,11 @@ export interface QuickAdd {
   nonce: number
 }
 
-export interface SendSheetRequest {
+/** The composer at the foot of a task's page: a new run, or a follow-up to the live one. */
+export interface RunComposerRequest {
   taskId: TaskItemId
+  kind: "run" | "followup"
+  /** Changes on every request, so asking again focuses the open composer. */
   nonce: number
 }
 
@@ -73,7 +77,7 @@ interface TasksState {
   /** The row or card with the keyboard focus. */
   focusedId: TaskItemId | null
   quickAdd: QuickAdd | null
-  sheet: SendSheetRequest | null
+  composer: RunComposerRequest | null
   menu: TaskMenuRequest | null
   /** Set when "New task" should focus the detail page's title. */
   titleFocus: TaskItemId | null
@@ -100,7 +104,7 @@ export const useTasks = create<TasksState>()(() => ({
   query: "",
   focusedId: null,
   quickAdd: null,
-  sheet: null,
+  composer: null,
   menu: null,
   titleFocus: null,
 }))
@@ -174,7 +178,7 @@ export function attachTasksFeed(client: KybernClient, ownerKey: string): () => v
       prefs: readStoredPrefs(ownerKey),
       focusedId: null,
       quickAdd: null,
-      sheet: null,
+      composer: null,
       menu: null,
     })
   }
@@ -263,6 +267,18 @@ export function setTaskFilter(filter: TaskFilter) {
   setTaskPrefs({ filter })
 }
 
+/** Pin a project to the top of the panel's Projects list, or unpin it. */
+export function setProjectPinned(projectId: ProjectId, pinned: boolean) {
+  setTaskPrefs((prefs) => {
+    const rest = prefs.pinnedProjects.filter((id) => id !== projectId)
+    return { pinnedProjects: pinned ? [...rest, projectId] : rest }
+  })
+}
+
+export function setProjectsCollapsed(collapsed: boolean) {
+  setTaskPrefs({ projectsCollapsed: collapsed })
+}
+
 export function setGroupCollapsed(key: string, collapsed: boolean) {
   setTaskPrefs((prefs) => ({ collapsed: { ...prefs.collapsed, [key]: collapsed } }))
 }
@@ -317,21 +333,34 @@ export function openRunThread(threadId: ThreadId) {
   void loadThread(threadId)
 }
 
-export function openSendSheet(taskId: TaskItemId) {
+/**
+ * Open a task's page with its composer showing: a new run, or, while a run is live,
+ * a follow-up to it. Asking again while it is open focuses it.
+ */
+export function openRunComposer(taskId: TaskItemId, kind?: RunComposerRequest["kind"]) {
   const task = getTask(taskId)
-  const run = task ? latestRun(task) : null
-  if (task && isLiveRun(run)) {
-    // One run at a time: more instructions go to the live run as a follow-up.
-    toast(`${task.key} is already running`, { description: "Send a follow-up from its page instead.", action: { label: "Open", onClick: () => openTask(taskId) } })
-    return
-  }
+  const live = task ? isLiveRun(latestRun(task)) : false
+  // One run at a time: while one is live, more instructions go to it as a follow-up.
+  const resolved = live ? "followup" : kind ?? "run"
   const selected = useStore.getState().selected
-  if (selected.kind !== "tasks") openTask(taskId)
-  useTasks.setState({ sheet: { taskId, nonce: ++nonce } })
+  if (selected.kind !== "tasks" || selected.taskId !== taskId) openTask(taskId)
+  useTasks.setState({ composer: { taskId, kind: resolved, nonce: ++nonce } })
 }
 
-export function closeSendSheet() {
-  if (useTasks.getState().sheet) useTasks.setState({ sheet: null })
+/**
+ * Leaving the task's page hides its composer; coming back shows the page at rest.
+ * Called from the workspace on every selection change (`useTasksSync`), because the
+ * environment store is swapped in after this module loads.
+ */
+export function closeRunComposerOffPage(selected: AppState["selected"]) {
+  const open = useTasks.getState().composer
+  if (open && !(selected.kind === "tasks" && selected.taskId === open.taskId)) useTasks.setState({ composer: null })
+}
+
+/** Hide the composer; its draft stays. */
+export function closeRunComposer(taskId?: TaskItemId) {
+  const open = useTasks.getState().composer
+  if (open && (!taskId || open.taskId === taskId)) useTasks.setState({ composer: null })
 }
 
 // ---- actions ----
@@ -450,7 +479,8 @@ export async function fetchTask(id: TaskItemId): Promise<TaskItem | null> {
 
 export const isConflict = (error: unknown): boolean => error instanceof RpcCallError && error.code === codes.CONFLICT
 
-export async function deleteTask(id: TaskItemId): Promise<boolean> {
+/** Delete a task (it stays restorable); `quiet` skips the toast when the caller offers its own way back. */
+export async function deleteTask(id: TaskItemId, options: { quiet?: boolean } = {}): Promise<boolean> {
   const task = getTask(id)
   if (!task) return false
   useTasks.setState((state) => {
@@ -465,6 +495,7 @@ export async function deleteTask(id: TaskItemId): Promise<boolean> {
     toast.error(`Unable to delete ${task.key}`, { description: errorText(error) })
     return false
   }
+  if (options.quiet) return true
   toast(`Deleted ${task.key}`, {
     duration: 8000,
     action: { label: "Undo", onClick: () => void restoreTask(id) },
@@ -483,23 +514,28 @@ export async function restoreTask(id: TaskItemId): Promise<TaskItem | null> {
   }
 }
 
+/**
+ * `tasks.items.send` with the composer's whole first message (chips, files, skills,
+ * attachments) in place of a prompt string. The daemon puts the task's own chip
+ * first when the message has none.
+ */
+export type TaskRunSendParams = Omit<TaskItemsSendParams, "prompt" | "message"> & { message: UserMessage }
+
 /** Start a run in the background. The caller decides whether to open it. */
-export async function sendTask(params: TaskItemsSendParams): Promise<{ task: TaskItem; thread_id: ThreadId }> {
+export async function sendTask(params: TaskRunSendParams): Promise<{ task: TaskItem; thread_id: ThreadId }> {
   const result = await client().call("tasks.items.send", params)
   upsert(result.task)
   return result
 }
 
-/** Send a follow-up: into an idle run, queued behind a busy one, or saved for the next run. */
-export async function followupTask(id: TaskItemId, text: string): Promise<{ task: TaskItem; sent_to?: ThreadId | null } | null> {
-  try {
-    const result = await client().call("tasks.items.followup", { id, text })
-    upsert(result.task)
-    return result
-  } catch (error) {
-    toast.error("Unable to send the follow-up", { description: errorText(error) })
-    return null
-  }
+/**
+ * Send a follow-up: into an idle run, queued behind a busy one, or saved for the next
+ * run. Throws, so the composer keeps the text and says what went wrong.
+ */
+export async function followupTask(id: TaskItemId, text: string): Promise<{ task: TaskItem; sent_to?: ThreadId | null }> {
+  const result = await client().call("tasks.items.followup", { id, text })
+  upsert(result.task)
+  return result
 }
 
 // ---- Send defaults, remembered per project ----
