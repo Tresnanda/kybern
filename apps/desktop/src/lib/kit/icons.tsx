@@ -9,8 +9,6 @@ import {
   Archive02Icon as HiArchive,
   ArrowTurnBackwardIcon as HiUndo,
   ArrowLeft01Icon as HiArrowLeft,
-  ArrowLeft02Icon as HiHistoryBack,
-  ArrowRight02Icon as HiHistoryForward,
   ArrowRight01Icon as HiArrowRight,
   ArrowDown01Icon as HiArrowDown,
   ArrowUp01Icon as HiArrowUp,
@@ -134,6 +132,21 @@ import {
   ShieldIcon as HcShield,
   Analytics01Icon as HcAnalytics,
   HandIcon as HcHand,
+  // --- Notes: the rail destination, the format bar, and the slash menu ---
+  Note01Icon as HcNote,
+  TextBoldIcon as HcBold,
+  TextItalicIcon as HcItalic,
+  TextStrikethroughIcon as HcStrikethrough,
+  Heading01Icon as HcHeading1,
+  Heading02Icon as HcHeading2,
+  Heading03Icon as HcHeading3,
+  ParagraphIcon as HcParagraph,
+  LeftToRightListBulletIcon as HcListBullet,
+  LeftToRightListNumberIcon as HcListNumber,
+  QuoteDownIcon as HcQuote,
+  SourceCodeSquareIcon as HcCodeBlock,
+  TextAlignLeftIcon as HcOutline,
+  Share08Icon as HcShare,
 } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 
@@ -199,8 +212,6 @@ export const EraserIcon: LucideIcon = hugeIcon(HcEraser);
 export const ArrowLeftIcon = hugeIcon(HiArrowLeft);
 export const ArrowRightIcon = hugeIcon(HiArrowRight);
 // Title-bar history navigation: arrows with a shaft, like the macOS toolbar.
-export const HistoryBackIcon = hugeIcon(HiHistoryBack);
-export const HistoryForwardIcon = hugeIcon(HiHistoryForward);
 export const ArrowDownIcon = hugeIcon(HiArrowDown);
 export const ArrowUpIcon = hugeIcon(HiArrowUp);
 export const ArrowUpRightIcon = hugeIcon(HiArrowUpRight);
@@ -386,3 +397,20 @@ export const ZapIcon = hugeIcon(HiFlash);
 export const FastModeIcon: LucideIcon = hugeIconFilled(HiFlash);
 // Outline twin of FastModeIcon for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = hugeIcon(HiFlash);
+
+// Notes: the rail destination, the format bar, and the slash menu.
+export const NoteIcon: LucideIcon = hugeIcon(HcNote);
+export const BoldIcon: LucideIcon = hugeIcon(HcBold);
+export const ItalicIcon: LucideIcon = hugeIcon(HcItalic);
+export const StrikethroughIcon: LucideIcon = hugeIcon(HcStrikethrough);
+export const Heading1Icon: LucideIcon = hugeIcon(HcHeading1);
+export const Heading2Icon: LucideIcon = hugeIcon(HcHeading2);
+export const Heading3Icon: LucideIcon = hugeIcon(HcHeading3);
+export const ParagraphIcon: LucideIcon = hugeIcon(HcParagraph);
+export const ListBulletIcon: LucideIcon = hugeIcon(HcListBullet);
+export const ListNumberIcon: LucideIcon = hugeIcon(HcListNumber);
+export const QuoteIcon: LucideIcon = hugeIcon(HcQuote);
+export const CodeBlockIcon: LucideIcon = hugeIcon(HcCodeBlock);
+// The Notes document: the outline toggle and the share/export menu.
+export const OutlineIcon: LucideIcon = hugeIcon(HcOutline);
+export const ShareIcon: LucideIcon = hugeIcon(HcShare);

@@ -127,6 +127,10 @@ export interface AppState {
     | { kind: "draft"; draft: Draft }
     | { kind: "pulls" }
     | { kind: "usage" }
+    /** Notes page; `noteId` is the open note, if any. */
+    | { kind: "notes"; noteId?: string }
+    /** Tasks page; `taskId` is the open task, if any. */
+    | { kind: "tasks"; taskId?: string }
     | { kind: "none" }
   /** The chat (thread or draft) to return to when Home is chosen from another page. */
   homeSelection: { kind: "thread"; id: ThreadId } | { kind: "draft"; draft: Draft } | null
@@ -191,6 +195,10 @@ export interface AppActions {
   selectFreeDraft: () => void
   selectPulls: () => void
   selectUsage: () => void
+  /** Open the Notes page, optionally on one note. */
+  selectNotes: (noteId?: string) => void
+  /** Open the Tasks page, optionally on one task. */
+  selectTasks: (taskId?: string) => void
   /** Return to the last chat, or the home screen when none is left. */
   selectHome: () => void
   /** Record that a thread needs attention (bell + sidebar unread marker). */
@@ -457,10 +465,18 @@ export function createEnvironmentStore(
       persistSplitView(null)
       set((s) => ({ selected: { kind: "usage" }, splitView: null, homeSelection: rememberHome(s) }))
     },
+    selectNotes: (noteId) => {
+      persistSplitView(null)
+      set((s) => ({ selected: noteId ? { kind: "notes", noteId } : { kind: "notes" }, splitView: null, homeSelection: rememberHome(s) }))
+    },
+    selectTasks: (taskId) => {
+      persistSplitView(null)
+      set((s) => ({ selected: taskId ? { kind: "tasks", taskId } : { kind: "tasks" }, splitView: null, homeSelection: rememberHome(s) }))
+    },
     selectHome: () => {
       const s = get()
       const home = s.homeSelection
-      if (s.selected.kind !== "pulls" && s.selected.kind !== "usage") return s.selectFreeDraft()
+      if (s.selected.kind !== "pulls" && s.selected.kind !== "usage" && s.selected.kind !== "notes" && s.selected.kind !== "tasks") return s.selectFreeDraft()
       if (home?.kind === "thread" && s.threads[home.id]?.status !== "archived" && s.threads[home.id]) return s.selectThread(home.id)
       if (home?.kind === "draft" && (!home.draft.projectId || s.projects[home.draft.projectId])) {
         persistSplitView(null)

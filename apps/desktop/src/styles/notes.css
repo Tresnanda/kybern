@@ -1,0 +1,1706 @@
+/* Notes: the gallery, the focused document, and the editor's typography.
+   One type scale (12 meta · 13 UI · 15 reading · 17 section · 28 display, all
+   following the chat font setting), tabular numerals, structure from surface
+   steps and spacing rather than borders, and color only in project dots and
+   status glyphs. Colors are mixes of the theme's foreground and surface, so
+   light, dark and custom themes follow; increased contrast and reduced motion
+   and transparency have their own rules at the end. */
+
+:root {
+  --n-fg: var(--foreground);
+  --n-fg1: color-mix(in srgb, var(--foreground) 86%, transparent);
+  --n-fg2: color-mix(in srgb, var(--foreground) 60%, transparent);
+  --n-fg3: color-mix(in srgb, var(--foreground) 42%, transparent);
+  --n-fg4: color-mix(in srgb, var(--foreground) 22%, transparent);
+  --n-hair: color-mix(in srgb, var(--foreground) 7%, transparent);
+  --n-fill: color-mix(in srgb, var(--foreground) 4%, transparent);
+  --n-hover: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+  --n-sel: color-mix(in srgb, var(--foreground) 7%, transparent);
+  --n-check-on: color-mix(in srgb, var(--foreground) 36%, transparent);
+  --n-focus: var(--color-border-focus, var(--ring));
+  /* Cards: one step above the page, with a hairline ring in light mode. */
+  --n-card: var(--color-background-surface);
+  --n-card-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.09), 0 1px 2px rgb(0 0 0 / 0.05), 0 2px 6px -2px rgb(0 0 0 / 0.04);
+  --n-card-shadow-lift: 0 0 0 0.5px rgb(0 0 0 / 0.11), 0 6px 18px -6px rgb(0 0 0 / 0.14);
+  /* The floating toolbar's material. */
+  --n-material: color-mix(in srgb, var(--color-background-surface) 82%, transparent);
+  --n-material-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 10px 30px -10px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.05);
+  --project-dot-l: 0.62;
+  --project-dot-c: 0.13;
+  /* The type scale. */
+  --n-meta: var(--app-font-size-ui-sm, 12px);
+  --n-ui: var(--app-font-size-ui, 13px);
+  --n-read: calc(var(--app-font-size-chat, 13px) * 15 / 13);
+  --n-section: calc(var(--app-font-size-chat, 13px) * 17 / 13);
+  --n-display: calc(var(--app-font-size-chat, 13px) * 28 / 13);
+  --n-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+.dark {
+  --n-fill: color-mix(in srgb, var(--foreground) 5%, transparent);
+  --n-sel: color-mix(in srgb, var(--foreground) 7.5%, transparent);
+  --n-check-on: color-mix(in srgb, var(--foreground) 42%, transparent);
+  --n-card: color-mix(in srgb, var(--color-background-surface) 95%, var(--foreground));
+  --n-card-shadow: inset 0 1px 0 rgb(255 255 255 / 0.035), 0 1px 2px rgb(0 0 0 / 0.25);
+  --n-card-shadow-lift: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 8px 20px -8px rgb(0 0 0 / 0.6);
+  --n-material: color-mix(in srgb, color-mix(in srgb, var(--color-background-surface) 86%, var(--foreground)) 84%, transparent);
+  --n-material-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 3px 8px rgb(0 0 0 / 0.3);
+  --project-dot-l: 0.74;
+  --project-dot-c: 0.1;
+}
+
+/* ---------- shared bits ---------- */
+
+.project-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: oklch(var(--project-dot-l) var(--project-dot-c) var(--project-hue, 0));
+}
+.project-dot[data-global] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.25px var(--n-fg3);
+}
+.checklist-ring {
+  color: var(--n-fg2);
+}
+.notes-tip-key {
+  margin-inline-start: 6px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.notes-text-button {
+  cursor: pointer;
+  border-radius: 3px;
+  color: var(--n-fg1);
+  text-decoration: underline;
+  text-decoration-color: var(--n-fg4);
+  text-underline-offset: 2px;
+  outline: none;
+  transition: text-decoration-color 120ms var(--n-ease);
+}
+.notes-text-button:hover {
+  text-decoration-color: currentColor;
+}
+.notes-text-button:focus-visible {
+  box-shadow: 0 0 0 2px var(--n-focus);
+}
+.notes-mark {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-token-text-link-foreground, var(--primary)) 20%, transparent);
+  color: inherit;
+}
+
+/* ---------- page ---------- */
+
+.notes-page {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-background-surface);
+  color: var(--n-fg);
+  font-family: var(--font-ui-family);
+  -webkit-font-smoothing: antialiased;
+}
+.notes-enter {
+  animation: notes-fade-in 160ms ease-out;
+}
+@keyframes notes-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Title bar */
+.notes-tb-title {
+  padding-inline: 2px;
+  font-size: var(--n-ui);
+  font-weight: 500;
+  color: var(--n-fg);
+  white-space: nowrap;
+}
+.notes-tb-button {
+  font-size: var(--n-ui);
+  font-weight: 400;
+  color: var(--n-fg2);
+}
+.notes-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: clamp(150px, 22vw, 220px);
+  height: 28px;
+  margin-inline-end: 4px;
+  padding-inline: 9px 6px;
+  border-radius: 8px;
+  background: var(--n-fill);
+  color: var(--n-fg3);
+  cursor: text;
+  transition: box-shadow 120ms var(--n-ease);
+}
+.notes-search:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--n-focus) 55%, transparent);
+}
+.notes-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--n-ui);
+  color: var(--n-fg);
+  outline: none;
+}
+.notes-search input::placeholder {
+  color: var(--n-fg3);
+}
+.notes-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+.notes-search-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--n-fg3);
+  cursor: pointer;
+}
+.notes-search-clear:hover {
+  background: var(--n-sel);
+  color: var(--n-fg1);
+}
+
+/* ---------- gallery ---------- */
+
+.notes-scroll {
+  container-type: inline-size;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Each virtual row is its own small layer; the scroller paints nothing (see perf/README.md). */
+.notes-vrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  will-change: transform;
+}
+
+.notes-filters {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  margin-top: 20px;
+  min-width: 0;
+}
+.notes-filters-ruler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  gap: 4px;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.notes-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  max-width: 220px;
+  padding-inline: 11px;
+  border-radius: 8px;
+  font-size: var(--n-ui);
+  color: var(--n-fg2);
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 120ms var(--n-ease),
+    color 120ms var(--n-ease);
+}
+.notes-chip:hover,
+.notes-chip[data-popup-open] {
+  background: var(--n-hover);
+  color: var(--n-fg1);
+}
+.notes-chip[data-selected] {
+  background: var(--n-sel);
+  color: var(--n-fg);
+  font-weight: 500;
+}
+.notes-chip:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--n-focus);
+}
+.notes-chip-quiet {
+  color: var(--n-fg3);
+}
+
+.notes-section-label {
+  padding-block: 4px 10px;
+  font-size: var(--n-ui);
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--n-fg);
+}
+.notes-section-label-first {
+  padding-top: 24px;
+}
+.notes-notice {
+  padding-block: 16px 12px;
+  font-size: var(--n-meta);
+  line-height: 18px;
+  color: var(--n-fg3);
+  text-wrap: pretty;
+}
+
+.notes-grid {
+  display: grid;
+  column-gap: 20px;
+  padding-bottom: 24px;
+}
+
+/* Card */
+.note-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  text-align: start;
+  border-radius: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.note-thumb {
+  --k: 0.6;
+  position: relative;
+  height: 156px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--n-card);
+  box-shadow: var(--n-card-shadow);
+  transition: transform 140ms var(--n-ease);
+}
+.note-card-big .note-thumb {
+  --k: 0.66;
+  height: 184px;
+}
+/* The lifted shadow fades in on its own layer, so hover never repaints the card. */
+.note-thumb::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--n-card-shadow-lift);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms var(--n-ease);
+}
+/* Long notes fade out at the bottom edge instead of being cut. */
+.note-thumb::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 40px;
+  background: linear-gradient(to bottom, transparent, var(--n-card));
+  pointer-events: none;
+}
+.note-thumb[data-short]::after,
+.note-thumb[data-empty]::after {
+  display: none;
+}
+.note-card:hover .note-thumb {
+  transform: translateY(-2px);
+}
+.note-card:hover .note-thumb::before {
+  opacity: 1;
+}
+.note-card:active .note-thumb {
+  transform: scale(0.985);
+}
+.note-card:focus-visible .note-thumb {
+  box-shadow:
+    0 0 0 2px var(--n-focus),
+    var(--n-card-shadow);
+}
+
+/* The miniature: the note's own blocks at a fraction of reading size, in ems of one variable. */
+.mini {
+  padding: 1.87em 2em;
+  font-size: calc(var(--n-read) * var(--k));
+  line-height: 1.6;
+  color: var(--n-fg1);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  user-select: none;
+}
+.note-card-big .mini {
+  padding: 1.73em 2em;
+}
+.note-card-big .mini > * {
+  max-width: 56em;
+}
+/* Short notes: a little larger and centered, so the card looks composed rather than empty. */
+.note-thumb[data-short] {
+  --k: 0.74;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.note-card-big .note-thumb[data-short] {
+  --k: 0.8;
+}
+.note-thumb[data-short] .mini {
+  padding-block: 1.2em;
+}
+.mini > * + * {
+  margin-top: 0.53em;
+}
+.mini p {
+  margin: 0;
+}
+.mini-h {
+  font-size: 1.133em;
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--n-fg);
+}
+.mini-h[data-level="1"] {
+  font-weight: 650;
+}
+.mini > * + .mini-h {
+  margin-top: 1.06em;
+}
+.mini > .mini-h + * {
+  margin-top: 0.4em;
+}
+.mini strong {
+  font-weight: 600;
+  color: var(--n-fg);
+}
+.mini code {
+  padding: 0.07em 0.33em;
+  border-radius: 0.33em;
+  background: var(--n-fill);
+  font-family: var(--font-chat-code-family, ui-monospace, monospace);
+  font-size: 0.87em;
+  color: var(--n-fg);
+}
+.mini-checklist,
+.mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.27em;
+}
+.mini-task,
+.mini-li {
+  display: flex;
+  align-items: center;
+  gap: 0.8em;
+  min-width: 0;
+}
+.mini-task-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mini-task[data-done] .mini-task-text {
+  color: var(--n-fg3);
+  text-decoration: line-through;
+  text-decoration-color: var(--n-fg4);
+}
+.mini-box {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.067em;
+  height: 1.067em;
+  border-radius: 0.3em;
+  box-shadow: inset 0 0 0 0.1em var(--n-fg4);
+}
+.mini-task[data-done] .mini-box {
+  background: var(--n-check-on);
+  box-shadow: none;
+  color: var(--n-card);
+}
+.mini-box svg {
+  width: 0.67em;
+  height: 0.67em;
+}
+.mini-marker {
+  flex: none;
+  min-width: 0.6em;
+  color: var(--n-fg3);
+  font-variant-numeric: tabular-nums;
+}
+.mini-code {
+  padding: 0.8em 0.93em;
+  border-radius: 0.67em;
+  background: var(--n-fill);
+  font-family: var(--font-chat-code-family, ui-monospace, monospace);
+  font-size: 0.87em;
+  line-height: 1.54;
+  color: var(--n-fg1);
+  white-space: pre;
+  overflow: hidden;
+}
+.mini-quote {
+  padding-inline-start: 1.07em;
+  box-shadow: inset 0.13em 0 0 var(--n-fg4);
+  color: var(--n-fg2);
+}
+.mini-rule {
+  border: 0;
+  border-top: 0.07em solid var(--n-fg4);
+}
+.mini-task-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  margin-inline: 0.1em;
+  font-size: 0.87em;
+  color: var(--n-fg2);
+  vertical-align: -0.05em;
+  font-variant-numeric: tabular-nums;
+}
+.mini-task-ref svg {
+  width: 0.95em;
+  height: 0.95em;
+}
+.mini-task-ref-empty {
+  width: 0.95em;
+  height: 0.95em;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 0.1em var(--n-fg4);
+}
+.mini-task-ref[data-missing] > span {
+  color: var(--n-fg3);
+  text-decoration: line-through;
+}
+.mini-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font-size: var(--n-meta);
+  color: var(--n-fg4);
+}
+
+.note-card-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 2px 0;
+}
+.note-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--n-ui);
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--n-fg);
+}
+.note-card-glyph {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--n-fg3);
+}
+.note-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: var(--n-meta);
+  line-height: 16px;
+  color: var(--n-fg3);
+  white-space: nowrap;
+}
+.note-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.note-progress {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  margin-inline-start: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* List layout: one quiet row per note. */
+.note-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: calc(100% + 24px);
+  height: 40px;
+  margin-inline: -12px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  font-size: var(--n-ui);
+  color: var(--n-fg1);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms var(--n-ease);
+}
+.note-row:hover {
+  background: var(--n-hover);
+}
+.note-row:focus-visible {
+  background: var(--n-sel);
+  box-shadow: inset 0 0 0 2px var(--n-focus);
+}
+.note-row-title {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 80px;
+  max-width: 42%;
+  color: var(--n-fg);
+}
+.note-row-excerpt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--n-fg3);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+}
+.note-row-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline: 1px;
+  vertical-align: -1px;
+  color: var(--n-fg2);
+  font-variant-numeric: tabular-nums;
+}
+.note-row-scope {
+  flex: none;
+  width: 148px;
+  font-size: var(--n-meta);
+  color: var(--n-fg2);
+}
+.note-row-progress {
+  width: 48px;
+  margin: 0;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+}
+.note-row-age {
+  flex: none;
+  width: 92px;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+  text-align: end;
+}
+@container (max-width: 640px) {
+  .note-row-scope {
+    display: none;
+  }
+}
+
+/* The hint bar: one quiet line, no key caps. */
+.notes-hints {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 20px;
+  height: 36px;
+  padding-inline: 20px;
+  overflow: hidden;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+  white-space: nowrap;
+}
+.notes-hints b {
+  margin-inline-end: 5px;
+  font-weight: 500;
+  color: var(--n-fg2);
+  letter-spacing: 0.02em;
+}
+.notes-hints-hide {
+  margin-inline-start: auto;
+  color: var(--n-fg4);
+  cursor: pointer;
+  transition: color 120ms var(--n-ease);
+}
+.notes-hints-hide:hover {
+  color: var(--n-fg2);
+}
+
+/* Empty states */
+.notes-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 320px;
+  padding: 48px 24px;
+  text-align: center;
+}
+.notes-first {
+  gap: 10px;
+}
+.notes-display {
+  max-width: 18em;
+  font-size: var(--n-display);
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.022em;
+  color: var(--n-fg);
+  text-wrap: balance;
+}
+.notes-empty-title {
+  font-size: var(--n-read);
+  line-height: 1.35;
+  font-weight: 600;
+  color: var(--n-fg);
+  text-wrap: balance;
+}
+.notes-empty-detail {
+  max-width: 46ch;
+  font-size: var(--n-ui);
+  line-height: 1.45;
+  color: var(--n-fg3);
+  text-wrap: pretty;
+}
+.notes-first .notes-empty-detail {
+  text-wrap: balance;
+}
+.notes-tips {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 28px;
+  font-size: var(--n-ui);
+  color: var(--n-fg3);
+}
+.notes-tips b {
+  font-weight: 500;
+  color: var(--n-fg2);
+  letter-spacing: 0.02em;
+}
+
+/* ---------- the focused document ---------- */
+
+.note-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--n-ui);
+  white-space: nowrap;
+}
+.note-crumb-root {
+  margin: -2px -4px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  color: var(--n-fg3);
+  cursor: pointer;
+  outline: none;
+  transition: color 120ms var(--n-ease);
+}
+.note-crumb-root:hover {
+  color: var(--n-fg1);
+}
+.note-crumb-root:focus-visible {
+  box-shadow: 0 0 0 2px var(--n-focus);
+}
+.note-crumb-sep {
+  color: var(--n-fg4);
+}
+.note-crumb-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+  color: var(--n-fg);
+}
+
+.note-doc-main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.note-doc-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.note-doc {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, calc(100% - 48px));
+  min-height: 100%;
+  margin-inline: auto;
+  padding: 84px 0 48px;
+}
+.notes-enter .note-doc {
+  animation: note-doc-in 200ms var(--n-ease);
+}
+@keyframes note-doc-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* The floating toolbar: the page's one translucent surface. */
+.note-toolbar {
+  position: absolute;
+  z-index: 20;
+  top: 14px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 38px;
+  padding-inline: 5px;
+  border-radius: 12px;
+  background: var(--n-material);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: var(--n-material-shadow);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.note-toolbar button[aria-label]:not(.note-toolbar-text) {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+.note-toolbar button[aria-pressed="true"] {
+  background: var(--n-sel);
+  color: var(--n-fg);
+}
+.note-toolbar svg {
+  width: 15px;
+  height: 15px;
+}
+.note-toolbar-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding-inline: 8px 6px;
+  border-radius: 7px;
+  font-size: var(--n-ui);
+  color: var(--n-fg1);
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms var(--n-ease);
+}
+.note-toolbar-text:hover,
+.note-toolbar-text[data-popup-open] {
+  background: var(--n-hover);
+}
+.note-toolbar-text:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--n-focus);
+}
+.note-toolbar .note-toolbar-text svg {
+  width: 11px;
+  height: 11px;
+}
+.note-toolbar input {
+  font-family: var(--font-ui-family);
+  font-size: var(--n-ui);
+}
+.note-toolbar-sep {
+  width: 1px;
+  height: 16px;
+  margin-inline: 4px;
+  background: var(--n-hair);
+}
+
+/* The outline in the left margin. Kept open it lists headings; otherwise a dash rail that opens on hover. */
+.note-outline {
+  position: absolute;
+  z-index: 10;
+  top: 84px;
+  left: 24px;
+  width: 188px;
+  max-height: calc(100% - 120px);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.note-outline-title {
+  margin-bottom: 6px;
+  font-size: var(--n-meta);
+  line-height: 18px;
+  color: var(--n-fg3);
+}
+.note-outline ol {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.note-outline-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 0 4px 10px;
+  font-size: var(--n-meta);
+  line-height: 16px;
+  color: var(--n-fg3);
+  text-align: start;
+  box-shadow: inset 1px 0 0 var(--n-hair);
+  cursor: pointer;
+  outline: none;
+  transition: color 120ms var(--n-ease);
+}
+.note-outline-item[data-depth="1"] {
+  padding-inline-start: 20px;
+}
+.note-outline-item[data-depth="2"] {
+  padding-inline-start: 30px;
+}
+.note-outline-item:hover {
+  color: var(--n-fg1);
+}
+.note-outline-item[data-active] {
+  color: var(--n-fg);
+  box-shadow: inset 2px 0 0 var(--n-fg2);
+}
+.note-outline-item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--n-focus);
+}
+.note-outline-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-outline-dash {
+  display: none;
+}
+/* Collapsed: short dashes beside the title, the current one darker. */
+.note-outline:not([data-open]) {
+  top: 120px;
+  width: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+.note-outline:not([data-open]) .note-outline-title {
+  display: none;
+}
+.note-outline:not([data-open]) ol {
+  gap: 0;
+}
+.note-outline:not([data-open]) .note-outline-item {
+  padding: 4px 0;
+  box-shadow: none;
+}
+.note-outline:not([data-open]) .note-outline-dash {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--n-fg4);
+}
+.note-outline:not([data-open]) .note-outline-item[data-depth="1"] .note-outline-dash,
+.note-outline:not([data-open]) .note-outline-item[data-depth="2"] .note-outline-dash {
+  width: 10px;
+  margin-inline-start: 6px;
+}
+.note-outline:not([data-open]) .note-outline-item[data-active] .note-outline-dash {
+  background: var(--n-fg2);
+}
+.note-outline:not([data-open]) .note-outline-label {
+  display: none;
+}
+/* Pointer or focus on the rail: the headings appear beside their dashes, on the page's own surface. */
+.note-outline:not([data-open]):is(:hover, :focus-within) {
+  width: 200px;
+  background: var(--color-background-surface);
+  box-shadow: var(--n-material-shadow);
+}
+.note-outline:not([data-open]):is(:hover, :focus-within) .note-outline-label {
+  display: block;
+  margin-inline-start: 10px;
+}
+
+/* Meta line over the title: "● ade · Pinned · Edited 2 min ago". */
+.note-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 18px;
+  margin-bottom: 12px;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+  white-space: nowrap;
+}
+.note-meta-dot {
+  color: var(--n-fg4);
+}
+.note-meta-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 50%;
+  margin: -2px -5px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  color: var(--n-fg2);
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 120ms var(--n-ease),
+    color 120ms var(--n-ease);
+}
+.note-meta-scope:hover,
+.note-meta-scope[data-popup-open] {
+  background: var(--n-hover);
+  color: var(--n-fg1);
+}
+.note-meta-scope:focus-visible {
+  box-shadow: 0 0 0 2px var(--n-focus);
+}
+.note-meta-chevron {
+  width: 10px;
+  height: 10px;
+  margin-inline-start: -2px;
+  opacity: 0.6;
+}
+.note-meta-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--n-fg2);
+}
+.note-meta-link {
+  min-width: 0;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--n-fg2);
+  cursor: pointer;
+  text-underline-offset: 2px;
+}
+.note-meta-link:hover {
+  color: var(--n-fg1);
+  text-decoration: underline;
+  text-decoration-color: var(--n-fg4);
+}
+.note-meta-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+  padding-inline-start: 12px;
+  font-weight: 500;
+  color: var(--n-fg1);
+  cursor: pointer;
+}
+.note-meta-open:hover {
+  color: var(--n-fg);
+}
+.note-meta .note-meta-status:not([role="alert"]) {
+  color: var(--n-fg3);
+  font-size: var(--n-meta);
+}
+
+/* The footer strip: linked tasks, then the word count. */
+.note-doc-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 20px;
+  height: 40px;
+  padding-inline: 20px;
+  font-size: var(--n-meta);
+  color: var(--n-fg2);
+  white-space: nowrap;
+}
+.note-footer-label,
+.note-footer-quiet {
+  color: var(--n-fg3);
+}
+.note-footer-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: -3px -5px;
+  padding: 3px 5px;
+  border-radius: 6px;
+  color: var(--n-fg2);
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms var(--n-ease);
+}
+.note-footer-item:hover {
+  background: var(--n-hover);
+}
+.note-footer-item:focus-visible {
+  box-shadow: 0 0 0 2px var(--n-focus);
+}
+.note-footer-count {
+  margin-inline-start: auto;
+  color: var(--n-fg3);
+}
+
+/* Banners (conflict, deleted, failed): fade and rise a few pixels. */
+.note-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 20px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 10px;
+  background: var(--n-fill);
+  font-size: var(--n-ui);
+  animation: note-banner-in 180ms ease-out;
+}
+.note-banner-title {
+  font-weight: 500;
+  color: var(--n-fg);
+}
+.note-banner-detail {
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+  text-wrap: pretty;
+}
+@keyframes note-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* ---------- the title and the text ---------- */
+
+.note-title {
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+  font-family: var(--font-ui-family);
+  font-size: var(--n-display);
+  line-height: 1.215;
+  font-weight: 650;
+  letter-spacing: -0.022em;
+  color: var(--n-fg);
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.note-title-field {
+  display: block;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  outline: none;
+}
+.note-title-field::placeholder {
+  color: var(--n-fg4);
+}
+
+.note-editor {
+  --note-size: var(--n-read);
+  font-family: var(--font-ui-family);
+  font-size: var(--note-size);
+  line-height: 1.6;
+  letter-spacing: -0.003em;
+  color: var(--n-fg1);
+}
+.note-editor-compact {
+  --note-size: var(--n-ui);
+  line-height: 1.55;
+  letter-spacing: 0;
+}
+
+.note-prose {
+  min-height: 6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  caret-color: var(--n-fg);
+  -webkit-font-smoothing: antialiased;
+}
+.note-editor-compact .note-prose {
+  min-height: 5rem;
+}
+
+/* One rhythm between blocks; headings, list items and quote paragraphs set their own. */
+.note-prose > * + * {
+  margin-top: 0.93em;
+}
+.note-prose strong {
+  font-weight: 600;
+  color: var(--n-fg);
+}
+.note-prose em {
+  font-style: italic;
+}
+.note-prose s {
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--n-fg3);
+}
+
+.note-prose h1,
+.note-prose h2,
+.note-prose h3 {
+  color: var(--n-fg);
+  text-wrap: balance;
+}
+.note-prose h1,
+.note-prose h2 {
+  font-size: calc(var(--note-size) * 17 / 15);
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+}
+.note-prose h1 {
+  font-weight: 650;
+}
+.note-prose h2 {
+  font-weight: 600;
+}
+.note-prose h3 {
+  font-size: 1em;
+  line-height: 1.45;
+  font-weight: 600;
+}
+.note-prose > h1:not(:first-child) {
+  margin-top: 2.25em;
+}
+.note-prose > h2:not(:first-child) {
+  margin-top: 2em;
+}
+.note-prose > h3:not(:first-child) {
+  margin-top: 1.6em;
+}
+.note-editor-compact .note-prose > :is(h1, h2, h3):not(:first-child) {
+  margin-top: 1.2em;
+}
+.note-prose > :is(h1, h2, h3) + * {
+  margin-top: 0.53em;
+}
+.note-prose > :first-child {
+  margin-top: 0;
+}
+
+.note-prose a {
+  color: var(--color-token-text-link-foreground);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-token-text-link-foreground) 35%, transparent);
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.18em;
+  /* A click places the caret; ⌘-click opens (the pointing hand shows while ⌘ is held). */
+  cursor: text;
+  transition: text-decoration-color var(--duration-quick) var(--ease-out);
+}
+.note-prose a:hover {
+  text-decoration-color: currentColor;
+}
+.note-prose[data-open-links] a {
+  cursor: pointer;
+}
+
+.note-prose code {
+  padding: 0.13em 0.33em;
+  border-radius: 5px;
+  background: var(--n-fill);
+  font-family: var(--font-chat-code-family);
+  font-size: 0.833em;
+  color: var(--n-fg);
+  white-space: pre-wrap;
+}
+.note-prose pre {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--n-fill);
+  font-family: var(--font-chat-code-family);
+  font-size: calc(var(--note-size) * 12.5 / 15);
+  line-height: 1.68;
+  color: var(--n-fg1);
+  white-space: pre;
+  overflow-x: auto;
+}
+.note-prose pre code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-size: inherit;
+  color: inherit;
+  white-space: inherit;
+}
+
+.note-prose blockquote {
+  margin-inline: 0;
+  padding-inline-start: 16px;
+  box-shadow: inset 2px 0 0 var(--n-fg4);
+  color: var(--n-fg2);
+}
+.note-prose blockquote > * + * {
+  margin-top: 0.27em;
+}
+
+.note-prose hr {
+  margin: 1.6em 0;
+  border: 0;
+  border-top: 1px solid var(--n-hair);
+}
+.note-prose hr.ProseMirror-selectednode {
+  border-top-color: var(--n-focus);
+}
+
+.note-prose ul,
+.note-prose ol {
+  padding-inline-start: 1.4em;
+}
+.note-prose ul {
+  list-style: disc;
+}
+.note-prose ul ul {
+  list-style: circle;
+}
+.note-prose ul ul ul {
+  list-style: square;
+}
+.note-prose ol {
+  list-style: decimal;
+}
+.note-prose ol ol {
+  list-style: lower-alpha;
+}
+.note-prose li > p {
+  margin: 0;
+}
+.note-prose li + li {
+  margin-top: 0.27em;
+}
+.note-prose li > ul,
+.note-prose li > ol {
+  margin-top: 0.27em;
+}
+.note-prose li::marker {
+  color: var(--n-fg3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Checklists: a quiet rounded box in place of the bullet, filled when done. */
+.note-prose ul[data-type="taskList"] {
+  padding-inline-start: 0;
+  list-style: none;
+}
+.note-prose ul[data-type="taskList"] > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-block: 4px;
+}
+.note-prose ul[data-type="taskList"] > li + li {
+  margin-top: 0;
+}
+.note-editor-compact .note-prose ul[data-type="taskList"] > li {
+  gap: 9px;
+  padding-block: 2px;
+}
+.note-prose ul[data-type="taskList"] > li > label {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  /* One line tall, so the box centers on the first line of text. The padding
+     (and the matching negative margin) widens the click target without moving the box. */
+  height: 1.6em;
+  padding: 0.3em;
+  margin: -0.3em;
+  box-sizing: content-box;
+  cursor: pointer;
+  user-select: none;
+}
+.note-prose ul[data-type="taskList"] > li > label > span {
+  display: none;
+}
+.note-prose ul[data-type="taskList"] > li > div {
+  min-width: 0;
+  flex: 1;
+}
+.note-prose ul[data-type="taskList"] > li > label > input {
+  appearance: none;
+  -webkit-appearance: none;
+  display: grid;
+  place-content: center;
+  width: 1.067em;
+  height: 1.067em;
+  margin: 0;
+  border: 0;
+  border-radius: 0.3em;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--n-fg4);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-quick) var(--ease-out),
+    box-shadow var(--duration-quick) var(--ease-out),
+    scale var(--duration-micro) var(--ease-out);
+}
+.note-prose ul[data-type="taskList"] > li > label > input:hover {
+  box-shadow: inset 0 0 0 1.5px var(--n-fg3);
+}
+.note-prose ul[data-type="taskList"] > li > label > input:active {
+  scale: 0.92;
+}
+/* The tick is drawn by the label over the box (engines do not paint ::before on a native checkbox). */
+.note-prose ul[data-type="taskList"] > li > label::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 1.067em;
+  height: 1.067em;
+  background: var(--color-background-surface);
+  pointer-events: none;
+  transform: scale(0.6);
+  opacity: 0;
+  transition:
+    transform var(--duration-quick) var(--ease-smooth-out),
+    opacity var(--duration-micro) linear;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.4 8.3l2.4 2.4L11.6 5.6' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.4 8.3l2.4 2.4L11.6 5.6' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat;
+}
+.note-prose ul[data-type="taskList"] > li[data-checked="true"] > label::after {
+  transform: scale(1);
+  opacity: 1;
+}
+.note-prose ul[data-type="taskList"] > li > label > input:checked {
+  background: var(--n-check-on);
+  box-shadow: none;
+}
+.note-prose ul[data-type="taskList"] > li > label > input:focus-visible {
+  outline: 2px solid var(--n-focus);
+  outline-offset: 2px;
+}
+.note-prose ul[data-type="taskList"] > li[data-checked="true"] > div > p:first-child {
+  color: var(--n-fg3);
+  text-decoration: line-through;
+  text-decoration-color: var(--n-fg4);
+  text-decoration-thickness: 1px;
+}
+
+/* Task references: `[ADE-14](kybern://task/…)` reads as the task's status glyph and key,
+   live. On a checklist line the status word follows; in prose the key is enough. An
+   inline block, so a done line's strike-through never runs through it. */
+.task-ref {
+  display: inline-block;
+  margin-inline: 0.1em;
+  border-radius: 5px;
+  font-size: calc(var(--note-size, var(--n-read)) * 13 / 15);
+  line-height: 1;
+  white-space: nowrap;
+  text-indent: 0;
+}
+.task-ref-hit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36em;
+  margin: -2px -3px;
+  padding: 2px 3px;
+  border-radius: 5px;
+  color: var(--n-fg2);
+  cursor: pointer;
+  transition: background-color 120ms var(--n-ease), color 120ms var(--n-ease);
+}
+.task-ref-hit:hover {
+  background: var(--n-hover);
+  color: var(--n-fg1);
+}
+.task-ref[data-selected] .task-ref-hit {
+  background: var(--n-sel);
+}
+.task-ref-glyph {
+  width: 1em;
+  height: 1em;
+}
+.task-ref-glyph-empty {
+  display: block;
+  flex: none;
+  box-sizing: border-box;
+  border: 1.25px dashed var(--n-fg4);
+  border-radius: 50%;
+}
+.task-ref-key {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.005em;
+}
+.task-ref-status {
+  display: none;
+  color: var(--n-fg3);
+}
+.note-prose ul[data-type="taskList"] > li > div > p .task-ref-status {
+  display: inline;
+  margin-inline-start: 0.12em;
+}
+.task-ref[data-state="missing"] .task-ref-hit,
+.task-ref[data-state="pending"] .task-ref-hit {
+  cursor: default;
+}
+.task-ref[data-state="missing"] .task-ref-key {
+  color: var(--n-fg3);
+  text-decoration: line-through;
+  text-decoration-color: var(--n-fg4);
+}
+.task-ref[data-state="pending"] .task-ref-key {
+  color: var(--n-fg3);
+}
+
+/* "Make task" on the checklist line under the pointer: a quiet fill behind the line
+   and a text button at its end. The fill sits under the text; the button floats over
+   a long line with the row's own color behind it. */
+.note-prose ul[data-type="taskList"] > li {
+  isolation: isolate;
+}
+.note-prose ul[data-type="taskList"] > li > div > p:first-child {
+  position: relative;
+}
+.task-line-make {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.task-line-make::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset-block: -4px;
+  inset-inline: calc(-1.067em - 12px - 8px) -8px;
+  border-radius: 8px;
+  background: var(--n-hover);
+}
+.note-editor-compact .task-line-make::before {
+  inset-block: -2px;
+  inset-inline-start: calc(-1.067em - 9px - 6px);
+  inset-inline-end: -6px;
+  border-radius: 6px;
+}
+.task-line-make-button {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 1.6em;
+  padding-inline: 14px 0;
+  border: 0;
+  background: linear-gradient(to right, transparent, var(--n-row) 12px);
+  font: inherit;
+  font-size: var(--n-meta);
+  line-height: 1;
+  color: var(--n-fg2);
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms var(--n-ease);
+}
+.task-line-make-button:hover {
+  color: var(--n-fg1);
+}
+.task-line-make-button svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.note-prose {
+  /* The hovered row's color as a solid, for what floats over text. */
+  --n-row: color-mix(in srgb, var(--color-background-surface, var(--background)) 96.5%, var(--foreground));
+}
+
+/* Placeholders: "Type / for commands" on the line being written, "Heading 2" on an empty heading. */
+.note-prose .is-empty::before {
+  float: left;
+  height: 0;
+  content: attr(data-placeholder);
+  color: var(--n-fg4);
+  pointer-events: none;
+}
+.note-prose li .is-empty::before,
+.note-prose blockquote .is-empty::before {
+  content: none;
+}
+
+.note-prose ::selection {
+  background: color-mix(in srgb, var(--color-token-text-link-foreground, var(--primary)) 28%, transparent);
+}
+
+/* ---------- other Notes surfaces ---------- */
+
+/* The thread's Environment panel: the note sits on a soft fill, no frame. */
+.thread-note-field {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--n-fill);
+  transition: background-color 120ms var(--n-ease), box-shadow 120ms var(--n-ease);
+}
+.thread-note-field:focus-within {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  box-shadow: inset 0 0 0 1px var(--n-hair);
+}
+
+/* Quick capture (⌘⇧N): reads like the note it becomes. */
+.quick-note {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 20px 14px;
+  font-family: var(--font-ui-family);
+}
+.quick-note-scope {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+}
+.quick-note-title {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-ui-family);
+  font-size: var(--n-section);
+  line-height: 1.3;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--n-fg);
+  outline: none;
+  -webkit-font-smoothing: antialiased;
+}
+.quick-note-title::placeholder {
+  color: var(--n-fg4);
+}
+.note-editor.quick-note-editor {
+  --note-size: var(--n-read);
+  margin-top: 6px;
+  line-height: 1.6;
+}
+.quick-note-editor .note-prose {
+  min-height: 6rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.quick-note-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.quick-note-hint {
+  margin-inline-end: auto;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+}
+.quick-note-hint b {
+  margin-inline-end: 4px;
+  font-weight: 500;
+  color: var(--n-fg2);
+}
+
+/* Save to note: the picker's rows. */
+.save-note-head {
+  padding: 12px 14px 4px;
+}
+.save-note-title {
+  font-size: var(--n-ui);
+  font-weight: 600;
+  color: var(--n-fg);
+}
+.save-note-sub {
+  margin-top: 1px;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+}
+.save-note-meta {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 40%;
+  min-width: 0;
+  font-size: var(--n-meta);
+  color: var(--n-fg3);
+}
+
+/* ---------- accessibility preferences ---------- */
+
+@media (prefers-contrast: more) {
+  :root {
+    --n-fg2: color-mix(in srgb, var(--foreground) 78%, transparent);
+    --n-fg3: color-mix(in srgb, var(--foreground) 66%, transparent);
+    --n-fg4: color-mix(in srgb, var(--foreground) 48%, transparent);
+    --n-hair: color-mix(in srgb, var(--foreground) 22%, transparent);
+    --n-sel: color-mix(in srgb, var(--foreground) 14%, transparent);
+    --n-card-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 32%, transparent);
+    --n-material: var(--color-background-surface);
+  }
+  .note-toolbar {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 40%, transparent);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .note-toolbar {
+    background: var(--color-background-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notes-enter,
+  .notes-enter .note-doc,
+  .note-banner {
+    animation: none;
+  }
+  .note-thumb,
+  .note-thumb::before {
+    transition: none;
+  }
+  .note-card:hover .note-thumb,
+  .note-card:active .note-thumb {
+    transform: none;
+  }
+  .note-prose ul[data-type="taskList"] > li > label > input,
+  .note-prose ul[data-type="taskList"] > li > label::after {
+    transition: none;
+  }
+}

@@ -21,6 +21,7 @@ use tauri_plugin_dialog::DialogExt;
 mod environments;
 mod notifications;
 mod remote;
+mod text_export;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 mod window_surface;
@@ -538,6 +539,7 @@ pub fn run() {
             data_dir_path,
             set_window_vibrancy,
             save_image_file,
+            text_export::save_text_file,
             write_image_clipboard,
             notifications::notification_permission,
             notifications::send_notification,

@@ -11,10 +11,19 @@ import { Command, CommandCollection, CommandDialog, CommandDialogPopup, CommandE
 import { Kbd, KbdGroup } from "@/components/kit/kbd"
 import { AutocompleteItem } from "@/components/kit/autocomplete"
 import { mod, relativeTime } from "@/lib/format"
-import { ClockIcon, FolderOpenIcon, MoonIcon, NewThreadIcon, PanelRightCloseIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
+import { ClockIcon, FolderOpenIcon, ListChecksIcon, MoonIcon, NewThreadIcon, NoteIcon, PanelRightCloseIcon, PencilIcon, PlusIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
-import { isFreeChatProject } from "@/protocol"
+import { isFreeChatProject, type NoteSummary, type TaskItem } from "@/protocol"
 import { newThread } from "@/state/nav"
+import { createAndOpenNote, openNote, useAllNotes } from "@/state/notes"
+import { isEmptyThreadNote, noteTitle } from "@/state/notesModel"
+import { openQuickNote } from "@/state/quickNote"
+import { NoteGlyph } from "@/views/notes/NoteGlyph"
+import { openTask, openTasks, useAllTasks } from "@/state/tasks"
+import { STATUS_LABEL } from "@/state/tasksModel"
+import { TaskStatusGlyph } from "@/views/tasks/TaskGlyphs"
+import { newTaskHere } from "@/views/tasks/taskActions"
+import { ProjectDot } from "@/lib/kit/projectDot"
 import { loadThread } from "@/state/rpc"
 import { selectRecentThreads, useStore } from "@/state/store"
 
@@ -22,11 +31,14 @@ interface Item {
   id: string
   label: string
   keywords: string
-  group: "Suggested" | "Threads" | "Projects" | "Themes"
+  group: "Suggested" | "Threads" | "Notes" | "Tasks" | "Projects" | "Themes"
   icon: React.ReactNode
   meta?: React.ReactNode
   run: () => void
 }
+
+const NO_NOTES: NoteSummary[] = []
+const NO_TASKS: TaskItem[] = []
 
 function itemToSearchValue(value: unknown): string {
   if (!value || typeof value !== "object") return ""
@@ -40,10 +52,15 @@ export function Palette() {
   const set = useStore((s) => s.set)
   const threads = useStore(useShallow(selectRecentThreads))
   const projects = useStore((s) => s.projects)
+  const liveNotes = useAllNotes()
   const selected = useStore((s) => s.selected)
   const { theme, setTheme } = useTheme()
   const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
   const close = () => set({ paletteOpen: false })
+  // Notes saving in the background must not rebuild the list while the palette is shut.
+  const allNotes = open ? liveNotes : NO_NOTES
+  const liveTasks = useAllTasks()
+  const allTasks = open ? liveTasks : NO_TASKS
 
   const groups = useMemo(() => {
     const actions: Item[] = [
@@ -58,7 +75,8 @@ export function Palette() {
         keywords: "new thread create",
         group: "Suggested",
         icon: <NewThreadIcon className="size-[15px]" />,
-        meta: (
+        // On the Notes page ⌘N makes a note instead.
+        meta: selected.kind === "notes" ? undefined : (
           <KbdGroup className="shrink-0">
             <Kbd>{mod}</Kbd>
             <Kbd>N</Kbd>
@@ -113,6 +131,38 @@ export function Palette() {
         run: () => set({ settingsOpen: true }),
       },
     ]
+    // The Notes group leads with its commands, then the notes themselves. ⌘N means "new note" only on the Notes page.
+    const onNotesPage = selected.kind === "notes"
+    const noteCommands: Item[] = [
+      {
+        id: "note-new", label: "New note", keywords: "new note create write notes", group: "Notes",
+        icon: <PlusIcon className="size-[15px]" />,
+        meta: onNotesPage ? (
+          <KbdGroup className="shrink-0">
+            <Kbd>{mod}</Kbd>
+            <Kbd>N</Kbd>
+          </KbdGroup>
+        ) : undefined,
+        run: () => void createAndOpenNote(),
+      },
+      {
+        id: "note-quick", label: "Capture note…", keywords: "quick note capture jot write notes", group: "Notes",
+        icon: <PencilIcon className="size-[15px]" />,
+        meta: (
+          <KbdGroup className="shrink-0">
+            <Kbd>{mod}</Kbd>
+            <Kbd>⇧</Kbd>
+            <Kbd>N</Kbd>
+          </KbdGroup>
+        ),
+        run: () => openQuickNote(),
+      },
+      {
+        id: "note-open", label: "Open Notes", keywords: "notes open list pages", group: "Notes",
+        icon: <NoteIcon className="size-[15px]" />,
+        run: () => useStore.getState().selectNotes(),
+      },
+    ]
     const threadItems: Item[] = threads.slice(0, 40).map((t) => ({
       id: `thread:${t.id}`,
       label: t.title || "Untitled",
@@ -130,6 +180,53 @@ export function Palette() {
         void loadThread(t.id)
       },
     }))
+    // Newest 50 only, like threads: the list stays small however many notes there are.
+    const noteItems: Item[] = allNotes
+      .filter((note) => !note.deleted_at && !isEmptyThreadNote(note))
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, 50)
+      .map((note) => ({
+        id: `note:${note.id}`,
+        label: noteTitle(note),
+        keywords: `${note.title} ${note.preview}`,
+        group: "Notes",
+        icon: <NoteGlyph note={note} className="size-[15px]" />,
+        meta: (
+          <>
+            <span className="flex w-28 min-w-0 shrink-0 items-center gap-1.5 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
+              <ProjectDot projectId={note.scope === "global" || !note.project_id || isFreeChatProject(note.project_id) ? null : note.project_id} />
+              <span className="truncate">{note.scope === "global" ? "Global" : (note.project_id && !isFreeChatProject(note.project_id) ? projects[note.project_id]?.name : undefined) ?? note.origin ?? "Chats"}</span>
+            </span>
+            <span className="w-10 shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,9px)] tabular-nums text-muted-foreground/79">{relativeTime(note.updated_at)}</span>
+          </>
+        ),
+        run: () => openNote(note.id),
+      }))
+    // Tasks: its commands, then the newest 50 tasks, found by key or title.
+    const taskCommands: Item[] = [
+      {
+        id: "task-new", label: "New task", keywords: "new task create todo add", group: "Tasks",
+        icon: <PlusIcon className="size-[15px]" />,
+        run: () => newTaskHere(),
+      },
+      {
+        id: "task-open", label: "Open Tasks", keywords: "tasks open list board todo", group: "Tasks",
+        icon: <ListChecksIcon className="size-[15px]" />,
+        run: () => openTasks(),
+      },
+    ]
+    const taskItems: Item[] = [...allTasks]
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, 50)
+      .map((task) => ({
+        id: `task:${task.id}`,
+        label: task.title || "Untitled",
+        keywords: `${task.key} ${task.key.replace("-", " ")} ${STATUS_LABEL[task.status]}`,
+        group: "Tasks",
+        icon: <TaskStatusGlyph status={task.status} />,
+        meta: <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] tabular-nums text-muted-foreground/79">{task.key}</span>,
+        run: () => openTask(task.id),
+      }))
     const projectItems: Item[] = Object.values(projects).map((p) => ({
       id: `project:${p.id}`,
       label: p.name,
@@ -152,17 +249,19 @@ export function Palette() {
     return [
       { value: "Suggested", items: actions },
       { value: "Threads", items: threadItems },
+      { value: "Notes", items: [...noteCommands, ...noteItems] },
+      { value: "Tasks", items: [...taskCommands, ...taskItems] },
       { value: "Projects", items: projectItems },
       { value: "Themes", items: themes },
     ].filter((g) => g.items.length > 0)
-  }, [threads, projects, selected, dark, set, setTheme])
+  }, [threads, projects, allNotes, allTasks, selected, dark, set, setTheme])
 
   return (
     <CommandDialog open={open} onOpenChange={(o) => set({ paletteOpen: o })}>
       <CommandDialogPopup className="max-w-2xl" aria-label="Search">
         <Command items={groups} itemToStringValue={itemToSearchValue} onValueChange={() => {}}>
           <CommandPanel className="overflow-hidden">
-            <CommandInput placeholder="Search threads, projects, and commands" />
+            <CommandInput placeholder="Search threads, notes, tasks, projects, and commands" />
             <CommandList className="max-h-[min(24rem,60vh)] not-empty:px-1.5 not-empty:pt-0 not-empty:pb-1.5">
               {(group: { value: string; items: Item[] }, index: number) => (
                 <CommandGroup key={group.value} items={group.items}>

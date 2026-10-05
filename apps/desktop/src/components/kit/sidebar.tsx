@@ -46,6 +46,7 @@ const SIDEBAR_OFFCANVAS_MOTION_CLASS = cn(
   SIDEBAR_OFFCANVAS_EASE_CLASS,
   SIDEBAR_OFFCANVAS_OPEN_DURATION_CLASS,
   "group-data-[state=collapsed]:duration-[200ms]",
+  "motion-reduce:transition-none",
 );
 
 /**
@@ -377,16 +378,16 @@ function Sidebar({
         />
         <div
           className={cn(
-            // The offcanvas slide animates transform (compositor) instead of left/right
-            // (layout): a fixed panel relayouts its whole subtree per frame otherwise,
-            // which read as a janky close on heavy sidebar content. The gap still
-            // animates width — reserving layout is its job — but its subtree is empty.
-            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width,translate,transform] md:flex",
+            // The shell stays put and clips at its leading edge; only the inner panel
+            // slides (below). A panel that sits beside something — the app rail —
+            // then tucks away behind that edge instead of travelling across it. The
+            // clip keeps the trailing side open for the resize rail's hit area.
+            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width] md:flex",
             SIDEBAR_OFFCANVAS_MOTION_CLASS,
             !hasMounted && SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
             side === "left"
-              ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
-              : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
+              ? "left-0 [clip-path:inset(0_-100vw_0_0_round_var(--app-card-radius,0px)_0_0_var(--app-card-radius,0px))]"
+              : "right-0 [clip-path:inset(0_0_0_-100vw_round_0_var(--app-card-radius,0px)_var(--app-card-radius,0px)_0)]",
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
@@ -402,10 +403,17 @@ function Sidebar({
           {...props}
         >
           {/* The inner surface is the safe place for visual skinning. The outer shell owns
-              fixed positioning, width transitions, and the resize rail hit area. */}
+              fixed positioning, width transitions, and the resize rail hit area. The
+              offcanvas slide animates this surface's translate (compositor, no relayout
+              of the panel's subtree), in lockstep with the gap's width. */}
           <div
             className={cn(
-              "relative z-0 flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
+              "relative z-0 flex h-full w-full flex-col transition-[translate] group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
+              SIDEBAR_OFFCANVAS_MOTION_CLASS,
+              !hasMounted && SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
+              side === "left"
+                ? "group-data-[collapsible=offcanvas]:-translate-x-full"
+                : "group-data-[collapsible=offcanvas]:translate-x-full",
               !transparentSurface && "bg-sidebar",
               innerClassName,
             )}

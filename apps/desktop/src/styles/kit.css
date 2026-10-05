@@ -133,7 +133,8 @@
     --app-rail-active: color-mix(in srgb, var(--color-text-foreground, var(--foreground)) 10%, transparent);
   }
 
-  :is(.app-sidebar-panel, .workspace-card) {
+  /* The panel's shell clips its slide at the rail with the same corners. */
+  :is(.app-sidebar-panel, .workspace-card, [data-slot="sidebar-container"]:has(> .app-sidebar-panel)) {
     --app-card-radius: 12px;
     --app-card-edge: --alpha(var(--color-black) / 10%);
   }

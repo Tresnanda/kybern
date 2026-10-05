@@ -5,7 +5,7 @@ import { platform } from "@/lib/tauri"
 // panel, the content surface, and the right dock.
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ChatPaneDropOverlay } from "@/components/kybern/ChatPaneDropOverlay"
@@ -37,6 +37,19 @@ import { SplitThreads } from "@/views/SplitThreads"
 import { ThreadView } from "@/views/Thread"
 import { AppUpdateSurface } from "@/views/AppUpdate"
 import { SurfaceHeader, TitlebarSlotProvider } from "@/views/chrome"
+import { useNotesSync } from "@/views/notes/useNotesSync"
+import { QuickNote } from "@/views/notes/QuickNote"
+import { SaveToNotePicker } from "@/views/notes/SaveToNotePicker"
+import { createAndOpenNote } from "@/state/notes"
+import { openQuickNote } from "@/state/quickNote"
+import { TasksSidebar } from "@/views/tasks/TasksSidebar"
+import { useTasksSync } from "@/views/tasks/useTasksSync"
+import { newTaskHere } from "@/views/tasks/taskActions"
+
+// The Notes page (editor and all) loads when it is first opened, not at launch.
+const NotesView = lazy(() => import("@/views/notes/NotesPage").then((module) => ({ default: module.NotesView })))
+// The Tasks page (list, board, drag and drop) loads the same way.
+const TasksView = lazy(() => import("@/views/tasks/TasksPage").then((module) => ({ default: module.TasksView })))
 
 /** Width of the app rail. */
 const APP_RAIL_WIDTH = 52
@@ -89,11 +102,20 @@ function Workspace() {
   const workspaceFocus = useRef<HTMLElement | null>(null)
   const set = useStore((s) => s.set)
   const [titlebarSlot, setTitlebarSlot] = useState<HTMLDivElement | null>(null)
+  useNotesSync()
+  useTasksSync()
 
   useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })
-  useHotkey("mod+n", () => { set({ settingsOpen: false }); newThread() }, { allowInInput: true })
+  // On the Notes page ⌘N starts a note in the section you are in; everywhere else, a thread.
+  useHotkey("mod+n", () => {
+    set({ settingsOpen: false })
+    if (useStore.getState().selected.kind === "notes") void createAndOpenNote()
+    else if (useStore.getState().selected.kind === "tasks") newTaskHere()
+    else newThread()
+  }, { allowInInput: true })
+  useHotkey("mod+shift+n", () => openQuickNote(), { allowInInput: true })
   useHotkey("mod+,", () => { setKeyboardNavigation(true); set({ settingsOpen: true }) }, { allowInInput: true })
   useHotkey("mod+\\", () => {
     if (useStore.getState().settingsOpen) return
@@ -143,17 +165,18 @@ function Workspace() {
       <div className="fixed top-0 z-40 flex h-[46px] items-center" style={{ left: platform() === "macos" ? "var(--desktop-top-bar-traffic-light-gutter, 84px)" : "16px" }}>
         <SidebarLeadingControls className="hidden md:flex" />
       </div>
-      {/* The panel is the card's leading section. It slides out from under the
-          rail, fading as it goes so it never shows through the translucent frame. */}
+      {/* The panel is the card's leading section. It tucks away behind the rail:
+          its shell clips at the rail's edge, so it never crosses the frame. */}
       <Sidebar
         side="left"
         collapsible="offcanvas"
         transparentSurface
         innerClassName="app-sidebar-panel"
-        className="top-(--app-titlebar-height) bottom-(--app-frame-inset) left-(--app-rail-width) h-auto transition-[left,right,width,translate,transform,opacity] group-data-[collapsible=offcanvas]:opacity-0 group-data-[collapsible=offcanvas]:pointer-events-none"
+        inert={!sidebarOpen}
+        className="top-(--app-titlebar-height) bottom-(--app-frame-inset) left-(--app-rail-width) h-auto group-data-[collapsible=offcanvas]:pointer-events-none"
       >
         <ErrorBoundary label="the sidebar">
-          <ThreadSidebar />
+          {selected.kind === "tasks" ? <TasksSidebar /> : <ThreadSidebar />}
         </ErrorBoundary>
       </Sidebar>
 
@@ -195,6 +218,18 @@ function Workspace() {
                 ) : selected.kind === "usage" ? (
                   <ErrorBoundary label="usage">
                     <UsageView />
+                  </ErrorBoundary>
+                ) : selected.kind === "notes" ? (
+                  <ErrorBoundary label="notes">
+                    <Suspense fallback={null}>
+                      <NotesView />
+                    </Suspense>
+                  </ErrorBoundary>
+                ) : selected.kind === "tasks" ? (
+                  <ErrorBoundary label="tasks">
+                    <Suspense fallback={null}>
+                      <TasksView />
+                    </Suspense>
                   </ErrorBoundary>
                 ) : selected.kind === "draft" ? (
                   <ErrorBoundary key={`${selected.draft.projectId ?? "free"}:${selected.draft.purpose ?? "thread"}`} label="the home screen">
@@ -246,6 +281,10 @@ function Workspace() {
 
       <ErrorBoundary label="the palette">
         <Palette />
+      </ErrorBoundary>
+      <ErrorBoundary label="quick note">
+        <QuickNote />
+        <SaveToNotePicker />
       </ErrorBoundary>
       <ErrorBoundary label="saved sessions">
         <SessionsDialog />
