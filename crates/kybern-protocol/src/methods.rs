@@ -1285,20 +1285,57 @@ pub struct UsageSummaryResult {
 }
 method!(UsageSummary, "usage.summary", Some(Scope::OrchestrationRead), UsageSummaryParams, UsageSummaryResult);
 
-/// Latest reported plan limits (e.g. 5-hour / weekly) per provider, taken from the
-/// most recent usage each provider reported. Available without running a turn.
+/// Current plan limits (e.g. 5-hour / weekly / monthly) per provider. The daemon
+/// keeps one account-wide cache fed by turn-free live reads, limits running turns
+/// report, and, until the first read, the last stored report.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct UsageLimitsParams {}
+pub struct UsageLimitsParams {
+    /// Answer from the cache at once. Providers whose values are older than
+    /// their freshness window are re-read in the background and arrive as a
+    /// `usage.limits.changed` notification. Without it the call waits for
+    /// those reads (bounded), as older clients expect.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cached: bool,
+    /// Re-read every provider now, even if its values are fresh. Reads closer
+    /// together than a few seconds are coalesced.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh: bool,
+}
+/// Where a provider's current limits came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitsSource {
+    /// A turn-free read of the account (Claude usage endpoint, Codex rate limits, Cursor dashboard).
+    Live,
+    /// Reported by a running turn.
+    Session,
+    /// The last report in the event log, from before this daemon read the account.
+    Stored,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderLimits {
     pub provider: crate::ProviderKind,
     pub limits: Vec<crate::UsageLimit>,
+    /// When these values were observed. Absent from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LimitsSource>,
+    /// Plan name when the provider reports one, e.g. "Pro+".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct UsageLimitsResult {
     pub providers: Vec<ProviderLimits>,
+    /// Providers with a live read in flight.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refreshing: Vec<crate::ProviderKind>,
 }
 method!(UsageLimits, "usage.limits", Some(Scope::OrchestrationRead), UsageLimitsParams, UsageLimitsResult);
+/// Sent to every client that may read orchestration state whenever the limits
+/// cache changes or a read finishes. Params are a full `UsageLimitsResult`.
+pub const USAGE_LIMITS_CHANGED_NOTIFICATION: &str = "usage.limits.changed";
 
 // ---- access (pairing and tokens) ----
 

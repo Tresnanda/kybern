@@ -960,11 +960,20 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
 }
 
 
+// One row per window: a provider can name the same 5-hour window differently
+// in a live read and an in-turn report. A sparse update without a window
+// matches by name.
+type Limit = NonNullable<ProviderUsage["limits"]>[number]
+const sameLimit = (old: Limit, next: Limit) => old.window_minutes != null && next.window_minutes != null ? old.window_minutes === next.window_minutes : old.name === next.name
+
 function mergeProviderUsage(previous: ProviderUsage | undefined, next: ProviderUsage): ProviderUsage {
-  const limits = new Map(previous?.limits?.map((limit) => [limit.name, limit]))
+  const limits = [...(previous?.limits ?? [])]
   for (const limit of next.limits ?? []) {
-    const old = limits.get(limit.name)
-    limits.set(limit.name, { ...limit, window_minutes: limit.window_minutes ?? old?.window_minutes ?? null, resets_at: limit.resets_at ?? old?.resets_at ?? null })
+    const index = limits.findIndex((old) => sameLimit(old, limit))
+    const old = index >= 0 ? limits[index] : undefined
+    const merged = { ...limit, window_minutes: limit.window_minutes ?? old?.window_minutes ?? null, resets_at: limit.resets_at ?? old?.resets_at ?? null }
+    if (index >= 0) limits[index] = merged
+    else limits.push(merged)
   }
-  return { ...previous, ...next, limits: [...limits.values()] }
+  return { ...previous, ...next, limits }
 }

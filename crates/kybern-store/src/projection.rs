@@ -781,8 +781,15 @@ pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
             }
             if let Some(limits) = &usage.limits {
                 let current = result.limits.get_or_insert_default();
+                // One row per window: a provider can name the same 5-hour
+                // window differently in a live read and an in-turn report.
+                let same = |old: &UsageLimit, new: &UsageLimit| match (old.window_minutes, new.window_minutes) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => old.name == new.name,
+                };
                 for limit in limits {
-                    if let Some(old) = current.iter_mut().find(|old| old.name == limit.name) {
+                    if let Some(old) = current.iter_mut().find(|old| same(old, limit)) {
+                        old.name = limit.name.clone();
                         old.used_percent = limit.used_percent;
                         old.window_minutes = limit.window_minutes.or(old.window_minutes);
                         old.resets_at = limit.resets_at.or(old.resets_at);

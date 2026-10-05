@@ -142,18 +142,22 @@ pub(crate) async fn login_needs_refresh(context: &ProbeContext) -> bool {
         #[serde(rename = "expiresAt")]
         expires_at: Option<u64>,
     }
-    let file = config_dir(context).map(|dir| dir.join(".credentials.json"));
-    let contents = match file.and_then(|file| std::fs::read(file).ok()) {
-        Some(contents) => contents,
-        None => match keychain_login(context).await {
-            Some(contents) => contents,
-            None => return false,
-        },
-    };
+    let Some(contents) = stored_login(context).await else { return false };
     let Ok(credentials) = serde_json::from_slice::<Credentials>(&contents) else { return false };
     let Some(expires_at) = credentials.oauth.and_then(|login| login.expires_at) else { return false };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.as_millis() as u64);
     now + 5 * 60 * 1000 >= expires_at
+}
+
+/// Claude Code's stored login JSON: `.credentials.json` on Linux and Windows,
+/// the Keychain item on macOS. Read only; Kybern never refreshes it, because
+/// Anthropic rotates the single-use refresh token on every redemption.
+pub(crate) async fn stored_login(context: &ProbeContext) -> Option<Vec<u8>> {
+    let file = config_dir(context).map(|dir| dir.join(".credentials.json"));
+    match file.and_then(|file| std::fs::read(file).ok()) {
+        Some(contents) => Some(contents),
+        None => keychain_login(context).await,
+    }
 }
 
 /// Claude Code's macOS login item, read the way Claude Code reads it. A

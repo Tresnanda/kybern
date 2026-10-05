@@ -10,6 +10,7 @@ pub mod claude;
 mod claude_catalog;
 mod claude_config;
 pub mod claude_integrations;
+mod claude_usage;
 pub mod codex;
 pub mod codex_integrations;
 pub mod cursor;

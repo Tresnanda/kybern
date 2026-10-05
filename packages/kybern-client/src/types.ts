@@ -1444,14 +1444,30 @@ export interface UsageSummaryResult {
   total: UsageRow;
 }
 
-export interface UsageLimitsParams {}
+export interface UsageLimitsParams {
+  /** Answer from the daemon's cache now; stale providers re-read in the background and arrive as `usage.limits.changed`. */
+  cached?: boolean;
+  /** Re-read every provider now, even if fresh. */
+  refresh?: boolean;
+}
+/** Where a provider's current limits came from. */
+export type LimitsSource = "live" | "session" | "stored";
 export interface ProviderLimits {
   provider: ProviderKind;
   limits: NonNullable<ProviderUsage["limits"]>;
+  /** When these values were observed (ISO). Absent from older daemons. */
+  updated_at?: string;
+  source?: LimitsSource;
+  /** Plan name when the provider reports one, e.g. "Pro+". */
+  plan?: string;
 }
 export interface UsageLimitsResult {
   providers: ProviderLimits[];
+  /** Providers with a live read in flight. */
+  refreshing?: ProviderKind[];
 }
+/** Params are a full UsageLimitsResult. */
+export const USAGE_LIMITS_CHANGED_NOTIFICATION = "usage.limits.changed";
 
 export interface PullRequest {
   number: number;

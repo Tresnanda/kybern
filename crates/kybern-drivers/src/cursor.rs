@@ -6,6 +6,7 @@
 mod acp;
 mod runtime;
 mod stream;
+pub mod usage;
 
 pub(crate) use runtime::Connection;
 pub use runtime::{SDK_VERSION, install, setup_command};

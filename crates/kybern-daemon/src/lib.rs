@@ -28,6 +28,7 @@ mod state;
 mod terminal;
 mod thread_projection;
 mod thumbnail;
+mod usage;
 mod ws;
 
 use std::fs::OpenOptions;

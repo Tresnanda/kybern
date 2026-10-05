@@ -2700,6 +2700,8 @@ struct Inner {
     notes_changed: tokio::sync::broadcast::Sender<methods::NotesChangedNotification>,
     /// Task changes, forwarded to clients as `tasks.items.changed`.
     tasks_changed: tokio::sync::broadcast::Sender<methods::TaskItemsChangedNotification>,
+    /// Account plan limits per provider, forwarded as `usage.limits.changed`.
+    usage: crate::usage::UsageMonitor,
     /// Serializes task writes, including the run tracker that `emit` calls.
     /// Always taken after `commands` when both are needed.
     task_writes: std::sync::Mutex<()>,
@@ -2918,6 +2920,7 @@ impl Orchestrator {
     ) -> Self {
         let app_tools = crate::app_tools::AppTools::new(store.clone(), crate::terminal::TerminalManager::default());
         let computer = crate::computer::ComputerUse::new(settings.clone());
+        let usage = crate::usage::UsageMonitor::new(store.clone(), settings.clone());
         let task_threads = store.task_run_thread_ids().map(|ids| ids.into_iter().collect::<HashSet<_>>()).unwrap_or_else(|error| {
             tracing::warn!(%error, "could not load the threads that run tasks");
             HashSet::new()
@@ -2946,6 +2949,7 @@ impl Orchestrator {
                 collaboration_wakeup: Notify::new(),
                 notes_changed: tokio::sync::broadcast::channel(1024).0,
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
+                usage,
                 task_writes: std::sync::Mutex::new(()),
                 task_threads: std::sync::Mutex::new(task_threads),
                 task_published: std::sync::Mutex::new(HashMap::new()),
@@ -2970,6 +2974,10 @@ impl Orchestrator {
 
     pub(crate) fn computer(&self) -> &crate::computer::ComputerUse {
         &self.inner.computer
+    }
+
+    pub(crate) fn usage(&self) -> &crate::usage::UsageMonitor {
+        &self.inner.usage
     }
 
     fn revoke_native_session(&self, live: &LiveSession) {
@@ -5742,6 +5750,7 @@ impl Orchestrator {
                     Some(turn_id),
                     EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, terminal_message_id },
                 )?;
+                self.inner.usage.turn_finished(t.provider.kind);
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
                 self.maybe_generate_title(&t);
@@ -5762,6 +5771,8 @@ impl Orchestrator {
                     self.checkpoint(&t, turn_id, "after").await;
                 }
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error })?;
+                // A failed turn may have hit a plan limit.
+                self.inner.usage.turn_finished(t.provider.kind);
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
             }
@@ -5769,6 +5780,13 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
             }
             DriverEvent::UsageUpdated(usage) => {
+                // Plan limits are account-wide: every client's limits view
+                // updates, not only this thread's.
+                if let Some(limits) = usage.limits.as_deref()
+                    && let Some(thread) = self.inner.store.thread_get(thread_id)?
+                {
+                    self.inner.usage.observe(thread.provider.kind, limits);
+                }
                 self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
             }
             DriverEvent::Notice { level, text, data } => {

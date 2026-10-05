@@ -406,6 +406,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     // Notes are orchestration state: only clients that may read it hear about changes.
     let mut notes = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_notes());
     let mut tasks = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_tasks());
+    let mut usage = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.usage().subscribe());
     if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
         return;
     }
@@ -479,6 +480,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                         tracing::warn!(conn = %ctx.id, lagged = n, "client missed task changes");
                     }
                     Err(_) => tasks = None,
+                }
+            }
+            limits = async {
+                match usage.as_mut() {
+                    Some(usage) => usage.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match limits {
+                    Ok(changed) => { let _ = ctx.out.notify(kybern_protocol::methods::USAGE_LIMITS_CHANGED_NOTIFICATION, changed).await; }
+                    // Each notification carries the whole cache; the next one catches up.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => usage = None,
                 }
             }
             ev = live.recv() => {
