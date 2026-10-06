@@ -20,6 +20,7 @@ import { InspectorColumn } from "../../src/features/Inspector";
 import { TranscriptBlock } from "../../src/features/Transcript";
 import { WorkspaceMenu, WorkspacePill } from "../../src/features/WorkspaceMenu";
 import { CollaborationStrip } from "../../src/features/CollaborationStrip";
+import { ChildThreads } from "../../src/features/ChildThreads";
 import { useLayout } from "../../src/state/layout";
 import {
   errorText,
@@ -538,6 +539,7 @@ export default function ThreadScreen() {
           style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
         >
           <CollaborationStrip thread={thread} />
+          <ChildThreads thread={thread} active={focused} />
           <WorkspacePill
             threadId={id}
             activeTasks={snapshot.tasks.filter(taskActive).length}

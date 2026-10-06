@@ -21,6 +21,8 @@ import { useTheme } from "../ui/theme";
 import { UserMessageBubble } from "./UserMessageBubble";
 import { TaskRow } from "./Tasks";
 import { ApprovalPanel } from "./Approvals";
+import { MessagePart } from "./MessagePart";
+import { hasOrchestrationParts } from "../state/orchestration";
 
 function CollaborationMessageNotice({ preview, text, expanded, setExpanded }: {
   preview: NonNullable<ReturnType<typeof collaborationPreview>>; text: string; expanded: boolean; setExpanded: (value: boolean) => void;
@@ -95,6 +97,15 @@ export const TranscriptBlock = memo(function TranscriptBlock({
   const [copied, setCopied] = useState(false);
   switch (block.kind) {
     case "user": {
+      // Messages between agents and delegated results read as notices, not as the user's own bubble.
+      if (hasOrchestrationParts(block.message))
+        return (
+          <View style={{ marginVertical: 12, gap: 8 }}>
+            {block.message.parts.map((part, index) => (
+              <MessagePart key={index} part={part} />
+            ))}
+          </View>
+        );
       const text = promptText(block.message);
       const preview = block.message.parts.every(part => part.type === "text") ? collaborationPreview(text) : null;
       if (!preview) return <UserMessageBubble block={block} threadId={threadId} />;
