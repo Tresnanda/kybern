@@ -1,10 +1,11 @@
-// The foot of a task's page, where work goes to an agent. It stays out of the way:
-// - no live run: nothing, or a "Draft run · Continue" pill while a draft is kept.
-//   "Send to agent" (or ⌘↵) slides the composer up with the task as a chip, its
-//   linked notes as chips, suggested notes to add, and the run's project,
+// The foot of a task's page, where work goes to an agent. One place both to start a
+// run and to follow one up, always visible as a one-line field that opens in place:
+// - no run to follow: "Tell an agent what to do with ADE-3…" (⌘↵ opens it too), with
+//   a "Draft" tag while a draft is kept. It opens into the composer with the task as a
+//   chip, its linked notes as chips, suggested notes to add, and the run's project,
 //   workspace and branch in the tray. Esc hides it; the draft stays.
-// - a live run, or one waiting for review: a one-line "Follow up with …" field that
-//   opens into the composer and goes to the run through `tasks.items.followup`.
+// - a live run, or one waiting for review: "Follow up with …", which opens into the
+//   composer and goes to the run through `tasks.items.followup`.
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { toast } from "sonner"
@@ -13,7 +14,7 @@ import { useShallow } from "zustand/react/shallow"
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME, COMPOSER_TRAY_CHIP_CLASS_NAME as TRAY_CHIP_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { mod, PROVIDER_LABEL } from "@/lib/format"
-import { ChevronDownIcon, PencilIcon, PlusIcon } from "@/lib/kit/icons"
+import { ChevronDownIcon, PlusIcon } from "@/lib/kit/icons"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { cn } from "@/lib/utils"
 import { noteMentionPart, taskMentionPart, type MentionPart } from "@/lib/userInput"
@@ -72,21 +73,18 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
   const close = useCallback(
     (restore = true) => {
       const target = returnFocus.current
-      const closing = kind
       returnFocus.current = null
       closeRunComposer(task.id)
       if (!restore) return
       requestAnimationFrame(() => {
         const field = dock.current?.querySelector<HTMLElement>("[data-dock-field]")
-        const header = document.querySelector<HTMLElement>(`[data-run-composer-trigger="${task.id}"]`)
-        const pill = dock.current?.querySelector<HTMLElement>("[data-dock-pill]")
-        const next = target?.isConnected ? target : closing === "followup" ? field ?? header : header ?? pill ?? field
+        const next = target?.isConnected ? target : field
         quietFocus.current = true
         next?.focus({ preventScroll: true })
         quietFocus.current = false
       })
     },
-    [task.id, kind],
+    [task.id],
   )
 
   // ---- room for the dock: the column's bottom padding follows its height ----
@@ -277,7 +275,6 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
   // ---- the follow-up composer speaks to the run's thread ----
   const thread = useStore((s) => (run ? s.threads[run.thread_id] : undefined))
   const agent = run ? PROVIDER_LABEL[(thread?.provider ?? run.provider).kind] : ""
-  const openFollowup = () => openRunComposer(task.id, "followup")
 
   const pending = task.pending_followup?.trim()
   const hide = <HideButton onClick={() => close()} />
@@ -299,8 +296,7 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
     exit: { opacity: 0, pointerEvents: "none" as const, transition: { duration: 0.1 } },
   }
 
-  const showPill = !kind && hasRunDraft && !live
-  const showField = !kind && canFollowUp && !!run
+  const showField = !kind
   let content: ReactNode = null
   if (kind === "run") {
     content = (
@@ -310,7 +306,7 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
           draftKey={runDraftKey(task.id)}
           autoFocus
           initialMentions={initialMentions}
-          placeholder="Add instructions, or send the task as it is"
+          placeholder={`Tell an agent what to do with ${task.key}, or start it as it is`}
           mode={config.permissionMode}
           onModeChange={(mode: PermissionMode) => pick({ permissionMode: mode })}
           provider={config.provider}
@@ -430,38 +426,34 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
         />
       </motion.div>
     )
-  } else if (showPill || showField) {
+  } else if (showField) {
+    // The field is always there. With a run to follow it follows up; otherwise it starts one.
+    const following = canFollowUp && !!run
+    const open = () => openRunComposer(task.id, following ? "followup" : "run")
     content = (
       <motion.div key="rest" {...rest}>
-        {showPill && (
-          <button type="button" className="tk-dock-pill" data-dock-pill onClick={() => openRunComposer(task.id, "run")}>
-            <PencilIcon className="size-3.5" aria-hidden />
-            Draft run ·<b>Continue</b>
-          </button>
-        )}
-        {showField && (
-          <button
-            type="button"
-            className="tk-fbox"
-            data-dock-field
-            onClick={openFollowup}
-            onFocus={() => {
-              if (!quietFocus.current) openFollowup()
-            }}
-          >
-            <span className="mk">
-              <AgentMark kind={run!.provider.kind} size={14} />
-            </span>
-            <span className="t">Follow up with {agent}…</span>
-            {hasFollowupDraft && <span className="tag">Draft</span>}
-          </button>
-        )}
+        <button
+          type="button"
+          className="tk-fbox"
+          data-dock-field
+          aria-label={following ? `Follow up with ${agent}` : `Tell an agent what to do with ${task.key}`}
+          onClick={open}
+          onFocus={() => {
+            if (!quietFocus.current) open()
+          }}
+        >
+          <span className="mk">
+            <AgentMark kind={(following ? run!.provider.kind : config.provider?.kind) ?? "claude-code"} size={14} />
+          </span>
+          <span className="t">{following ? `Follow up with ${agent}…` : `Tell an agent what to do with ${task.key}…`}</span>
+          {following ? hasFollowupDraft && <span className="tag">Draft</span> : hasRunDraft ? <span className="tag">Draft</span> : <span className="key">{mod}↵</span>}
+        </button>
       </motion.div>
     )
   }
 
   return (
-    <div ref={dock} className="tk-dock" data-filled={content ? true : undefined}>
+    <div ref={dock} className="tk-dock" data-filled>
       <div className="tk-dock-col">
         {/* Leaving and arriving share one grid cell, so a swap never shifts the page. */}
         <AnimatePresence initial={false}>

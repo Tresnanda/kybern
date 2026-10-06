@@ -1284,41 +1284,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tk-dock-pill {
-  display: flex;
-  width: fit-content;
-  height: 30px;
-  margin: 0 auto;
-  align-items: center;
-  gap: 6px;
-  padding: 0 12px 0 10px;
-  border-radius: 999px;
-  background: var(--task-card);
-  box-shadow: var(--task-shadow-card);
-  font-size: 12px;
-  color: var(--task-fg2);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: box-shadow var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out), scale var(--duration-micro) var(--ease-out);
-}
-.tk-dock-pill:hover {
-  box-shadow: var(--task-shadow-card-hover);
-  color: var(--task-fg1);
-}
-.tk-dock-pill:active {
-  scale: 0.96;
-}
-.tk-dock-pill:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
-  outline-offset: 1px;
-}
-.tk-dock-pill b {
-  font-weight: 500;
-  color: var(--task-fg);
-}
-.tk-dock-pill + .tk-fbox {
-  margin-top: 8px;
-}
 /* The follow-up field, collapsed: reads like a composer waiting for a click. */
 .tk-fbox {
   display: flex;
@@ -1362,12 +1327,51 @@
   font-size: 12px;
   color: var(--task-fg2);
 }
-@media (prefers-reduced-motion: reduce) {
-  .tk-dock-pill:active {
-    scale: none;
-  }
+.tk-fbox .key {
+  flex: none;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--task-fg4);
+}
+.tk-fbox:hover {
+  box-shadow: inset 0 0 0 0.5px var(--task-hair), 0 0 0 0.5px var(--task-hair);
+}
+.tk-fbox:hover .t {
+  color: var(--task-fg2);
+}
+:root:not(.dark) .tk-fbox:hover {
+  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 3px 10px -3px rgb(0 0 0 / 0.1);
 }
 
+/* The run's state in the task page's header: the word, the agent, a way to the thread. */
+.tk-runstate {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 6px;
+  font-size: 13px;
+  color: var(--task-fg2);
+  white-space: nowrap;
+  transition: opacity 150ms var(--ease-out);
+}
+.tk-runstate b {
+  font-weight: 500;
+  color: var(--task-fg1);
+}
+.tk-btn.open-run {
+  gap: 4px;
+  margin-inline-end: 14px; /* space, not a divider, before the previous/next pair */
+  color: var(--task-fg1);
+  font-weight: 500;
+  transition: opacity 150ms var(--ease-out), background-color var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out);
+}
+@starting-style {
+  .tk-runstate,
+  .tk-btn.open-run {
+    opacity: 0;
+  }
+}
 .tk-dside {
   width: 296px;
   flex: none;
