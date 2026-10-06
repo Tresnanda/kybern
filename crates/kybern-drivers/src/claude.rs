@@ -145,8 +145,8 @@ impl AgentDriver for ClaudeDriver {
             cmd.args(["--mcp-config", native_mcp_config.path.to_string_lossy().as_ref()]);
         }
         if let Some(bridge) = config.native_tool_bridge.as_ref() {
-            if let Some(instructions) = bridge.coordinator_instructions.as_deref() {
-                cmd.args(["--append-system-prompt", instructions]);
+            if let Some(instructions) = bridge.provider_instructions() {
+                cmd.args(["--append-system-prompt", instructions.as_str()]);
             }
             for tool in &bridge.restrictions.denied_tools {
                 let provider_name = claude_tool_name(bridge, tool);
@@ -1842,6 +1842,7 @@ mod tests {
             endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
             authorization: Some("session-capability".into()),
             coordinator_instructions: None,
+            guide: None,
             tools: vec![],
             restrictions: Default::default(),
         };
@@ -1874,12 +1875,16 @@ mod tests {
     async fn session_start_resume_and_fork_scope_mcp_and_coordinator_bootstrap() {
         use crate::{AgentDriver, NativeToolDefinition, SessionConfig};
         use std::os::unix::fs::PermissionsExt;
-        for (resume, fork, enabled, coordinator) in [
-            (false, false, true, false),
-            (false, false, true, true),
-            (true, false, true, true),
-            (true, true, true, true),
-            (false, false, false, false),
+        for (resume, fork, enabled, coordinator, guide) in [
+            (false, false, true, false, false),
+            (false, false, true, true, false),
+            (true, false, true, true, false),
+            (true, true, true, true, false),
+            (false, false, false, false, false),
+            // The guide alone (an ordinary thread), and with a coordinator role after it.
+            (false, false, true, false, true),
+            (true, false, true, false, true),
+            (true, false, true, true, true),
         ] {
             let root = tempfile::tempdir().unwrap();
             let binary = root.path().join("claude-fixture");
@@ -1890,6 +1895,7 @@ mod tests {
                 endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
                 authorization: Some("fixture-capability".into()),
                 coordinator_instructions: coordinator.then(|| "COORDINATOR ROLE SENTINEL".into()),
+                guide: guide.then(|| "KYBERN GUIDE SENTINEL".into()),
                 tools: ["kybern_thread_read", "kybern_collaboration_spawn"]
                     .into_iter()
                     .map(|name| NativeToolDefinition {
@@ -1926,8 +1932,16 @@ mod tests {
             let args: Vec<String> = serde_json::from_slice(&std::fs::read(argv_path).unwrap()).unwrap();
             spawned.session.close().await.unwrap();
             assert_eq!(args.iter().any(|arg| arg == "--mcp-config"), enabled);
-            assert_eq!(args.iter().filter(|arg| arg.as_str() == "--append-system-prompt").count(), usize::from(coordinator));
-            assert_eq!(args.iter().any(|arg| arg == "COORDINATOR ROLE SENTINEL"), coordinator);
+            let delivered = enabled && (coordinator || guide);
+            assert_eq!(args.iter().filter(|arg| arg.as_str() == "--append-system-prompt").count(), usize::from(delivered));
+            let expected = match (guide, coordinator) {
+                (true, true) => Some("KYBERN GUIDE SENTINEL\nCOORDINATOR ROLE SENTINEL"),
+                (true, false) => Some("KYBERN GUIDE SENTINEL"),
+                (false, true) => Some("COORDINATOR ROLE SENTINEL"),
+                (false, false) => None,
+            };
+            let position = args.iter().position(|arg| arg == "--append-system-prompt");
+            assert_eq!(position.map(|index| args[index + 1].as_str()).filter(|_| enabled), expected.filter(|_| enabled));
             assert!(
                 !args.iter().any(|arg| ["--system-prompt", "--tools", "--strict-mcp-config"].contains(&arg.as_str())),
                 "ordinary MCP availability must not replace system prompts or disable native plugins"

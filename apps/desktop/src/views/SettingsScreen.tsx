@@ -294,6 +294,9 @@ function General() {
         <Row title="Generate thread titles" description="Names the thread from its first message using the agent.">
           <Switch aria-label="Generate thread titles" checked={settings.generate_titles} onCheckedChange={(v) => update({ generate_titles: v })} />
         </Row>
+        <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads.">
+          <Switch aria-label="Tell agents about Kybern" checked={settings.tell_agents_about_kybern ?? true} onCheckedChange={(v) => update({ tell_agents_about_kybern: v })} />
+        </Row>
         <AskBeforeCloseRow />
       </Section>
       <Section title="Notes">

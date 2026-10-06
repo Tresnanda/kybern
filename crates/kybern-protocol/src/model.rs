@@ -920,6 +920,9 @@ pub struct Settings {
     pub access: AccessSettings,
     /// Desktop control through CuaDriver for non-Codex harnesses.
     pub computer_use: ComputerUseSettings,
+    /// Give new agent sessions a short guide to Kybern: images, notes and
+    /// tasks, other threads, helpers. Applies to sessions started after the change.
+    pub tell_agents_about_kybern: bool,
 }
 
 /// Agents drive apps on this Mac through a separately installed CuaDriver.
@@ -976,6 +979,7 @@ impl Default for Settings {
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
             computer_use: ComputerUseSettings::default(),
+            tell_agents_about_kybern: true,
         }
     }
 }

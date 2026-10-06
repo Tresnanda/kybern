@@ -4960,7 +4960,8 @@ impl Orchestrator {
                 if self.inner.computer.offered_to(thread.provider.kind) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
                 }
-                gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions)
+                let guide = self.agent_guide(&tools, &restrictions);
+                gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
             })
             .transpose()?;
         let config = SessionConfig {
@@ -5075,6 +5076,22 @@ impl Orchestrator {
             denied_tools: vec!["kybern_collaboration_report".into()],
             require_enforcement: true,
         })
+    }
+
+    /// The "Working in Kybern" guide for a session with these tools, or `None`
+    /// when the user turned "Tell agents about Kybern" off.
+    fn agent_guide(
+        &self,
+        tools: &[kybern_drivers::NativeToolDefinition],
+        restrictions: &kybern_drivers::NativeToolRestrictions,
+    ) -> Option<String> {
+        if !self.inner.settings.get().tell_agents_about_kybern {
+            return None;
+        }
+        let names = tools.iter().map(|tool| tool.name.as_str()).filter(|name| restrictions.permits(name));
+        let guide = crate::agent_guide::render(&crate::agent_guide::GuideTools::from_names(names));
+        tracing::debug!(version = crate::agent_guide::GUIDE_VERSION, bytes = guide.len(), "attaching the Kybern guide to a new session");
+        Some(guide)
     }
 
     fn coordinator_instructions(&self, thread: &Thread) -> Result<Option<String>> {
@@ -6729,6 +6746,10 @@ mod tests {
         }
 
         fn with_drivers(drivers: DriverRegistry) -> Self {
+            Self::with_drivers_and_gateway(drivers, None)
+        }
+
+        fn with_drivers_and_gateway(drivers: DriverRegistry, gateway: Option<crate::native_tools_mcp::NativeToolsGateway>) -> Self {
             let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
             let paths = Paths::resolve(Some(root.clone())).unwrap();
             let settings = SettingsStore::load(&paths.settings).unwrap();
@@ -6746,7 +6767,10 @@ mod tests {
             };
             store.project_insert(&project).unwrap();
             let (events_tx, _) = crate::bounded_broadcast::channel(64, 8 * 1024 * 1024);
-            let orchestrator = Orchestrator::new(store.clone(), drivers, events_tx, paths, settings);
+            let mut orchestrator = Orchestrator::new(store.clone(), drivers, events_tx, paths, settings);
+            if let Some(gateway) = gateway {
+                orchestrator = orchestrator.with_native_tools(gateway);
+            }
             Self { root, store, orchestrator, project }
         }
 
@@ -6976,6 +7000,7 @@ mod tests {
         let created = fixture.tool(&thread, &live, "c1", "kybern_note_create", json!({"title": "Findings", "body": "one"})).await.unwrap();
         let note_id: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
         assert_eq!(created["link"], json!(format!("kybern://note/{note_id}")));
+        assert_eq!(created["markdown"], json!(format!("[Findings](kybern://note/{note_id})")));
         assert_eq!(created["created_by_thread"], json!(thread.id));
         assert_eq!(created["scope"], json!("project"));
         // Replacing text needs the revision it was based on.
@@ -7050,6 +7075,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((updated["criteria_done"].clone(), updated["priority"].clone()), (json!(1), json!(2)));
+        assert_eq!(updated["markdown"], json!(format!("[{} {}](kybern://task/{})", user_task.key, user_task.title, user_task.id)));
         let task = fixture.store.task_item_get(user_task.id).unwrap().unwrap();
         assert_eq!(task.body, "Redirect.\n\nSafari only.\n\n- [x] Lands on home\n- [ ] Has a test\n");
         assert!(tasks_changed.try_recv().is_ok(), "the update is published");
@@ -8091,6 +8117,107 @@ mod tests {
         let mut resumed = coordinator.thread.clone();
         resumed.provider_session_id = Some("saved-provider-session".into());
         assert_eq!(fixture.orchestrator.coordinator_instructions(&resumed).unwrap().as_deref(), Some(role_before.as_str()));
+    }
+
+    /// Records the bridge each spawned session is given.
+    struct BridgeCapture {
+        kind: ProviderKind,
+        bridges: Arc<std::sync::Mutex<Vec<Option<kybern_drivers::NativeToolBridge>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl kybern_drivers::AgentDriver for BridgeCapture {
+        fn kind(&self) -> ProviderKind {
+            self.kind
+        }
+
+        async fn probe(&self, _binary: Option<&PathBuf>) -> ProviderStatus {
+            ProviderStatus {
+                kind: self.kind,
+                display_name: "Capture".into(),
+                available: true,
+                binary_path: None,
+                version: None,
+                unavailable_reason: None,
+                supported_permission_modes: PermissionMode::ALL.to_vec(),
+                supports_fork: false,
+                supports_model_switch: false,
+                supports_effort_switch: false,
+                supported_efforts: vec![],
+                models: vec![],
+                instances: vec![],
+            }
+        }
+
+        async fn spawn(&self, config: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
+            self.bridges.lock().unwrap().push(config.native_tool_bridge);
+            let (_tx, events) = tokio::sync::mpsc::channel(1);
+            Ok(kybern_drivers::SpawnedSession { session: Box::new(TestSession::default()), events })
+        }
+    }
+
+    fn capture_fixture(kind: ProviderKind) -> (Fixture, Arc<std::sync::Mutex<Vec<Option<kybern_drivers::NativeToolBridge>>>>) {
+        let bridges = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut drivers = DriverRegistry::default();
+        drivers.register(Arc::new(BridgeCapture { kind, bridges: bridges.clone() }));
+        let gateway = crate::native_tools_mcp::NativeToolsGateway::default();
+        (Fixture::with_drivers_and_gateway(drivers, Some(gateway)), bridges)
+    }
+
+    #[tokio::test]
+    async fn every_new_session_receives_the_guide_for_its_own_tools_unless_turned_off() {
+        let (fixture, bridges) = capture_fixture(ProviderKind::Codex);
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Codex);
+        let spawn = || async {
+            let live = fixture.orchestrator.spawn_session(&thread, None).await.unwrap();
+            fixture.orchestrator.revoke_native_session(&live);
+            bridges.lock().unwrap().last().cloned().flatten().expect("bridge")
+        };
+
+        let first = spawn().await;
+        let guide = first.guide().expect("an ordinary thread gets the guide").to_owned();
+        assert_eq!(first.provider_instructions().as_deref(), Some(guide.as_str()), "no coordinator role on an ordinary thread");
+        assert!(guide.starts_with("# Working in Kybern") && guide.contains("## Notes and tasks") && guide.contains("## Helpers"));
+        assert!(!guide.contains("The user's Mac"), "Codex has no Kybern computer tools");
+        assert_eq!(spawn().await.guide(), Some(guide.as_str()), "respawn and resume keep the prefix byte-identical");
+
+        let mut settings = fixture.orchestrator.inner.settings.get();
+        settings.tell_agents_about_kybern = false;
+        fixture.orchestrator.inner.settings.set(settings).unwrap();
+        let off = spawn().await;
+        assert_eq!(off.guide(), None);
+        assert_eq!(off.provider_instructions(), None);
+        assert!(off.tools().next().is_some(), "turning the guide off leaves the tools alone");
+    }
+
+    #[tokio::test]
+    async fn a_coordinator_gets_the_guide_for_its_restricted_tools_then_its_stable_role() {
+        let (fixture, bridges) = capture_fixture(ProviderKind::ClaudeCode);
+        let coordinator = fixture
+            .orchestrator
+            .project_coordinator_get_or_create(methods::CollaborationCoordinatorGetOrCreateParams {
+                operation_id: Uuid::now_v7(),
+                project_id: fixture.project.id,
+                provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+                model: None,
+                effort: None,
+                permission_mode: Some(PermissionMode::Supervised),
+                coordinator_mode: Some(CoordinatorMode::Dedicated),
+                initial_goal: Some("Coordinate".into()),
+            })
+            .await
+            .unwrap();
+        let live = fixture.orchestrator.spawn_session(&coordinator.thread, None).await.unwrap();
+        fixture.orchestrator.revoke_native_session(&live);
+        let bridge = bridges.lock().unwrap().last().cloned().flatten().expect("bridge");
+        let role = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
+        let guide = bridge.guide().unwrap();
+        assert_eq!(bridge.provider_instructions(), Some(format!("{guide}\n{role}")));
+        assert!(guide.contains("## Notes and tasks") && guide.contains("kybern_thread_read"));
+        assert!(!guide.contains("kybern_collaboration_spawn") || bridge.has_tool("kybern_collaboration_spawn"));
+        for name in ["kybern_thread_send", "kybern_workspace_diff"] {
+            assert_eq!(guide.contains(name), bridge.has_tool(name), "the guide must describe exactly the tools the session has: {name}");
+        }
     }
 
     #[tokio::test]

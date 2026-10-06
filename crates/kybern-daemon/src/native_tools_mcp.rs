@@ -63,7 +63,7 @@ impl NativeToolsGateway {
         tools: Vec<NativeToolDefinition>,
         restrictions: NativeToolRestrictions,
     ) -> Result<NativeToolBridge> {
-        self.register_coordinator(thread_id, session_instance_id, tools, restrictions, None)
+        self.register_coordinator(thread_id, session_instance_id, tools, restrictions, None, None)
     }
 
     pub(crate) fn register_coordinator(
@@ -73,6 +73,7 @@ impl NativeToolsGateway {
         tools: Vec<NativeToolDefinition>,
         restrictions: NativeToolRestrictions,
         coordinator_instructions: Option<String>,
+        guide: Option<String>,
     ) -> Result<NativeToolBridge> {
         let authorization = crate::auth::generate();
         let endpoint = self.endpoint.read().unwrap_or_else(|error| error.into_inner()).clone();
@@ -83,6 +84,7 @@ impl NativeToolsGateway {
             tools,
             restrictions,
             coordinator_instructions,
+            guide,
         };
         bridge.validate()?;
         let mut sessions = self.sessions.lock().unwrap_or_else(|error| error.into_inner());

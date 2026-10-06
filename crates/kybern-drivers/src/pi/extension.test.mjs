@@ -12,6 +12,8 @@ function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
   else delete process.env.KYBERN_PI_APP_TOOLS;
   if (policy.systemPrompt) process.env.KYBERN_PI_SYSTEM_PROMPT = policy.systemPrompt;
   else delete process.env.KYBERN_PI_SYSTEM_PROMPT;
+  if (policy.noBootstrap) process.env.KYBERN_PI_NO_BOOTSTRAP = "1";
+  else delete process.env.KYBERN_PI_NO_BOOTSTRAP;
   if (policy.coordinatorOnly) process.env.KYBERN_PI_COORDINATOR_ONLY = "1";
   else delete process.env.KYBERN_PI_COORDINATOR_ONLY;
   if (policy.deniedTools) process.env.KYBERN_PI_DENIED_TOOLS = JSON.stringify(policy.deniedTools);
@@ -137,6 +139,14 @@ test("coordinator system prefix stays stable while its history marker is added o
   assert.deepEqual(await hook({ systemPrompt: "native" }), {
     systemPrompt: "native\n\nUse kybern_thread_send for durable routing.",
   });
+});
+
+test("a guide-only session repeats the guide in the system prompt without a history message", async () => {
+  const guideOnly = fakePi("supervised", [], { systemPrompt: "Kybern guide.", noBootstrap: true });
+  await guideOnly.handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+  const hook = guideOnly.handlers.get("before_agent_start");
+  assert.deepEqual(await hook({ systemPrompt: "native" }), { systemPrompt: "native\n\nKybern guide." });
+  assert.deepEqual(await hook({ systemPrompt: "native" }), { systemPrompt: "native\n\nKybern guide." });
 });
 
 test("saved coordinator sessions backfill only when the durable marker is absent", async () => {

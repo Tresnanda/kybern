@@ -1353,6 +1353,8 @@ export interface Settings {
   background: BackgroundSettings;
   access: AccessSettings;
   computer_use: ComputerUseSettings;
+  /** Give new agent sessions a short guide to Kybern. Defaults to on. */
+  tell_agents_about_kybern: boolean;
 }
 
 /** Whether an agent may ask to use the real cursor and focus. */

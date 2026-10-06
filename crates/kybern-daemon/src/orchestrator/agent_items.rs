@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use super::tasks::{NOTE_MENTION_PREFIX, TASK_MENTION_PREFIX, priority_label, status_label};
 use super::{DaemonAnswer, LiveSession, Orchestrator};
+use crate::app_tools::markdown_link;
 
 /// `tool_name` of the approval card these tools open.
 pub(crate) const APPROVAL_TOOL: &str = "kybern_notes_tasks";
@@ -271,7 +272,10 @@ impl Orchestrator {
             .note_ids
             .iter()
             .map(|id| match store.note_get(*id).ok().flatten().filter(|note| note.summary.deleted_at.is_none()) {
-                Some(note) => json!({ "id": id, "title": note.summary.title, "link": format!("{NOTE_MENTION_PREFIX}{id}") }),
+                Some(note) => json!({
+                    "id": id, "title": note.summary.title, "link": format!("{NOTE_MENTION_PREFIX}{id}"),
+                    "markdown": markdown_link(&note.summary.title, &format!("{NOTE_MENTION_PREFIX}{id}")),
+                }),
                 None => json!({ "id": id, "title": null, "unavailable": true }),
             })
             .collect();
@@ -965,6 +969,7 @@ fn note_row(note: &NoteSummary) -> Value {
         "revision": note.revision,
         "updated_at": note.updated_at,
         "link": format!("{NOTE_MENTION_PREFIX}{}", note.id),
+        "markdown": markdown_link(&note.title, &format!("{NOTE_MENTION_PREFIX}{}", note.id)),
     })
 }
 
@@ -990,6 +995,7 @@ fn task_row(task: &TaskItem) -> Value {
         "criteria_total": items.len(),
         "latest_run": task.runs.last().map(|run| json!({ "thread_id": run.thread_id, "state": run.state })),
         "link": format!("{TASK_MENTION_PREFIX}{}", task.id),
+        "markdown": markdown_link(&format!("{} {}", task.key, task.title), &format!("{TASK_MENTION_PREFIX}{}", task.id)),
     })
 }
 

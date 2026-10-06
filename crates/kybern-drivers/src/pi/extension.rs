@@ -128,11 +128,15 @@ impl StagedExtension {
         command.env("KYBERN_PI_PERMISSION_MODE", mode_name(self.mode));
         command.env_remove("KYBERN_PI_APP_TOOLS");
         command.env_remove("KYBERN_PI_SYSTEM_PROMPT");
+        command.env_remove("KYBERN_PI_NO_BOOTSTRAP");
         command.env_remove("KYBERN_PI_COORDINATOR_ONLY");
         command.env_remove("KYBERN_PI_DENIED_TOOLS");
         if let Some(bridge) = bridge {
-            if let Some(instructions) = bridge.coordinator_instructions.as_deref() {
+            if let Some(instructions) = bridge.provider_instructions() {
                 command.env("KYBERN_PI_SYSTEM_PROMPT", instructions);
+                if bridge.coordinator_instructions.is_none() {
+                    command.env("KYBERN_PI_NO_BOOTSTRAP", "1");
+                }
             }
             let tools: Vec<_> = bridge
                 .tools()
@@ -414,6 +418,7 @@ mod tests {
             endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
             authorization: Some("session-capability".into()),
             coordinator_instructions: Some("COORDINATOR ROLE SENTINEL".into()),
+            guide: None,
             tools: vec![
                 NativeToolDefinition {
                     name: "kybern_threads_search".into(),
@@ -456,11 +461,44 @@ mod tests {
     }
 
     #[test]
+    fn configure_delivers_the_guide_before_a_coordinator_role() {
+        let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
+        let mut bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: None,
+            authorization: None,
+            coordinator_instructions: None,
+            guide: Some("KYBERN GUIDE SENTINEL".into()),
+            tools: vec![],
+            restrictions: NativeToolRestrictions::default(),
+        };
+        let mut ordinary = Command::new("pi");
+        staged.configure(&mut ordinary, Some(&bridge));
+        assert_eq!(command_env(&ordinary, "KYBERN_PI_SYSTEM_PROMPT").unwrap().unwrap(), "KYBERN GUIDE SENTINEL");
+        assert_eq!(command_env(&ordinary, "KYBERN_PI_NO_BOOTSTRAP").unwrap().unwrap(), "1");
+
+        bridge.coordinator_instructions = Some("COORDINATOR ROLE SENTINEL".into());
+        let mut coordinator = Command::new("pi");
+        staged.configure(&mut coordinator, Some(&bridge));
+        assert_eq!(
+            command_env(&coordinator, "KYBERN_PI_SYSTEM_PROMPT").unwrap().unwrap(),
+            "KYBERN GUIDE SENTINEL\nCOORDINATOR ROLE SENTINEL"
+        );
+        assert_eq!(command_env(&coordinator, "KYBERN_PI_NO_BOOTSTRAP"), Some(None));
+    }
+
+    #[test]
     fn configure_clears_bridge_environment_when_disabled() {
         let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
         let mut command = Command::new("pi");
         staged.configure(&mut command, None);
-        for name in ["KYBERN_PI_APP_TOOLS", "KYBERN_PI_SYSTEM_PROMPT", "KYBERN_PI_COORDINATOR_ONLY", "KYBERN_PI_DENIED_TOOLS"] {
+        for name in [
+            "KYBERN_PI_APP_TOOLS",
+            "KYBERN_PI_SYSTEM_PROMPT",
+            "KYBERN_PI_NO_BOOTSTRAP",
+            "KYBERN_PI_COORDINATOR_ONLY",
+            "KYBERN_PI_DENIED_TOOLS",
+        ] {
             assert_eq!(command_env(&command, name), Some(None));
         }
     }
