@@ -253,6 +253,7 @@ impl Orchestrator {
                     coordinator_project_id: None,
                     collaboration_group_id: None,
                     subagent: Some(info.clone()),
+                    delegation: None,
                 };
                 self.inner.store.thread_upsert(&thread)?;
                 let event = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() })?;

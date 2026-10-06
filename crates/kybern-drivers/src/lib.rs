@@ -6,6 +6,37 @@
 //! and turns [`DriverEvent`]s into persisted thread events.
 
 pub mod binary;
+#[cfg(test)]
+pub(crate) mod test_support {
+    use kybern_protocol::*;
+    use uuid::Uuid;
+
+    /// A user message holding one thread message and one results batch.
+    pub fn orchestration_message() -> UserMessage {
+        UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "intro".into() },
+                ContentPart::ThreadMessage {
+                    message_id: Uuid::nil(),
+                    from_thread_id: None,
+                    from_title: "Kybern".into(),
+                    purpose: ThreadMessagePurpose::Warning,
+                    reply_to: None,
+                    body: "stop editing a.rs".into(),
+                },
+                ContentPart::AgentResults { items: Vec::new() },
+            ],
+        }
+    }
+
+    pub const MARKERS: [&str; 3] = ["Message from Kybern · warning", "stop editing a.rs", "Results from 0 delegated agent(s):"];
+
+    pub fn assert_flattened(text: &str) {
+        for marker in MARKERS {
+            assert!(text.contains(marker), "missing `{marker}` in `{text}`");
+        }
+    }
+}
 pub mod claude;
 mod claude_catalog;
 mod claude_config;

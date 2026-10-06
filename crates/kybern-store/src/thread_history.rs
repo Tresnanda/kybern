@@ -129,7 +129,7 @@ impl Store {
             })?;
             let mut found = Vec::with_capacity(limit as usize + 1);
             while let Some(row) = rows.next()? {
-                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(21)?, created_second: row.get(22)? });
+                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(22)?, created_second: row.get(23)? });
             }
             let has_more = found.len() > limit as usize;
             found.truncate(limit as usize);
@@ -249,7 +249,7 @@ fn search_sql() -> String {
          )
          SELECT id,project_id,title,provider_kind,provider_instance,model,effort,permission_mode,status,
                 worktree_path,worktree_branch,cwd,provider_session_id,pinned,created_at,updated_at,last_seq,
-                parent_thread_id,coordinator_project_id,collaboration_group_id,subagent,preference_rank,created_second
+                parent_thread_id,coordinator_project_id,collaboration_group_id,subagent,delegation,preference_rank,created_second
          FROM candidates
          WHERE (created_second<:snapshot_second OR (created_second=:snapshot_second AND id<=:snapshot_id))
            AND (:cursor_rank IS NULL OR preference_rank>:cursor_rank
@@ -301,6 +301,10 @@ fn user_text_sql(payload: &str, include_thread_id: bool) -> String {
           WHEN 'thread_reference' THEN {thread_reference}
           WHEN 'skill' THEN '$'||COALESCE(json_extract(part.value,'$.name'),'')
           WHEN 'mention' THEN '@'||COALESCE(json_extract(part.value,'$.display_name'),json_extract(part.value,'$.name'),'')
+          WHEN 'thread_message' THEN COALESCE(json_extract(part.value,'$.body'),'')
+          WHEN 'agent_results' THEN COALESCE((SELECT group_concat(COALESCE(json_extract(item.value,'$.title'),'')||' '||
+            COALESCE(json_extract(item.value,'$.result'),json_extract(item.value,'$.error'),''),' ')
+            FROM json_each(json_extract(part.value,'$.items')) item),'')
           WHEN 'image' THEN '[image]'
           WHEN 'attachment' THEN '['||COALESCE(json_extract(part.value,'$.name'),'')||']'
           ELSE '' END,'') FROM json_each(json_extract({payload},'$.message.parts')) part),'')"
@@ -541,6 +545,7 @@ mod tests {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         }
     }
 

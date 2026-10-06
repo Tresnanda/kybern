@@ -262,6 +262,321 @@ pub struct Thread {
     /// thread lists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<SubagentInfo>,
+    /// Set when this thread is a child another thread delegated work to with
+    /// `kybern_agent_delegate`. Unlike `subagent` it is a normal, writable
+    /// thread; `parent_thread_id` is the delegating thread. Clients that do
+    /// not know about delegation hide such threads from thread lists the same
+    /// way they hide subagents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<DelegationInfo>,
+}
+
+/// What the delegating agent asked this child to be.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationRole {
+    Implementation,
+    Research,
+    Review,
+    Design,
+    Test,
+    #[default]
+    General,
+}
+
+impl DelegationRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DelegationRole::Implementation => "implementation",
+            DelegationRole::Research => "research",
+            DelegationRole::Review => "review",
+            DelegationRole::Design => "design",
+            DelegationRole::Test => "test",
+            DelegationRole::General => "general",
+        }
+    }
+}
+
+impl std::fmt::Display for DelegationRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Where a delegated child works.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationWorkspace {
+    /// The parent's checkout and branch.
+    #[default]
+    Shared,
+    /// Its own git worktree on `kybern/<child-id>`, seeded from the parent's
+    /// current uncommitted state.
+    Worktree,
+}
+
+impl DelegationWorkspace {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DelegationWorkspace::Shared => "shared",
+            DelegationWorkspace::Worktree => "worktree",
+        }
+    }
+}
+
+impl std::fmt::Display for DelegationWorkspace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    /// Cut off by a daemon restart.
+    Interrupted,
+}
+
+impl DelegationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DelegationStatus::Running => "running",
+            DelegationStatus::Completed => "completed",
+            DelegationStatus::Failed => "failed",
+            DelegationStatus::Cancelled => "cancelled",
+            DelegationStatus::Interrupted => "interrupted",
+        }
+    }
+}
+
+impl std::fmt::Display for DelegationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// State of a delegated child's own worktree (`DelegationWorkspace::Worktree`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeState {
+    Active,
+    /// Left on disk because it was dirty or its branch is unmerged.
+    Kept,
+    Removed,
+}
+
+/// Files and lines changed between two commits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiffStat {
+    pub files: u32,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// A shared-checkout edit that landed on a path a sibling delegation owns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegationConflict {
+    /// Repo-relative path that was edited.
+    pub path: String,
+    /// The sibling thread whose `owns` globs cover `path`.
+    pub owner_thread_id: ThreadId,
+    pub at: DateTime<Utc>,
+}
+
+/// Delegation metadata carried by a child [`Thread`] created with
+/// `kybern_agent_delegate`. Refreshed through `thread_updated`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegationInfo {
+    /// Stable id agents use to refer to this delegation.
+    pub task_id: Uuid,
+    /// Idempotency key of the delegate call.
+    pub operation_id: Uuid,
+    /// Duplicate of `Thread::parent_thread_id` for convenience.
+    pub parent_thread_id: ThreadId,
+    /// 1 for a direct child of a top-level thread.
+    pub depth: u8,
+    #[serde(default)]
+    pub role: DelegationRole,
+    #[serde(default)]
+    pub workspace: DelegationWorkspace,
+    /// Globs relative to the checkout root this child owns (shared only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owns: Vec<String>,
+    pub status: DelegationStatus,
+    /// The child's final assistant text of the completing turn (at most
+    /// 16 KiB, truncated with a marker).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Repo-relative paths the child edited, deduplicated, at most 200.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_touched: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<DelegationConflict>,
+    /// Worktree: the snapshot commit the worktree was seeded from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// Worktree: `kybern/<child-id>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Worktree: HEAD when the child completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<String>,
+    /// Worktree: `base_commit..head_commit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diffstat: Option<DiffStat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_state: Option<WorktreeState>,
+    pub started_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Why a message exists. `Task` is a delegation brief; `Warning` comes from
+/// Kybern itself (for example a file ownership clash).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadMessagePurpose {
+    Task,
+    Message,
+    Question,
+    Reply,
+    Warning,
+}
+
+impl ThreadMessagePurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThreadMessagePurpose::Task => "task",
+            ThreadMessagePurpose::Message => "message",
+            ThreadMessagePurpose::Question => "question",
+            ThreadMessagePurpose::Reply => "reply",
+            ThreadMessagePurpose::Warning => "warning",
+        }
+    }
+}
+
+impl std::fmt::Display for ThreadMessagePurpose {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How the sender asked for a thread message to be delivered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadMessageDelivery {
+    #[default]
+    Queue,
+    /// Into the recipient's running turn when its harness can steer; falls
+    /// back to `Queue` otherwise.
+    Steer,
+}
+
+impl ThreadMessageDelivery {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThreadMessageDelivery::Queue => "queue",
+            ThreadMessageDelivery::Steer => "steer",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadMessageState {
+    /// Blocked by the permission rule; waiting for the user to deliver or dismiss it.
+    Held,
+    Queued,
+    Steered,
+    /// The recipient's turn that consumed it has started.
+    Delivered,
+    /// A question that received its reply.
+    Answered,
+    Dismissed,
+    Failed,
+}
+
+impl ThreadMessageState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThreadMessageState::Held => "held",
+            ThreadMessageState::Queued => "queued",
+            ThreadMessageState::Steered => "steered",
+            ThreadMessageState::Delivered => "delivered",
+            ThreadMessageState::Answered => "answered",
+            ThreadMessageState::Dismissed => "dismissed",
+            ThreadMessageState::Failed => "failed",
+        }
+    }
+}
+
+/// A message one thread sent another through `kybern_thread_send` (or Kybern
+/// sent on its own behalf). The row id is also the queued or steered message id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadMessageRecord {
+    pub id: MessageId,
+    /// Idempotency key of the send.
+    pub operation_id: Uuid,
+    /// `None` when Kybern itself sent it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_thread_id: Option<ThreadId>,
+    pub to_thread_id: ThreadId,
+    pub purpose: ThreadMessagePurpose,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<MessageId>,
+    pub body: String,
+    /// Requested delivery.
+    pub delivery: ThreadMessageDelivery,
+    pub state: ThreadMessageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// How a held message left the held state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HeldResolution {
+    Delivered,
+    Dismissed,
+}
+
+/// One delegated agent's outcome inside an [`ContentPart::AgentResults`] batch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentResultItem {
+    pub task_id: Uuid,
+    pub thread_id: ThreadId,
+    pub title: String,
+    pub provider: ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub role: DelegationRole,
+    pub status: DelegationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub workspace: DelegationWorkspace,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diffstat: Option<DiffStat>,
+    /// At most 50.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_touched: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<DelegationConflict>,
 }
 
 /// Provider-native subagent metadata carried by a read-only child [`Thread`].
@@ -374,10 +689,129 @@ pub enum ContentPart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display_name: Option<String>,
     },
+    /// A message from another thread (or from Kybern itself when
+    /// `from_thread_id` is `None`). Providers receive it as flattened text; see
+    /// [`thread_message_text`].
+    ThreadMessage {
+        /// The `thread_messages` row id; also the queued or steered message id.
+        message_id: MessageId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_thread_id: Option<ThreadId>,
+        from_title: String,
+        purpose: ThreadMessagePurpose,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply_to: Option<MessageId>,
+        body: String,
+    },
+    /// A batch of delegated-agent outcomes delivered to the delegating thread.
+    /// Providers receive it as flattened text; see [`agent_results_text`].
+    AgentResults {
+        items: Vec<AgentResultItem>,
+    },
+}
+
+impl ContentPart {
+    /// Provider-facing text of a [`ContentPart::ThreadMessage`] or
+    /// [`ContentPart::AgentResults`]; `None` for every other part. Drivers
+    /// flatten these parts through this one helper so every harness sees the
+    /// same wording.
+    pub fn orchestration_text(&self) -> Option<String> {
+        match self {
+            ContentPart::ThreadMessage { message_id, from_thread_id, from_title, purpose, reply_to, body } => {
+                Some(thread_message_text(*message_id, *from_thread_id, from_title, *purpose, *reply_to, body))
+            }
+            ContentPart::AgentResults { items } => Some(agent_results_text(items)),
+            _ => None,
+        }
+    }
 }
 
 pub fn thread_reference_text(thread_id: ThreadId, title: &str) -> String {
-    format!("@thread[{thread_id}] {title}")
+    format!("@thread[{thread_id}] {title} (you can read it with kybern_thread_read and message it with kybern_thread_send)")
+}
+
+/// Provider-facing text for a [`ContentPart::ThreadMessage`]. Every driver
+/// flattens the part through this so agents see one format.
+pub fn thread_message_text(
+    message_id: MessageId,
+    from_thread_id: Option<ThreadId>,
+    from_title: &str,
+    purpose: ThreadMessagePurpose,
+    reply_to: Option<MessageId>,
+    body: &str,
+) -> String {
+    let mut out = match from_thread_id {
+        Some(from) => format!("Message from thread \"{from_title}\" ({from}) · {purpose} · id {message_id}"),
+        None => format!("Message from Kybern · {purpose} · id {message_id}"),
+    };
+    if let Some(reply_to) = reply_to {
+        out.push_str(&format!(" · reply to {reply_to}"));
+    }
+    out.push_str(":\n");
+    out.push_str(body);
+    let guidance = match purpose {
+        ThreadMessagePurpose::Question => match from_thread_id {
+            Some(from) => format!(
+                "Reply with kybern_thread_send to {from} with purpose \"reply\" and reply_to \"{message_id}\". If you do not, your final message this turn is sent back as the reply."
+            ),
+            None => String::new(),
+        },
+        ThreadMessagePurpose::Message | ThreadMessagePurpose::Reply | ThreadMessagePurpose::Warning => {
+            "No acknowledgement needed.".to_string()
+        }
+        ThreadMessagePurpose::Task => String::new(),
+    };
+    if !guidance.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&guidance);
+    }
+    out
+}
+
+/// Provider-facing text for a [`ContentPart::AgentResults`] batch.
+pub fn agent_results_text(items: &[AgentResultItem]) -> String {
+    let mut out = format!("Results from {} delegated agent(s):", items.len());
+    for item in items {
+        let model = item.model.as_deref().unwrap_or("default");
+        out.push_str(&format!(
+            "\n\n- {} ({}/{}, {}) — {} · task {} · thread {}",
+            item.title, item.provider, model, item.role, item.status, item.task_id, item.thread_id
+        ));
+        match item.workspace {
+            DelegationWorkspace::Shared => {
+                if item.files_touched.is_empty() {
+                    out.push_str("\n  workspace: shared checkout, no files touched");
+                } else {
+                    out.push_str(&format!("\n  files touched: {}", item.files_touched.join(", ")));
+                }
+            }
+            DelegationWorkspace::Worktree => {
+                let branch = item.branch.as_deref().unwrap_or("(unknown branch)");
+                let commit = item.head_commit.as_deref().unwrap_or("(no commit)");
+                out.push_str(&format!("\n  branch {branch} at {commit}"));
+                if let Some(stat) = item.diffstat {
+                    out.push_str(&format!(", {} files +{} −{}", stat.files, stat.additions, stat.deletions));
+                }
+                out.push_str(". Merge it with git.");
+            }
+        }
+        for conflict in &item.conflicts {
+            out.push_str(&format!("\n  conflict: edited {} owned by thread {}", conflict.path, conflict.owner_thread_id));
+        }
+        match (&item.result, &item.error) {
+            (Some(result), _) if !result.trim().is_empty() => {
+                out.push_str("\n  Result:\n");
+                out.push_str(result);
+            }
+            (_, Some(error)) => {
+                out.push_str("\n  Error: ");
+                out.push_str(error);
+            }
+            _ => {}
+        }
+    }
+    out.push_str("\n\nIntegrate these results. For another round, delegate again with a full brief.");
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -411,6 +845,10 @@ impl UserMessage {
                     out.push('@');
                     out.push_str(display_name.as_deref().unwrap_or(name));
                 }
+                ContentPart::ThreadMessage { message_id, from_thread_id, from_title, purpose, reply_to, body } => {
+                    out.push_str(&thread_message_text(*message_id, *from_thread_id, from_title, *purpose, *reply_to, body));
+                }
+                ContentPart::AgentResults { items } => out.push_str(&agent_results_text(items)),
                 ContentPart::Image { .. } => out.push_str("[image]"),
                 ContentPart::Attachment { name, .. } => {
                     out.push('[');
@@ -986,9 +1424,27 @@ pub struct Settings {
     pub access: AccessSettings,
     /// Desktop control through CuaDriver for non-Codex harnesses.
     pub computer_use: ComputerUseSettings,
+    /// Limits on agents delegating work to other agents.
+    pub orchestration: OrchestrationSettings,
     /// Give new agent sessions a short guide to Kybern: images, notes and
     /// tasks, other threads, helpers. Applies to sessions started after the change.
     pub tell_agents_about_kybern: bool,
+}
+
+/// Limits for `kybern_agent_delegate`. Read each time an agent delegates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct OrchestrationSettings {
+    /// Most delegated children one thread may have running at once (1..=16).
+    pub max_active_children: u32,
+    /// Deepest chain of delegation: 1 means only top-level threads delegate (1..=4).
+    pub max_depth: u32,
+}
+
+impl Default for OrchestrationSettings {
+    fn default() -> Self {
+        Self { max_active_children: 4, max_depth: 2 }
+    }
 }
 
 /// Agents drive apps on this Mac through a separately installed CuaDriver.
@@ -1045,6 +1501,7 @@ impl Default for Settings {
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
             computer_use: ComputerUseSettings::default(),
+            orchestration: OrchestrationSettings::default(),
             tell_agents_about_kybern: true,
         }
     }
@@ -1287,4 +1744,158 @@ fn deserialize_null_options<'de, D: serde::Deserializer<'de>>(deserializer: D) -
 pub struct AsyncQuestionRequest {
     pub id: String,
     pub questions: Vec<AsyncQuestion>,
+}
+
+#[cfg(test)]
+mod orchestration_tests {
+    use super::*;
+
+    fn id(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn thread_reference_text_tells_the_agent_how_to_read_and_message_the_thread() {
+        let text = thread_reference_text(id(1), "Fix login");
+        assert_eq!(
+            text,
+            format!("@thread[{}] Fix login (you can read it with kybern_thread_read and message it with kybern_thread_send)", id(1))
+        );
+    }
+
+    #[test]
+    fn question_message_asks_for_a_reply_and_names_the_fallback() {
+        let text = thread_message_text(id(9), Some(id(2)), "Parent", ThreadMessagePurpose::Question, None, "What is the port?");
+        assert_eq!(
+            text,
+            format!(
+                "Message from thread \"Parent\" ({}) · question · id {}:\nWhat is the port?\n\nReply with kybern_thread_send to {} with purpose \"reply\" and reply_to \"{}\". If you do not, your final message this turn is sent back as the reply.",
+                id(2),
+                id(9),
+                id(2),
+                id(9)
+            )
+        );
+    }
+
+    #[test]
+    fn reply_task_and_kybern_warning_use_the_contract_wording() {
+        let reply = thread_message_text(id(9), Some(id(2)), "Child", ThreadMessagePurpose::Reply, Some(id(7)), "8080");
+        assert!(reply.starts_with(&format!(
+            "Message from thread \"Child\" ({}) · reply · id {} · reply to {}:\n8080",
+            id(2),
+            id(9),
+            id(7)
+        )));
+        assert!(reply.ends_with("\n\nNo acknowledgement needed."));
+
+        let task = thread_message_text(id(9), Some(id(2)), "Parent", ThreadMessagePurpose::Task, None, "Do the thing");
+        assert!(task.ends_with(":\nDo the thing"), "a task carries its own brief and no guidance: {task}");
+
+        let warning = thread_message_text(id(9), None, "Kybern", ThreadMessagePurpose::Warning, None, "stop");
+        assert_eq!(warning, format!("Message from Kybern · warning · id {}:\nstop\n\nNo acknowledgement needed.", id(9)));
+    }
+
+    fn item(workspace: DelegationWorkspace) -> AgentResultItem {
+        AgentResultItem {
+            task_id: id(3),
+            thread_id: id(4),
+            title: "Port the parser".into(),
+            provider: ProviderKind::Codex,
+            model: Some("gpt-5".into()),
+            role: DelegationRole::Implementation,
+            status: DelegationStatus::Completed,
+            result: Some("Done. Tests pass.".into()),
+            error: None,
+            workspace,
+            branch: Some("kybern/abc".into()),
+            head_commit: Some("1234567".into()),
+            diffstat: Some(DiffStat { files: 2, additions: 10, deletions: 4 }),
+            files_touched: vec!["a.rs".into(), "b.rs".into()],
+            conflicts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn agent_results_list_each_agent_with_its_workspace_and_result() {
+        let mut failed = item(DelegationWorkspace::Shared);
+        failed.status = DelegationStatus::Failed;
+        failed.result = None;
+        failed.error = Some("boom".into());
+        failed.files_touched.clear();
+        failed.conflicts =
+            vec![DelegationConflict { path: "src/x.rs".into(), owner_thread_id: id(5), at: chrono::DateTime::<Utc>::default() }];
+        let text = agent_results_text(&[item(DelegationWorkspace::Worktree), item(DelegationWorkspace::Shared), failed]);
+        assert!(text.starts_with("Results from 3 delegated agent(s):"));
+        assert!(text.contains(&format!("- Port the parser (codex/gpt-5, implementation) — completed · task {} · thread {}", id(3), id(4))));
+        assert!(text.contains("branch kybern/abc at 1234567, 2 files +10 −4. Merge it with git."));
+        assert!(text.contains("files touched: a.rs, b.rs"));
+        assert!(text.contains("Result:\nDone. Tests pass."));
+        assert!(text.contains(&format!("conflict: edited src/x.rs owned by thread {}", id(5))));
+        assert!(text.contains("Error: boom"));
+        assert!(text.ends_with("Integrate these results. For another round, delegate again with a full brief."));
+    }
+
+    #[test]
+    fn orchestration_text_is_only_for_the_new_parts() {
+        assert!(ContentPart::Text { text: "x".into() }.orchestration_text().is_none());
+        assert!(ContentPart::AgentResults { items: Vec::new() }.orchestration_text().unwrap().starts_with("Results from 0"));
+    }
+
+    #[test]
+    fn new_parts_roundtrip_and_plain_text_flattens_them() {
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::ThreadMessage {
+                    message_id: id(1),
+                    from_thread_id: Some(id(2)),
+                    from_title: "Parent".into(),
+                    purpose: ThreadMessagePurpose::Task,
+                    reply_to: None,
+                    body: "brief".into(),
+                },
+                ContentPart::AgentResults { items: vec![item(DelegationWorkspace::Shared)] },
+            ],
+        };
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["parts"][0]["type"], "thread_message");
+        assert_eq!(wire["parts"][1]["type"], "agent_results");
+        assert!(wire["parts"][0].get("reply_to").is_none());
+        let restored: UserMessage = serde_json::from_value(wire).unwrap();
+        assert_eq!(restored, message);
+        let text = restored.plain_text();
+        assert!(text.contains("brief") && text.contains("Results from 1 delegated agent(s):"));
+    }
+
+    #[test]
+    fn thread_omits_delegation_when_absent_and_old_payloads_still_parse() {
+        let now = Utc::now();
+        let mut thread = serde_json::json!({
+            "id": id(1), "project_id": id(2), "title": "t",
+            "provider": { "kind": "codex", "instance": "default" },
+            "permission_mode": "supervised", "status": "idle", "cwd": "/",
+            "pinned": false, "created_at": now, "updated_at": now, "last_seq": 0
+        });
+        let parsed: Thread = serde_json::from_value(thread.clone()).unwrap();
+        assert!(parsed.delegation.is_none());
+        assert!(serde_json::to_value(&parsed).unwrap().get("delegation").is_none());
+        thread["delegation"] = serde_json::json!({
+            "task_id": id(3), "operation_id": id(4), "parent_thread_id": id(5), "depth": 1,
+            "role": "research", "workspace": "worktree", "status": "interrupted", "started_at": now
+        });
+        let parsed: Thread = serde_json::from_value(thread).unwrap();
+        let delegation = parsed.delegation.unwrap();
+        assert_eq!(delegation.status, DelegationStatus::Interrupted);
+        assert_eq!(delegation.workspace, DelegationWorkspace::Worktree);
+        assert!(delegation.owns.is_empty() && delegation.files_touched.is_empty());
+    }
+
+    #[test]
+    fn orchestration_settings_default_and_partial_parse() {
+        assert_eq!(Settings::default().orchestration, OrchestrationSettings { max_active_children: 4, max_depth: 2 });
+        let settings: Settings = serde_json::from_value(serde_json::json!({ "orchestration": { "max_depth": 3 } })).unwrap();
+        assert_eq!(settings.orchestration, OrchestrationSettings { max_active_children: 4, max_depth: 3 });
+        let legacy: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(legacy.orchestration, OrchestrationSettings::default());
+    }
 }

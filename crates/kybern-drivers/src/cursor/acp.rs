@@ -616,6 +616,11 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
             ContentPart::Mention { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("@{name}")))),
             ContentPart::Image { media_type, data } => out.push(ContentBlock::Image(ImageContent::new(data.clone(), media_type.clone()))),
             ContentPart::Attachment { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("[attached file: {name}]")))),
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                if let Some(text) = part.orchestration_text() {
+                    out.push(ContentBlock::Text(TextContent::new(text)));
+                }
+            }
         }
     }
     out
@@ -703,5 +708,24 @@ mod tests {
         let blocks = blocks(&message);
         let ContentBlock::Text(text) = &blocks[0] else { panic!("expected text block") };
         assert_eq!(text.text, "/review");
+    }
+}
+
+#[cfg(test)]
+mod orchestration_part_tests {
+    use super::*;
+    use crate::test_support::*;
+
+    #[test]
+    fn thread_messages_and_agent_results_flatten_into_text_blocks() {
+        let text: String = blocks(&orchestration_message())
+            .into_iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_flattened(&text);
     }
 }

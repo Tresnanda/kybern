@@ -71,6 +71,16 @@ pub enum EventPayload {
     CollaborationContextUpdated {
         entry: ContextEntry,
     },
+    /// A message another thread sent this one is waiting for the user to
+    /// deliver or dismiss. Emitted on the recipient thread.
+    ThreadMessageHeld {
+        message: ThreadMessageRecord,
+    },
+    /// A held message was delivered or dismissed. Emitted on the recipient thread.
+    ThreadMessageResolved {
+        message_id: MessageId,
+        resolution: HeldResolution,
+    },
     TurnStarted {
         message_id: MessageId,
         message: UserMessage,
@@ -229,6 +239,8 @@ impl EventPayload {
             Self::CollaborationAssignmentUpdated { .. } => "collaboration_assignment_updated",
             Self::CollaborationMessageUpdated { .. } => "collaboration_message_updated",
             Self::CollaborationContextUpdated { .. } => "collaboration_context_updated",
+            Self::ThreadMessageHeld { .. } => "thread_message_held",
+            Self::ThreadMessageResolved { .. } => "thread_message_resolved",
             Self::TurnStarted { .. } => "turn_started",
             Self::TurnResumed => "turn_resumed",
             Self::ProviderSessionBound { .. } => "provider_session_bound",
@@ -314,6 +326,23 @@ mod kind_tests {
             EventPayload::ProviderUsageUpdated { usage: Default::default() },
             EventPayload::ProviderCommandsUpdated { commands: Vec::new() },
             EventPayload::WorkspaceReverted { to_turn_id: TurnId::nil(), commit: "abc".into() },
+            EventPayload::ThreadMessageResolved { message_id: MessageId::nil(), resolution: HeldResolution::Dismissed },
+            EventPayload::ThreadMessageHeld {
+                message: ThreadMessageRecord {
+                    id: MessageId::nil(),
+                    operation_id: uuid::Uuid::nil(),
+                    from_thread_id: None,
+                    to_thread_id: ThreadId::nil(),
+                    purpose: ThreadMessagePurpose::Question,
+                    reply_to: None,
+                    body: "hi".into(),
+                    delivery: ThreadMessageDelivery::Queue,
+                    state: ThreadMessageState::Held,
+                    held_reason: Some("permission".into()),
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                },
+            },
         ];
         for event in examples {
             let wire = serde_json::to_value(&event).unwrap();

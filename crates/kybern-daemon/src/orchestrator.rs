@@ -3595,6 +3595,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
@@ -3681,6 +3682,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         self.inner.store.thread_upsert(&thread)?;
         let ev = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() })?;
@@ -6506,6 +6508,7 @@ mod tests {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         store.thread_upsert(&thread).unwrap();
         let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
@@ -6880,6 +6883,7 @@ mod tests {
                 coordinator_project_id: None,
                 collaboration_group_id: None,
                 subagent: None,
+                delegation: None,
             };
             self.store.thread_upsert(&thread).unwrap();
             thread

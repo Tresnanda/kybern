@@ -56,6 +56,7 @@ impl Fixture {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         let coordinator = thread("Coordinator", ThreadStatus::Idle);
         let worker = thread("Worker", ThreadStatus::Idle);

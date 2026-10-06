@@ -610,6 +610,7 @@ mod tests {
                 coordinator_project_id: None,
                 collaboration_group_id: None,
                 subagent: None,
+                delegation: None,
             };
             let thread = make_thread(Uuid::now_v7());
             let other_thread = make_thread(Uuid::now_v7());

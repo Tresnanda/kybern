@@ -167,11 +167,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
             let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
-            // Subagent threads are opt-in: older clients must never list one as a normal thread.
+            // Subagent and delegated threads are opt-in: older clients must never list one as a normal thread.
             if let Some(parent) = p.parent_thread_id {
-                threads.retain(|thread| thread.subagent.is_some() && thread.parent_thread_id == Some(parent));
+                threads
+                    .retain(|thread| (thread.subagent.is_some() || thread.delegation.is_some()) && thread.parent_thread_id == Some(parent));
             } else if !p.include_subagents {
-                threads.retain(|thread| thread.subagent.is_none());
+                threads.retain(|thread| thread.subagent.is_none() && thread.delegation.is_none());
             }
             let activity = threads
                 .iter()
@@ -407,6 +408,19 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ThreadsInterruptParams = parse(params)?;
             state.orchestrator.interrupt(p.thread_id).await.map_err(bad)?;
             ok(Empty {})
+        }
+        ThreadMessagesList::NAME => {
+            let p: ThreadMessagesListParams = parse(params)?;
+            let messages = state.store.thread_message_list_for_thread(p.thread_id, p.states.as_deref(), 200).map_err(internal)?;
+            ok(ThreadMessagesListResult { messages })
+        }
+        // Delivering or dismissing a held message and removing a delegated
+        // child's worktree arrive with the messaging and delegation engines.
+        ThreadMessagesDeliver::NAME | ThreadMessagesDismiss::NAME => {
+            Err(RpcError::internal("Held thread messages are not implemented yet. Update Kybern, then try again."))
+        }
+        DelegationsWorktreeRemove::NAME => {
+            Err(RpcError::internal("Removing a delegated worktree is not implemented yet. Update Kybern, then try again."))
         }
         CollaborationGroupsCreate::NAME => ok(state.orchestrator.collaboration_group_create(parse(params)?).map_err(bad)?),
         CollaborationCoordinatorGet::NAME => {

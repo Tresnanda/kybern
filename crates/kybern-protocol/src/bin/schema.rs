@@ -117,6 +117,10 @@ fn main() {
     method::<ThreadsCompact>(&mut methods);
     method::<ThreadsAnswer>(&mut methods);
     method::<ThreadsInterrupt>(&mut methods);
+    method::<ThreadMessagesList>(&mut methods);
+    method::<ThreadMessagesDeliver>(&mut methods);
+    method::<ThreadMessagesDismiss>(&mut methods);
+    method::<DelegationsWorktreeRemove>(&mut methods);
     method::<CollaborationGroupsCreate>(&mut methods);
     method::<CollaborationCoordinatorGet>(&mut methods);
     method::<CollaborationCoordinatorGetOrCreate>(&mut methods);

@@ -1051,6 +1051,11 @@ fn followup_saved_text(message: &UserMessage) -> Result<String> {
             ContentPart::ThreadReference { thread_id, title, .. } => {
                 text.push_str(&format!("\u{201c}{title}\u{201d} (thread {thread_id})"))
             }
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                return invalid(
+                    "Messages from other agents cannot be saved as a task follow-up. Remove them to save this follow-up for the next run.",
+                );
+            }
             ContentPart::Image { .. } | ContentPart::Attachment { .. } => {
                 return invalid(
                     "This task has no run to receive attachments. Start a new run to send them, or remove them to save this follow-up for the next run.",
@@ -1333,6 +1338,7 @@ mod tests {
                 coordinator_project_id: None,
                 collaboration_group_id: None,
                 subagent: None,
+                delegation: None,
             };
             self.store.thread_upsert(&thread).unwrap();
             self.store.task_run_start(task.id, thread.id, &thread.provider, thread.model.as_deref(), &[]).unwrap();

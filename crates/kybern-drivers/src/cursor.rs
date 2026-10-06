@@ -244,6 +244,11 @@ fn sdk_message(message: &UserMessage) -> Value {
             ContentPart::Mention { name, .. } => text.push_str(&format!("@{name}")),
             ContentPart::Image { media_type, data } => images.push(json!({"data": data, "mimeType": media_type})),
             ContentPart::Attachment { name, .. } => text.push_str(&format!("[attached file: {name}]")),
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                if let Some(flat) = part.orchestration_text() {
+                    text.push_str(&flat);
+                }
+            }
         }
     }
     json!({"text": text, "images": images})
@@ -281,5 +286,16 @@ mod tests {
             ],
         };
         assert_eq!(sdk_message(&message), json!({"text":"/review", "images":[{"data":"base64", "mimeType":"image/png"}]}));
+    }
+}
+
+#[cfg(test)]
+mod orchestration_part_tests {
+    use super::*;
+    use crate::test_support::*;
+
+    #[test]
+    fn thread_messages_and_agent_results_flatten_into_the_sdk_text() {
+        assert_flattened(sdk_message(&orchestration_message())["text"].as_str().unwrap());
     }
 }

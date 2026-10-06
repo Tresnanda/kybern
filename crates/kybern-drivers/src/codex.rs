@@ -1798,6 +1798,11 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
             ContentPart::Attachment { name, .. } => {
                 items.push(json!({ "type": "text", "text": format!("[attached file: {name}]"), "text_elements": [] }))
             }
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                if let Some(text) = part.orchestration_text() {
+                    items.push(json!({ "type": "text", "text": text, "text_elements": [] }));
+                }
+            }
         }
     }
     items
@@ -2894,5 +2899,17 @@ mod app_catalog_tests {
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].path, "app://app-one");
         assert_eq!(apps[0].scope, kybern_protocol::SkillScope::Plugin);
+    }
+}
+
+#[cfg(test)]
+mod orchestration_part_tests {
+    use super::*;
+    use crate::test_support::*;
+
+    #[test]
+    fn thread_messages_and_agent_results_flatten_to_text_items() {
+        let items = input_items(&orchestration_message());
+        assert_flattened(&items.iter().filter_map(|i| i["text"].as_str()).collect::<Vec<_>>().join("\n"));
     }
 }

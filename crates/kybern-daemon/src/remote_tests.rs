@@ -53,6 +53,7 @@ impl Host {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         self.state.store.thread_upsert(&thread).unwrap();
         thread

@@ -601,6 +601,8 @@ fn apply_transcript_event(
             | EventPayload::CollaborationMessageUpdated { .. }
             | EventPayload::CollaborationContextUpdated { .. }
             | EventPayload::ThreadNotesUpdated { .. }
+            | EventPayload::ThreadMessageHeld { .. }
+            | EventPayload::ThreadMessageResolved { .. }
             | EventPayload::MessageRemoved { .. }
             | EventPayload::ThreadArchived
             | EventPayload::ToolCallOutputDelta { .. }

@@ -384,6 +384,35 @@ const MIGRATIONS: &[&str] = &[
       WHERE subagent IS NOT NULL;
     CREATE INDEX threads_parent ON threads(parent_thread_id) WHERE parent_thread_id IS NOT NULL;
     ",
+    // v18: Orchestrator V2. Threads another thread delegated work to carry a JSON
+    // `delegation` (one delegation per operation and per task id), and messages
+    // between threads get their own table so held ones survive restarts.
+    "
+    ALTER TABLE threads ADD COLUMN delegation TEXT;
+    CREATE UNIQUE INDEX threads_delegation_operation
+      ON threads(json_extract(delegation, '$.operation_id'))
+      WHERE delegation IS NOT NULL;
+    CREATE UNIQUE INDEX threads_delegation_task
+      ON threads(json_extract(delegation, '$.task_id'))
+      WHERE delegation IS NOT NULL;
+    CREATE TABLE thread_messages(
+        id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL UNIQUE,
+        from_thread_id TEXT,
+        to_thread_id TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        reply_to TEXT,
+        body TEXT NOT NULL,
+        delivery TEXT NOT NULL,
+        state TEXT NOT NULL,
+        held_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX thread_messages_to ON thread_messages(to_thread_id, state);
+    CREATE INDEX thread_messages_from ON thread_messages(from_thread_id);
+    CREATE INDEX thread_messages_reply ON thread_messages(reply_to);
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

@@ -57,6 +57,10 @@ expression: names
 - threads.compact
 - threads.answer
 - threads.interrupt
+- threads.messages.list
+- threads.messages.deliver
+- threads.messages.dismiss
+- delegations.worktree_remove
 - collaboration.groups.create
 - collaboration.coordinator.get
 - collaboration.coordinator.get_or_create
