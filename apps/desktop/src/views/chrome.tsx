@@ -14,6 +14,7 @@ import { ArrowLeftIcon, ArrowRightIcon, LayoutSidebarIcon, NewThreadIcon, PanelR
 import { mod } from "@/lib/format"
 import { isTauri } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { goBack, goForward, useNavigationAvailability } from "@/state/navigation"
 import { newThread } from "@/state/nav"
 import { useStore } from "@/state/store"
 
@@ -130,11 +131,15 @@ const SIDEBAR_TRIGGER_CLASS_NAME = cn(
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 )
 
+/** Back and forward dim while there is nowhere to go; the opacity eases so a step does not flicker them. */
+const NAVIGATION_ARROW_CLASS_NAME = cn(SIDEBAR_TRIGGER_CLASS_NAME, "transition-opacity duration-150 disabled:opacity-40")
+
 /** The sidebar toggle first, so it never moves, then back/forward (or a single new-thread action when collapsed). */
 export function SidebarLeadingControls({ className }: { className?: string }) {
   const { open, toggleSidebar } = useSidebar()
   // Notes have no side panel, so nothing here applies (App.tsx keeps the panel closed there).
   const panelless = useStore((s) => s.selected.kind === "notes")
+  const { canBack, canForward } = useNavigationAvailability()
   if (panelless) return null
   return (
     <div
@@ -169,10 +174,11 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      className={SIDEBAR_TRIGGER_CLASS_NAME}
+                      className={NAVIGATION_ARROW_CLASS_NAME}
                       aria-label="Back"
                       tabIndex={open ? 0 : -1}
-                      onClick={() => history.back()}
+                      disabled={!canBack}
+                      onClick={() => goBack()}
                     />
                   }
                 >
@@ -186,10 +192,11 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      className={SIDEBAR_TRIGGER_CLASS_NAME}
+                      className={NAVIGATION_ARROW_CLASS_NAME}
                       aria-label="Forward"
                       tabIndex={open ? 0 : -1}
-                      onClick={() => history.forward()}
+                      disabled={!canForward}
+                      onClick={() => goForward()}
                     />
                   }
                 >
