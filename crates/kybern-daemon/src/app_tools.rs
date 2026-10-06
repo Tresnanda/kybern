@@ -120,17 +120,21 @@ impl AppTools {
         let thread = self.thread(thread_id)?;
         let project = self.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("owning project no longer exists"))?;
         let notes = self.store.thread_notes(thread_id)?;
-        // The task this thread is a run of, if any.
-        let task = match self.store.task_run_for_thread(thread_id)? {
-            Some((task_id, number)) => self.store.task_item_get(task_id)?.map(|task| {
+        // The tasks this thread is a run of, if any: one, or several for a combined run.
+        let tasks: Vec<Value> = self
+            .store
+            .task_runs_for_thread(thread_id)?
+            .into_iter()
+            .filter_map(|(task_id, number)| self.store.task_item_get(task_id).ok().flatten().map(|task| (task, number)))
+            .map(|(task, number)| {
                 json!({
                     "id": task.id, "key": task.key, "title": task.title, "status": task.status, "run_number": number,
                     "link": format!("kybern://task/{}", task.id),
                     "markdown": markdown_link(&format!("{} {}", task.key, task.title), &format!("kybern://task/{}", task.id)),
                 })
-            }),
-            None => None,
-        };
+            })
+            .collect();
+        let task = tasks.first().cloned();
         Ok(json!({
             "thread": {
                 "id": thread.id,
@@ -155,6 +159,7 @@ impl AppTools {
             },
             "notes": notes,
             "task": task,
+            "tasks": tasks,
             "collaboration": {
                 "available": true,
                 "guidance": "Use kybern_threads_search and kybern_thread_read to inspect prior chats without waking them. Use kybern_thread_send for an addressed durable message. kybern_collaboration_spawn creates a managed Kybern child chat; group setup is automatic. Provider-native subagents and external plugins remain separate options."
