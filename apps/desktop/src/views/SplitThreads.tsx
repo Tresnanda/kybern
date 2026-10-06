@@ -374,7 +374,7 @@ function SplitPaneEmptyState({
       Object.values(threads)
         .filter(
           (thread) =>
-            thread.status !== "archived" && !excludedThreadIds.has(thread.id)
+            thread.status !== "archived" && !thread.subagent && !excludedThreadIds.has(thread.id)
         )
         .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
         .slice(0, 6),

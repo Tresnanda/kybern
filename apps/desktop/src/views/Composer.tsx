@@ -475,7 +475,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const threadHits = useMemo(
     () => term === ""
       ? Object.values(threads)
-          .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived")
+          .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived" && !thread.subagent)
           .sort((left, right) => Number(right.project_id === projectId) - Number(left.project_id === projectId) || Date.parse(right.updated_at) - Date.parse(left.updated_at))
           .slice(0, 12)
           .map((thread) => ({ thread }))

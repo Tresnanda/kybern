@@ -129,7 +129,7 @@ export function ThreadSidebar() {
   const connection = useStore((s) => s.connection)
   const threads = useStore((s) => s.threads)
   const freeThreads = useMemo(
-    () => Object.values(threads).filter((thread) => isFreeChatProject(thread.project_id) && thread.status !== "archived" && !thread.parent_thread_id).sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    () => Object.values(threads).filter((thread) => isFreeChatProject(thread.project_id) && thread.status !== "archived" && !thread.parent_thread_id && !thread.subagent).sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
     [threads],
   )
   const freeDraftSelected = selected.kind === "draft" && !selected.draft.projectId
@@ -148,7 +148,7 @@ export function ThreadSidebar() {
     if (!attentionIds && !filtering) return null
     const ids = new Set<ThreadId>()
     for (const thread of Object.values(threads)) {
-      if (thread.status === "archived") continue
+      if (thread.status === "archived" || thread.subagent) continue
       if (attentionIds && !attentionIds.has(thread.id)) continue
       if (filtering && !threadMatchesFilter(thread, sidebarFilter, threadActivity[thread.id]?.state ?? undefined)) continue
       ids.add(thread.id)
@@ -175,7 +175,7 @@ export function ThreadSidebar() {
   // Agents to filter by: the ones that have threads here, plus the chosen one.
   const threadAgents = useMemo(() => {
     const kinds = new Set<ProviderKind>()
-    for (const thread of Object.values(threads)) if (thread.status !== "archived") kinds.add(thread.provider.kind)
+    for (const thread of Object.values(threads)) if (thread.status !== "archived" && !thread.subagent) kinds.add(thread.provider.kind)
     if (sidebarFilter.agent) kinds.add(sidebarFilter.agent)
     return [...kinds].sort((a, b) => (PROVIDER_LABEL[a] ?? a).localeCompare(PROVIDER_LABEL[b] ?? b))
   }, [sidebarFilter.agent, threads])

@@ -100,7 +100,7 @@ export function persistThreadNotificationState(
 /** Internal helpers report through their parent, never through the user inbox.
  * Unknown threads stay quiet until their relationship metadata is available. */
 export function threadCanNotify(thread: Thread | undefined): boolean {
-  return !!thread && !thread.parent_thread_id
+  return !!thread && !thread.parent_thread_id && !thread.subagent
 }
 
 const KIND_RANK: Record<NotificationKind, number> = { blocked: 0, failed: 1, done: 2 }

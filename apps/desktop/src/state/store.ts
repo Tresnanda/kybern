@@ -810,7 +810,7 @@ export const selectThreadsForProject = (
   projectId: ProjectId
 ): Thread[] =>
   Object.values(s.threads)
-    .filter((t) => t.project_id === projectId && t.status !== "archived")
+    .filter((t) => t.project_id === projectId && t.status !== "archived" && !t.subagent)
     .sort(
       (a, b) =>
         Number(b.pinned) - Number(a.pinned) ||
@@ -819,7 +819,7 @@ export const selectThreadsForProject = (
 
 export const selectRecentThreads = (s: AppState): Thread[] =>
   Object.values(s.threads)
-    .filter((t) => t.status !== "archived")
+    .filter((t) => t.status !== "archived" && !t.subagent)
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
 
 export const selectSelectedThread = (s: AppState): Thread | null =>

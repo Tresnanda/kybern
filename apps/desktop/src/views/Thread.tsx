@@ -124,7 +124,7 @@ export function ThreadView({
   const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_TASKS)
   const activeTasks = useMemo(() => runtimeTasks.filter(isRuntimeTaskActive), [runtimeTasks])
   const threads = useStore((s) => s.threads)
-  const helperThreads = useMemo(() => Object.values(threads).filter((candidate) => candidate.parent_thread_id === threadId && candidate.status !== "archived"), [threadId, threads])
+  const helperThreads = useMemo(() => Object.values(threads).filter((candidate) => candidate.parent_thread_id === threadId && candidate.status !== "archived" && !candidate.subagent), [threadId, threads])
   const providers = useStore((s) => s.providers)
   const set = useStore((s) => s.set)
   const requestedEnvOpen = useStore((s) => s.envOpen)
@@ -155,7 +155,8 @@ export function ThreadView({
   const canSwitchCoordinator = !!thread?.coordinator_project_id && (thread.status === "idle" || thread.status === "failed")
   const approval = pending[0] ?? null
   const connector = approval ? connectorApproval(approval) : null
-  const hideInput = !!approval && isUserInput(approval) && !connector
+  // A subagent thread is read-only; the subagent page replaces the composer with its own bar.
+  const hideInput = (!!approval && isUserInput(approval) && !connector) || !!thread?.subagent
 
   const answer = (n: number): boolean => {
     if (!approval || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false

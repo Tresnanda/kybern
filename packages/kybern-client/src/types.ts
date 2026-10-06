@@ -198,6 +198,43 @@ export interface Thread {
   updated_at: DateTime;
   /** Sequence of the last event on this thread. */
   last_seq: EventSeq;
+  /**
+   * Set when this thread mirrors one provider-native subagent. It is read-only,
+   * `parent_thread_id` is the thread (or subagent) that launched it, and it must
+   * stay out of ordinary thread lists. See `isSubagentThread`.
+   */
+  subagent?: SubagentInfo | null;
+}
+
+/** Subagent metadata of a read-only child thread; title, model and effort live on the thread. */
+export interface SubagentInfo {
+  /** Runtime task id in the parent thread; with `root_thread_id` it identifies the child. */
+  task_id: string;
+  /** The thread that owns the provider session. `tasks.stop` / `tasks.background` accept the child thread id. */
+  root_thread_id: ThreadId;
+  /** Turn of the root thread that launched it. */
+  parent_turn_id: TurnId;
+  tool_call_id?: string | null;
+  provider_thread_id?: string | null;
+  /** Provider agent type or role (`Explore`, `worker`). */
+  agent_type?: string | null;
+  status: RuntimeTaskStatus;
+  backgrounded?: boolean;
+  last_tool_name?: string | null;
+  /** Latest provider progress or result summary as reported. */
+  detail?: string | null;
+  /** One live line while it works (latest activity, else `Using <tool>`). */
+  progress?: string | null;
+  /** First line of its final answer once it settled. */
+  result?: string | null;
+  usage?: Usage | null;
+  /** Token count, tool uses and duration as the provider reports them. */
+  stats?: RuntimeTaskStats;
+  capabilities?: RuntimeTaskCapabilities;
+  /** False when the harness reports only lifecycle: the transcript holds just the prompt and outcome. */
+  transcript?: boolean;
+  started_at: DateTime;
+  completed_at?: DateTime | null;
 }
 
 // ---- collaboration ----
@@ -834,6 +871,10 @@ export interface ProjectsRemoveParams {
 export interface ThreadsListParams {
   project_id?: ProjectId;
   include_archived?: boolean;
+  /** Also return read-only subagent threads; left out by default. */
+  include_subagents?: boolean;
+  /** Only the direct subagent children of this thread (implies `include_subagents`). */
+  parent_thread_id?: ThreadId;
 }
 
 export interface ThreadsListResult {
@@ -1170,9 +1211,10 @@ export interface TasksListResult {
   tasks: RuntimeTask[];
 }
 
+/** `thread_id` may be a subagent thread: the daemon then acts on its own task and ignores `task_id`. */
 export interface TaskControlParams {
   thread_id: ThreadId;
-  task_id: string;
+  task_id?: string;
 }
 
 export interface ThreadsRegenerateTitleParams {

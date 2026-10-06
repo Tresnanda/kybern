@@ -231,6 +231,20 @@ replay events received during hydration; preserve row identity and reading posit
   protocol; do not add a shared abstraction layer. Follow
   `docs/harness-parity.md` for spawned-agent and background-process lifecycle,
   controls, recovery, and UI parity.
+- Provider subagents: every runtime task of kind `Agent` gets a read-only child
+  thread (`Thread.subagent`, store migration 16, `orchestrator/subagents.rs`),
+  created and refreshed from the task snapshot and fed with the subagent's own
+  prompt, messages, reasoning and tool calls under its own turn. Drivers tag that
+  output with an `EventOrigin::Agent` origin, a tool `parent_id`, or
+  `DriverEvent::SubagentOnly` and send the launch prompt as
+  `DriverEvent::SubagentPrompt`; child prose never enters the parent log, and
+  child tool calls nest in the parent only where a harness already did that
+  (Claude, Cursor). Sends, steering and edits to a subagent thread are rejected;
+  `tasks.stop`, `tasks.background` and `threads.interrupt` accept its id.
+  `threads.list` omits subagent threads unless `include_subagents` or
+  `parent_thread_id` is set, and clients must keep them out of normal lists
+  (`isSubagentThread` in `packages/kybern-client`). Archiving a thread archives
+  its subagent threads.
 - Events are append-only. New behavior means a new `EventPayload` variant plus
   handling in `store/projection.rs` and `apps/desktop/src/state/transcript.ts`.
   Clients ignore unknown kinds.
