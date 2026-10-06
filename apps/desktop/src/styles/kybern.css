@@ -234,6 +234,11 @@ html[data-project-reordering="true"] * {
   align-items: baseline;
   gap: 0.25em;
 }
+/* Muted hosts tint every descendant ([&_*]:text-muted-foreground); the lead is
+   part of the chip, so it keeps the chip's colour. */
+.chat-inline-token .chat-inline-token-lead {
+  color: inherit;
+}
 .chat-inline-token[role="link"]:hover {
   text-decoration: underline;
   text-decoration-thickness: from-font;

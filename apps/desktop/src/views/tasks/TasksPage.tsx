@@ -1,6 +1,9 @@
 // The Tasks page: the list or board for the panel's current view, or one task's page.
 // Keyboard: C new task, ↑↓ (J K) move, ↵ open, S status, P priority, ⌘↵ send to
-// agent, ⌘⌫ delete (with Undo). A quiet hint line says so until it is hidden.
+// agent, ⌘⌫ delete (with Undo). X picks the focused task, ⇧↑↓ extends the pick, ⌘A
+// picks every task shown, Esc clears it; with a pick, S P ⌘↵ ⌘⌫ act on all of it.
+// A quiet hint line says so until it is hidden.
+import { AnimatePresence } from "motion/react"
 import { useEffect, useMemo } from "react"
 
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
@@ -11,14 +14,23 @@ import { mod } from "@/lib/format"
 import { CustomizeIcon, KanbanIcon, ListBulletIcon } from "@/lib/kit/icons"
 import type { TaskItem, TaskItemId } from "@/protocol"
 import {
+  clearSelection,
+  closeBatchComposer,
   closeTaskMenu,
+  deleteSelectedTasks,
   deleteTask,
+  extendTaskSelection,
+  openBatchComposer,
   openRunComposer,
   openTask,
   openTaskMenu,
+  pruneSelected,
   refreshTasks,
+  selectAllTasks,
+  setBulkMenu,
   setFocusedTask,
   setTaskPrefs,
+  toggleSelected,
   useTasks,
 } from "@/state/tasks"
 import {
@@ -34,6 +46,8 @@ import {
 import { orderProjects } from "@/state/sidebarOrganize"
 import { useStore } from "@/state/store"
 import { SurfaceHeader } from "../chrome"
+import { SelectionBar } from "./SelectionBar"
+import { TaskBatchDock } from "./TaskBatchDock"
 import { TaskBoard } from "./TaskBoard"
 import { TaskDetail } from "./TaskDetail"
 import { TaskList } from "./TaskList"
@@ -49,6 +63,8 @@ export function TasksView() {
   const prefs = useTasks((s) => s.prefs)
   const query = useTasks((s) => s.query)
   const quickAdd = useTasks((s) => s.quickAdd)
+  const batch = useTasks((s) => s.batch)
+  const selecting = useTasks((s) => s.selected.size > 0)
   const projects = useStore((s) => s.projects)
   const projectOrder = useStore((s) => s.projectOrder)
   const now = useNow(30_000)
@@ -76,6 +92,20 @@ export function TasksView() {
 
   const open = taskId ? tasks[taskId] : undefined
   useTaskKeys({ sequence, columns: board ? columns : null, openId: open?.id })
+
+  // A pick drops tasks that are gone, or that a filter, a search or Display now hides. It
+  // survives opening a task, so while a page is open only deleted tasks leave it.
+  const listing = !taskId && loaded && supported
+  const shown = useMemo(() => new Set((board ? columns.map((column) => column.tasks) : groups.map((group) => group.tasks)).flat().map((task) => task.id)), [board, columns, groups])
+  useEffect(() => {
+    if (!loaded) return
+    pruneSelected((id) => (listing ? shown.has(id) : !!tasks[id]))
+  }, [loaded, listing, shown, tasks])
+  // The batch composer belongs to the list: leaving it (a task page, another surface) hides it.
+  useEffect(() => {
+    if (taskId) closeBatchComposer()
+  }, [taskId])
+  useEffect(() => () => closeBatchComposer(), [])
 
   let content
   if (!supported) {
@@ -114,14 +144,16 @@ export function TasksView() {
 
   const title = query.trim() ? "Search" : filterLabel(prefs.filter, (id) => projects[id]?.name)
   return (
-    <div className="tk-page font-system-ui">
+    <div className="tk-page font-system-ui" data-no-hints={!prefs.showHints || undefined}>
       {!taskId && (
         <SurfaceHeader dock={false} trailing={<ListControls board={board} />}>
           <h1 className="tk-title">{title}</h1>
         </SurfaceHeader>
       )}
       {content}
-      {!taskId && loaded && supported && prefs.showHints && all.length > 0 && <HintBar />}
+      {listing && prefs.showHints && all.length > 0 && <HintBar selecting={selecting} hidden={!!batch} />}
+      {listing && all.length > 0 && <SelectionBar />}
+      <AnimatePresence>{listing && all.length > 0 && batch && <TaskBatchDock key={batch.nonce} request={batch} />}</AnimatePresence>
       <KeyboardMenus />
     </div>
   )
@@ -212,24 +244,31 @@ function ListControls({ board }: { board: boolean }) {
   )
 }
 
-function HintBar() {
+function HintBar({ selecting, hidden }: { selecting: boolean; hidden: boolean }) {
+  const keys: [string, string][] = selecting
+    ? [
+        ["S", "Status"],
+        ["P", "Priority"],
+        [`${mod}↵`, "Send to agent"],
+        [`${mod}⌫`, "Delete"],
+        [`${mod}A`, "Select all"],
+        ["Esc", "Clear"],
+      ]
+    : [
+        ["↑↓", "Move"],
+        ["↵", "Open"],
+        ["S", "Status"],
+        ["P", "Priority"],
+        [`${mod}↵`, "Send to agent"],
+      ]
   return (
-    <div className="tk-hints" aria-label="Keyboard shortcuts">
-      <span>
-        <b>↑↓</b>Move
-      </span>
-      <span>
-        <b>↵</b>Open
-      </span>
-      <span>
-        <b>S</b>Status
-      </span>
-      <span>
-        <b>P</b>Priority
-      </span>
-      <span>
-        <b>{mod}↵</b>Send to agent
-      </span>
+    <div className="tk-hints" aria-label="Keyboard shortcuts" data-hidden={hidden || undefined}>
+      {keys.map(([key, label]) => (
+        <span key={key}>
+          <b>{key}</b>
+          {label}
+        </span>
+      ))}
       <button type="button" className="hide" onClick={() => setTaskPrefs({ showHints: false })}>
         Hide hints
       </button>
@@ -268,16 +307,31 @@ function useTaskKeys({ sequence, columns, openId }: { sequence: TaskItemId[]; co
       const store = useStore.getState()
       if (store.settingsOpen || store.paletteOpen || store.selected.kind !== "tasks") return
       const tasks = useTasks.getState()
-      if (tasks.menu) return
+      if (tasks.menu || tasks.bulkMenu) return
       const meta = event.metaKey || event.ctrlKey
       const typing = editable(event.target)
       const current = openId ?? tasks.focusedId ?? undefined
+      const picking = !openId && tasks.selected.size > 0
+      const inDock = !!(event.target as HTMLElement | null)?.closest?.(".tk-dock")
 
-      // ⌘↵ and ⌘⌫ act on the focused (or open) task, even from the search field. On a
-      // task's page ⌘↵ opens its composer, except in rich text, where ⌘↵ is the editor's.
-      if (meta && event.key === "Enter" && !event.shiftKey && current && !(openId && richText(event.target))) {
+      // ⌘↵ and ⌘⌫ act on the pick when there is one, else on the focused (or open) task,
+      // even from the search field. On a task's page ⌘↵ opens its composer, except in
+      // rich text, where ⌘↵ is the editor's. In the batch composer ⌘↵ is the composer's.
+      if (meta && event.key === "Enter" && !event.shiftKey && (picking || current) && !(openId && richText(event.target)) && !inDock) {
         event.preventDefault()
-        openRunComposer(current)
+        if (picking) {
+          if (!tasks.batch) openBatchComposer()
+        } else openRunComposer(current!)
+        return
+      }
+      if (meta && event.key === "Backspace" && picking && !typing) {
+        event.preventDefault()
+        void deleteSelectedTasks().then((after) => after && focusTask(after))
+        return
+      }
+      if (meta && event.key.toLowerCase() === "a" && !event.shiftKey && !event.altKey && !openId && !typing && !inDock) {
+        event.preventDefault()
+        selectAllTasks()
         return
       }
       if (meta && event.key === "Backspace" && current && !typing) {
@@ -290,7 +344,7 @@ function useTaskKeys({ sequence, columns, openId }: { sequence: TaskItemId[]; co
         return
       }
       // Letters typed around the run composer (its tray, its chips) stay with it.
-      if (typing || meta || event.altKey || (event.target as HTMLElement | null)?.closest?.(".tk-dock")) return
+      if (typing || meta || event.altKey || inDock) return
 
       const key = event.key.toLowerCase()
       if (key === "c" && !event.shiftKey) {
@@ -316,6 +370,32 @@ function useTaskKeys({ sequence, columns, openId }: { sequence: TaskItemId[]; co
           event.preventDefault()
           openTaskMenu(openId, key === "s" ? "status" : "priority")
         }
+        return
+      }
+      // Esc: hide the batch composer first, then clear the pick, then the focus.
+      if (key === "escape" && (tasks.batch || picking)) {
+        event.preventDefault()
+        if (tasks.batch) closeBatchComposer()
+        else {
+          clearSelection()
+          if (tasks.focusedId) focusTask(tasks.focusedId)
+        }
+        return
+      }
+      if (picking && (key === "s" || key === "p")) {
+        event.preventDefault()
+        setBulkMenu(key === "s" ? "status" : "priority")
+        return
+      }
+      if (event.shiftKey && (key === "arrowdown" || key === "arrowup")) {
+        event.preventDefault()
+        const next = extendTaskSelection(key === "arrowdown" ? 1 : -1)
+        if (next) focusTask(next)
+        return
+      }
+      if (key === "x" && !event.shiftKey && current) {
+        event.preventDefault()
+        toggleSelected(current)
         return
       }
       const down = key === "arrowdown" || key === "j"
