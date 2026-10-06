@@ -1,7 +1,9 @@
 // How a turn's work blocks fold into rows: runs of settled tool calls become one group,
-// and two or more subagent launches become one "N subagents" row.
+// two or more subagent launches become one "N subagents" row, and two or more Kybern
+// delegations (`kybern_agent_delegate`) become one "N delegated agents" row.
 
 import type { Block } from "../../../../packages/kybern-client/src/transcript.ts"
+import { isDelegateTool, orchestrationTool } from "../../../../packages/kybern-client/src/orchestrationTools.ts"
 import type { RuntimeTask } from "../../../../packages/kybern-client/src/types.ts"
 import { agentItemTool } from "./agentItemTools"
 import { isAgentLaunchTool } from "./toolActivity"
@@ -13,6 +15,8 @@ export type WorkChunk =
   | { kind: "tools"; blocks: ToolBlock[] }
   /** Two or more subagent launches (tool calls or runtime tasks), launch order. */
   | { kind: "subagents"; blocks: Block[] }
+  /** Two or more `kybern_agent_delegate` calls, launch order. */
+  | { kind: "delegations"; blocks: Block[] }
 
 const isTaskActive = (task: RuntimeTask) =>
   task.status === "pending" || task.status === "running" || task.status === "waiting" || task.status === "stopping"
@@ -27,6 +31,21 @@ export function isSubagentLaunchBlock(block: Block, tasksByToolCall: ReadonlyMap
   return block.kind === "runtime_task" && block.task.kind === "agent"
 }
 
+/** A `kybern_agent_delegate` call: it starts a Kybern child thread, not a provider subagent. */
+export function isDelegationLaunchBlock(block: Block): boolean {
+  return block.kind === "tool" && isDelegateTool(block.call.name)
+}
+
+/** A `kybern_thread_send` call: a message to another thread, worth its own row rather than a place in a tool group. */
+export function isThreadSendBlock(block: Block): boolean {
+  return block.kind === "tool" && orchestrationTool(block.call.name) === "thread_send"
+}
+
+/** Delegations and messages to other threads stay visible above a settled turn's "Worked for" fold. */
+export function isOrchestrationBlock(block: Block): boolean {
+  return isDelegationLaunchBlock(block) || isThreadSendBlock(block)
+}
+
 /** Reasoning with no answer text: it may sit between two launches without breaking a group. */
 const isThinkingOnly = (block: Block) => block.kind === "assistant" && !block.text.trim()
 
@@ -34,6 +53,7 @@ export function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap
   const chunks: WorkChunk[] = []
   let tools: ToolBlock[] = []
   let launches: Block[] = []
+  let launchKind: "subagents" | "delegations" = "subagents"
   // Thinking seen since the last launch. If another launch follows it joins the group's
   // lead-in; otherwise it follows the group.
   let held: Block[] = []
@@ -46,7 +66,7 @@ export function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap
   }
   const flushLaunches = () => {
     for (const block of absorbed) chunks.push({ kind: "single", block })
-    if (launches.length >= 2) chunks.push({ kind: "subagents", blocks: launches })
+    if (launches.length >= 2) chunks.push(launchKind === "delegations" ? { kind: "delegations", blocks: launches } : { kind: "subagents", blocks: launches })
     else if (launches[0]) chunks.push({ kind: "single", block: launches[0] })
     for (const block of held) chunks.push({ kind: "single", block })
     launches = []
@@ -55,8 +75,12 @@ export function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap
   }
 
   for (const block of blocks) {
-    if (isSubagentLaunchBlock(block, tasksByToolCall)) {
+    const delegation = isDelegationLaunchBlock(block)
+    if (delegation || isSubagentLaunchBlock(block, tasksByToolCall)) {
       flushTools()
+      // A different kind of launch starts its own group.
+      if (launches.length > 0 && (launchKind === "delegations") !== delegation) flushLaunches()
+      launchKind = delegation ? "delegations" : "subagents"
       if (launches.length > 0) {
         absorbed.push(...held)
         held = []
@@ -75,6 +99,7 @@ export function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap
       block.complete &&
       !block.isError &&
       !agentItemTool(block.call.name)?.write &&
+      !isThreadSendBlock(block) &&
       (!linkedTask || !isTaskActive(linkedTask))
     ) {
       tools.push(block)
@@ -97,5 +122,7 @@ export function chunkKey(chunk: WorkChunk): string {
       return `group:${chunk.blocks[0]!.id}`
     case "subagents":
       return `subagents:${chunk.blocks[0]!.id}`
+    case "delegations":
+      return `delegations:${chunk.blocks[0]!.id}`
   }
 }

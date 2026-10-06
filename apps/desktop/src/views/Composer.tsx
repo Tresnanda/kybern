@@ -76,6 +76,7 @@ import {
 } from "./composerMentions"
 import { SendCancelled } from "./sendCancelled"
 import { findModel, modelQualifier } from "../../../../packages/kybern-client/src/models"
+import { isChildThread } from "../../../../packages/kybern-client/src/subagents.ts"
 import { ModelPicker } from "@/components/kybern/ModelPicker"
 
 export interface ComposerHandle {
@@ -485,7 +486,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const threadHits = useMemo(
     () => term === ""
       ? Object.values(threads)
-          .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived" && !thread.subagent)
+          .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived" && !isChildThread(thread))
           .sort((left, right) => Number(right.project_id === projectId) - Number(left.project_id === projectId) || Date.parse(right.updated_at) - Date.parse(left.updated_at))
           .slice(0, 12)
           .map((thread) => ({ thread }))

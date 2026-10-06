@@ -61,6 +61,19 @@ final class Bench: NSObject, WKScriptMessageHandler {
   fflush(stdout)
   let json = (message.body as? String)?.data(using: .utf8)
   let result = json.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+  if let name = result?["screenshot"] as? String {
+   // Named screenshots mid-run: written to KYBERN_PERF_SHOTS_DIR as <name>.png, then the page resumes.
+   guard let directory = ProcessInfo.processInfo.environment["KYBERN_PERF_SHOTS_DIR"] else { web.evaluateJavaScript("window.__screenshotContinue()"); return }
+   let safe = name.replacingOccurrences(of: "/", with: "-")
+   web.takeSnapshot(with: nil) { image, error in
+    if let image, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+     try? FileManager.default.createDirectory(at: URL(fileURLWithPath: directory, isDirectory: true), withIntermediateDirectories: true)
+     try? png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(safe + ".png"))
+    } else { print("Snapshot failed: \(String(describing: error))") }
+    self.web.evaluateJavaScript("window.__screenshotContinue()")
+   }
+   return
+  }
   if result?["stage"] != nil {
    if result?["nativeClipboardBytes"] as? Bool == true, let encoded = result?["data"] as? [Int] {
     // Verify the production native fallback on the real macOS pasteboard.

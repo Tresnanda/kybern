@@ -47,8 +47,12 @@ import { ToolResultText } from "@/components/kybern/ToolResultText"
 import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
-import { chunkKey, chunkWork, isAgentLaunchBlock, isSubagentLaunchBlock, type WorkChunk } from "@/lib/workChunks"
+import { chunkKey, chunkWork, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock, isSubagentLaunchBlock, isThreadSendBlock, type WorkChunk } from "@/lib/workChunks"
 import { SubagentGroupRow, SubagentLaunchRow, type LaunchBlock } from "./subagents/SubagentRows"
+import { DelegationGroupRow, DelegationLaunchRow } from "./delegations/DelegationRows"
+import { AgentResultsCard, InboundMessageRow, SentToRow } from "./delegations/ThreadMessageRows"
+import { agentResultItems, threadMessagePart } from "../../../../packages/kybern-client/src/delegations.ts"
+import { orchestrationLabel, orchestrationTool } from "../../../../packages/kybern-client/src/orchestrationTools.ts"
 import { SubagentDivider, SubagentEndRow } from "./subagents/SubagentPage"
 import { subagentThreadPhase } from "../../../../packages/kybern-client/src/subagents.ts"
 import { TranscriptStateRoot } from "@/components/kybern/TranscriptStateScope"
@@ -56,6 +60,7 @@ import {
   ArrowDownIcon,
   BackToParentIcon,
   CheckmarkSquare04Icon,
+  ChatBubbleIcon,
   BrainIcon,
   ChangesIcon,
   CheckIcon,
@@ -170,7 +175,8 @@ function settledWorkPresentation(blocks: readonly Block[], tasks: readonly Runti
   for (const block of hierarchy.roots) {
     if (
       (block.kind === "tool" && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) ||
-      (block.kind === "runtime_task" && block.task.kind === "agent")
+      (block.kind === "runtime_task" && block.task.kind === "agent") ||
+      isOrchestrationBlock(block)
     ) agentBlocks.push(block)
     else disclosureBlocks.push(block)
   }
@@ -1014,6 +1020,7 @@ function mentionToken(part: Extract<ContentPart, { type: "mention" }>): InlineTo
 }
 
 function UserBubble({ message, at, attribution, clampLines }: { message: { parts: ContentPart[] }; at: string; attribution?: string; clampLines?: number }) {
+  const threadId = useContext(ImageThreadContext)
   const [expanded, setExpanded] = useState(false)
   const [overflowing, setOverflowing] = useState(false)
   const clamped = useRef<HTMLDivElement>(null)
@@ -1069,6 +1076,11 @@ function UserBubble({ message, at, attribution, clampLines }: { message: { parts
     resize.observe(element)
     return () => resize.disconnect()
   }, [clampLines, expanded, text])
+  // A message from another thread, or the results of delegated agents, is its own row rather than a bubble.
+  const inbound = threadMessagePart(message.parts)
+  if (inbound) return <InboundMessageRow part={inbound} at={at} threadId={threadId} />
+  const resultItems = agentResultItems(message.parts)
+  if (resultItems) return <AgentResultsCard items={resultItems} at={at} />
   if (files.length === 0 && tokens.size === 0 && collaborationPreview(text)) return <CollaborationMessageNotice text={text} />
   const clampedNow = !!clampLines && !expanded && overflowing
   return (
@@ -1138,6 +1150,8 @@ function workIcon(kind: ToolVisualKind, isError: boolean) {
       return <NoteIcon className="size-3.5" />
     case "task":
       return <ListChecksIcon className="size-3.5" />
+    case "message":
+      return <ChatBubbleIcon className="size-3.5" />
     case "github":
       return <GitHubIcon className="size-3.5" />
     case "web":
@@ -1361,6 +1375,8 @@ function WorkRows({
       renderBlock(chunk.block)
     ) : chunk.kind === "subagents" ? (
       <SubagentGroupRow blocks={chunk.blocks} tasksByToolCall={tasksByToolCall} onOpenLegacy={onOpenAgentActivity} />
+    ) : chunk.kind === "delegations" ? (
+      <DelegationGroupRow blocks={chunk.blocks} />
     ) : (
       <ToolGroupRow
         key={chunk.blocks[0]!.id}
@@ -1455,6 +1471,9 @@ const WorkRow = memo(function WorkRow({
       return <div className="pt-3 pb-4"><UserBubble message={block.message} at={block.at} /></div>
     case "tool": {
       const row = <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
+      // A delegation opens the child thread Kybern started; a message to another thread has its own row.
+      if (isDelegationLaunchBlock(block)) return <DelegationLaunchRow block={block} legacy={row} />
+      if (isThreadSendBlock(block)) return <SentToRow block={block} legacy={row} />
       // A subagent launch opens its own thread; the tool row stays for history with no child thread.
       return isSubagentLaunchBlock(block, tasksByToolCall)
         ? <SubagentLaunchRow block={block as LaunchBlock} tasksByToolCall={tasksByToolCall} onOpenLegacy={onOpenAgentActivity} legacy={row} />
@@ -1534,12 +1553,15 @@ function ToolRow({
     const visual = toolVisualKind(block.call, activity)
     const surface = toolSurface(block.call, block.output)
     const item = agentItemTool(block.call.name)
+    const orchestration = orchestrationTool(block.call.name)
     const itemResult = item && block.complete && !block.isError ? parseAgentItemResult(block.output) : null
     // A settled write shows its card in place of the raw result.
     const itemWrite = item?.write ? agentItemWriteResult(itemResult) : null
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
-    const label = item
+    const label = orchestration
+      ? orchestrationLabel(orchestration, block.complete && !active, block.isError)
+      : item
       ? agentItemLabel(item, block.call.input, itemResult, block.complete && !active, block.isError)
       : surface ? surfaceLabel(surface, block.call.input, block.complete && !active, block.isError) : workLabel(activity, block.call.name, block.complete && !active, block.isError)
     const hasOutput = !itemWrite && (hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted)

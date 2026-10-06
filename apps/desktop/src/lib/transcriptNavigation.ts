@@ -1,3 +1,4 @@
+import { structuredMessageSummary } from "../../../../packages/kybern-client/src/delegations.ts"
 import type { TurnGroup } from "../state/transcript"
 
 export interface TranscriptNavigationItem {
@@ -34,6 +35,8 @@ export function createTranscriptNavigation() {
           if (part.type === "text") user += part.text.slice(0, 512 - user.length)
           if (user.length >= 512) break
         }
+        // A message from another thread or a batch of delegated results has no text of its own.
+        if (!user && group.user) user = structuredMessageSummary(group.user.message) ?? ""
         text = { user, answer: group.answer?.text.slice(0, 512) ?? "" }
         cache.set(group, text)
       }

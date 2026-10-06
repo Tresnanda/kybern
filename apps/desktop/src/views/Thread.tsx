@@ -80,6 +80,8 @@ import { Composer, type ComposerHandle, type SlashCommand } from "./Composer"
 import { ENVIRONMENT_DOCKED_CONTENT_INSET_PX, EnvironmentPanel } from "./Environment"
 import { Transcript } from "./Transcript"
 import { SubagentStrip } from "./subagents/SubagentStrip"
+import { HeldMessagesPanel } from "./delegations/HeldMessagesPanel"
+import { structuredMessageBody, structuredMessageSummary } from "../../../../packages/kybern-client/src/delegations.ts"
 import { SubagentBar, SubagentBreadcrumb } from "./subagents/SubagentPage"
 import { openParentOf, openParentShortcut, stopOneSubagent, useAncestors, useHelperThreads, useSubagentDepth } from "@/state/subagents"
 import { pageDirection, playPageMotion, lastInputWasPointer } from "@/lib/navMotion"
@@ -391,6 +393,7 @@ export function ThreadView({
                     fallback={<RuntimeActivityPanel tasks={activeAgentTasks} />}
                   />
                   {otherActiveTasks.length > 0 && <RuntimeActivityPanel tasks={otherActiveTasks} />}
+                  <HeldMessagesPanel threadId={threadId} />
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
@@ -530,8 +533,10 @@ function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
 export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
   const [expanded, setExpanded] = useState(false)
-  const updates = queued.filter(q => collaborationPreview(promptText(q.message)))
-  const prompts = queued.filter(q => !collaborationPreview(promptText(q.message)))
+  // Updates from other agents (legacy collaboration text, messages from threads, delegated results) wait behind one row.
+  const isUpdate = (q: { message: UserMessage }) => !!collaborationPreview(promptText(q.message)) || !!structuredMessageSummary(q.message)
+  const updates = queued.filter(isUpdate)
+  const prompts = queued.filter(q => !isUpdate(q))
   return <ComposerStackedPanel className="composer-queue-panel flex max-h-64 flex-col overflow-y-auto">
     {updates.length > 0 && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}
       className="flex min-h-9 w-full items-center gap-2 px-3 py-2 text-start text-xs text-muted-foreground hover:text-foreground">
@@ -539,14 +544,17 @@ export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
       <span>{updates.length} agent {updates.length === 1 ? "update" : "updates"} waiting</span>
     </button>}
     {prompts.length > 0 && <div className="px-3 pt-2 text-xs text-muted-foreground">Queued · {prompts.length}</div>}
-    {queued.filter(q => expanded || !collaborationPreview(promptText(q.message))).map((q, i) => <QueuedRow key={q.id} item={{ ...q, thread_id: threadId }} divided={i > 0} />)}
+    {queued.filter(q => expanded || !isUpdate(q)).map((q, i) => <QueuedRow key={q.id} item={{ ...q, thread_id: threadId }} divided={i > 0} />)}
   </ComposerStackedPanel>
 }
 
 function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage; divided: boolean }) {
   const [entered, setEntered] = useState(false)
-  const preview = collaborationPreview(promptText(item.message))
-  const sender = useStore(state => preview?.senderId ? state.threads[preview.senderId]?.title || "Helper" : "You")
+  const legacy = collaborationPreview(promptText(item.message))
+  // A message from another thread or a batch of delegated results reads from its parts, not from prompt text.
+  const structured = structuredMessageSummary(item.message)
+  const preview = legacy ?? (structured ? { purpose: structured, senderId: null, body: structuredMessageBody(item.message) ?? "" } : null)
+  const sender = useStore(state => legacy?.senderId ? state.threads[legacy.senderId]?.title || "Helper" : "You")
   const [showBody, setShowBody] = useState(false)
   const connected = useStore((s) => s.connection.state === "open")
   const [edit, setEdit] = useState<string | null>(null)
@@ -567,7 +575,7 @@ function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage
       <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
       <div className="min-w-0 flex-1">
         {edit === null ? <button type="button" aria-expanded={showBody} onClick={() => setShowBody(value => !value)} className="w-full text-start">
-          <span className="flex min-w-0 items-center gap-2"><span className={cn(COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME, "min-w-0 flex-1")}>{preview ? `${preview.purpose} · ${sender}` : promptText(item.message) || "Queued follow-up"}</span><DisclosureChevron open={showBody} /></span>
+          <span className="flex min-w-0 items-center gap-2"><span className={cn(COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME, "min-w-0 flex-1")}>{structured ? structured : preview ? `${preview.purpose} · ${sender}` : promptText(item.message) || "Queued follow-up"}</span><DisclosureChevron open={showBody} /></span>
           {showBody && <span className="block whitespace-pre-wrap break-words py-2 text-sm font-normal leading-relaxed">{preview?.body ?? promptText(item.message)}</span>}
         </button>
           : <Textarea aria-label="Edit queued prompt" value={edit} disabled={busy} onChange={(e) => setEdit(e.target.value)} size="sm" />}

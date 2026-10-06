@@ -186,6 +186,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Project-free draft, recents, and neutral composer controls | `node scripts/check-rendering.mjs free-chat` |
 | Collaboration group lifecycle, paging, attribution, and context revisions | `node scripts/check-rendering.mjs collaboration` |
 | Ordinary-chat delegation, child navigation, earlier-thread references, project coordinator entry, and optional dock panels | `node scripts/check-rendering.mjs chat-collaboration` |
+| Orchestrator V2: Lineage dock, delegation and message rows, held messages, Delegation settings. `KYBERN_ORCH_THEME=light\|dark KYBERN_PERF_SHOTS_DIR=<dir> KYBERN_PERF_WIDTH=1560 KYBERN_PERF_HEIGHT=1000` also writes named screenshots | `node scripts/check-rendering.mjs orchestrator` |
 | Release announcement, release details, and sidebar update controls | `node scripts/check-rendering.mjs app-update` |
 | Context menus or popup materials | `node scripts/check-rendering.mjs materials` |
 | Large histories, worker scheduling, expanded work | `node scripts/check-rendering.mjs scaling` |

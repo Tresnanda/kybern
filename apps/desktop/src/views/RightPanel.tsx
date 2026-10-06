@@ -26,6 +26,7 @@ import { diffKey, isRuntimeTaskActive, useStore, type RightTab } from "@/state/s
 
 import { ActivityPane } from "./Activity"
 import { CollaborationPane } from "./Collaboration"
+import { LineagePane } from "./lineage/LineagePane"
 import { ExplorerPane } from "./Explorer"
 import { TerminalWorkspace } from "./Terminal"
 import { NotesDockPanel } from "./dock/NotesDockPanel"
@@ -62,6 +63,8 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const diff = useStore((s) => (threadId ? s.diffs[diffKey(threadId)] : undefined))
   const projectId = useStore((s) => (threadId ? s.threads[threadId]?.project_id : undefined) ?? (s.selected.kind === "draft" ? s.selected.draft.projectId : undefined))
   const projectCoordinator = useStore((s) => !!(threadId && s.threads[threadId]?.coordinator_project_id))
+  // Coordinators and the members of a coordinator group keep the collaboration pane; every other thread shows its Lineage.
+  const collaborationThread = useStore((s) => !!(threadId && (s.threads[threadId]?.coordinator_project_id || s.threads[threadId]?.collaboration_group_id)))
   const [adds, dels] = useMemo(() => [diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0, diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0], [diff])
   const activeTasks = useStore((s) => (threadId ? (s.runtimeTasks[threadId] ?? []).filter(isRuntimeTaskActive).length : 0))
   const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(`${tab}:${tabs.join(",")}`)
@@ -145,7 +148,9 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         {tabs.length > 0 && threadId && (
           <>
             {tabs.includes("collaboration") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "collaboration" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "collaboration"} aria-hidden={tab !== "collaboration"}>
-              <CollaborationPane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />
+              {collaborationThread
+                ? <CollaborationPane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />
+                : <LineagePane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />}
             </div>}
             {tabs.includes("activity") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "activity"} aria-hidden={tab !== "activity"}>
               <ActivityPane key={threadId} threadId={threadId} visible={workspaceActive && tab === "activity"} />

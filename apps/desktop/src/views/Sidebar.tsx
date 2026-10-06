@@ -75,7 +75,7 @@ import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from
 import { DEFAULT_SIDEBAR_FILTER, isFiltering, moveProject, orderProjects, threadMatchesFilter, type SidebarFilter } from "@/state/sidebarOrganize"
 import { createProjectThreadsSelector, useStore } from "@/state/store"
 import { createSidebarSubagentsSelector, createUserThreadsSelector, nowMs, useDismissedSubagentRows } from "@/state/subagents"
-import { visibleSubagentThreads } from "../../../../packages/kybern-client/src/subagents.ts"
+import { isChildThread, visibleSubagentThreads } from "../../../../packages/kybern-client/src/subagents.ts"
 import { SubagentSidebarRow } from "./subagents/SubagentSidebarRow"
 
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
@@ -153,7 +153,7 @@ export function ThreadSidebar() {
     if (!attentionIds && !filtering) return null
     const ids = new Set<ThreadId>()
     for (const thread of Object.values(threads)) {
-      if (thread.status === "archived" || thread.subagent) continue
+      if (thread.status === "archived" || isChildThread(thread)) continue
       if (attentionIds && !attentionIds.has(thread.id)) continue
       if (filtering && !threadMatchesFilter(thread, sidebarFilter, threadActivity[thread.id]?.state ?? undefined)) continue
       ids.add(thread.id)
@@ -180,7 +180,7 @@ export function ThreadSidebar() {
   // Agents to filter by: the ones that have threads here, plus the chosen one.
   const threadAgents = useMemo(() => {
     const kinds = new Set<ProviderKind>()
-    for (const thread of Object.values(threads)) if (thread.status !== "archived" && !thread.subagent) kinds.add(thread.provider.kind)
+    for (const thread of Object.values(threads)) if (thread.status !== "archived" && !isChildThread(thread)) kinds.add(thread.provider.kind)
     if (sidebarFilter.agent) kinds.add(sidebarFilter.agent)
     return [...kinds].sort((a, b) => (PROVIDER_LABEL[a] ?? a).localeCompare(PROVIDER_LABEL[b] ?? b))
   }, [sidebarFilter.agent, threads])
@@ -548,13 +548,13 @@ function ProjectItem({
     return collaborationThreadRows([...ordered, ...shownSubagents], expandedThreads, selectedThreadId, defaultOpen)
   }, [filterThreadIds, coordinator, threads, subagentThreads, dismissedSubagents, expandedThreads, selectedThreadId])
   // Subagent rows ride along with their parent; only real threads count toward the cap.
-  const topRows = useMemo(() => orderedRows.filter((row) => !row.thread.subagent).length, [orderedRows])
+  const topRows = useMemo(() => orderedRows.filter((row) => !isChildThread(row.thread)).length, [orderedRows])
   const visible = useMemo(() => {
     if (showAll || filtering) return orderedRows
     let counted = 0
     let cutting = false
     return orderedRows.filter((row) => {
-      if (row.thread.subagent) return !cutting
+      if (isChildThread(row.thread)) return !cutting
       cutting = counted >= MAX_PROJECT_THREADS
       if (!cutting) counted += 1
       return !cutting
@@ -648,7 +648,7 @@ function ProjectItem({
           <div className="min-h-0 overflow-hidden">
             <ul className={cn("mx-0 my-0 flex w-full min-w-0 translate-x-0 flex-col border-l-0 px-0 py-0", SIDEBAR_NESTED_LIST_GAP_CLASS_NAME, disclosureContentClassName(open))}>
               {!coordinator && !filtering && <CreateCoordinatorRow project={project} />}
-              {visible.map(({ thread, depth, childCount, open: childrenOpen }) => thread.subagent ? (
+              {visible.map(({ thread, depth, childCount, open: childrenOpen }) => isChildThread(thread) ? (
                 <SubagentSidebarRow key={thread.id} thread={thread} depth={depth} childCount={childCount} childrenOpen={childrenOpen} onToggleChildren={() => setExpandedThreads(value => ({ ...value, [thread.id]: !childrenOpen }))} />
               ) : (
                 <ThreadRow key={thread.id} thread={thread} depth={depth} childCount={childCount} childrenOpen={childrenOpen} onToggleChildren={() => setExpandedThreads(value => ({ ...value, [thread.id]: !childrenOpen }))} />
