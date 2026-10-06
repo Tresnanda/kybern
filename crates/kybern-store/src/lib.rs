@@ -2085,6 +2085,26 @@ impl Store {
         })
     }
 
+    /// Latest turn a person started in `thread_id`: not a collaboration delivery,
+    /// a thread message, delegation brief or batch of agent results. Thread
+    /// messaging resets its per-pair wake cap on it.
+    pub fn thread_latest_person_turn_at(&self, thread_id: ThreadId) -> Result<Option<DateTime<Utc>>> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT e.at FROM events e
+                 LEFT JOIN collaboration_messages cm ON cm.delivery_message_id=json_extract(e.payload,'$.message_id')
+                 LEFT JOIN thread_messages tm ON tm.id=json_extract(e.payload,'$.message_id')
+                 WHERE e.thread_id=?1 AND e.kind='turn_started' AND cm.id IS NULL AND tm.id IS NULL
+                   AND COALESCE(json_extract(e.payload,'$.message.parts[0].type'),'') NOT IN ('thread_message','agent_results')
+                 ORDER BY e.seq DESC LIMIT 1",
+                [thread_id.to_string()],
+                |row| parse_time(row.get(0)?),
+            )
+            .optional()
+            .map_err(Into::into)
+        })
+    }
+
     /// Keep a hydrated transcript aligned with the thread's acknowledged head.
     pub fn events_for_thread_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
@@ -3871,6 +3891,42 @@ mod orchestration_tests {
         let rows = store.project_transcript_through(thread.id, i64::MAX).unwrap();
         assert_eq!(rows.len(), 1, "held and resolved events add no transcript row");
         assert!(matches!(&rows[0], TranscriptEntry::User { id, message: m, .. } if *id == message_id && *m == message));
+    }
+
+    #[test]
+    fn only_a_person_started_turn_counts_as_the_latest_person_turn() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let thread = thread(&project, None, None);
+        store.thread_upsert(&thread).unwrap();
+        assert!(store.thread_latest_person_turn_at(thread.id).unwrap().is_none());
+        let start = |message_id: MessageId, parts: Vec<ContentPart>| {
+            store
+                .event_append(thread.id, Some(Uuid::now_v7()), EventPayload::TurnStarted { message_id, message: UserMessage { parts } })
+                .unwrap()
+        };
+        let human = start(Uuid::now_v7(), vec![ContentPart::Text { text: "hi".into() }]);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        // A turn a thread message started (by row id, or by its part) is not a person's.
+        let record = message(thread.id, Some(Uuid::now_v7()), ThreadMessagePurpose::Message, ThreadMessageState::Queued);
+        store.thread_message_insert(&record).unwrap();
+        start(record.id, vec![ContentPart::Text { text: "from the queue".into() }]);
+        start(
+            Uuid::now_v7(),
+            vec![ContentPart::ThreadMessage {
+                message_id: Uuid::now_v7(),
+                from_thread_id: None,
+                from_title: "Kybern".into(),
+                purpose: ThreadMessagePurpose::Warning,
+                reply_to: None,
+                body: "w".into(),
+            }],
+        );
+        start(Uuid::now_v7(), vec![ContentPart::AgentResults { items: Vec::new() }]);
+        assert_eq!(store.thread_latest_person_turn_at(thread.id).unwrap(), Some(human.at));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let later = start(Uuid::now_v7(), vec![ContentPart::Text { text: "again".into() }]);
+        assert_eq!(store.thread_latest_person_turn_at(thread.id).unwrap(), Some(later.at));
     }
 
     fn message_record_for(to: ThreadId) -> ThreadMessageRecord {

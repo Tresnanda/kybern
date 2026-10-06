@@ -24,6 +24,7 @@ use crate::settings::SettingsStore;
 
 mod agent_items;
 mod delegation;
+mod messaging;
 mod notes;
 mod subagents;
 mod tasks;
@@ -197,10 +198,7 @@ impl Orchestrator {
                 "an isolated worker cannot wake a main-checkout thread; return the result to its coordinator or ask the user to message that thread"
             ));
         }
-        let permission_is_safe = actor.permission_mode == PermissionMode::FullAccess
-            || recipient.permission_mode == PermissionMode::Supervised
-            || (actor.provider.kind == recipient.provider.kind && actor.permission_mode == recipient.permission_mode);
-        if !permission_is_safe {
+        if messaging::permission_rule(&actor, &recipient).is_err() {
             return Err(anyhow!(
                 "recipient permission mode is not a conservative subset of the caller; ask the user to message that thread directly or lower its permission mode"
             ));
@@ -2165,12 +2163,15 @@ impl Orchestrator {
             if delegation::is_tool(name) {
                 return self.execute_agent_tool(&thread, turn_id, &live, name, arguments).await;
             }
+            if messaging::is_tool(name) {
+                return self.execute_messaging_tool(&thread, turn_id, &live, name, arguments).await;
+            }
             if name.starts_with("kybern_collaboration_") && !self.collaboration_tools_enabled(&thread)? {
                 return Err(anyhow!(
                     "The kybern_collaboration_* tools are only for project coordinators and their workers. To hand work to another agent use kybern_agent_delegate; to message another thread use kybern_thread_send."
                 ));
             }
-            if name.starts_with("kybern_collaboration_") || name == "kybern_thread_send" {
+            if name.starts_with("kybern_collaboration_") {
                 let object = arguments.as_object_mut().ok_or_else(|| anyhow!("tool arguments must be a JSON object"))?;
                 let existing_group = self.inner.store.collaboration_group_for_thread(thread_id)?;
                 if existing_group.is_none() && name == "kybern_collaboration_context_read" {
@@ -2200,7 +2201,7 @@ impl Orchestrator {
                         "caller": {"thread_id":thread_id,"group_id":null,"assignment":null}
                     }));
                 }
-                let group_id = if matches!(name, "kybern_collaboration_send" | "kybern_thread_send") {
+                let group_id = if name == "kybern_collaboration_send" {
                     match object.get("reply_to").filter(|value| !value.is_null()) {
                         Some(value) => {
                             let reply_to: CollaborationMessageId = serde_json::from_value(value.clone())?;
@@ -2225,7 +2226,7 @@ impl Orchestrator {
                             .await?,
                         )?
                     }
-                    "kybern_collaboration_send" | "kybern_thread_send" => {
+                    "kybern_collaboration_send" => {
                         object.insert("group_id".into(), serde_json::to_value(group_id)?);
                         object.insert("from_thread_id".into(), serde_json::to_value(thread_id)?);
                         let guard = live.turn.lock().await;
@@ -2725,6 +2726,8 @@ struct Inner {
     subagents: std::sync::Mutex<subagents::SubagentRouter>,
     /// Orchestrator V2 delegation engine state (batches, waiters).
     delegation: delegation::DelegationState,
+    /// Orchestrator V2 messaging engine state (blocked askers, owed answers, edit guards).
+    messaging: messaging::MessagingState,
 }
 
 struct LiveSession {
@@ -2987,6 +2990,7 @@ impl Orchestrator {
                 agent_item_ops: Mutex::new(()),
                 subagents: std::sync::Mutex::new(Default::default()),
                 delegation: Default::default(),
+                messaging: Default::default(),
             }),
         }
     }
@@ -3964,6 +3968,7 @@ impl Orchestrator {
         let thread = self.update_thread(thread)?;
         let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+        self.messaging_turn_started(thread.id, turn_id, message_id);
 
         // The user's intent is persisted and broadcast, so the call returns now
         // and clients navigate and render immediately. Spawning the harness,
@@ -4004,6 +4009,7 @@ impl Orchestrator {
             return Err(anyhow!("follow-up has already started or was removed; refresh the thread"));
         }
         self.emit(thread_id, None, EventPayload::MessageRemoved { message_id: id })?;
+        self.messaging_queue_removed(thread_id, id);
         Ok(())
     }
 
@@ -5570,6 +5576,7 @@ impl Orchestrator {
             } else {
                 let timeout = if name == "kybern_collaboration_wait"
                     || delegation::BLOCKING_TOOLS.contains(&name.as_str())
+                    || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
                     || crate::computer::ComputerUse::is_tool(&name)
                     || agent_items::WRITE_TOOLS.contains(&name.as_str())
                 {
@@ -5800,6 +5807,7 @@ impl Orchestrator {
                         .await?;
                 }
                 let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
+                self.guard_tool_started(thread_id, provider, &call);
                 if let Some(task) = generic_runtime_task_for_provider(provider, &call) {
                     self.persist_runtime_task_start(thread_id, live, turn_id, task).await?;
                 }
@@ -5834,6 +5842,9 @@ impl Orchestrator {
                     },
                 )?;
                 let provider = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?.provider.kind;
+                if provider == ProviderKind::Cursor {
+                    self.guard_tool_completed(thread_id, &tool_call_id, &output);
+                }
                 if matches!(provider, ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Cursor) {
                     let task_id = live
                         .tasks
@@ -10155,4 +10166,5 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/messaging_tests.rs");
 }

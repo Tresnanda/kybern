@@ -414,9 +414,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let messages = state.store.thread_message_list_for_thread(p.thread_id, p.states.as_deref(), 200).map_err(internal)?;
             ok(ThreadMessagesListResult { messages })
         }
-        // Delivering or dismissing a held message arrives with the messaging engine.
-        ThreadMessagesDeliver::NAME | ThreadMessagesDismiss::NAME => {
-            Err(RpcError::internal("Held thread messages are not implemented yet. Update Kybern, then try again."))
+        ThreadMessagesDeliver::NAME => {
+            let p: ThreadMessageIdParams = parse(params)?;
+            ok(state.orchestrator.thread_message_deliver(p.message_id).await.map_err(bad)?)
+        }
+        ThreadMessagesDismiss::NAME => {
+            let p: ThreadMessageIdParams = parse(params)?;
+            ok(state.orchestrator.thread_message_dismiss(p.message_id).await.map_err(bad)?)
         }
         DelegationsWorktreeRemove::NAME => {
             let p: DelegationsWorktreeRemoveParams = parse(params)?;

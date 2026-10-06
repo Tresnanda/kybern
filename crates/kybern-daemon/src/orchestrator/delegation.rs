@@ -404,7 +404,7 @@ impl Orchestrator {
         }
     }
 
-    async fn ensure_turn_active(live: &LiveSession, turn_id: TurnId) -> Result<()> {
+    pub(super) async fn ensure_turn_active(live: &LiveSession, turn_id: TurnId) -> Result<()> {
         let guard = live.turn.lock().await;
         if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
             bail!("native tool caller turn ended before mutation reservation");
@@ -910,8 +910,44 @@ impl Orchestrator {
         Ok(Some(updated))
     }
 
+    /// A message from the delegating parent reopens a finished child: its
+    /// delegation goes back to `running` (result and error cleared) so the next
+    /// completion notifies the parent again. Returns the previous delegation to
+    /// restore if delivery then fails, or `None` when nothing was reopened.
+    pub(super) fn delegation_reopen(&self, child_id: ThreadId) -> Result<Option<DelegationInfo>> {
+        let mut previous = None;
+        let updated = self.delegation_update(child_id, |info| {
+            if info.status == DelegationStatus::Running {
+                return false;
+            }
+            previous = Some(info.clone());
+            info.status = DelegationStatus::Running;
+            info.result = None;
+            info.error = None;
+            info.completed_at = None;
+            true
+        })?;
+        if let Some(updated) = updated
+            && let Some(info) = updated.delegation.as_ref()
+        {
+            // A result a blocked call already returned must not hide the next one.
+            self.inner.delegation.inline_delivered.lock().unwrap_or_else(|error| error.into_inner()).remove(&info.task_id);
+        }
+        Ok(previous)
+    }
+
+    /// Undo [`Orchestrator::delegation_reopen`] after a failed delivery.
+    pub(super) fn delegation_restore(&self, child_id: ThreadId, previous: DelegationInfo) {
+        if let Err(error) = self.delegation_update(child_id, |info| {
+            *info = previous;
+            true
+        }) {
+            tracing::warn!(thread_id = %child_id, %error, "could not restore a delegation after a failed message");
+        }
+    }
+
     /// Last root assistant text of `turn_id` (the terminal message when known).
-    fn last_assistant_text(&self, thread_id: ThreadId, turn_id: Option<TurnId>, terminal: Option<MessageId>) -> Option<String> {
+    pub(super) fn last_assistant_text(&self, thread_id: ThreadId, turn_id: Option<TurnId>, terminal: Option<MessageId>) -> Option<String> {
         let events = self.inner.store.events_for_thread_recent(thread_id, 600).ok()?;
         let mut last = None;
         let mut terminal_text = None;
@@ -940,6 +976,9 @@ impl Orchestrator {
     }
 
     async fn delegation_finish_turn(&self, thread_id: ThreadId, turn_id: TurnId, outcome: TurnOutcome) -> Result<()> {
+        // Answer questions this turn consumed before the delegation settles, so a
+        // child's reply to its parent can tell it apart from the batched result.
+        self.messaging_turn_finished(thread_id, turn_id, &outcome).await;
         let Some(thread) = self.inner.store.thread_get(thread_id)? else { return Ok(()) };
         if thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running) {
             self.delegation_complete_child(&thread, turn_id, outcome).await?;
