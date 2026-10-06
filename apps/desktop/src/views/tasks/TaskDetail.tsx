@@ -9,8 +9,9 @@ import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "@/compone
 import { Popover, PopoverPopup, PopoverTrigger } from "@/components/kit/popover"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { copyText, useNow } from "@/lib/hooks"
-import { mod, PROVIDER_LABEL, relativeTime } from "@/lib/format"
-import { ChevronDownIcon, ChevronUpIcon, EllipsisIcon, NoteIcon, PlusIcon, XIcon } from "@/lib/kit/icons"
+import { PROVIDER_LABEL, relativeTime } from "@/lib/format"
+import { TextSwap } from "@/components/kybern/motion"
+import { ArrowUpRightIcon, ChevronDownIcon, ChevronUpIcon, EllipsisIcon, NoteIcon, PlusIcon, XIcon } from "@/lib/kit/icons"
 import type { NoteId, TaskItem, TaskItemId } from "@/protocol"
 import { fetchNoteImage, openNote, uploadNoteImage, useAllNotes } from "@/state/notes"
 import { isEmptyThreadNote, noteTitle } from "@/state/notesModel"
@@ -18,7 +19,6 @@ import {
   deleteTask,
   fetchTask,
   isConflict,
-  openRunComposer,
   openRunThread,
   openTask,
   saveTaskContent,
@@ -63,8 +63,6 @@ export function TaskDetail({ task, siblings }: { task: TaskItem; siblings: TaskI
   const index = siblings.indexOf(task.id)
   const previous = index > 0 ? siblings[index - 1] : undefined
   const next = index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : undefined
-  const run = latestRun(task)
-  const composing = useTasks((s) => s.composer?.taskId === task.id && s.composer.kind === "run")
 
   return (
     <>
@@ -72,18 +70,7 @@ export function TaskDetail({ task, siblings }: { task: TaskItem; siblings: TaskI
         dock={false}
         trailing={
           <>
-            {!isLiveRun(run) && (
-              <Tooltip>
-                <TooltipTrigger
-                  render={<button type="button" className="tk-btn" data-run-composer-trigger={task.id} aria-expanded={composing} onClick={() => openRunComposer(task.id, "run")} />}
-                >
-                  Send to agent
-                </TooltipTrigger>
-                <TooltipPopup side="bottom">
-                  Start a run ({mod}↵)
-                </TooltipPopup>
-              </Tooltip>
-            )}
+            <RunState task={task} />
             <span className="flex items-center">
               <IconButton label="Previous task (K)" disabled={!previous} onClick={() => previous && openTask(previous)}>
                 <ChevronUpIcon className="size-4" />
@@ -129,6 +116,42 @@ export function TaskDetail({ task, siblings }: { task: TaskItem; siblings: TaskI
           <Properties task={task} />
         </aside>
       </div>
+    </>
+  )
+}
+
+/**
+ * Where the task's run stands, in the header: the state, the agent, and a way to the
+ * run's thread. Nothing while there is no run to speak of (starting one is the
+ * composer at the foot of the page).
+ */
+function RunState({ task }: { task: TaskItem }) {
+  const run = latestRun(task)
+  const thread = useStore((s) => (run ? s.threads[run.thread_id] : undefined))
+  if (!run) return null
+  const live = isLiveRun(run)
+  const review = !live && task.status === "needs_review"
+  if (!live && !review) return null
+  const label = live ? (run.state === "waiting" ? "Waiting for you" : "Running") : "Needs review"
+  const agent = live ? PROVIDER_LABEL[(thread?.provider ?? run.provider).kind] : null
+  return (
+    <>
+      <span className="tk-runstate" role="status">
+        <TaskStatusGlyph status={live ? "running" : "needs_review"} animated />
+        <span>
+          <b className="inline-flex">
+            <TextSwap text={label} />
+          </b>
+          {agent && <> · {agent}</>}
+        </span>
+      </span>
+      <Tooltip>
+        <TooltipTrigger render={<button type="button" className="tk-btn open-run" onClick={() => openRunThread(run.thread_id)} />}>
+          Open run
+          <ArrowUpRightIcon className="size-3" aria-hidden />
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">Open the run’s thread</TooltipPopup>
+      </Tooltip>
     </>
   )
 }

@@ -6,18 +6,20 @@
 import { DndContext, DragOverlay, useDroppable } from "@dnd-kit/core"
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { memo, useMemo, useState, type CSSProperties } from "react"
+import { memo, useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react"
 import { useReducedMotion } from "motion/react"
 
 import { AddPlusIcon, ArrowUpRightIcon } from "@/lib/kit/icons"
 import { relativeTime } from "@/lib/format"
 import type { TaskItem, TaskItemId, TaskStatus } from "@/protocol"
-import { openRunThread, openTask, setFocusedTask, startQuickAdd, useTasks } from "@/state/tasks"
+import { openRunThread, openTask, setFocusedTask, setRenderedTasks, startQuickAdd, toggleSelected, useTasks } from "@/state/tasks"
 import { isOpenStatus, latestRun, runChanges, runDuration, shortActivity, shortDuration, STATUS_LABEL } from "@/state/tasksModel"
 import { ProjectDot } from "@/lib/kit/projectDot"
 import { CreatedByThread } from "./CreatedBy"
 import { AgentMark, PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
 import { QuickAddRow } from "./QuickAdd"
+import { pickTask, pressProps } from "./checkActions"
+import { TaskCheckBox } from "./TaskCheck"
 import { TaskProjectChip } from "./TaskMenus"
 import { projectForNewTask } from "./taskActions"
 import { containerId, useTaskDnd } from "./useTaskDnd"
@@ -29,11 +31,24 @@ export function TaskBoard({ columns, tasks, now }: { columns: { status: TaskStat
   const ordering = useTasks((s) => s.prefs.ordering)
   const quickAdd = useTasks((s) => s.quickAdd)
   const focusedId = useTasks((s) => s.focusedId)
+  const selecting = useTasks((s) => s.selected.size > 0)
   const reducedMotion = useReducedMotion()
   const [doneOpen, setDoneOpen] = useState(false)
   const containers = useMemo(() => Object.fromEntries(columns.map((column) => [containerId(column.status), column.tasks.map((task) => task.id)])), [columns])
   const dnd = useTaskDnd(containers, tasks, ordering === "manual")
   const active = dnd.activeId ? tasks[dnd.activeId] : undefined
+
+  // What ⌘A and ⇧↑↓ walk: the cards on screen, column by column.
+  const rendered = useMemo(
+    () =>
+      columns.flatMap((column) => {
+        const ids = dnd.items[containerId(column.status)] ?? []
+        const capped = column.status === "done" && !doneOpen && ids.length > DONE_PREVIEW + 1
+        return (capped ? ids.slice(0, DONE_PREVIEW) : ids).filter((id) => tasks[id])
+      }),
+    [columns, dnd.items, doneOpen, tasks],
+  )
+  useEffect(() => setRenderedTasks(rendered), [rendered])
 
   return (
     <DndContext
@@ -45,7 +60,7 @@ export function TaskBoard({ columns, tasks, now }: { columns: { status: TaskStat
       onDragCancel={dnd.onDragCancel}
       accessibility={{ screenReaderInstructions: { draggable: "Press S to change status. Drag with a pointer to move between columns." } }}
     >
-      <div className="tk-board" role="list" aria-label="Board">
+      <div className="tk-board" role="list" aria-label="Board" data-selecting={selecting || undefined}>
         {columns.map((column) => {
           const id = containerId(column.status)
           const ids = dnd.items[id] ?? []
@@ -112,7 +127,13 @@ function ColumnBody({ id, children }: { id: string; children: React.ReactNode })
 
 const TaskCard = memo(function TaskCard({ task, now, focused }: { task: TaskItem; now: number; focused: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
+  const selected = useTasks((s) => s.selected.has(task.id))
   const style: CSSProperties = { transform: CSS.Translate.toString(transform), transition }
+  // ⌘- or ⇧-click picks the card, a plain click opens it.
+  const click = (event: MouseEvent) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey) toggleSelected(task.id)
+    else openTask(task.id)
+  }
   return (
     <div
       ref={setNodeRef}
@@ -124,14 +145,17 @@ const TaskCard = memo(function TaskCard({ task, now, focused }: { task: TaskItem
       tabIndex={focused ? 0 : -1}
       data-task-card={task.id}
       data-focused={focused || undefined}
+      data-selected={selected || undefined}
       data-closed={!isOpenStatus(task.status) || undefined}
       data-dragging={isDragging || undefined}
       className="tk-card"
-      aria-label={`${task.key} ${task.title || "Untitled"}, ${STATUS_LABEL[task.status]}`}
+      aria-selected={selected || undefined}
+      aria-label={`${task.key} ${task.title || "Untitled"}, ${STATUS_LABEL[task.status]}${selected ? ", selected" : ""}`}
       onFocus={() => setFocusedTask(task.id)}
-      onClick={() => openTask(task.id)}
+      onClick={click}
     >
       <CardInner task={task} now={now} />
+      <TaskCheckBox taskKey={task.key} selected={selected} onClick={(event) => pickTask(event, task.id, false)} {...pressProps} />
     </div>
   )
 })

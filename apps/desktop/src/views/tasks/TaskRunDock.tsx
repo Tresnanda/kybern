@@ -1,43 +1,41 @@
-// The foot of a task's page, where work goes to an agent. It stays out of the way:
-// - no live run: nothing, or a "Draft run · Continue" pill while a draft is kept.
-//   "Send to agent" (or ⌘↵) slides the composer up with the task as a chip, its
-//   linked notes as chips, suggested notes to add, and the run's project,
+// The foot of a task's page, where work goes to an agent. One place both to start a
+// run and to follow one up, always visible as a one-line field that opens in place:
+// - no run to follow: "Tell an agent what to do with ADE-3…" (⌘↵ opens it too), with
+//   a "Draft" tag while a draft is kept. It opens into the composer with the task as a
+//   chip, its linked notes as chips, suggested notes to add, and the run's project,
 //   workspace and branch in the tray. Esc hides it; the draft stays.
-// - a live run, or one waiting for review: a one-line "Follow up with …" field that
-//   opens into the composer and goes to the run through `tasks.items.followup`.
+// - a live run, or one waiting for review: "Follow up with …", which opens into the
+//   composer and goes to the run through `tasks.items.followup`.
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { toast } from "sonner"
-import { useShallow } from "zustand/react/shallow"
 
-import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME, COMPOSER_TRAY_CHIP_CLASS_NAME as TRAY_CHIP_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
-import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
+import { COMPOSER_TRAY_CHIP_CLASS_NAME as TRAY_CHIP_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { mod, PROVIDER_LABEL } from "@/lib/format"
-import { ChevronDownIcon, PencilIcon, PlusIcon } from "@/lib/kit/icons"
+import { PlusIcon } from "@/lib/kit/icons"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { cn } from "@/lib/utils"
 import { noteMentionPart, taskMentionPart, type MentionPart } from "@/lib/userInput"
-import type { GitBranchesResult, NoteId, PermissionMode, ProjectId, ProviderInstance, TaskItem, TaskRun, UserMessage } from "@/protocol"
+import type { GitBranchesResult, NoteId, PermissionMode, ProjectId, TaskItem, TaskRun, UserMessage } from "@/protocol"
 import { locateNote, searchNoteBodies, useAllNotes } from "@/state/notes"
 import { noteTitle } from "@/state/notesModel"
 import { errorText, rpc, updateThread } from "@/state/rpc"
-import { selectAvailableProviders, useStore } from "@/state/store"
+import { useStore } from "@/state/store"
 import { closeRunComposer, followupTask, openRunComposer, openRunThread, sendTask, updateTask, useTasks, writeSendPrefs } from "@/state/tasks"
 import { isLiveRun, latestRun, suggestionQuery } from "@/state/tasksModel"
-import { findModel } from "../../../../../packages/kybern-client/src/models"
 import { Composer, LandingTray, type ComposerHandle } from "../Composer"
 import { BranchTrayChip, ProjectTrayChip, WorkspaceTrayChip } from "../trayChips"
 import { AgentMark } from "./TaskGlyphs"
-import { useSendDefaults, type SendConfig } from "./sendDefaults"
+import { HideButton, TrayButton } from "./DockButtons"
+import { panelMotion, parentPath } from "./dockMotion"
+import { useSendPicker } from "./sendDefaults"
 
 /** The new-run draft. The follow-up draft is kept apart so neither overwrites the other. */
 const runDraftKey = (taskId: string) => `task:${taskId}`
 const followupDraftKey = (taskId: string) => `task-followup:${taskId}`
 
-const EASE_DRAWER = [0.32, 0.72, 0, 1] as const
 const EASE_OUT = [0.23, 1, 0.32, 1] as const
 
-const TRAY_BUTTON_CLASS_NAME = cn(COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME, "shrink-0 whitespace-nowrap")
 
 export function TaskRunDock({ task }: { task: TaskItem }) {
   const run = latestRun(task)
@@ -72,21 +70,18 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
   const close = useCallback(
     (restore = true) => {
       const target = returnFocus.current
-      const closing = kind
       returnFocus.current = null
       closeRunComposer(task.id)
       if (!restore) return
       requestAnimationFrame(() => {
         const field = dock.current?.querySelector<HTMLElement>("[data-dock-field]")
-        const header = document.querySelector<HTMLElement>(`[data-run-composer-trigger="${task.id}"]`)
-        const pill = dock.current?.querySelector<HTMLElement>("[data-dock-pill]")
-        const next = target?.isConnected ? target : closing === "followup" ? field ?? header : header ?? pill ?? field
+        const next = target?.isConnected ? target : field
         quietFocus.current = true
         next?.focus({ preventScroll: true })
         quietFocus.current = false
       })
     },
-    [task.id, kind],
+    [task.id],
   )
 
   // ---- room for the dock: the column's bottom padding follows its height ----
@@ -122,38 +117,12 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
   const projectList = useMemo(() => Object.values(projects).sort((a, b) => a.name.localeCompare(b.name)), [projects])
   const isGit = project?.is_git ?? false
   const allProviders = useStore((s) => s.providers)
-  const available = useStore(useShallow(selectAvailableProviders))
   const providersLoading = useStore((s) => s.providersLoading)
-  const defaults = useSendDefaults(projectId)
-  const [picked, setPicked] = useState<Partial<SendConfig>>({})
-  const config: SendConfig = { ...defaults, ...picked }
-  const pick = (patch: Partial<SendConfig>) => setPicked((current) => ({ ...current, ...patch }))
+  const { config, pick, chooseProvider, chooseModel, reset } = useSendPicker(projectId)
 
   const chooseProject = (id: ProjectId) => {
     setChosenProject(id)
-    setPicked({})
-  }
-  const chooseProvider = (provider: ProviderInstance, choice?: { model?: string; effort?: string }) => {
-    const status = available.find((item) => item.kind === provider.kind)
-    const models = status?.models ?? []
-    const modes = status?.supported_permission_modes ?? []
-    const model = choice?.model ?? null
-    setPicked((current) => {
-      const mode = current.permissionMode ?? defaults.permissionMode
-      return {
-        ...current,
-        provider,
-        status,
-        model,
-        modelInfo: model ? findModel(models, model) : models.find((item) => item.is_default),
-        effort: choice?.effort ?? null,
-        permissionMode: modes.length && !modes.includes(mode) ? modes[0]! : mode,
-      }
-    })
-  }
-  const chooseModel = (model: string | undefined, effort: string | undefined) => {
-    const models = config.status?.models ?? []
-    pick({ model: model ?? null, modelInfo: model ? findModel(models, model) : models.find((item) => item.is_default), effort: effort ?? null })
+    reset()
   }
 
   const [branches, setBranches] = useState<{ projectId: ProjectId; result: GitBranchesResult } | null>(null)
@@ -277,30 +246,18 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
   // ---- the follow-up composer speaks to the run's thread ----
   const thread = useStore((s) => (run ? s.threads[run.thread_id] : undefined))
   const agent = run ? PROVIDER_LABEL[(thread?.provider ?? run.provider).kind] : ""
-  const openFollowup = () => openRunComposer(task.id, "followup")
 
   const pending = task.pending_followup?.trim()
   const hide = <HideButton onClick={() => close()} />
 
-  const panel = reducedMotion
-    ? {
-        initial: { opacity: 0 },
-        animate: { opacity: 1, transition: { duration: 0.15 } },
-        exit: { opacity: 0, pointerEvents: "none" as const, transition: { duration: 0.12 } },
-      }
-    : {
-        initial: { opacity: 0, transform: "translateY(16px)" },
-        animate: { opacity: 1, transform: "translateY(0px)", transition: { duration: 0.26, ease: EASE_DRAWER } },
-        exit: { opacity: 0, transform: "translateY(10px)", pointerEvents: "none" as const, transition: { duration: 0.16, ease: EASE_OUT } },
-      }
+  const panel = panelMotion(reducedMotion)
   const rest = {
     initial: { opacity: 0 },
     animate: { opacity: 1, transition: { duration: 0.18, ease: EASE_OUT } },
     exit: { opacity: 0, pointerEvents: "none" as const, transition: { duration: 0.1 } },
   }
 
-  const showPill = !kind && hasRunDraft && !live
-  const showField = !kind && canFollowUp && !!run
+  const showField = !kind
   let content: ReactNode = null
   if (kind === "run") {
     content = (
@@ -310,7 +267,7 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
           draftKey={runDraftKey(task.id)}
           autoFocus
           initialMentions={initialMentions}
-          placeholder="Add instructions, or send the task as it is"
+          placeholder={`Tell an agent what to do with ${task.key}, or start it as it is`}
           mode={config.permissionMode}
           onModeChange={(mode: PermissionMode) => pick({ permissionMode: mode })}
           provider={config.provider}
@@ -430,38 +387,34 @@ export function TaskRunDock({ task }: { task: TaskItem }) {
         />
       </motion.div>
     )
-  } else if (showPill || showField) {
+  } else if (showField) {
+    // The field is always there. With a run to follow it follows up; otherwise it starts one.
+    const following = canFollowUp && !!run
+    const open = () => openRunComposer(task.id, following ? "followup" : "run")
     content = (
       <motion.div key="rest" {...rest}>
-        {showPill && (
-          <button type="button" className="tk-dock-pill" data-dock-pill onClick={() => openRunComposer(task.id, "run")}>
-            <PencilIcon className="size-3.5" aria-hidden />
-            Draft run ·<b>Continue</b>
-          </button>
-        )}
-        {showField && (
-          <button
-            type="button"
-            className="tk-fbox"
-            data-dock-field
-            onClick={openFollowup}
-            onFocus={() => {
-              if (!quietFocus.current) openFollowup()
-            }}
-          >
-            <span className="mk">
-              <AgentMark kind={run!.provider.kind} size={14} />
-            </span>
-            <span className="t">Follow up with {agent}…</span>
-            {hasFollowupDraft && <span className="tag">Draft</span>}
-          </button>
-        )}
+        <button
+          type="button"
+          className="tk-fbox"
+          data-dock-field
+          aria-label={following ? `Follow up with ${agent}` : `Tell an agent what to do with ${task.key}`}
+          onClick={open}
+          onFocus={() => {
+            if (!quietFocus.current) open()
+          }}
+        >
+          <span className="mk">
+            <AgentMark kind={(following ? run!.provider.kind : config.provider?.kind) ?? "claude-code"} size={14} />
+          </span>
+          <span className="t">{following ? `Follow up with ${agent}…` : `Tell an agent what to do with ${task.key}…`}</span>
+          {following ? hasFollowupDraft && <span className="tag">Draft</span> : hasRunDraft ? <span className="tag">Draft</span> : <span className="key">{mod}↵</span>}
+        </button>
       </motion.div>
     )
   }
 
   return (
-    <div ref={dock} className="tk-dock" data-filled={content ? true : undefined}>
+    <div ref={dock} className="tk-dock" data-filled>
       <div className="tk-dock-col">
         {/* Leaving and arriving share one grid cell, so a swap never shifts the page. */}
         <AnimatePresence initial={false}>
@@ -478,27 +431,4 @@ function runState(run: TaskRun, task: TaskItem): string {
   return task.status === "needs_review" ? "Needs review" : "Finished"
 }
 
-function TrayButton({ tip, onClick, disabled, children }: { tip: string; onClick: () => void; disabled?: boolean; children: ReactNode }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<button type="button" className={TRAY_BUTTON_CLASS_NAME} disabled={disabled} onClick={onClick} />}>{children}</TooltipTrigger>
-      <TooltipPopup side="top">{tip}</TooltipPopup>
-    </Tooltip>
-  )
-}
 
-function HideButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<button type="button" aria-label="Hide the composer" className={cn(TRAY_BUTTON_CLASS_NAME, "px-1.5")} onClick={onClick} />}>
-        <ChevronDownIcon className="size-3.5" aria-hidden />
-      </TooltipTrigger>
-      <TooltipPopup side="top">Hide (Esc). Your draft stays.</TooltipPopup>
-    </Tooltip>
-  )
-}
-
-function parentPath(path: string): string {
-  const at = path.lastIndexOf("/")
-  return at <= 0 ? path : "…/" + path.slice(path.slice(0, at).lastIndexOf("/") + 1, at)
-}
