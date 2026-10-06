@@ -9,7 +9,7 @@ registerHooks({
     if (specifier === "react")
       return {
         shortCircuit: true,
-        url: `data:text/javascript,${encodeURIComponent("export const useSyncExternalStore = () => undefined;")}`,
+        url: `data:text/javascript,${encodeURIComponent("export const useSyncExternalStore = () => undefined; export const useCallback = (fn) => fn;")}`,
       };
     const url = specifier.startsWith(".") && context.parentURL ? new URL(specifier, context.parentURL) : null;
     if (url?.protocol === "file:" && !/\.[a-z]+$/i.test(url.pathname) && existsSync(fileURLToPath(url) + ".ts"))

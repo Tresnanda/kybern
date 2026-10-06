@@ -11,6 +11,8 @@ import { createMarkdownParser, sameMarkdownNode, type MarkdownBlock, type Parsed
 import { cachedMarkdown, cacheMarkdown, nextMarkdownConsumer, parseMarkdown, releaseMarkdown } from "@/lib/markdown"
 
 import { ChatFileLink } from "./ChatFileLink"
+import { KybernRefChip } from "./KybernRefChip"
+import { chatLink } from "../../../../../packages/kybern-client/src/chatLinks"
 import { cn } from "@/lib/utils"
 import { StreamWords } from "@/components/kybern/motion"
 import { renderWithTokens, type InlineTokenValue } from "@/lib/inlineTokens"
@@ -65,10 +67,18 @@ function MarkdownCode({ children, node }: { children?: ReactNode; node?: { posit
     : <CodeBlock code={code} lang={lang} live={live} stateKey={key} />
 }
 
+function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+  if (href && localImageLink(href)) return <ResponseImage source={href} label={extractText(children) || "Image preview"} linkLabel={children} />
+  // The sanitizer lets `kybern:` through only for note and task ids.
+  const link = href ? chatLink(href) : null
+  if (link?.kind === "kybern") return <KybernRefChip target={link.target} id={link.id} label={extractText(children)} />
+  return <ChatFileLink href={href}>{children}</ChatFileLink>
+}
+
 // Stable component types preserve code-block state and highlighting across deltas.
 const BASE_COMPONENTS: import("react-markdown").Components = {
   img: ({ src, alt }) => <ResponseImage source={typeof src === "string" ? src : ""} label={alt || "Agent image"} />,
-  a: ({ href, children }) => href && localImageLink(href) ? <ResponseImage source={href} label={extractText(children) || "Image preview"} linkLabel={children} /> : <ChatFileLink href={href}>{children}</ChatFileLink>,
+  a: MarkdownLink,
   pre: MarkdownCode,
   table: ({ children }) => <div className="chat-markdown-table" role="region" aria-label="Table" tabIndex={0}><table>{children}</table></div>,
 }

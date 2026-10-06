@@ -5,7 +5,7 @@ import remarkRehype from "remark-rehype"
 import { urlAttributes } from "html-url-attributes"
 import { defaultUrlTransform } from "react-markdown"
 import { imageSource } from "./responseImages"
-import { chatLink } from "../../../../packages/kybern-client/src/chatLinks.ts"
+import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks.ts"
 
 // The same GFM, HTML-as-text and URL policy as our ReactMarkdown renderer.
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true })
@@ -27,6 +27,26 @@ export function sameMarkdownNode(a: unknown, b: unknown): boolean {
   return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && sameMarkdownNode(left[key], right[key]))
 }
 
+function refLink(ref: KybernRef, label: string): MarkdownTreeNode {
+  return { type: "element", tagName: "a", properties: { href: `kybern://${ref.target}/${ref.id}` }, children: [{ type: "text", value: label }] }
+}
+
+/** A bare `kybern://note|task/<id>` and an inline-code span holding only one become links,
+ * so the renderer draws every form of a reference as the same chip. Links, code blocks and
+ * code spans with other text keep their source. */
+function linkifyRefs(child: MarkdownTreeNode): MarkdownTreeNode[] {
+  if (child.type === "text") {
+    if (!child.value.includes("kybern://")) return [child]
+    return splitKybernRefs(child.value).map((part) => ("ref" in part ? refLink(part.ref, part.text) : { type: "text", value: part.text }))
+  }
+  if (child.type === "element" && child.tagName === "code" && child.children.length === 1 && child.children[0]!.type === "text") {
+    const value = child.children[0]!.value.trim()
+    const ref = value.startsWith("kybern://") ? kybernRef(value) : null
+    if (ref) return [refLink(ref, value)]
+  }
+  return [child]
+}
+
 function sanitize(node: MarkdownTreeNode, topLevel = false): MarkdownTreeNode {
   // Top-level positions drive incremental boundaries and stable block keys.
   // MarkdownCode receives the pre node, while inline/fenced code nodes may be
@@ -39,10 +59,11 @@ function sanitize(node: MarkdownTreeNode, topLevel = false): MarkdownTreeNode {
     for (const [key, tags] of Object.entries(urlAttributes)) {
       if (Object.hasOwn(node.properties, key) && (tags === null || tags.includes(node.tagName))) {
         const url = String(node.properties[key] || "")
-        node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : key === "href" && chatLink(url).kind === "file" ? url : defaultUrlTransform(url)
+        node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : key === "href" && ["file", "kybern"].includes(chatLink(url).kind) ? url : defaultUrlTransform(url)
       }
     }
     node.children = node.children.map((child) => sanitize(child)) as typeof node.children
+    if (node.tagName !== "a" && node.tagName !== "pre" && node.tagName !== "code") node.children = node.children.flatMap(linkifyRefs) as typeof node.children
   }
   if (!preservePosition) delete node.position
   return node
