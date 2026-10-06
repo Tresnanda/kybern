@@ -750,6 +750,9 @@ struct TurnState {
     current_message: Option<String>,
     /// Content block index of the thinking block currently streaming.
     thinking_block: Option<u64>,
+    /// The same two cursors for each subagent, keyed by the tool call that
+    /// launched it. Subagents run concurrently, so they cannot share the root's.
+    child_streams: HashMap<String, (Option<String>, Option<u64>)>,
     last_total_cost: f64,
     last_bound: Option<(String, Option<String>)>,
     /// uuid of the most recent assistant frame this turn (the rewind anchor).
@@ -761,6 +764,19 @@ struct TurnState {
     queued_usage: Usage,
     queued_cost: f64,
     queued_duration_ms: u64,
+}
+
+impl TurnState {
+    /// The message and thinking-block cursors of the root stream (`None`) or of one subagent.
+    fn stream_cursor(&mut self, parent: Option<&str>) -> (&mut Option<String>, &mut Option<u64>) {
+        match parent {
+            None => (&mut self.current_message, &mut self.thinking_block),
+            Some(parent) => {
+                let cursor = self.child_streams.entry(parent.to_string()).or_default();
+                (&mut cursor.0, &mut cursor.1)
+            }
+        }
+    }
 }
 
 struct ClaudeSession {
@@ -1040,6 +1056,12 @@ impl ClaudeSession {
             }
             "task_started" => {
                 if let Some(task) = claude_task_started(v) {
+                    // The launch prompt becomes the first message of the subagent's own thread.
+                    if task.kind == RuntimeTaskKind::Agent
+                        && let Some(prompt) = v.get("prompt").and_then(Value::as_str).filter(|prompt| !prompt.trim().is_empty())
+                    {
+                        self.emit(DriverEvent::SubagentPrompt { task_id: task.id.clone(), prompt: prompt.to_string() }).await;
+                    }
                     self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
                 }
             }
@@ -1051,6 +1073,9 @@ impl ClaudeSession {
                 }
             }
             "task_notification" => {
+                if let Some(tool_use_id) = v.get("tool_use_id").and_then(Value::as_str) {
+                    self.state.lock().await.child_streams.remove(tool_use_id);
+                }
                 if let Some(mut update) = claude_task_update(v) {
                     if update.status.is_none() {
                         update.status = Some(RuntimeTaskStatus::Completed);
@@ -1072,54 +1097,63 @@ impl ClaudeSession {
     }
 
     async fn handle_stream_event(&self, v: &Value) {
-        // Only the main thread's text is the assistant transcript; subagent output stays inside its tool call.
-        if !v.get("parent_tool_use_id").is_none_or(Value::is_null) {
-            return;
-        }
+        // Root deltas are the assistant transcript. A subagent's carry the id of
+        // the tool call that launched it; they are tagged so the daemon records
+        // them in that subagent's own thread, never in the parent's.
+        let parent = v.get("parent_tool_use_id").and_then(Value::as_str).map(str::to_string);
+        let origin = match &parent {
+            Some(task_id) => EventOrigin::Agent { task_id: task_id.clone(), provider_thread_id: None },
+            None => EventOrigin::Root,
+        };
         let ev = &v["event"];
         match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
             "message_start" => {
-                self.emit(DriverEvent::ResponseStarted).await;
+                if parent.is_none() {
+                    self.emit(DriverEvent::ResponseStarted).await;
+                }
                 if let Some(id) = ev.pointer("/message/id").and_then(|i| i.as_str()) {
                     let mut st = self.state.lock().await;
-                    st.current_message = Some(id.to_string());
-                    st.thinking_block = None;
+                    let (message, thinking_block) = st.stream_cursor(parent.as_deref());
+                    *message = Some(id.to_string());
+                    *thinking_block = None;
                 }
             }
             "content_block_start" => {
                 if ev.pointer("/content_block/type").and_then(Value::as_str) == Some("thinking") {
-                    self.state.lock().await.thinking_block = ev.get("index").and_then(Value::as_u64);
+                    let mut st = self.state.lock().await;
+                    *st.stream_cursor(parent.as_deref()).1 = ev.get("index").and_then(Value::as_u64);
                 }
             }
             "content_block_stop" => {
                 let index = ev.get("index").and_then(Value::as_u64);
                 let message_id = {
                     let mut st = self.state.lock().await;
-                    if index.is_none() || st.thinking_block != index {
+                    let (message, thinking_block) = st.stream_cursor(parent.as_deref());
+                    if index.is_none() || *thinking_block != index {
                         return;
                     }
-                    st.thinking_block = None;
-                    st.current_message.clone()
+                    *thinking_block = None;
+                    message.clone()
                 };
                 if let Some(message_id) = message_id {
-                    self.emit(DriverEvent::ThinkingCompleted { message_id, origin: EventOrigin::Root }).await;
+                    self.emit(DriverEvent::ThinkingCompleted { message_id, origin }).await;
                 }
             }
             "content_block_delta" => {
                 let delta = &ev["delta"];
-                let message_id = match self.state.lock().await.current_message.clone() {
+                let message_id = match self.state.lock().await.stream_cursor(parent.as_deref()).0.clone() {
                     Some(id) => id,
                     None => return,
                 };
                 match delta.get("type").and_then(|t| t.as_str()) {
                     Some("text_delta") => {
                         if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                            self.emit(DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta: text.to_string() }).await;
+                            self.emit(DriverEvent::TextDelta { message_id, origin, delta: text.to_string() }).await;
                         }
                     }
                     Some("thinking_delta") => {
                         if let Some(text) = delta.get("thinking").and_then(|t| t.as_str()) {
-                            self.emit(DriverEvent::ThinkingDelta { message_id, origin: EventOrigin::Root, delta: text.to_string() }).await;
+                            self.emit(DriverEvent::ThinkingDelta { message_id, origin, delta: text.to_string() }).await;
                         }
                     }
                     _ => {}
@@ -1152,9 +1186,14 @@ impl ClaudeSession {
             self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("API error: {err}"), data: Some(msg.clone()) }).await;
         }
         let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) else { return };
+        // A subagent's own prose is tagged with the call that launched it.
+        let origin = match &parent {
+            Some(task_id) => EventOrigin::Agent { task_id: task_id.clone(), provider_thread_id: None },
+            None => EventOrigin::Root,
+        };
         for block in blocks {
             match block.get("type").and_then(|t| t.as_str()).unwrap_or("") {
-                "text" if parent.is_none() => {
+                "text" => {
                     let text = block.get("text").and_then(|t| t.as_str()).unwrap_or("");
                     let mut st = self.state.lock().await;
                     let acc = st.text.entry(message_id.clone()).or_default();
@@ -1164,13 +1203,13 @@ impl ClaudeSession {
                     drop(st);
                     self.emit(DriverEvent::MessageCompleted {
                         message_id: message_id.clone(),
-                        origin: EventOrigin::Root,
+                        origin: origin.clone(),
                         text: full,
                         thinking,
                     })
                     .await;
                 }
-                "thinking" if parent.is_none() => {
+                "thinking" => {
                     let text = block.get("thinking").and_then(|t| t.as_str()).unwrap_or("");
                     self.state.lock().await.thinking.entry(message_id.clone()).or_default().push_str(text);
                 }
@@ -1296,6 +1335,17 @@ fn claude_task_started(value: &Value) -> Option<DriverRuntimeTask> {
         "local_bash" | "shell" => RuntimeTaskKind::Process,
         "monitor" | "monitor_mcp" => RuntimeTaskKind::Monitor,
         _ => RuntimeTaskKind::Agent,
+    };
+    // The agent's own role (`Explore`, `general-purpose`) says more than the generic task type.
+    let provider_type = match kind {
+        RuntimeTaskKind::Agent => value
+            .get("subagent_type")
+            .or_else(|| value.get("subagentType"))
+            .and_then(Value::as_str)
+            .filter(|role| !role.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or(provider_type),
+        _ => provider_type,
     };
     let status = value.get("status").and_then(Value::as_str).map(claude_task_status).unwrap_or(RuntimeTaskStatus::Running);
     let backgrounded = value.get("is_backgrounded").or_else(|| value.get("isBackgrounded")).and_then(Value::as_bool).unwrap_or(false);
@@ -1753,6 +1803,111 @@ mod tests {
         assert!(matches!(rx.recv().await, Some(DriverEvent::ThinkingDelta { .. })));
         assert!(matches!(rx.recv().await, Some(DriverEvent::ThinkingCompleted { message_id, .. }) if message_id == "root-message"));
         assert!(rx.try_recv().is_err());
+        child.kill().await;
+    }
+
+    /// Frames recorded from Claude Code 2.1.290 (haiku, `--include-partial-messages`) while a
+    /// background Agent read a file: lifecycle plus the subagent's own tool call, result and
+    /// answer, all stamped with `parent_tool_use_id`. The CLI sent no `stream_event` for them.
+    #[tokio::test]
+    async fn subagent_frames_become_origin_tagged_events_and_a_launch_prompt() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(64);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            _native_mcp_config: None,
+        });
+        for line in include_str!("../tests/fixtures/claude-subagent-frames.ndjson").lines() {
+            session.handle_frame(serde_json::from_str(line).unwrap()).await;
+        }
+        let mut seen = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            seen.push(event);
+        }
+        let launch = "toolu_017gG1LQ2MRcP3bjnhLKvnD5";
+        let task = seen.iter().find_map(|event| match event {
+            // The background roster announces the task first, without its launch call.
+            DriverEvent::RuntimeTaskStarted(task) if task.kind == RuntimeTaskKind::Agent && task.tool_call_id.is_some() => Some(task),
+            _ => None,
+        });
+        let task = task.expect("the subagent task starts");
+        assert_eq!((task.provider_type.as_deref(), task.tool_call_id.as_deref()), (Some("general-purpose"), Some(launch)));
+        let prompt = seen.iter().position(|event| {
+            matches!(event, DriverEvent::SubagentPrompt { task_id, prompt }
+            if *task_id == task.id && prompt.starts_with("Read the file note.txt"))
+        });
+        let started = seen.iter().position(|event| matches!(event, DriverEvent::RuntimeTaskStarted(task) if task.tool_call_id.is_some()));
+        assert!(prompt.is_some() && prompt < started, "the prompt precedes the task start");
+        // Its tool call keeps nesting under the launch call, and the result follows.
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::ToolStarted(call)
+            if call.name == "Read" && call.parent_id.as_deref() == Some(launch))));
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::ToolCompleted { output, .. }
+            if output["content"].as_str().is_some_and(|text| text.contains("hello from fixture")))));
+        // Its prose is tagged with the launch call and never root-owned.
+        let texts: Vec<_> = seen
+            .iter()
+            .filter_map(|event| match event {
+                DriverEvent::MessageCompleted { origin, text, .. } => Some((origin.clone(), text.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 1, "empty thinking blocks produce no message: {texts:?}");
+        assert!(matches!(&texts[0].0, EventOrigin::Agent { task_id, .. } if task_id == launch));
+        assert!(texts[0].1.contains("hello from fixture"));
+        // Progress carries the latest tool, the notification completes it with token and tool counts.
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::RuntimeTaskUpdated(update)
+            if update.last_tool_name.as_deref() == Some("Read"))));
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::RuntimeTaskCompleted(update)
+            if update.status == Some(RuntimeTaskStatus::Completed)
+                && update.stats.as_ref().is_some_and(|stats| stats.token_count == Some(27432) && stats.tool_uses == Some(1)))));
+        child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn subagent_stream_deltas_follow_their_own_message_and_never_disturb_the_root() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(64);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            _native_mcp_config: None,
+        });
+        let frame = |parent: Option<&str>, event: Value| json!({"type":"stream_event", "parent_tool_use_id":parent, "event":event});
+        session.handle_frame(frame(None, json!({"type":"message_start", "message":{"id":"root-1"}}))).await;
+        session.handle_frame(frame(Some("toolu_a"), json!({"type":"message_start", "message":{"id":"child-a"}}))).await;
+        session.handle_frame(frame(Some("toolu_b"), json!({"type":"message_start", "message":{"id":"child-b"}}))).await;
+        for (parent, text) in [(Some("toolu_a"), "alpha"), (None, "root"), (Some("toolu_b"), "beta")] {
+            session
+                .handle_frame(frame(parent, json!({"type":"content_block_delta", "index":0, "delta":{"type":"text_delta", "text":text}})))
+                .await;
+        }
+        assert!(matches!(rx.recv().await, Some(DriverEvent::ResponseStarted)));
+        let mut deltas = Vec::new();
+        while let Ok(DriverEvent::TextDelta { message_id, origin, delta }) = rx.try_recv() {
+            deltas.push((message_id, origin, delta));
+        }
+        let agent = |task: &str| EventOrigin::Agent { task_id: task.into(), provider_thread_id: None };
+        assert_eq!(
+            deltas,
+            [
+                ("child-a".to_string(), agent("toolu_a"), "alpha".to_string()),
+                ("root-1".to_string(), EventOrigin::Root, "root".to_string()),
+                ("child-b".to_string(), agent("toolu_b"), "beta".to_string()),
+            ]
+        );
         child.kill().await;
     }
 

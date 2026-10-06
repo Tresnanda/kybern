@@ -791,7 +791,7 @@ pub async fn run() -> Result<()> {
                 Some(p) => Some(resolve_project(&client, &p, false).await?),
                 None => None,
             };
-            let r = client.call::<ThreadsList>(ThreadsListParams { project_id, include_archived: archived }).await?;
+            let r = client.call::<ThreadsList>(ThreadsListParams { project_id, include_archived: archived, ..Default::default() }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::threads(&r.threads) }
         }
         Cmd::New { project, provider, model, effort, mode, worktree, branch, detach, prompt } => {

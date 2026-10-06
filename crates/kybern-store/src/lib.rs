@@ -1594,6 +1594,30 @@ impl Store {
         })
     }
 
+    /// The child thread mirroring `task_id` of the session owned by `root_thread_id`.
+    pub fn subagent_thread_find(&self, root_thread_id: ThreadId, task_id: &str) -> Result<Option<Thread>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!(
+                    "{THREAD_SELECT} WHERE subagent IS NOT NULL AND json_extract(subagent, '$.root_thread_id') = ?1
+                     AND json_extract(subagent, '$.task_id') = ?2"
+                ),
+                params![root_thread_id.to_string(), task_id],
+                row_to_thread,
+            )
+            .optional()?)
+        })
+    }
+
+    /// Direct subagent children of a thread, oldest first.
+    pub fn subagent_children(&self, parent_thread_id: ThreadId) -> Result<Vec<Thread>> {
+        self.with(|c| {
+            let mut st =
+                c.prepare(&format!("{THREAD_SELECT} WHERE subagent IS NOT NULL AND parent_thread_id = ?1 ORDER BY created_at, id"))?;
+            Ok(st.query_map([parent_thread_id.to_string()], row_to_thread)?.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     pub fn threads_running(&self) -> Result<Vec<Thread>> {
         self.with(|c| {
             let mut st = c.prepare(&format!("{THREAD_SELECT} WHERE status IN ('running','awaiting-approval')"))?;
@@ -2420,7 +2444,7 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, collaboration_group_id FROM threads";
+    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent FROM threads";
 
 fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -2463,6 +2487,7 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         parent_thread_id: r.get::<_, Option<String>>(17)?.map(parse_uuid).transpose()?,
         coordinator_project_id: r.get::<_, Option<String>>(18)?.map(parse_uuid).transpose()?,
         collaboration_group_id: r.get::<_, Option<String>>(19)?.map(parse_uuid).transpose()?,
+        subagent: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
     })
 }
 
@@ -2654,8 +2679,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
     c.execute(
         "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-                    parent_thread_id, coordinator_project_id, collaboration_group_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
                  ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
                     status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
@@ -2663,7 +2688,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     updated_at = excluded.updated_at, last_seq = excluded.last_seq,
                     parent_thread_id = COALESCE(threads.parent_thread_id, excluded.parent_thread_id),
                     coordinator_project_id = excluded.coordinator_project_id,
-                    collaboration_group_id = excluded.collaboration_group_id",
+                    collaboration_group_id = excluded.collaboration_group_id,
+                    subagent = COALESCE(excluded.subagent, threads.subagent)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -2685,6 +2711,7 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
             t.parent_thread_id.map(|id| id.to_string()),
             t.coordinator_project_id.map(|id| id.to_string()),
             t.collaboration_group_id.map(|id| id.to_string()),
+            t.subagent.as_ref().map(serde_json::to_string).transpose()?,
         ],
     )?;
     Ok(())
@@ -2727,6 +2754,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         };
         store.thread_upsert(&thread).unwrap();
         let group = CollaborationGroup {
@@ -2823,6 +2851,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         };
         let history = vec![ThreadEvent {
             seq: 999,
@@ -2892,6 +2921,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         };
         s.thread_upsert(&t).unwrap();
         let e = s.event_append(t.id, None, EventPayload::ThreadCreated { thread: t.clone() }).unwrap();
@@ -3032,6 +3062,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         };
         store.thread_upsert(&thread).unwrap();
         let turn = Uuid::now_v7();

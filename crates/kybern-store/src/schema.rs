@@ -342,6 +342,16 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE notes ADD COLUMN created_by_thread_id TEXT;
     ALTER TABLE task_items ADD COLUMN created_by_thread_id TEXT;
     ",
+    // v16: read-only child threads that mirror provider-native subagents. The
+    // JSON `subagent` column marks them and carries their lifecycle; one
+    // runtime task of one session maps to exactly one child thread.
+    "
+    ALTER TABLE threads ADD COLUMN subagent TEXT;
+    CREATE UNIQUE INDEX threads_subagent_task
+      ON threads(json_extract(subagent, '$.root_thread_id'), json_extract(subagent, '$.task_id'))
+      WHERE subagent IS NOT NULL;
+    CREATE INDEX threads_parent ON threads(parent_thread_id) WHERE parent_thread_id IS NOT NULL;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

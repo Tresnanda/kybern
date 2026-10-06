@@ -166,7 +166,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
-            let threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
+            let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
+            // Subagent threads are opt-in: older clients must never list one as a normal thread.
+            if let Some(parent) = p.parent_thread_id {
+                threads.retain(|thread| thread.subagent.is_some() && thread.parent_thread_id == Some(parent));
+            } else if !p.include_subagents {
+                threads.retain(|thread| thread.subagent.is_none());
+            }
             let activity = threads
                 .iter()
                 .map(|thread| {

@@ -1055,6 +1055,7 @@ mod tests {
                 parent_thread_id: None,
                 coordinator_project_id: None,
                 collaboration_group_id: None,
+                subagent: None,
             };
             self.store.thread_upsert(&thread).unwrap();
             self.store.task_run_start(task.id, thread.id, &thread.provider, thread.model.as_deref(), &[]).unwrap();

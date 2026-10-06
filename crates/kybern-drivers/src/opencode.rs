@@ -446,7 +446,24 @@ struct ChildRuntime {
     stats: RuntimeTaskStats,
     stop_requested: bool,
     terminal: bool,
+    /// Message id -> role, so only the subagent's own (assistant) output is
+    /// forwarded; its first message is the prompt it was launched with.
+    message_roles: HashMap<String, String>,
+    parts: HashMap<String, ChildPart>,
+    /// Parts that arrived before their message's role, replayed once it is known.
+    held_parts: Vec<Value>,
 }
+
+#[derive(Default)]
+struct ChildPart {
+    kind: String,
+    message_id: String,
+    started: bool,
+    finished: bool,
+}
+
+/// How many parts may wait for their message's role.
+const CHILD_HELD_PARTS: usize = 64;
 
 fn opencode_child_status(status: &str, backgrounded: bool) -> RuntimeTaskStatus {
     match status {
@@ -966,6 +983,29 @@ impl OpencodeSession {
     async fn handle_child_event(&self, session_id: &str, task_id: &str, ty: &str, properties: &Value) {
         match ty {
             "message.part.updated" => self.handle_child_part(session_id, task_id, &properties["part"]).await,
+            "message.updated" => self.handle_child_message(session_id, task_id, &properties["info"]).await,
+            "message.part.delta" => {
+                let part_id = properties.get("partID").and_then(Value::as_str).unwrap_or("");
+                let delta = properties.get("delta").and_then(Value::as_str).unwrap_or("");
+                let part = {
+                    let state = self.state.lock().await;
+                    state
+                        .children
+                        .get(session_id)
+                        .and_then(|child| child.parts.get(part_id))
+                        .map(|part| (part.kind.clone(), part.message_id.clone()))
+                };
+                let event = match part.as_ref().map(|(kind, message_id)| (kind.as_str(), message_id.clone())) {
+                    Some(("text", message_id)) => {
+                        DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta: delta.to_string() }
+                    }
+                    Some(("reasoning", message_id)) => {
+                        DriverEvent::ThinkingDelta { message_id, origin: EventOrigin::Root, delta: delta.to_string() }
+                    }
+                    _ => return,
+                };
+                self.emit_child(task_id, event).await;
+            }
             "session.status" => {
                 let status = properties.pointer("/status/type").and_then(Value::as_str).unwrap_or("");
                 match status {
@@ -995,10 +1035,113 @@ impl OpencodeSession {
         }
     }
 
+    async fn emit_child(&self, task_id: &str, event: DriverEvent) {
+        self.emit(DriverEvent::SubagentOnly { task_id: task_id.to_string(), event: Box::new(event) }).await;
+    }
+
+    /// A subagent session announced a message. Its role decides whether its
+    /// parts are the subagent's own output or the prompt it was given.
+    async fn handle_child_message(&self, session_id: &str, task_id: &str, info: &Value) {
+        let (Some(id), Some(role)) = (info.get("id").and_then(Value::as_str), info.get("role").and_then(Value::as_str)) else { return };
+        let held = {
+            let mut state = self.state.lock().await;
+            let Some(child) = state.children.get_mut(session_id) else { return };
+            child.message_roles.insert(id.to_owned(), role.to_owned());
+            let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut child.held_parts)
+                .into_iter()
+                .partition(|part| part.get("messageID").and_then(Value::as_str) == Some(id));
+            child.held_parts = waiting;
+            ready
+        };
+        for part in held {
+            self.forward_child_part(session_id, task_id, &part).await;
+        }
+    }
+
+    /// Forward the subagent's own text, reasoning and tool calls to its thread.
+    async fn forward_child_part(&self, session_id: &str, task_id: &str, part: &Value) {
+        let message_id = part.get("messageID").and_then(Value::as_str).unwrap_or("").to_string();
+        let id = part.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+        let kind = part.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+        if id.is_empty() || !matches!(kind.as_str(), "text" | "reasoning" | "tool") {
+            return;
+        }
+        {
+            let mut state = self.state.lock().await;
+            let Some(child) = state.children.get_mut(session_id) else { return };
+            match child.message_roles.get(&message_id).map(String::as_str) {
+                Some("assistant") => {}
+                Some(_) => return,
+                None => {
+                    if child.held_parts.len() < CHILD_HELD_PARTS {
+                        child.held_parts.push(part.clone());
+                    }
+                    return;
+                }
+            }
+            child.parts.entry(id.clone()).or_insert_with(|| ChildPart {
+                kind: kind.clone(),
+                message_id: message_id.clone(),
+                ..ChildPart::default()
+            });
+        }
+        let finished_at = |part: &Value| part.pointer("/time/end").is_some_and(|end| !end.is_null());
+        match kind.as_str() {
+            "text" => {
+                let text = part.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+                let synthetic = part.get("synthetic").and_then(Value::as_bool).unwrap_or(false);
+                if finished_at(part) && !synthetic && !text.is_empty() && self.set_child_part_flag(session_id, &id, false).await {
+                    self.emit_child(task_id, DriverEvent::MessageCompleted { message_id, origin: EventOrigin::Root, text, thinking: None })
+                        .await;
+                }
+            }
+            "reasoning" => {
+                if finished_at(part) && self.set_child_part_flag(session_id, &id, false).await {
+                    self.emit_child(task_id, DriverEvent::ThinkingCompleted { message_id, origin: EventOrigin::Root }).await;
+                }
+            }
+            "tool" => {
+                let status = part.pointer("/state/status").and_then(Value::as_str).unwrap_or("");
+                let call_id = part.get("callID").and_then(Value::as_str).unwrap_or(&id).to_string();
+                let tool = part.get("tool").and_then(Value::as_str).unwrap_or("tool").to_string();
+                let input = part.pointer("/state/input").cloned().unwrap_or(Value::Null);
+                let terminal = matches!(status, "completed" | "error");
+                if (status == "running" || terminal) && self.set_child_part_flag(session_id, &id, true).await {
+                    self.emit_child(
+                        task_id,
+                        DriverEvent::ToolStarted(ToolCall { id: call_id.clone(), name: tool, input, parent_id: None }),
+                    )
+                    .await;
+                }
+                if terminal && self.set_child_part_flag(session_id, &id, false).await {
+                    let output = json!({
+                        "content": part.pointer("/state/output").or_else(|| part.pointer("/state/error")),
+                        "title": part.pointer("/state/title"),
+                        "metadata": part.pointer("/state/metadata"),
+                        "attachments": part.pointer("/state/attachments"),
+                    });
+                    self.emit_child(task_id, DriverEvent::ToolCompleted { tool_call_id: call_id, output, is_error: status == "error" })
+                        .await;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Set the started (`started`) or finished flag of a subagent part. True
+    /// only the first time, so each event is forwarded once.
+    async fn set_child_part_flag(&self, session_id: &str, part_id: &str, started: bool) -> bool {
+        let mut state = self.state.lock().await;
+        let Some(part) = state.children.get_mut(session_id).and_then(|child| child.parts.get_mut(part_id)) else { return false };
+        let flag = if started { &mut part.started } else { &mut part.finished };
+        !std::mem::replace(flag, true)
+    }
+
     async fn handle_child_part(&self, session_id: &str, owner_task_id: &str, part: &Value) {
         if let Some((child_id, task)) = opencode_child_task(part, Some(owner_task_id.to_string())) {
             self.observe_child(child_id, task).await;
         }
+        self.forward_child_part(session_id, owner_task_id, part).await;
 
         match part.get("type").and_then(Value::as_str).unwrap_or("") {
             "tool" => {
@@ -1400,6 +1543,97 @@ impl AgentSession for Handle {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn child_session_output_reaches_the_subagent_and_never_the_root() {
+        use super::*;
+        let (events, mut rx) = mpsc::channel(64);
+        let mut command = Command::new("sleep");
+        command.arg("30").kill_on_drop(true);
+        let session = Arc::new(OpencodeSession {
+            http: reqwest::Client::new(),
+            base: "http://127.0.0.1:9".into(),
+            dir: "/tmp".into(),
+            child: Mutex::new(command.spawn().unwrap()),
+            events,
+            state: Mutex::new(State {
+                compact_operation: None,
+                commands: vec![],
+                context_windows: HashMap::new(),
+                session_id: Some("root".into()),
+                model: None,
+                coordinator_instructions: None,
+                mode: PermissionMode::Supervised,
+                parts: HashMap::new(),
+                message_roles: HashMap::new(),
+                pending_images: HashMap::new(),
+                turn_usage: Usage::default(),
+                turn_cost: 0.0,
+                turn_started: None,
+                active: true,
+                pending: HashMap::new(),
+                current_message_id: None,
+                children: HashMap::new(),
+            }),
+        });
+        let event = |ty: &str, properties: Value| json!({"type": ty, "properties": properties});
+        // The parent's task tool part announces the child session.
+        session
+            .handle_event(&event(
+                "message.part.updated",
+                json!({"sessionID":"root", "part":{"id":"p0", "type":"tool", "tool":"task", "callID":"call-1", "messageID":"rm",
+                    "state":{"status":"running", "input":{"description":"Look around", "prompt":"List the files"}, "metadata":{"sessionId":"kid"}}}}),
+            ))
+            .await;
+        let frames = [
+            // Its first message is the prompt it was given: never forwarded.
+            event("message.updated", json!({"info":{"id":"um", "role":"user", "sessionID":"kid"}})),
+            event(
+                "message.part.updated",
+                json!({"sessionID":"kid", "part":{"id":"up", "type":"text", "messageID":"um", "text":"List the files", "time":{"end":1}}}),
+            ),
+            // A part may precede the message that gives it a role.
+            event(
+                "message.part.updated",
+                json!({"sessionID":"kid", "part":{"id":"tp", "type":"tool", "tool":"ls", "callID":"c1", "messageID":"am", "state":{"status":"running", "input":{"path":"."}}}}),
+            ),
+            event("message.updated", json!({"info":{"id":"am", "role":"assistant", "sessionID":"kid"}})),
+            event(
+                "message.part.updated",
+                json!({"sessionID":"kid", "part":{"id":"tp", "type":"tool", "tool":"ls", "callID":"c1", "messageID":"am", "state":{"status":"completed", "input":{"path":"."}, "output":"a.txt"}}}),
+            ),
+            event(
+                "message.part.updated",
+                json!({"sessionID":"kid", "part":{"id":"xp", "type":"text", "messageID":"am", "text":"", "time":{"start":1}}}),
+            ),
+            event("message.part.delta", json!({"sessionID":"kid", "messageID":"am", "partID":"xp", "field":"text", "delta":"One file."})),
+            event(
+                "message.part.updated",
+                json!({"sessionID":"kid", "part":{"id":"xp", "type":"text", "messageID":"am", "text":"One file.", "time":{"start":1, "end":2}}}),
+            ),
+        ];
+        for frame in &frames {
+            session.handle_event(frame).await;
+        }
+        let mut shape = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                DriverEvent::SubagentOnly { task_id, event } => {
+                    assert_eq!(task_id, "opencode:kid");
+                    shape.push(match *event {
+                        DriverEvent::ToolStarted(call) => format!("tool {} {}", call.name, call.id),
+                        DriverEvent::ToolCompleted { tool_call_id, .. } => format!("done {tool_call_id}"),
+                        DriverEvent::TextDelta { delta, .. } => format!("text {delta}"),
+                        DriverEvent::MessageCompleted { text, .. } => format!("message {text}"),
+                        other => panic!("unexpected {other:?}"),
+                    });
+                }
+                DriverEvent::TextDelta { .. } | DriverEvent::MessageCompleted { .. } => panic!("child prose leaked to the root"),
+                _ => {}
+            }
+        }
+        assert_eq!(shape, ["tool ls c1", "done c1", "text One file.", "message One file."]);
+    }
 
     #[tokio::test]
     async fn native_compaction_and_advertised_commands_use_their_own_endpoints() {

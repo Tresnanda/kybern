@@ -24,6 +24,7 @@ use crate::settings::SettingsStore;
 
 mod agent_items;
 mod notes;
+mod subagents;
 mod tasks;
 
 #[derive(Clone)]
@@ -2720,6 +2721,8 @@ struct Inner {
     agent_items: std::sync::Mutex<agent_items::AgentItemState>,
     /// Serializes agent notes-and-tasks writes with their operation receipts.
     agent_item_ops: Mutex<()>,
+    /// Routing state for the read-only child threads of provider subagents.
+    subagents: std::sync::Mutex<subagents::SubagentRouter>,
 }
 
 struct LiveSession {
@@ -2980,6 +2983,7 @@ impl Orchestrator {
                 task_published: std::sync::Mutex::new(HashMap::new()),
                 agent_items: std::sync::Mutex::new(Default::default()),
                 agent_item_ops: Mutex::new(()),
+                subagents: std::sync::Mutex::new(Default::default()),
             }),
         }
     }
@@ -3226,7 +3230,12 @@ impl Orchestrator {
                 task.updated_at = Utc::now();
                 task.completed_at = Some(task.updated_at);
                 checkpoint_turns.insert(task.origin_turn_id);
-                self.emit(t.id, Some(task.origin_turn_id), EventPayload::RuntimeTaskCompleted { task })?;
+                self.emit(t.id, Some(task.origin_turn_id), EventPayload::RuntimeTaskCompleted { task: task.clone() })?;
+                if t.subagent.is_none()
+                    && let Err(error) = self.subagent_sync(t.id, &task)
+                {
+                    tracing::warn!(thread_id = %t.id, task_id = %task.id, %error, "could not settle the subagent thread");
+                }
             }
             for turn_id in checkpoint_turns {
                 if self.inner.store.checkpoint_get(turn_id)?.is_some_and(|checkpoint| checkpoint.after.is_none()) {
@@ -3584,6 +3593,7 @@ impl Orchestrator {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
@@ -3669,6 +3679,7 @@ impl Orchestrator {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         };
         self.inner.store.thread_upsert(&thread)?;
         let ev = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() })?;
@@ -3718,6 +3729,9 @@ impl Orchestrator {
 
     pub fn update_thread_fields(&self, params: methods::ThreadsUpdateParams) -> Result<Thread> {
         let mut t = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if t.subagent.is_some() {
+            return Err(anyhow!(subagents::READ_ONLY_ERROR));
+        }
         if let Some(title) = params.title {
             t.title = title;
         }
@@ -3770,6 +3784,7 @@ impl Orchestrator {
             t.status = ThreadStatus::Archived;
             self.update_thread(t)?;
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
+            self.subagents_archive_below(thread_id)?;
         }
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
             live.mark_released();
@@ -3813,7 +3828,11 @@ impl Orchestrator {
         queued: bool,
         retryable: bool,
     ) -> Result<(TurnId, MessageId, bool)> {
-        let kind = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?.provider.kind;
+        let target = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if target.subagent.is_some() {
+            return Err(anyhow!(subagents::READ_ONLY_ERROR));
+        }
+        let kind = target.provider.kind;
         let _harness = self.inner.harness_gates[&kind]
             .clone()
             .try_read_owned()
@@ -3897,6 +3916,9 @@ impl Orchestrator {
     pub fn enqueue(&self, message: methods::QueuedMessage) -> Result<()> {
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
         let thread = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if thread.subagent.is_some() {
+            return Err(anyhow!(subagents::READ_ONLY_ERROR));
+        }
         if thread.status == ThreadStatus::Archived {
             return Err(anyhow!("thread is archived"));
         }
@@ -3932,6 +3954,7 @@ impl Orchestrator {
     /// Deliver new user input within the current native turn. The turn gate also
     /// serializes retries, so a lost RPC reply does not send the prompt twice.
     pub async fn steer(&self, mut params: methods::QueuedMessage) -> Result<methods::ThreadsSendResult> {
+        self.ensure_not_subagent(params.thread_id)?;
         let redirect_summary = title_from_message(&params.message);
         self.resolve_attachments(&mut params.message);
         let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
@@ -4190,6 +4213,11 @@ impl Orchestrator {
     }
 
     pub async fn interrupt(&self, thread_id: ThreadId) -> Result<()> {
+        // Interrupting a subagent thread stops that subagent, not its parent.
+        if self.inner.store.thread_get(thread_id)?.is_some_and(|thread| thread.subagent.is_some()) {
+            self.stop_runtime_task(thread_id, "").await?;
+            return Ok(());
+        }
         self.interrupt_with_grace(thread_id, Duration::from_secs(5)).await
     }
 
@@ -4279,6 +4307,8 @@ impl Orchestrator {
     }
 
     pub async fn stop_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
+        let (thread_id, task_id) = self.resolve_task_control(thread_id, task_id)?;
+        let task_id = task_id.as_str();
         let live = self
             .inner
             .sessions
@@ -4313,6 +4343,8 @@ impl Orchestrator {
     }
 
     pub async fn background_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
+        let (thread_id, task_id) = self.resolve_task_control(thread_id, task_id)?;
+        let task_id = task_id.as_str();
         let live = self
             .inner
             .sessions
@@ -4362,6 +4394,7 @@ impl Orchestrator {
     /// Async questions are ordinary user input, not provider permission responses.
     /// Serialize submissions so two clients cannot answer the same question twice.
     pub async fn answer_questions(&self, params: methods::ThreadsAnswerParams) -> Result<()> {
+        self.ensure_not_subagent(params.thread_id)?;
         let _answer = self.inner.question_answers.lock().await;
         let events = self.inner.store.events_for_thread(params.thread_id)?;
         if let Some(previous) = events.iter().find_map(|event| match &event.payload {
@@ -4836,6 +4869,7 @@ impl Orchestrator {
 
     /// Reset the working tree to the snapshot taken before `turn_id`.
     pub async fn revert(&self, thread_id: ThreadId, turn_id: TurnId) -> Result<(String, bool)> {
+        self.ensure_not_subagent(thread_id)?;
         let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             return Err(anyhow!("thread is busy; interrupt it first"));
@@ -5191,6 +5225,9 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
+        if let Err(error) = self.subagent_sync(thread_id, &task) {
+            tracing::warn!(%thread_id, task_id = %task.id, %error, "could not update the subagent thread");
+        }
         if !task.status.is_active() {
             self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
         }
@@ -5262,6 +5299,9 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
+        if let Err(error) = self.subagent_sync(thread_id, &task) {
+            tracing::warn!(%thread_id, task_id = %task.id, %error, "could not update the subagent thread");
+        }
         if !resumed && (completed || !task.status.is_active()) {
             self.finish_deferred_checkpoint(thread_id, live, task.origin_turn_id).await?;
         }
@@ -5472,6 +5512,12 @@ impl Orchestrator {
 
     async fn process_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent, retiring: bool) -> Result<()> {
         live.touch();
+        // A subagent's own prose and tool calls belong to its child thread and
+        // never reach the parent's log or its turn bookkeeping.
+        if live.stop_cleanup.load(Ordering::Relaxed) && !retiring {
+            return Ok(());
+        }
+        let Some(ev) = self.subagent_take_event(thread_id, ev)? else { return Ok(()) };
         let starts_response = match &ev {
             DriverEvent::ResponseStarted => true,
             DriverEvent::TextDelta { origin, .. }
@@ -5548,6 +5594,8 @@ impl Orchestrator {
             );
         }
         match ev {
+            // Consumed by `subagent_take_event` before this point.
+            DriverEvent::SubagentPrompt { .. } | DriverEvent::SubagentOnly { .. } => {}
             DriverEvent::ResponseStarted => {}
             DriverEvent::ResponseBoundary => {
                 if let Some(turn) = turn_guard.as_mut() {
@@ -5622,6 +5670,16 @@ impl Orchestrator {
                     provider_thread_id: task.provider_thread_id.clone(),
                 });
                 self.emit(thread_id, turn_id, EventPayload::ToolCallStarted { call: call.clone(), origin })?;
+                // The same call also belongs to the subagent that made it, and the
+                // prompt of a launching call becomes that subagent's first message.
+                if let Some(parent_id) = call.parent_id.as_deref() {
+                    self.subagent_mirror_tool_started(thread_id, parent_id, &call)?;
+                }
+                if let Some(prompt) = json_text(&call.input, &["prompt"])
+                    && generic_runtime_task(&call).is_some_and(|task| task.kind == RuntimeTaskKind::Agent)
+                {
+                    self.subagent_remember_prompt(thread_id, &call.id, &prompt);
+                }
                 if let Some(task) = owner {
                     let _ = self
                         .apply_runtime_task_update(
@@ -5647,9 +5705,23 @@ impl Orchestrator {
                 }
             }
             DriverEvent::ToolOutputDelta { tool_call_id, delta } => {
+                if self.subagent_holds_call(thread_id, &tool_call_id) {
+                    self.subagent_mirror_tool_event(
+                        thread_id,
+                        &tool_call_id,
+                        DriverEvent::ToolOutputDelta { tool_call_id: tool_call_id.clone(), delta: delta.clone() },
+                    )?;
+                }
                 self.emit(thread_id, turn_id, EventPayload::ToolCallOutputDelta { tool_call_id, delta })?;
             }
             DriverEvent::ToolCompleted { tool_call_id, output, is_error } => {
+                if self.subagent_holds_call(thread_id, &tool_call_id) {
+                    self.subagent_mirror_tool_event(
+                        thread_id,
+                        &tool_call_id,
+                        DriverEvent::ToolCompleted { tool_call_id: tool_call_id.clone(), output: output.clone(), is_error },
+                    )?;
+                }
                 self.emit(
                     thread_id,
                     turn_id,
@@ -6151,10 +6223,16 @@ mod tests {
         app_tool_responses: CapturedAppToolResponses,
         hang_interrupt: bool,
         broken_interrupt: bool,
+        stopped_tasks: Arc<Mutex<Vec<String>>>,
     }
 
     #[async_trait::async_trait]
     impl AgentSession for TestSession {
+        async fn stop_runtime_task(&self, task: &RuntimeTask) -> kybern_drivers::Result<()> {
+            self.stopped_tasks.lock().await.push(task.id.clone());
+            Ok(())
+        }
+
         async fn send_message(&self, _message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
             self.messages.lock().await.push(message.clone());
             Ok(())
@@ -6409,6 +6487,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         };
         store.thread_upsert(&thread).unwrap();
         let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
@@ -6775,6 +6854,7 @@ mod tests {
                 parent_thread_id: None,
                 coordinator_project_id: None,
                 collaboration_group_id: None,
+                subagent: None,
             };
             self.store.thread_upsert(&thread).unwrap();
             thread
@@ -9454,5 +9534,387 @@ for line in sys.stdin:
             assert_eq!(std::fs::canonicalize(value["cwd"].as_str().unwrap()).unwrap(), std::fs::canonicalize(&thread.cwd).unwrap());
             assert_eq!(value["args"].as_array().unwrap().iter().any(|arg| arg == "--resume"), index == 1);
         }
+    }
+
+    fn agent_task(id: &str, tool_call_id: Option<&str>, parent_id: Option<&str>) -> DriverRuntimeTask {
+        DriverRuntimeTask {
+            id: id.into(),
+            kind: RuntimeTaskKind::Agent,
+            status: RuntimeTaskStatus::Running,
+            title: format!("Task {id}"),
+            detail: None,
+            provider_type: Some("Explore".into()),
+            parent_id: parent_id.map(str::to_string),
+            tool_call_id: tool_call_id.map(str::to_string),
+            provider_thread_id: None,
+            model: Some("claude-haiku".into()),
+            effort: None,
+            backgrounded: false,
+            last_tool_name: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities { stop: true, background: true },
+        }
+    }
+
+    fn agent_text(task_id: &str, id: &str, text: &str) -> DriverEvent {
+        DriverEvent::MessageCompleted {
+            message_id: id.into(),
+            origin: EventOrigin::Agent { task_id: task_id.into(), provider_thread_id: None },
+            text: text.into(),
+            thinking: None,
+        }
+    }
+
+    fn child_of(fixture: &Fixture, root: ThreadId, task_id: &str) -> Thread {
+        fixture.store.subagent_thread_find(root, task_id).unwrap().expect("a child thread for the task")
+    }
+
+    async fn subagent_fixture() -> (Fixture, Thread, Arc<LiveSession>) {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
+        live.turn_ready.notified().await;
+        (fixture, thread, live)
+    }
+
+    #[tokio::test]
+    async fn a_subagent_becomes_a_read_only_thread_fed_by_its_own_output() {
+        let (fixture, thread, live) = subagent_fixture().await;
+        let o = &fixture.orchestrator;
+        let launch = ToolCall { id: "toolu_1".into(), name: "Agent".into(), input: json!({"prompt":"Read note.txt"}), parent_id: None };
+        o.handle_driver_event(thread.id, &live, DriverEvent::ToolStarted(launch)).await.unwrap();
+        o.handle_driver_event(thread.id, &live, DriverEvent::SubagentPrompt { task_id: "task-1".into(), prompt: "Read note.txt".into() })
+            .await
+            .unwrap();
+        o.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("task-1", Some("toolu_1"), None)))
+            .await
+            .unwrap();
+        let child = child_of(&fixture, thread.id, "task-1");
+        assert_eq!(child.parent_thread_id, Some(thread.id));
+        assert_eq!(child.status, ThreadStatus::Running);
+        let info = child.subagent.clone().unwrap();
+        assert_eq!(
+            (info.root_thread_id, info.status, info.tool_call_id.as_deref()),
+            (thread.id, RuntimeTaskStatus::Running, Some("toolu_1"))
+        );
+        assert_eq!(info.agent_type.as_deref(), Some("Explore"));
+        assert!(info.transcript && info.capabilities.stop);
+
+        // The subagent's tool call stays nested in the parent and is mirrored into the child.
+        let read = ToolCall {
+            id: "toolu_2".into(),
+            name: "Read".into(),
+            input: json!({"file_path":"note.txt"}),
+            parent_id: Some("toolu_1".into()),
+        };
+        o.handle_driver_event(thread.id, &live, DriverEvent::ToolStarted(read)).await.unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            DriverEvent::ToolCompleted { tool_call_id: "toolu_2".into(), output: json!({"content":"hi"}), is_error: false },
+        )
+        .await
+        .unwrap();
+        o.handle_driver_event(thread.id, &live, agent_text("toolu_1", "msg-1", "The note says hello.\nMore detail.")).await.unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status("task-1", RuntimeTaskStatus::Completed)),
+        )
+        .await
+        .unwrap();
+
+        let parent_events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(
+            !parent_events.iter().any(|event| matches!(&event.payload, EventPayload::AssistantMessageCompleted { .. })),
+            "child prose never reaches the parent transcript"
+        );
+        assert!(parent_events.iter().any(|event| matches!(&event.payload,
+            EventPayload::ToolCallStarted { call, origin: EventOrigin::Agent { .. } } if call.id == "toolu_2" && call.parent_id.as_deref() == Some("toolu_1"))));
+        assert!(
+            parent_events.iter().any(|event| matches!(&event.payload, EventPayload::RuntimeTaskStarted { task } if task.id == "task-1"))
+        );
+
+        let events = fixture.store.events_for_thread(child.id).unwrap();
+        let kinds: Vec<_> = events.iter().map(|event| event.payload.kind()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "thread_created",
+                "turn_started",
+                "tool_call_started",
+                "thread_updated",
+                "tool_call_completed",
+                "assistant_message_completed",
+                "turn_completed",
+                "thread_updated"
+            ]
+        );
+        assert!(matches!(&events[1].payload, EventPayload::TurnStarted { message, .. } if message.plain_text() == "Read note.txt"));
+        assert!(matches!(&events[2].payload,
+            EventPayload::ToolCallStarted { call, origin: EventOrigin::Root } if call.parent_id.is_none() && call.name == "Read"));
+        let message_id = match &events[5].payload {
+            EventPayload::AssistantMessageCompleted { message_id, origin: EventOrigin::Root, .. } => *message_id,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert!(matches!(&events[6].payload,
+            EventPayload::TurnCompleted { stop_reason: StopReason::Completed, terminal_message_id: Some(id), .. } if *id == message_id));
+        let done = child_of(&fixture, thread.id, "task-1");
+        assert_eq!(done.status, ThreadStatus::Idle);
+        let info = done.subagent.unwrap();
+        assert_eq!(info.result.as_deref(), Some("The note says hello."));
+        assert!(info.progress.is_none() && info.completed_at.is_some());
+
+        // The transcript projects like any other thread.
+        let transcript = fixture.store.project_transcript_through(child.id, done.last_seq).unwrap();
+        assert!(
+            transcript
+                .iter()
+                .any(|entry| matches!(entry, TranscriptEntry::Assistant { text, .. } if text.starts_with("The note says hello")))
+        );
+
+        // Read-only.
+        let rejected = o.send(child.id, UserMessage::text("hi")).await.unwrap_err().to_string();
+        assert!(rejected.contains("read-only"), "{rejected}");
+        assert!(
+            o.update_thread_fields(methods::ThreadsUpdateParams {
+                thread_id: child.id,
+                title: Some("x".into()),
+                pinned: None,
+                permission_mode: None,
+                model: None,
+                effort: None
+            })
+            .is_err()
+        );
+        // Lists leave them to callers that ask.
+        assert_eq!(fixture.store.subagent_children(thread.id).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn subagent_output_waits_for_its_task_and_nested_agents_hang_below_their_parent() {
+        let (fixture, thread, live) = subagent_fixture().await;
+        let o = &fixture.orchestrator;
+        // Output that arrives before the task starts is held, then delivered.
+        o.handle_driver_event(thread.id, &live, agent_text("toolu_1", "early", "Early words")).await.unwrap();
+        o.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("task-1", Some("toolu_1"), None)))
+            .await
+            .unwrap();
+        let first = child_of(&fixture, thread.id, "task-1");
+        assert!(fixture.store.events_for_thread(first.id).unwrap().iter().any(|event| matches!(&event.payload,
+            EventPayload::AssistantMessageCompleted { text, .. } if text == "Early words")));
+
+        // A tool call the first subagent makes launches a second one below it.
+        let launch = ToolCall { id: "toolu_nested".into(), name: "Agent".into(), input: json!({}), parent_id: Some("toolu_1".into()) };
+        o.handle_driver_event(thread.id, &live, DriverEvent::ToolStarted(launch)).await.unwrap();
+        o.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("task-2", Some("toolu_nested"), None)))
+            .await
+            .unwrap();
+        let second = child_of(&fixture, thread.id, "task-2");
+        assert_eq!(second.parent_thread_id, Some(first.id));
+        assert_eq!(second.subagent.as_ref().unwrap().root_thread_id, thread.id);
+        // The first subagent's own thread shows the launch row.
+        assert!(fixture.store.runtime_tasks_for_thread(first.id).unwrap().iter().any(|task| task.id == "task-2"));
+
+        // Archiving the parent settles and archives the whole subtree.
+        o.archive_thread(thread.id).await.unwrap();
+        for id in [first.id, second.id] {
+            assert_eq!(fixture.store.thread_get(id).unwrap().unwrap().status, ThreadStatus::Archived);
+            assert!(fixture.store.events_for_thread(id).unwrap().iter().any(|event| matches!(event.payload, EventPayload::ThreadArchived)));
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_style_subagent_output_goes_only_to_its_thread_and_the_prompt_may_arrive_late() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Codex);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let o = &fixture.orchestrator;
+        o.send(thread.id, UserMessage::text("delegate")).await.unwrap();
+        live.turn_ready.notified().await;
+        let mut task = agent_task("child-thread", None, None);
+        task.provider_thread_id = Some("child-thread".into());
+        o.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(task)).await.unwrap();
+        let child = child_of(&fixture, thread.id, "child-thread");
+        let wrap = |event| DriverEvent::SubagentOnly { task_id: "child-thread".into(), event: Box::new(event) };
+        // The turn has not started: its first message is still unknown.
+        assert!(
+            !fixture
+                .store
+                .events_for_thread(child.id)
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+        );
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            DriverEvent::SubagentPrompt { task_id: "child-thread".into(), prompt: "Review the diff".into() },
+        )
+        .await
+        .unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            wrap(DriverEvent::ToolStarted(ToolCall {
+                id: "cmd-1".into(),
+                name: "shell".into(),
+                input: json!({"command":"git diff"}),
+                parent_id: None,
+            })),
+        )
+        .await
+        .unwrap();
+        o.handle_driver_event(thread.id, &live, wrap(DriverEvent::ToolOutputDelta { tool_call_id: "cmd-1".into(), delta: "+line".into() }))
+            .await
+            .unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            wrap(DriverEvent::ToolCompleted { tool_call_id: "cmd-1".into(), output: json!({}), is_error: false }),
+        )
+        .await
+        .unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            wrap(DriverEvent::ThinkingDelta { message_id: "r1".into(), origin: EventOrigin::Root, delta: "hmm".into() }),
+        )
+        .await
+        .unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            wrap(DriverEvent::ThinkingCompleted { message_id: "r1".into(), origin: EventOrigin::Root }),
+        )
+        .await
+        .unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            wrap(DriverEvent::TextDelta { message_id: "m1".into(), origin: EventOrigin::Root, delta: "Looks".into() }),
+        )
+        .await
+        .unwrap();
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            wrap(DriverEvent::MessageCompleted {
+                message_id: "m1".into(),
+                origin: EventOrigin::Root,
+                text: "Looks fine".into(),
+                thinking: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let events = fixture.store.events_for_thread(child.id).unwrap();
+        let kinds: Vec<_> = events.iter().map(|event| event.payload.kind()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "thread_created",
+                "turn_started",
+                "tool_call_started",
+                "tool_call_output_delta",
+                "tool_call_completed",
+                "assistant_thinking_delta",
+                "assistant_thinking_completed",
+                "assistant_text_delta",
+                "assistant_message_completed"
+            ]
+        );
+        // Reasoning, text and the final message share one logical message.
+        let ids: HashSet<_> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::AssistantThinkingDelta { message_id, .. }
+                | EventPayload::AssistantTextDelta { message_id, .. }
+                | EventPayload::AssistantMessageCompleted { message_id, .. } => Some(*message_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids.len(), 1);
+        let parent = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(!parent.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::ToolCallStarted { .. } | EventPayload::ToolCallOutputDelta { .. } | EventPayload::AssistantTextDelta { .. }
+        )));
+    }
+
+    #[tokio::test]
+    async fn stopping_a_subagent_thread_stops_its_task_in_the_root_session() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let stopped = Arc::new(Mutex::new(Vec::new()));
+        let live = Arc::new(LiveSession {
+            session_instance_id: Uuid::now_v7(),
+            session: Box::new(TestSession { stopped_tasks: stopped.clone(), ..Default::default() }),
+            computer_tools: false,
+            last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
+            released: AtomicBool::new(false),
+            stop_cleanup: AtomicBool::new(false),
+            turn: Mutex::new(None),
+            continuation: Mutex::new(None),
+            turn_ready: tokio::sync::Notify::new(),
+            last_turn_id: Mutex::new(None),
+            tasks: Mutex::new(HashMap::new()),
+            deferred_checkpoints: Mutex::new(HashSet::new()),
+            pending: Mutex::new(HashMap::new()),
+            daemon_approvals: Mutex::new(HashMap::new()),
+            app_tool_requests: Mutex::new(HashSet::new()),
+            app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+        });
+        fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+        fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
+        live.turn_ready.notified().await;
+        let o = &fixture.orchestrator;
+        o.handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("task-1", Some("toolu_1"), None)))
+            .await
+            .unwrap();
+        let child = child_of(&fixture, thread.id, "task-1");
+        // Interrupting the child thread (or tasks.stop with its id) stops that subagent only.
+        o.interrupt(child.id).await.unwrap();
+        assert_eq!(*stopped.lock().await, ["task-1"]);
+        assert_eq!(child_of(&fixture, thread.id, "task-1").subagent.unwrap().status, RuntimeTaskStatus::Stopping);
+        o.handle_driver_event(
+            thread.id,
+            &live,
+            DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status("task-1", RuntimeTaskStatus::Stopped)),
+        )
+        .await
+        .unwrap();
+        let done = child_of(&fixture, thread.id, "task-1");
+        assert_eq!(done.status, ThreadStatus::Idle);
+        assert!(
+            fixture
+                .store
+                .events_for_thread(child.id)
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_daemon_restart_settles_running_subagent_threads() {
+        let (fixture, thread, live) = subagent_fixture().await;
+        fixture
+            .orchestrator
+            .handle_driver_event(thread.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("task-1", None, None)))
+            .await
+            .unwrap();
+        let child = child_of(&fixture, thread.id, "task-1");
+        assert_eq!(child.status, ThreadStatus::Running);
+        fixture.orchestrator.recover_after_restart().await.unwrap();
+        let after = child_of(&fixture, thread.id, "task-1");
+        assert_eq!(after.status, ThreadStatus::Idle);
+        assert_eq!(after.subagent.unwrap().status, RuntimeTaskStatus::Interrupted);
+        let kinds: Vec<_> = fixture.store.events_for_thread(child.id).unwrap().iter().map(|event| event.payload.kind()).collect();
+        assert_eq!(kinds.iter().filter(|kind| **kind == "turn_completed").count(), 1);
+        assert!(!kinds.contains(&"turn_failed"));
     }
 }

@@ -255,6 +255,72 @@ pub struct Thread {
     /// Active collaboration membership, denormalized for efficient navigation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration_group_id: Option<crate::GroupId>,
+    /// Set when this thread mirrors one provider-native subagent. Such a thread
+    /// is read-only: it records what the subagent said and did, and its
+    /// `parent_thread_id` is the thread (or subagent thread) that launched it.
+    /// Clients that do not know about subagent threads must hide them from
+    /// thread lists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<SubagentInfo>,
+}
+
+/// Provider-native subagent metadata carried by a read-only child [`Thread`].
+///
+/// The title, model and effort live on the thread itself. This struct holds
+/// the rest of what a subagent page needs and is refreshed (through
+/// `thread_updated`) whenever the parent's runtime task for it changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubagentInfo {
+    /// Provider-stable id of the runtime task in the parent thread. Together
+    /// with the root thread it identifies this child thread.
+    pub task_id: String,
+    /// The thread that owns the provider session. For a subagent launched by
+    /// another subagent this is the root, not `Thread::parent_thread_id`.
+    /// `tasks.stop` and `tasks.background` accept the child thread id and
+    /// resolve the session through it.
+    pub root_thread_id: ThreadId,
+    /// Turn of the root thread that launched the subagent.
+    pub parent_turn_id: TurnId,
+    /// Tool call in the parent that launched it, when the provider has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_thread_id: Option<String>,
+    /// Provider agent type or role (`Explore`, `worker`, `task:general`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    pub status: RuntimeTaskStatus,
+    #[serde(default)]
+    pub backgrounded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_name: Option<String>,
+    /// Latest progress or final result summary from the provider, as reported
+    /// (see `progress` and `result` for the normalized one-line forms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// One live line while the subagent works: the provider's latest activity
+    /// text, else the last tool it used (`Using Read`). Cleared once it settles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+    /// First line of the subagent's final answer once it settled (its last
+    /// message, else the provider's result summary, else the failure message).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+    #[serde(default)]
+    pub stats: RuntimeTaskStats,
+    /// Whether `tasks.stop` / `tasks.background` currently work for it.
+    #[serde(default)]
+    pub capabilities: RuntimeTaskCapabilities,
+    /// False when the harness only reports lifecycle (Pi/OMP and providers
+    /// without native subagent forwarding): the transcript holds just the
+    /// prompt and the outcome.
+    #[serde(default)]
+    pub transcript: bool,
+    pub started_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 /// One piece of a user message.

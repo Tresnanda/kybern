@@ -129,7 +129,7 @@ impl Store {
             })?;
             let mut found = Vec::with_capacity(limit as usize + 1);
             while let Some(row) = rows.next()? {
-                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(20)?, created_second: row.get(21)? });
+                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(21)?, created_second: row.get(22)? });
             }
             let has_more = found.len() > limit as usize;
             found.truncate(limit as usize);
@@ -243,12 +243,13 @@ fn search_sql() -> String {
              CAST(strftime('%s',t.created_at) AS INTEGER) AS created_second
            FROM threads t
            WHERE (:project IS NULL OR t.project_id=:project)
+             AND t.subagent IS NULL
              AND (:include_archived OR t.status!='archived')
              AND (:query='' OR instr(lower(t.title),:query)>0 OR {message_match})
          )
          SELECT id,project_id,title,provider_kind,provider_instance,model,effort,permission_mode,status,
                 worktree_path,worktree_branch,cwd,provider_session_id,pinned,created_at,updated_at,last_seq,
-                parent_thread_id,coordinator_project_id,collaboration_group_id,preference_rank,created_second
+                parent_thread_id,coordinator_project_id,collaboration_group_id,subagent,preference_rank,created_second
          FROM candidates
          WHERE (created_second<:snapshot_second OR (created_second=:snapshot_second AND id<=:snapshot_id))
            AND (:cursor_rank IS NULL OR preference_rank>:cursor_rank
@@ -262,7 +263,7 @@ fn search_sql() -> String {
 fn search_snapshot(connection: &Connection, project_id: Option<ProjectId>, include_archived: bool, query: &str) -> Result<(i64, String)> {
     let sql = format!(
         "SELECT CAST(strftime('%s',t.created_at) AS INTEGER),t.id FROM threads t
-         WHERE (:project IS NULL OR t.project_id=:project) AND (:include_archived OR t.status!='archived')
+         WHERE (:project IS NULL OR t.project_id=:project) AND t.subagent IS NULL AND (:include_archived OR t.status!='archived')
            AND (:query='' OR instr(lower(t.title),:query)>0 OR {})
          ORDER BY CAST(strftime('%s',t.created_at) AS INTEGER) DESC,t.id DESC LIMIT 1",
         message_match_sql("t.id")
@@ -539,6 +540,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             collaboration_group_id: None,
+            subagent: None,
         }
     }
 
@@ -585,6 +587,83 @@ mod tests {
         assert_ne!(next.threads[0].thread.id, page.threads[0].thread.id);
         assert!(store.search_thread_history(Some(project), None, Some("other"), false, Some(&cursor), 1).is_err());
         assert!(store.search_thread_history(Some(project), None, None, false, Some("💥"), 1).is_err());
+    }
+
+    fn subagent_info(root: ThreadId, task_id: &str) -> SubagentInfo {
+        SubagentInfo {
+            task_id: task_id.into(),
+            root_thread_id: root,
+            parent_turn_id: uuid::Uuid::now_v7(),
+            tool_call_id: Some("toolu_1".into()),
+            provider_thread_id: None,
+            agent_type: Some("Explore".into()),
+            status: RuntimeTaskStatus::Running,
+            backgrounded: false,
+            last_tool_name: None,
+            detail: None,
+            progress: None,
+            result: None,
+            usage: None,
+            stats: RuntimeTaskStats::default(),
+            capabilities: RuntimeTaskCapabilities::default(),
+            transcript: true,
+            started_at: Utc::now(),
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn migration_16_adds_the_subagent_marker_without_touching_existing_threads() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::schema::migrate_to(&conn, 15).unwrap();
+        conn.execute_batch(
+            "INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES ('p1', 'kybern', '/k', 0, '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00');
+             INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, permission_mode, status, cwd, created_at, updated_at, last_seq, pinned)
+               VALUES ('t1', 'p1', 'Old thread', 'codex', 'codex', 'supervised', 'idle', '/k', '2026-09-01T00:00:00+00:00', '2026-09-02T00:00:00+00:00', 0, 0);",
+        )
+        .unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let subagent: Option<String> = conn.query_row("SELECT subagent FROM threads WHERE id = 't1'", [], |r| r.get(0)).unwrap();
+        assert!(subagent.is_none());
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), crate::schema::migration_count() as i64);
+    }
+
+    #[test]
+    fn subagent_threads_roundtrip_are_found_by_task_and_stay_out_of_search() {
+        let store = Store::open_in_memory().unwrap();
+        let project = uuid::Uuid::now_v7();
+        let now = Utc::now();
+        insert_project(&store, project, now);
+        let root = thread(project, "needle parent", now);
+        store.thread_upsert(&root).unwrap();
+        let mut child = thread(project, "needle child", now);
+        child.parent_thread_id = Some(root.id);
+        child.subagent = Some(subagent_info(root.id, "task-1"));
+        store.thread_upsert(&child).unwrap();
+
+        let found = store.subagent_thread_find(root.id, "task-1").unwrap().unwrap();
+        assert_eq!(found.id, child.id);
+        assert_eq!(found.subagent, child.subagent);
+        assert!(store.subagent_thread_find(root.id, "other").unwrap().is_none());
+        assert_eq!(store.subagent_children(root.id).unwrap().len(), 1);
+        assert!(store.subagent_children(child.id).unwrap().is_empty());
+        // A task maps to exactly one child thread.
+        let mut duplicate = thread(project, "dup", now);
+        duplicate.subagent = Some(subagent_info(root.id, "task-1"));
+        assert!(store.thread_upsert(&duplicate).is_err());
+        // An ordinary write never drops the marker.
+        let mut plain = found.clone();
+        plain.subagent = None;
+        plain.title = "renamed".into();
+        store.thread_upsert(&plain).unwrap();
+        assert!(store.thread_get(child.id).unwrap().unwrap().subagent.is_some());
+
+        assert_eq!(store.threads_list(None, false).unwrap().len(), 2);
+        let page = store.search_thread_history(Some(project), None, Some("needle"), false, None, 10).unwrap();
+        assert_eq!(page.threads.len(), 1);
+        assert_eq!(page.threads[0].thread.id, root.id);
+        let page = store.search_thread_history(Some(project), None, None, false, None, 10).unwrap();
+        assert!(page.threads.iter().all(|hit| hit.thread.subagent.is_none()));
     }
 
     #[test]

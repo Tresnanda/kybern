@@ -237,6 +237,15 @@ pub struct ThreadsListParams {
     pub project_id: Option<ProjectId>,
     #[serde(default)]
     pub include_archived: bool,
+    /// Also return read-only subagent threads (`Thread::subagent`). They are
+    /// left out by default so clients that predate them never show one as a
+    /// normal thread.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_subagents: bool,
+    /// Return only the direct subagent children of this thread. Implies
+    /// `include_subagents`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsListResult {
@@ -964,9 +973,14 @@ pub struct TasksListResult {
 }
 method!(TasksList, "tasks.list", Some(Scope::OrchestrationRead), TasksListParams, TasksListResult);
 
+/// Stop or background one provider-owned task. `thread_id` may also be a
+/// subagent thread (`Thread::subagent`): the daemon then acts on that
+/// subagent's own task through its root session and ignores `task_id`, so
+/// clients can pass an empty string.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskControlParams {
     pub thread_id: ThreadId,
+    #[serde(default)]
     pub task_id: String,
 }
 method!(TaskStop, "tasks.stop", Some(Scope::OrchestrationOperate), TaskControlParams, RuntimeTask);

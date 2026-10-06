@@ -648,7 +648,10 @@ enum ApprovalKind {
 enum ChildNotificationRoute {
     /// Fold the notification into the child's compact runtime-task lifecycle.
     Activity,
-    /// Child prose/output is deliberately kept out of the root transcript.
+    /// Child prose and command output: forwarded to the subagent's own thread,
+    /// never to the root transcript.
+    Forward,
+    /// Child-owned metadata nothing consumes.
     Drop,
     /// The method is not child-owned; let the normal root handler inspect it.
     Root,
@@ -667,9 +670,8 @@ fn child_notification_route(method: &str) -> ChildNotificationRoute {
         "item/agentMessage/delta"
         | "item/reasoning/summaryTextDelta"
         | "item/reasoning/textDelta"
-        | "item/commandExecution/outputDelta"
-        | "turn/plan/updated"
-        | "thread/name/updated" => ChildNotificationRoute::Drop,
+        | "item/commandExecution/outputDelta" => ChildNotificationRoute::Forward,
+        "turn/plan/updated" | "thread/name/updated" => ChildNotificationRoute::Drop,
         _ => ChildNotificationRoute::Root,
     }
 }
@@ -1077,6 +1079,8 @@ impl CodexSession {
                     capabilities: Some(RuntimeTaskCapabilities { stop: true, background: false }),
                 }))
                 .await;
+                // The subagent's own messages and tool calls go to its thread.
+                self.handle_item_for(Some(thread_id), item, method == "item/completed").await;
             }
             "thread/tokenUsage/updated" => {
                 let usage = p.pointer("/tokenUsage/total").map(parse_usage);
@@ -1202,6 +1206,10 @@ impl CodexSession {
             match child_notification_route(method) {
                 ChildNotificationRoute::Activity => {
                     self.handle_subagent_notification(thread_id, method, p).await;
+                    return;
+                }
+                ChildNotificationRoute::Forward => {
+                    self.forward_child_delta(thread_id, method, p).await;
                     return;
                 }
                 ChildNotificationRoute::Drop => return,
@@ -1350,12 +1358,56 @@ impl CodexSession {
     }
 
     async fn handle_item(&self, item: &Value, completed: bool) {
+        self.handle_item_for(None, item, completed).await;
+    }
+
+    /// Emit an item event for the root, or for the subagent thread `owner`
+    /// when the item belongs to one.
+    async fn emit_for(&self, owner: Option<&str>, event: DriverEvent) {
+        match owner {
+            Some(task_id) => self.emit(DriverEvent::SubagentOnly { task_id: task_id.to_string(), event: Box::new(event) }).await,
+            None => self.emit(event).await,
+        }
+    }
+
+    /// Streamed text, reasoning and command output of a subagent.
+    async fn forward_child_delta(&self, thread_id: &str, method: &str, p: &Value) {
+        let (Some(id), Some(delta)) = (p.get("itemId").and_then(Value::as_str), p.get("delta").and_then(Value::as_str)) else { return };
+        let (message_id, delta) = (id.to_string(), delta.to_string());
+        let event = match method {
+            "item/agentMessage/delta" => DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta },
+            "item/commandExecution/outputDelta" => DriverEvent::ToolOutputDelta { tool_call_id: message_id, delta },
+            _ => DriverEvent::ThinkingDelta { message_id, origin: EventOrigin::Root, delta },
+        };
+        self.emit_for(Some(thread_id), event).await;
+    }
+
+    /// Fold one thread item into driver events. `owner` is the subagent thread
+    /// the item belongs to; its content then goes to that subagent's thread
+    /// only, and runtime-task side effects are skipped.
+    async fn handle_item_for(&self, owner: Option<&str>, item: &Value, completed: bool) {
         let ty = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let id = item.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
         match ty {
+            "userMessage" => {
+                // A subagent's first input is the prompt it was launched with.
+                if let Some(task_id) = owner {
+                    let prompt = item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .map(|parts| {
+                            parts.iter().filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
+                        })
+                        .unwrap_or_default();
+                    if !prompt.trim().is_empty() {
+                        self.emit(DriverEvent::SubagentPrompt { task_id: task_id.to_string(), prompt }).await;
+                    }
+                }
+            }
             "agentMessage" => {
                 if completed {
-                    if item.get("delivery").and_then(Value::as_str) == Some("async")
+                    if owner.is_none()
+                        && item.get("delivery").and_then(Value::as_str) == Some("async")
                         && let Some(questions) = item
                             .get("questions")
                             .and_then(|v| serde_json::from_value::<Vec<kybern_protocol::AsyncQuestion>>(v.clone()).ok())
@@ -1365,12 +1417,16 @@ impl CodexSession {
                         self.emit(DriverEvent::AsyncQuestions(kybern_protocol::AsyncQuestionRequest { id: id.clone(), questions })).await;
                     }
                     let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
-                    self.emit(DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None }).await;
+                    self.emit_for(owner, DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None })
+                        .await;
                 }
             }
             "reasoning" => {
                 if completed {
-                    self.emit(DriverEvent::ThinkingCompleted { message_id: id.clone(), origin: EventOrigin::Root }).await;
+                    self.emit_for(owner, DriverEvent::ThinkingCompleted { message_id: id.clone(), origin: EventOrigin::Root }).await;
+                    if owner.is_some() {
+                        return;
+                    }
                     let summary = item
                         .get("summary")
                         .and_then(|s| s.as_array())
@@ -1389,22 +1445,26 @@ impl CodexSession {
             }
             "commandExecution" => {
                 if !completed {
-                    self.emit(DriverEvent::ToolStarted(ToolCall {
-                        id,
-                        name: "shell".into(),
-                        input: json!({ "command": item.get("command"), "cwd": item.get("cwd"), "actions": item.get("commandActions") }),
-                        parent_id: None,
-                    }))
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolStarted(ToolCall {
+                            id,
+                            name: "shell".into(),
+                            input: json!({ "command": item.get("command"), "cwd": item.get("cwd"), "actions": item.get("commandActions") }),
+                            parent_id: None,
+                        }),
+                    )
                     .await;
                 } else {
                     let status = item.get("status").and_then(|s| s.as_str()).unwrap_or("");
-                    self.emit(DriverEvent::ToolCompleted {
+                    self.emit_for(owner, DriverEvent::ToolCompleted {
                         tool_call_id: id.clone(),
                         output: json!({ "content": item.get("aggregatedOutput"), "exit_code": item.get("exitCode"), "status": status, "duration_ms": item.get("durationMs") }),
                         is_error: matches!(status, "failed" | "declined"),
                     })
                     .await;
                     if status == "inProgress"
+                        && owner.is_none()
                         && let Some(process_id) = item.get("processId").and_then(Value::as_str)
                     {
                         let stats = RuntimeTaskStats { duration_ms: item.get("durationMs").and_then(Value::as_u64), ..Default::default() };
@@ -1426,20 +1486,26 @@ impl CodexSession {
                 let changes = item.get("changes").cloned().unwrap_or(Value::Array(vec![]));
                 if !completed {
                     self.state.lock().await.file_changes.insert(id.clone(), changes.clone());
-                    self.emit(DriverEvent::ToolStarted(ToolCall {
-                        id,
-                        name: "apply_patch".into(),
-                        input: json!({ "changes": changes }),
-                        parent_id: None,
-                    }))
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolStarted(ToolCall {
+                            id,
+                            name: "apply_patch".into(),
+                            input: json!({ "changes": changes }),
+                            parent_id: None,
+                        }),
+                    )
                     .await;
                 } else {
                     let status = item.get("status").and_then(|s| s.as_str()).unwrap_or("");
-                    self.emit(DriverEvent::ToolCompleted {
-                        tool_call_id: id,
-                        output: json!({ "status": status, "changes": changes }),
-                        is_error: matches!(status, "failed" | "declined"),
-                    })
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolCompleted {
+                            tool_call_id: id,
+                            output: json!({ "status": status, "changes": changes }),
+                            is_error: matches!(status, "failed" | "declined"),
+                        },
+                    )
                     .await;
                 }
             }
@@ -1450,62 +1516,77 @@ impl CodexSession {
                     item.get("tool").and_then(|s| s.as_str()).unwrap_or("")
                 );
                 if !completed {
-                    self.emit(DriverEvent::ToolStarted(ToolCall {
-                        id,
-                        name,
-                        input: item.get("arguments").cloned().unwrap_or(Value::Null),
-                        parent_id: None,
-                    }))
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolStarted(ToolCall {
+                            id,
+                            name,
+                            input: item.get("arguments").cloned().unwrap_or(Value::Null),
+                            parent_id: None,
+                        }),
+                    )
                     .await;
                 } else {
                     let status = item.get("status").and_then(|s| s.as_str()).unwrap_or("");
-                    self.emit(DriverEvent::ToolCompleted {
-                        tool_call_id: id,
-                        output: json!({ "result": item.get("result"), "error": item.get("error"), "status": status }),
-                        is_error: status == "failed" || !item.get("error").is_none_or(Value::is_null),
-                    })
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolCompleted {
+                            tool_call_id: id,
+                            output: json!({ "result": item.get("result"), "error": item.get("error"), "status": status }),
+                            is_error: status == "failed" || !item.get("error").is_none_or(Value::is_null),
+                        },
+                    )
                     .await;
                 }
             }
             "webSearch" => {
                 if !completed {
-                    self.emit(DriverEvent::ToolStarted(ToolCall {
-                        id,
-                        name: "web_search".into(),
-                        input: json!({ "query": item.get("query"), "action": item.get("action") }),
-                        parent_id: None,
-                    }))
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolStarted(ToolCall {
+                            id,
+                            name: "web_search".into(),
+                            input: json!({ "query": item.get("query"), "action": item.get("action") }),
+                            parent_id: None,
+                        }),
+                    )
                     .await;
                 } else {
-                    self.emit(DriverEvent::ToolCompleted {
-                        tool_call_id: id,
-                        output: json!({ "results": item.get("results") }),
-                        is_error: false,
-                    })
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolCompleted { tool_call_id: id, output: json!({ "results": item.get("results") }), is_error: false },
+                    )
                     .await;
                 }
             }
             "dynamicToolCall" => {
                 let name = item.get("tool").and_then(Value::as_str).unwrap_or("dynamic_tool").to_string();
                 if !completed {
-                    self.emit(DriverEvent::ToolStarted(ToolCall {
-                        id,
-                        name,
-                        input: item.get("arguments").cloned().unwrap_or(Value::Null),
-                        parent_id: None,
-                    }))
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolStarted(ToolCall {
+                            id,
+                            name,
+                            input: item.get("arguments").cloned().unwrap_or(Value::Null),
+                            parent_id: None,
+                        }),
+                    )
                     .await;
                 } else {
                     let status = item.get("status").and_then(Value::as_str).unwrap_or("");
                     let is_error = status == "failed" || item.get("success").and_then(Value::as_bool) == Some(false);
-                    self.emit(DriverEvent::ToolCompleted { tool_call_id: id, output: item.clone(), is_error }).await;
+                    self.emit_for(owner, DriverEvent::ToolCompleted { tool_call_id: id, output: item.clone(), is_error }).await;
                 }
             }
             "imageView" | "imageGeneration" => {
                 if !completed {
-                    self.emit(DriverEvent::ToolStarted(ToolCall { id, name: ty.to_string(), input: item.clone(), parent_id: None })).await;
+                    self.emit_for(
+                        owner,
+                        DriverEvent::ToolStarted(ToolCall { id, name: ty.to_string(), input: item.clone(), parent_id: None }),
+                    )
+                    .await;
                 } else {
-                    self.emit(DriverEvent::ToolCompleted { tool_call_id: id, output: item.clone(), is_error: false }).await;
+                    self.emit_for(owner, DriverEvent::ToolCompleted { tool_call_id: id, output: item.clone(), is_error: false }).await;
                 }
             }
             "collabAgentToolCall" => {
@@ -1517,6 +1598,14 @@ impl CodexSession {
                     .filter_map(Value::as_str)
                     .map(str::to_string)
                     .collect::<Vec<_>>();
+                // The spawn call carries the prompt each new subagent starts with.
+                if item.get("tool").and_then(Value::as_str) == Some("spawnAgent")
+                    && let Some(prompt) = item.get("prompt").and_then(Value::as_str).filter(|prompt| !prompt.trim().is_empty())
+                {
+                    for thread_id in &receiver_ids {
+                        self.emit(DriverEvent::SubagentPrompt { task_id: thread_id.clone(), prompt: prompt.to_string() }).await;
+                    }
+                }
                 for thread_id in receiver_ids {
                     self.ensure_subagent(&thread_id).await;
                 }
@@ -2282,9 +2371,10 @@ fi
         assert_eq!(child_notification_route("item/started"), ChildNotificationRoute::Activity);
         assert_eq!(child_notification_route("error"), ChildNotificationRoute::Activity);
 
-        assert_eq!(child_notification_route("item/agentMessage/delta"), ChildNotificationRoute::Drop);
-        assert_eq!(child_notification_route("item/reasoning/textDelta"), ChildNotificationRoute::Drop);
-        assert_eq!(child_notification_route("item/commandExecution/outputDelta"), ChildNotificationRoute::Drop);
+        assert_eq!(child_notification_route("item/agentMessage/delta"), ChildNotificationRoute::Forward);
+        assert_eq!(child_notification_route("item/reasoning/textDelta"), ChildNotificationRoute::Forward);
+        assert_eq!(child_notification_route("item/commandExecution/outputDelta"), ChildNotificationRoute::Forward);
+        assert_eq!(child_notification_route("turn/plan/updated"), ChildNotificationRoute::Drop);
 
         assert_eq!(child_notification_route("serverRequest/resolved"), ChildNotificationRoute::Root);
         assert_eq!(child_notification_route("future/method"), ChildNotificationRoute::Root);
@@ -2534,6 +2624,105 @@ wait
         assert!(child_started, "real child activity must still be delivered");
         assert_eq!(root_prose, "root prose", "early root prose must survive binding");
         assert!(!session.state.lock().await.subagents.contains_key("root"));
+        child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn subagent_items_and_deltas_are_forwarded_to_the_subagent_only() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(64);
+        let session = Arc::new(CodexSession {
+            child: child.clone(),
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(State {
+                manual_compaction: false,
+                deferred_notifications: Vec::new(),
+                thread_id: Some("root".into()),
+                turn_id: None,
+                mode: PermissionMode::Supervised,
+                model: None,
+                effort: None,
+                cwd: PathBuf::from("/tmp"),
+                last_total_tokens: None,
+                message_ids: HashMap::new(),
+                file_changes: HashMap::new(),
+                subagents: HashMap::new(),
+                background_processes: HashMap::new(),
+                stopping_processes: HashSet::new(),
+            }),
+            turn_usage: Mutex::new(None),
+            bridge: None,
+            closed: AtomicBool::new(false),
+        });
+        session
+            .handle_notification(
+                "thread/started",
+                &json!({"thread":{"id":"kid", "source":{"subAgent":{"thread_spawn":{"parent_thread_id":"root", "agent_role":"worker"}}}}}),
+            )
+            .await;
+        let kid = |method: &str, params: Value| (method.to_string(), params);
+        let notifications = [
+            kid(
+                "item/started",
+                json!({"threadId":"kid", "item":{"type":"userMessage", "id":"u1", "content":[{"type":"text","text":"Check the diff"}]}}),
+            ),
+            kid(
+                "item/started",
+                json!({"threadId":"kid", "item":{"type":"commandExecution", "id":"cmd", "command":"git diff", "cwd":"/tmp"}}),
+            ),
+            kid("item/commandExecution/outputDelta", json!({"threadId":"kid", "itemId":"cmd", "delta":"+x"})),
+            kid(
+                "item/completed",
+                json!({"threadId":"kid", "item":{"type":"commandExecution", "id":"cmd", "status":"completed", "aggregatedOutput":"+x", "exitCode":0}}),
+            ),
+            kid("item/reasoning/textDelta", json!({"threadId":"kid", "itemId":"r", "delta":"thinking"})),
+            kid("item/agentMessage/delta", json!({"threadId":"kid", "itemId":"m", "delta":"All"})),
+            kid("item/completed", json!({"threadId":"kid", "item":{"type":"agentMessage", "id":"m", "text":"All good"}})),
+        ];
+        for (method, params) in &notifications {
+            session.handle_notification(method, params).await;
+        }
+        let mut forwarded = Vec::new();
+        let mut leaked_to_root = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                DriverEvent::SubagentOnly { task_id, event } => {
+                    assert_eq!(task_id, "kid");
+                    forwarded.push(*event);
+                }
+                DriverEvent::SubagentPrompt { task_id, prompt } => {
+                    assert_eq!((task_id.as_str(), prompt.as_str()), ("kid", "Check the diff"));
+                    forwarded.push(DriverEvent::SubagentPrompt { task_id, prompt });
+                }
+                DriverEvent::TextDelta { .. }
+                | DriverEvent::ThinkingDelta { .. }
+                | DriverEvent::MessageCompleted { .. }
+                | DriverEvent::ToolStarted(_)
+                | DriverEvent::ToolCompleted { .. }
+                | DriverEvent::ToolOutputDelta { .. } => leaked_to_root = true,
+                _ => {}
+            }
+        }
+        assert!(!leaked_to_root, "a subagent's content never reaches the root as a bare event");
+        let shape: Vec<&str> = forwarded
+            .iter()
+            .map(|event| match event {
+                DriverEvent::SubagentPrompt { .. } => "prompt",
+                DriverEvent::ToolStarted(call) if call.name == "shell" && call.parent_id.is_none() => "tool",
+                DriverEvent::ToolOutputDelta { .. } => "output",
+                DriverEvent::ToolCompleted { .. } => "done",
+                DriverEvent::ThinkingDelta { .. } => "thinking",
+                DriverEvent::TextDelta { delta, .. } if delta == "All" => "text",
+                DriverEvent::MessageCompleted { text, .. } if text == "All good" => "message",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(shape, ["prompt", "tool", "output", "done", "thinking", "text", "message"]);
         child.kill().await;
     }
 

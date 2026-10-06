@@ -266,6 +266,10 @@ pub enum DriverEvent {
         session_id: String,
         model: Option<String>,
     },
+    /// Text of an assistant message. A non-root `origin` (its `task_id` may be
+    /// the runtime task id, the provider thread id or the launching tool call
+    /// id) marks a subagent's own prose: the daemon routes it to that
+    /// subagent's thread and never to the parent transcript.
     TextDelta {
         message_id: String,
         origin: EventOrigin,
@@ -305,6 +309,28 @@ pub enum DriverEvent {
         tool_call_id: String,
         output: Value,
         is_error: bool,
+    },
+    /// The prompt a native subagent was launched with. Sent before or right
+    /// after its `RuntimeTaskStarted`; it becomes the first message of the
+    /// subagent's own thread. `task_id` is the runtime task id.
+    SubagentPrompt {
+        task_id: String,
+        prompt: String,
+    },
+    /// An item that belongs only to a subagent's own conversation: the daemon
+    /// records it in the subagent's thread and nowhere in the parent's log.
+    /// `task_id` is the runtime task id, the provider thread id, or the
+    /// launching tool call id. The inner event is a `TextDelta`,
+    /// `ThinkingDelta`, `ThinkingCompleted`, `MessageCompleted`, `ToolStarted`,
+    /// `ToolOutputDelta` or `ToolCompleted`; its origin and tool `parent_id`
+    /// are ignored. Drivers use it for harnesses whose child tool calls were
+    /// never part of the parent transcript (Codex, OpenCode). Harnesses whose
+    /// child tool calls already nest under the launch row (Claude, Cursor)
+    /// keep sending `ToolStarted` with `parent_id` and origin-tagged text
+    /// instead, and the daemon mirrors those into the subagent's thread.
+    SubagentOnly {
+        task_id: String,
+        event: Box<DriverEvent>,
     },
     RuntimeTaskStarted(DriverRuntimeTask),
     /// A provider-stable task began another unit of work after previously
