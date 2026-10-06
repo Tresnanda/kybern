@@ -1,0 +1,103 @@
+/* Subagent surfaces: the group row in a parent transcript, the composer strip, the
+   subagent page (divider, prompt, end row, read-only bar) and the sidebar rows.
+   Tokens and motion come from kit.css and motion.css; this adds only what they lack. */
+
+/* Provider disc in the avatar stack. The ring is the transcript surface, so overlapped
+   discs read as separate marks. */
+.sa-avatar {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 9999px;
+  background: #f3f3f3;
+  box-shadow: 0 0 0 2px var(--background), inset 0 0 0 0.5px var(--color-border-heavy);
+}
+.dark .sa-avatar {
+  background: var(--color-background-control-opaque);
+}
+.sa-avatar--single {
+  width: 20px;
+  height: 20px;
+}
+
+/* Opening prompt: six lines, then a fade. The mask is the only effect; no extra layer. */
+.sa-prompt-clamp {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent);
+}
+
+/* A finished subagent leaves the sidebar: it holds its check, then rises 4px, fades and
+   collapses over 200ms. Height goes through grid rows so the rows below slide up with it. */
+.sa-side-row {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 200ms var(--ease-out),
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
+}
+.sa-side-row > * {
+  min-height: 0;
+}
+.sa-side-row[data-leaving="true"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+/* The composer strip leaves once nothing is working and the turn has ended. */
+.sa-strip-leave {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
+  pointer-events: none;
+}
+
+/* Bar buttons that disappear when the subagent settles fade with a 2px blur. */
+.sa-bar-action {
+  animation: sa-bar-action-in 150ms var(--ease-out) both;
+}
+@keyframes sa-bar-action-in {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .sa-secondary {
+    color: color-mix(in srgb, var(--color-text-foreground) 62%, transparent) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sa-side-row,
+  .sa-strip-leave {
+    transition-property: opacity;
+    transition-duration: 120ms;
+  }
+  .sa-side-row[data-leaving="true"],
+  .sa-strip-leave {
+    transform: none;
+  }
+  .sa-bar-action {
+    animation-name: sa-bar-action-fade;
+  }
+  @keyframes sa-bar-action-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

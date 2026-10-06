@@ -39,7 +39,7 @@ import {
   getChatTranscriptTextStyle,
 } from "@/components/kit/chat/chatTypography"
 import { calendarDateKey, calendarDateLabel, clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
-import { isImageGenerationTool, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
+import { isImageGenerationTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel, type MessageScrollerController } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
@@ -47,9 +47,14 @@ import { ToolResultText } from "@/components/kybern/ToolResultText"
 import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
+import { chunkKey, chunkWork, isAgentLaunchBlock, isSubagentLaunchBlock, type WorkChunk } from "@/lib/workChunks"
+import { SubagentGroupRow, SubagentLaunchRow, type LaunchBlock } from "./subagents/SubagentRows"
+import { SubagentDivider, SubagentEndRow } from "./subagents/SubagentPage"
+import { subagentThreadPhase } from "../../../../packages/kybern-client/src/subagents.ts"
 import { TranscriptStateRoot } from "@/components/kybern/TranscriptStateScope"
 import {
   ArrowDownIcon,
+  BackToParentIcon,
   CheckmarkSquare04Icon,
   BrainIcon,
   ChangesIcon,
@@ -98,7 +103,6 @@ const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?
 const turnTimestamp = (group: TurnGroup) => group.user?.at ?? group.work[0]?.at ?? group.end?.at ?? ""
 const blockKey = (block: Block) => block.id
 const estimateWorkSize = () => 32
-const chunkKey = (chunk: WorkChunk) => chunk.kind === "single" ? chunk.block.id : `group:${chunk.blocks[0]!.id}`
 
 type ToolBlock = Extract<Block, { kind: "tool" }>
 type AgentActivityTarget =
@@ -156,10 +160,6 @@ function runtimeTaskStatusLabel(task: RuntimeTask): string {
   if (task.status === "failed") return "Failed"
   if (task.status === "stopped") return "Stopped"
   return "Interrupted"
-}
-
-function isAgentLaunchBlock(block: ToolBlock, task?: RuntimeTask): boolean {
-  return task?.kind === "agent" || isAgentLaunchTool(block.call)
 }
 
 function settledWorkPresentation(blocks: readonly Block[], tasks: readonly RuntimeTask[]): SettledWorkPresentation {
@@ -264,6 +264,11 @@ export function Transcript({
     thread?.coordinator_project_id ? s.projects[thread.project_id]?.name : undefined
   )
   const connected = useStore((s) => s.connection.state === "open")
+  const isSubagent = !!thread?.subagent
+  const subagentPhase = thread?.subagent ? subagentThreadPhase(thread) : null
+  const promptParentTitle = useStore((s) => (thread?.subagent && thread.parent_thread_id ? s.threads[thread.parent_thread_id]?.title || "Untitled" : null))
+  // Stable so settled turns that receive it stay memoized.
+  const subagentPrompt = useMemo(() => (isSubagent ? { parentTitle: promptParentTitle ?? "its parent" } : undefined), [isSubagent, promptParentTitle])
   const blocks = state?.blocks
   const groupTurns = useMemo(() => createTurnGrouper(), [])
   const groups = useMemo(() => groupTurns(blocks ?? []), [blocks, groupTurns])
@@ -461,7 +466,14 @@ export function Transcript({
           viewportProps={{ "data-chat-scroll-container": "" } as Record<string, unknown>}
           contentProps={{ style: { paddingBottom: bottomInset + 64 } }}
         >
-          {groups.length === 0 ? (
+          {groups.length === 0 && thread?.subagent ? (
+            <div className={cn(ROW, "chat-paint-host")}>
+              <SubagentDivider thread={thread} />
+              <p className="text-center font-system-ui text-sm text-muted-foreground/60">
+                {subagentPhase === "working" ? "Waiting for the first message." : "This subagent sent no messages."}
+              </p>
+            </div>
+          ) : groups.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               {thread?.coordinator_project_id ? (
                 <div className="max-w-lg px-5 text-center">
@@ -495,10 +507,14 @@ export function Transcript({
                 {(g, i) => {
                   const at = turnTimestamp(g)
                   const previousAt = i > 0 ? turnTimestamp(groups[i - 1]!) : ""
-                  const startsDay = !!at && ((!hasEarlier && i === 0) || (i > 0 && calendarDateKey(at) !== calendarDateKey(previousAt)))
+                  // A subagent's divider already says when it started, so it takes the place of the first date.
+                  const startsDay = !!at && ((!hasEarlier && i === 0 && !isSubagent) || (i > 0 && calendarDateKey(at) !== calendarDateKey(previousAt)))
+                  const last = i === groups.length - 1
                   return <div data-turn-id={turnKey(g, i)}>
+                    {thread?.subagent && i === 0 && !hasEarlier && <SubagentDivider thread={thread} className={cn(ROW, "chat-paint-host")} />}
                     {startsDay && <DateSeparator at={at} />}
-                    <Turn group={g} threadId={threadId} isLast={i === groups.length - 1} onOpenAgentActivity={openAgentActivity} />
+                    <Turn group={g} threadId={threadId} isLast={last} onOpenAgentActivity={openAgentActivity} subagentPrompt={i === 0 ? subagentPrompt : undefined} />
+                    {thread?.subagent && last && <div className={cn(ROW, "chat-paint-host")}><SubagentEndRow thread={thread} /></div>}
                   </div>
                 }}
               </VirtualRows>
@@ -664,7 +680,7 @@ function GeneratedImageOutputLease({ threadId, block }: { threadId: ThreadId; bl
   return null
 }
 
-const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity }) {
+const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, subagentPrompt }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; onOpenAgentActivity: OpenAgentActivity; subagentPrompt?: { parentTitle: string } }) {
   const imageTools = useMemo(() => group.work.filter((block): block is ToolBlock => block.kind === "tool" && block.origin.kind === "root" && isImageGenerationTool(block.call)), [group.work])
   const deliveredImages = useMemo(() => {
     if (group.running) return []
@@ -718,7 +734,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
     <>
       {group.user && (
         <div className={cn(ROW, "chat-paint-host", group.running ? "pb-5" : "pb-4")} data-timeline-row-kind="message" data-message-role="user" data-slot="message" data-from="user">
-          <UserBubble message={group.user.message} at={group.user.at} />
+          <UserBubble message={group.user.message} at={group.user.at} attribution={subagentPrompt ? `Prompt from ${subagentPrompt.parentTitle}` : undefined} clampLines={subagentPrompt ? 6 : undefined} />
         </div>
       )}
 
@@ -997,7 +1013,10 @@ function mentionToken(part: Extract<ContentPart, { type: "mention" }>): InlineTo
   return target?.kind === "computer" ? "computer" : "plugin"
 }
 
-function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: string }) {
+function UserBubble({ message, at, attribution, clampLines }: { message: { parts: ContentPart[] }; at: string; attribution?: string; clampLines?: number }) {
+  const [expanded, setExpanded] = useState(false)
+  const [overflowing, setOverflowing] = useState(false)
+  const clamped = useRef<HTMLDivElement>(null)
   // Structured parts (skills, plugin and file mentions) sit inline in the
   // message at the position they were typed, so the bubble is rebuilt as one
   // string with those tokens rendered as chips. Only attachments and images
@@ -1040,10 +1059,27 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
   const files = message.parts.filter((p) => p.type === "image" || p.type === "attachment")
   // Decided once on mount: only a bubble that was sent just now plays the send animation.
   const [fresh] = useState(() => Date.now() - new Date(at).getTime() < 3000)
+  // A clamped prompt shows "Show full prompt" only when it actually overflows its lines.
+  useLayoutEffect(() => {
+    const element = clamped.current
+    if (!clampLines || !element || expanded) return
+    const measure = () => setOverflowing(element.scrollHeight > element.clientHeight + 1)
+    measure()
+    const resize = new ResizeObserver(measure)
+    resize.observe(element)
+    return () => resize.disconnect()
+  }, [clampLines, expanded, text])
   if (files.length === 0 && tokens.size === 0 && collaborationPreview(text)) return <CollaborationMessageNotice text={text} />
+  const clampedNow = !!clampLines && !expanded && overflowing
   return (
     <div className={cn("flex w-full justify-end", fresh && "chat-message-send-enter")}>
       <div className="group relative flex max-w-[80%] flex-col items-end gap-px">
+          {attribution && (
+            <p className="sa-secondary mb-0.5 flex items-center gap-1.5 pe-0.5 font-system-ui text-xs text-foreground/48">
+              <BackToParentIcon aria-hidden className="size-3 shrink-0" />
+              <span className="min-w-0 truncate">{attribution}</span>
+            </p>
+          )}
           {files.length > 0 && (
             <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-2 self-end">
               {files.map((p, i) =>
@@ -1062,9 +1098,25 @@ function UserBubble({ message, at }: { message: { parts: ContentPart[] }; at: st
             </div>
           )}
           {text && (
-            <div data-slot="message-content" className="w-max max-w-full min-w-0 self-end rounded-[var(--radius-user-message)] border border-transparent bg-[var(--app-user-message-background)] px-3 py-1.5">
+            <div
+              ref={clamped}
+              data-slot="message-content"
+              data-clamped={clampedNow || undefined}
+              style={clampLines && !expanded ? { maxHeight: `calc(${clampLines} * 1.625em + 14px)`, fontSize: TEXT.fontSize } : undefined}
+              className={cn("w-max max-w-full min-w-0 self-end rounded-[var(--radius-user-message)] border border-transparent bg-[var(--app-user-message-background)] px-3 py-1.5", clampLines && !expanded && "overflow-hidden", clampedNow && "sa-prompt-clamp")}
+            >
               <Markdown text={text} variant="user" style={TEXT} tokens={tokens} />
             </div>
+          )}
+          {clampLines && (overflowing || expanded) && (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((value) => !value)}
+              className="sa-secondary mt-1 cursor-pointer rounded-md px-1 py-0.5 font-system-ui text-xs text-[var(--color-text-foreground-secondary)] outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+            >
+              {expanded ? "Show less" : "Show full prompt"}
+            </button>
           )}
           <div className="absolute top-full right-0 flex items-center justify-end gap-2 pt-1 pr-0.5 font-system-ui font-normal whitespace-nowrap text-muted-foreground/45" style={META}>
             <time dateTime={at} title={new Date(at).toLocaleString()} className={cn("tabular-nums", HOVER_REVEAL)}>{clockTime(at)}</time>
@@ -1204,36 +1256,6 @@ function approvalRowIcon(approval: ApprovalRequest, decision: { decision: string
 
 const TONE = "text-muted-foreground transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground"
 
-type WorkChunk = { kind: "single"; block: Block } | { kind: "tools"; blocks: ToolBlock[] }
-
-function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string, RuntimeTask>): WorkChunk[] {
-  const chunks: WorkChunk[] = []
-  let tools: ToolBlock[] = []
-  const flush = () => {
-    if (tools.length >= 2) chunks.push({ kind: "tools", blocks: tools })
-    else if (tools[0]) chunks.push({ kind: "single", block: tools[0] })
-    tools = []
-  }
-  for (const block of blocks) {
-    const linkedTask = block.kind === "tool" ? tasksByToolCall.get(block.call.id) : undefined
-    if (
-      block.kind === "tool" &&
-      block.complete &&
-      !block.isError &&
-      !isAgentLaunchBlock(block, linkedTask) &&
-      !agentItemTool(block.call.name)?.write &&
-      (!linkedTask || !isRuntimeTaskActive(linkedTask))
-    ) {
-      tools.push(block)
-    } else {
-      flush()
-      chunks.push({ kind: "single", block })
-    }
-  }
-  flush()
-  return chunks
-}
-
 /** Derive from a block list, patching the previous result when only the tail
  * block changed or one block was appended. A stream replaces one reference per
  * token; rebuilding 1,000+ entries and invalidating every mounted row for that
@@ -1337,6 +1359,8 @@ function WorkRows({
   return <VirtualRows items={chunks} getKey={chunkKey} estimateSize={estimateWorkSize}>{(chunk) =>
     chunk.kind === "single" ? (
       renderBlock(chunk.block)
+    ) : chunk.kind === "subagents" ? (
+      <SubagentGroupRow blocks={chunk.blocks} tasksByToolCall={tasksByToolCall} onOpenLegacy={onOpenAgentActivity} />
     ) : (
       <ToolGroupRow
         key={chunk.blocks[0]!.id}
@@ -1429,14 +1453,23 @@ const WorkRow = memo(function WorkRow({
       // A message sent mid-turn sits between work rows; give it the same breathing
       // room as a turn-opening bubble, including space for its hover timestamp.
       return <div className="pt-3 pb-4"><UserBubble message={block.message} at={block.at} /></div>
-    case "tool":
-      return <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
+    case "tool": {
+      const row = <ToolRow block={block} task={task} tasksByToolCall={tasksByToolCall} childrenByParent={childrenByParent} onOpenAgentActivity={onOpenAgentActivity} />
+      // A subagent launch opens its own thread; the tool row stays for history with no child thread.
+      return isSubagentLaunchBlock(block, tasksByToolCall)
+        ? <SubagentLaunchRow block={block as LaunchBlock} tasksByToolCall={tasksByToolCall} onOpenLegacy={onOpenAgentActivity} legacy={row} />
+        : row
+    }
     case "image":
       return <ResponseImage source={block.source} />
     case "assistant":
       return <AssistantWorkRow block={block} tone={tone} live={live} thinkingLive={thinking} />
-    case "runtime_task":
-      return <RuntimeTaskTranscriptRow task={block.task} onOpenAgentActivity={onOpenAgentActivity} />
+    case "runtime_task": {
+      const row = <RuntimeTaskTranscriptRow task={block.task} onOpenAgentActivity={onOpenAgentActivity} />
+      return block.task.kind === "agent"
+        ? <SubagentLaunchRow block={block} tasksByToolCall={tasksByToolCall} onOpenLegacy={onOpenAgentActivity} legacy={row} />
+        : row
+    }
     case "approval":
       {
         const text = approvalRowText(block.approval, block.decision)
