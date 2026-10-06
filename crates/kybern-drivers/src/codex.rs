@@ -511,8 +511,8 @@ impl AgentDriver for CodexDriver {
                     })
                     .collect(),
             );
-            if let Some(instructions) = bridge.coordinator_instructions.as_ref() {
-                params["developerInstructions"] = Value::String(instructions.clone());
+            if let Some(instructions) = bridge.provider_instructions() {
+                params["developerInstructions"] = Value::String(instructions);
             }
         }
         if let Some(m) = &config.model {
@@ -2028,6 +2028,7 @@ fi
             endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
             authorization: Some("session-capability".into()),
             coordinator_instructions: None,
+            guide: None,
             tools: vec![NativeToolDefinition {
                 name: "kybern_collaboration_read".into(),
                 description: "Read collaboration state".into(),
@@ -2082,6 +2083,7 @@ fi
                 endpoint: None,
                 authorization: None,
                 coordinator_instructions: None,
+                guide: None,
                 tools: vec![NativeToolDefinition {
                     name: "kybern_collaboration_read".into(),
                     description: "Read collaboration state".into(),
@@ -2300,11 +2302,16 @@ mod startup_cleanup_tests {
     async fn provider_session_attach_scopes_tools_and_coordinator_instructions() {
         use crate::{NativeToolDefinition, NativeToolRestrictions};
 
-        for (resume, fork, coordinator, method) in [
-            (None, false, true, "thread/start"),
-            (Some("saved"), false, true, "thread/resume"),
-            (Some("saved"), true, true, "thread/fork"),
-            (Some("ordinary"), false, false, "thread/resume"),
+        for (resume, fork, coordinator, guide, method) in [
+            (None, false, true, false, "thread/start"),
+            (Some("saved"), false, true, false, "thread/resume"),
+            (Some("saved"), true, true, false, "thread/fork"),
+            (Some("ordinary"), false, false, false, "thread/resume"),
+            // The guide reaches ordinary threads on every attach, and precedes a coordinator role.
+            (None, false, false, true, "thread/start"),
+            (Some("saved"), false, false, true, "thread/resume"),
+            (Some("saved"), true, false, true, "thread/fork"),
+            (Some("saved"), false, true, true, "thread/resume"),
         ] {
             let root = tempfile::tempdir().unwrap();
             let binary = root.path().join("codex-fixture");
@@ -2332,6 +2339,7 @@ wait
                 endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
                 authorization: Some("session-capability".into()),
                 coordinator_instructions: coordinator.then(|| "COORDINATOR ROLE SENTINEL".into()),
+                guide: guide.then(|| "KYBERN GUIDE SENTINEL".into()),
                 tools: vec![NativeToolDefinition {
                     name: "kybern_collaboration_spawn".into(),
                     description: "Delegate bounded work".into(),
@@ -2359,9 +2367,12 @@ wait
             assert_eq!(lines.len(), 3);
             assert_eq!(lines[2]["method"], method);
             assert!(lines.iter().all(|line| line["method"] != "config/read"));
-            assert_eq!(lines[2]["params"].get("developerInstructions").is_some(), coordinator);
-            if coordinator {
-                assert_eq!(lines[2]["params"]["developerInstructions"], "COORDINATOR ROLE SENTINEL");
+            assert_eq!(lines[2]["params"].get("developerInstructions").is_some(), coordinator || guide);
+            match (guide, coordinator) {
+                (true, true) => assert_eq!(lines[2]["params"]["developerInstructions"], "KYBERN GUIDE SENTINEL\nCOORDINATOR ROLE SENTINEL"),
+                (true, false) => assert_eq!(lines[2]["params"]["developerInstructions"], "KYBERN GUIDE SENTINEL"),
+                (false, true) => assert_eq!(lines[2]["params"]["developerInstructions"], "COORDINATOR ROLE SENTINEL"),
+                (false, false) => {}
             }
             assert_eq!(lines[2]["params"]["dynamicTools"][0]["name"], "kybern_collaboration_spawn");
             spawned.session.close().await.unwrap();

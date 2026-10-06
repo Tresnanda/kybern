@@ -425,43 +425,68 @@ impl Store {
         model: Option<&str>,
         notes: &[TaskRunNote],
     ) -> Result<TaskItem> {
+        let mut started = self.task_runs_start(&[task_id], thread_id, provider, model, notes)?;
+        Ok(started.remove(0))
+    }
+
+    /// Record one run of the same thread for every task and set each task to
+    /// running, all or nothing. A combined run is one thread with a run on each
+    /// of its tasks; the tasks then move together with that thread. Returns the
+    /// tasks as they are now, in the order given.
+    pub fn task_runs_start(
+        &self,
+        task_ids: &[TaskItemId],
+        thread_id: ThreadId,
+        provider: &ProviderInstance,
+        model: Option<&str>,
+        notes: &[TaskRunNote],
+    ) -> Result<Vec<TaskItem>> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
-            let (_, deleted) =
-                fetch_item(&tx, task_id)?.ok_or(TaskError::NotFound("Task not found. It may have been deleted permanently."))?;
-            if deleted.is_some() {
-                return invalid("Restore this task before sending it to an agent.");
+            for task_id in task_ids {
+                let (_, deleted) =
+                    fetch_item(&tx, *task_id)?.ok_or(TaskError::NotFound("Task not found. It may have been deleted permanently."))?;
+                if deleted.is_some() {
+                    return invalid("Restore this task before sending it to an agent.");
+                }
+                let number: i64 =
+                    tx.query_row("SELECT COALESCE(MAX(number), 0) + 1 FROM task_runs WHERE task_id = ?1", [task_id.to_string()], |r| {
+                        r.get(0)
+                    })?;
+                tx.execute(
+                    "INSERT INTO task_runs(task_id, number, thread_id, provider_kind, provider_instance, model, started_at, state, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8)",
+                    params![
+                        task_id.to_string(),
+                        number,
+                        thread_id.to_string(),
+                        provider.kind.as_str(),
+                        provider.instance,
+                        model,
+                        Utc::now().to_rfc3339(),
+                        serde_json::to_string(notes)?
+                    ],
+                )?;
+                set_status(&tx, *task_id, TaskStatus::Running)?;
             }
-            let number: i64 =
-                tx.query_row("SELECT COALESCE(MAX(number), 0) + 1 FROM task_runs WHERE task_id = ?1", [task_id.to_string()], |r| r.get(0))?;
-            tx.execute(
-                "INSERT INTO task_runs(task_id, number, thread_id, provider_kind, provider_instance, model, started_at, state, notes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8)",
-                params![
-                    task_id.to_string(),
-                    number,
-                    thread_id.to_string(),
-                    provider.kind.as_str(),
-                    provider.instance,
-                    model,
-                    Utc::now().to_rfc3339(),
-                    serde_json::to_string(notes)?
-                ],
-            )?;
-            set_status(&tx, task_id, TaskStatus::Running)?;
             tx.commit()?;
-            expect_item(c, task_id)
+            task_ids.iter().map(|task_id| expect_item(c, *task_id)).collect()
         })
     }
 
-    /// The task and run number a thread belongs to, when it is a task run.
+    /// The first task and run number a thread belongs to, when it is a task run.
+    /// A combined run belongs to several tasks; see [`Store::task_runs_for_thread`].
     pub fn task_run_for_thread(&self, thread_id: ThreadId) -> Result<Option<(TaskItemId, u32)>> {
+        Ok(self.task_runs_for_thread(thread_id)?.into_iter().next())
+    }
+
+    /// Every task and run number a thread belongs to: one for a task's own run,
+    /// several for a combined run. In the order the runs were recorded.
+    pub fn task_runs_for_thread(&self, thread_id: ThreadId) -> Result<Vec<(TaskItemId, u32)>> {
         self.with(|c| {
-            c.query_row("SELECT task_id, number FROM task_runs WHERE thread_id = ?1", [thread_id.to_string()], |r| {
-                Ok((parse_uuid(r.get::<_, String>(0)?)?, r.get::<_, u32>(1)?))
-            })
-            .optional()
-            .map_err(Into::into)
+            let mut st = c.prepare("SELECT task_id, number FROM task_runs WHERE thread_id = ?1 ORDER BY rowid")?;
+            let rows = st.query_map([thread_id.to_string()], |r| Ok((parse_uuid(r.get::<_, String>(0)?)?, r.get::<_, u32>(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
     }
 
@@ -475,84 +500,105 @@ impl Store {
     }
 
     /// Apply a patch to the run of `thread_id`. Returns the task as it is now,
-    /// or `None` when the thread is not a task run or nothing changed.
+    /// or `None` when the thread is not a task run or nothing changed. A combined
+    /// run has several; this reports the first one that changed.
     pub fn task_run_patch(&self, thread_id: ThreadId, patch: TaskRunPatch) -> Result<Option<TaskItem>> {
         Ok(self.task_run_update(thread_id, patch, None)?.map(|update| update.task))
     }
 
-    /// Patch the run of `thread_id` and, in the same transaction, move its task to
-    /// `status`. Readers see the run and the task change together, never a task
-    /// that is running next to a run that already finished. The task follows only
-    /// its latest run: a run that a newer one replaced changes the task's status
-    /// no more. `None` when the thread is not a task run or nothing changed.
+    /// [`Store::task_run_updates`] for a thread with one run: the first change, if any.
     pub fn task_run_update(
         &self,
         thread_id: ThreadId,
         patch: TaskRunPatch,
         status: Option<TaskStatusChange>,
     ) -> Result<Option<TaskRunUpdate>> {
+        Ok(self.task_run_updates(thread_id, patch, status)?.into_iter().next())
+    }
+
+    /// Patch every run of `thread_id` and, in the same transaction, move each
+    /// run's task to `status`. A thread is the run of one task, or of several
+    /// when they were sent together, and all of them follow it. Readers see the
+    /// runs and tasks change together, never a task that is running next to a run
+    /// that already finished. A task follows only its latest run: a run that a
+    /// newer one replaced changes the task's status no more. Empty when the
+    /// thread is not a task run or nothing changed.
+    pub fn task_run_updates(
+        &self,
+        thread_id: ThreadId,
+        patch: TaskRunPatch,
+        status: Option<TaskStatusChange>,
+    ) -> Result<Vec<TaskRunUpdate>> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
-            let found: Option<(String, u32)> = tx
-                .query_row("SELECT task_id, number FROM task_runs WHERE thread_id = ?1", [thread_id.to_string()], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })
-                .optional()?;
-            let Some((task_id, number)) = found else { return Ok(None) };
-            let id: TaskItemId = task_id.parse()?;
-            let before = fetch_item(&tx, id)?.map(|(item, _)| item);
-            let Some(before) = before else { return Ok(None) };
-            let Some(run) = before.runs.iter().find(|run| run.number == number).cloned() else { return Ok(None) };
-            if patch.only_from.as_ref().is_some_and(|from| !from.contains(&run.state)) {
-                return Ok(None);
-            }
-            let mut next = run.clone();
-            if let Some(state) = patch.state {
-                next.state = state;
-            }
-            if let Some(activity) = patch.activity {
-                next.activity = activity;
-            }
-            if let Some(ended_at) = patch.ended_at {
-                next.ended_at = ended_at;
-            }
-            if let Some(diff) = patch.diff {
-                next.diff = diff;
-            }
-            let run_changed = next != run;
-            if run_changed {
-                tx.execute(
-                    "UPDATE task_runs SET state = ?3, activity = ?4, ended_at = ?5, diff_added = ?6, diff_removed = ?7, diff_files = ?8
-                     WHERE task_id = ?1 AND number = ?2",
-                    params![
-                        task_id,
-                        number,
-                        next.state.as_str(),
-                        next.activity,
-                        next.ended_at.map(|at| at.to_rfc3339()),
-                        next.diff.map(|diff| diff.added),
-                        next.diff.map(|diff| diff.removed),
-                        next.diff.map(|diff| diff.files),
-                    ],
-                )?;
-            }
-            let latest = before.runs.iter().map(|run| run.number).max() == Some(number);
-            let status_changed = match status {
-                Some(change)
-                    if latest
-                        && before.status != change.status
-                        && change.only_from.as_ref().is_none_or(|from| from.contains(&before.status)) =>
-                {
-                    set_status(&tx, id, change.status)?;
-                    true
-                }
-                _ => false,
+            let found: Vec<(String, u32)> = {
+                let mut st = tx.prepare("SELECT task_id, number FROM task_runs WHERE thread_id = ?1 ORDER BY rowid")?;
+                let rows = st.query_map([thread_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                rows.collect::<Result<Vec<_>, _>>()?
             };
-            if !run_changed && !status_changed {
-                return Ok(None);
+            let mut changed = Vec::new();
+            for (task_id, number) in found {
+                let id: TaskItemId = task_id.parse()?;
+                let before = fetch_item(&tx, id)?.map(|(item, _)| item);
+                let Some(before) = before else { continue };
+                let Some(run) = before.runs.iter().find(|run| run.number == number).cloned() else { continue };
+                if patch.only_from.as_ref().is_some_and(|from| !from.contains(&run.state)) {
+                    continue;
+                }
+                let mut next = run.clone();
+                if let Some(state) = patch.state {
+                    next.state = state;
+                }
+                if let Some(activity) = &patch.activity {
+                    next.activity = activity.clone();
+                }
+                if let Some(ended_at) = patch.ended_at {
+                    next.ended_at = ended_at;
+                }
+                if let Some(diff) = patch.diff {
+                    next.diff = diff;
+                }
+                let run_changed = next != run;
+                if run_changed {
+                    tx.execute(
+                        "UPDATE task_runs SET state = ?3, activity = ?4, ended_at = ?5, diff_added = ?6, diff_removed = ?7, diff_files = ?8
+                         WHERE task_id = ?1 AND number = ?2",
+                        params![
+                            task_id,
+                            number,
+                            next.state.as_str(),
+                            next.activity,
+                            next.ended_at.map(|at| at.to_rfc3339()),
+                            next.diff.map(|diff| diff.added),
+                            next.diff.map(|diff| diff.removed),
+                            next.diff.map(|diff| diff.files),
+                        ],
+                    )?;
+                }
+                let latest = before.runs.iter().map(|run| run.number).max() == Some(number);
+                let status_changed = match &status {
+                    Some(change)
+                        if latest
+                            && before.status != change.status
+                            && change.only_from.as_ref().is_none_or(|from| from.contains(&before.status)) =>
+                    {
+                        set_status(&tx, id, change.status)?;
+                        true
+                    }
+                    _ => false,
+                };
+                if run_changed || status_changed {
+                    changed.push((id, run_changed, status_changed));
+                }
+            }
+            if changed.is_empty() {
+                return Ok(Vec::new());
             }
             tx.commit()?;
-            Ok(Some(TaskRunUpdate { task: expect_item(c, id)?, run_changed, status_changed }))
+            changed
+                .into_iter()
+                .map(|(id, run_changed, status_changed)| Ok(TaskRunUpdate { task: expect_item(c, id)?, run_changed, status_changed }))
+                .collect()
         })
     }
 
@@ -1625,6 +1671,99 @@ mod tests {
         let review = TaskStatusChange { status: TaskStatus::NeedsReview, only_from: None };
         assert!(store.task_run_update(t2.id, same, Some(review)).unwrap().is_none());
         assert!(store.task_run_update(Uuid::now_v7(), TaskRunPatch::default(), None).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_combined_run_records_one_run_per_task_and_moves_them_together() {
+        let store = Store::open_in_memory().unwrap();
+        let ade = project(&store, "ade");
+        let (a, b, c) = (
+            store.task_item_create(new_task(Some(&ade), "A")).unwrap(),
+            store.task_item_create(new_task(Some(&ade), "B")).unwrap(),
+            store.task_item_create(new_task(Some(&ade), "C")).unwrap(),
+        );
+        let (shared, solo) = (thread(&store, &ade), thread(&store, &ade));
+        let provider = ProviderInstance::default_for(ProviderKind::ClaudeCode);
+
+        let started = store.task_runs_start(&[a.id, b.id], shared.id, &provider, Some("opus"), &[]).unwrap();
+        assert_eq!(
+            started.iter().map(|task| (task.id, task.status)).collect::<Vec<_>>(),
+            [(a.id, TaskStatus::Running), (b.id, TaskStatus::Running)]
+        );
+        assert!(started.iter().all(|task| task.runs.len() == 1 && task.runs[0].thread_id == shared.id && task.runs[0].number == 1));
+        assert_eq!(store.task_runs_for_thread(shared.id).unwrap(), [(a.id, 1), (b.id, 1)]);
+        assert_eq!(store.task_run_for_thread(shared.id).unwrap(), Some((a.id, 1)));
+        assert_eq!(store.task_run_thread_ids().unwrap(), [shared.id, shared.id]);
+
+        // The thread's end moves both tasks to Needs review in one step; a task the user moved stays.
+        store.task_item_update(b.id, TaskPatch { status: Some(TaskStatus::Done), ..Default::default() }).unwrap();
+        let finish = TaskRunPatch { state: Some(TaskRunState::Completed), ended_at: Some(Some(Utc::now())), ..Default::default() };
+        let review = TaskStatusChange { status: TaskStatus::NeedsReview, only_from: Some(vec![TaskStatus::Running]) };
+        let updates = store.task_run_updates(shared.id, finish, Some(review)).unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates.iter().map(|update| (update.task.id, update.status_changed)).collect::<Vec<_>>(), [(a.id, true), (b.id, false)]);
+        assert_eq!(store.task_item_get(a.id).unwrap().unwrap().status, TaskStatus::NeedsReview);
+        assert_eq!(store.task_item_get(b.id).unwrap().unwrap().status, TaskStatus::Done);
+        assert!(store.task_item_get(b.id).unwrap().unwrap().runs[0].ended_at.is_some(), "the run still ended");
+
+        // A new turn reopens every task of the thread.
+        let reopen = TaskRunPatch { state: Some(TaskRunState::Running), ended_at: Some(None), ..Default::default() };
+        let running = TaskStatusChange { status: TaskStatus::Running, only_from: None };
+        let updates = store.task_run_updates(shared.id, reopen, Some(running)).unwrap();
+        assert_eq!(updates.iter().map(|update| update.task.status).collect::<Vec<_>>(), [TaskStatus::Running, TaskStatus::Running]);
+
+        // A task that later runs alone follows only that newer run; the shared thread no longer moves it.
+        store.task_run_start(a.id, solo.id, &provider, None, &[]).unwrap();
+        store
+            .task_run_updates(
+                solo.id,
+                TaskRunPatch { state: Some(TaskRunState::Completed), ..Default::default() },
+                Some(TaskStatusChange { status: TaskStatus::NeedsReview, only_from: None }),
+            )
+            .unwrap();
+        let end = TaskRunPatch { state: Some(TaskRunState::Completed), ..Default::default() };
+        let updates =
+            store.task_run_updates(shared.id, end, Some(TaskStatusChange { status: TaskStatus::Running, only_from: None })).unwrap();
+        let a_after = store.task_item_get(a.id).unwrap().unwrap();
+        assert_eq!(a_after.status, TaskStatus::NeedsReview, "an older run does not change the task's status");
+        assert!(updates.iter().any(|update| update.task.id == a.id && !update.status_changed));
+
+        // All-or-nothing: a missing task leaves no run behind, and the rollback removes every run of a thread.
+        let missing = store.task_runs_start(&[c.id, Uuid::now_v7()], thread(&store, &ade).id, &provider, None, &[]);
+        assert!(missing.is_err());
+        assert!(store.task_item_get(c.id).unwrap().unwrap().runs.is_empty());
+        assert_eq!(store.task_item_get(c.id).unwrap().unwrap().status, TaskStatus::Inbox);
+        store.task_run_delete(shared.id).unwrap();
+        assert!(store.task_runs_for_thread(shared.id).unwrap().is_empty());
+        assert_eq!(store.task_item_get(b.id).unwrap().unwrap().runs.len(), 0);
+    }
+
+    #[test]
+    fn migration_16_lets_a_thread_hold_several_runs_and_keeps_existing_ones() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate_to(&conn, 15).unwrap();
+        conn.execute_batch(
+            "INSERT INTO task_items(id, key, project_id, title, body, status, priority, rank, revision, created_at, updated_at, status_changed_at)
+               VALUES ('00000000-0000-0000-0000-0000000000b1', 'ADE-1', NULL, 'One', '', 'running', 0, 1.0, 1, '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00'),
+                      ('00000000-0000-0000-0000-0000000000b2', 'ADE-2', NULL, 'Two', '', 'todo', 0, 2.0, 1, '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00');
+             INSERT INTO task_runs(task_id, number, thread_id, provider_kind, provider_instance, model, started_at, state, notes)
+               VALUES ('00000000-0000-0000-0000-0000000000b1', 1, '00000000-0000-0000-0000-0000000000c1', 'claude-code', 'default', 'opus', '2026-09-01T00:00:00+00:00', 'running', '[]');",
+        )
+        .unwrap();
+        let shared_thread = "INSERT INTO task_runs(task_id, number, thread_id, provider_kind, provider_instance, started_at, state)
+             VALUES ('00000000-0000-0000-0000-0000000000b2', 1, '00000000-0000-0000-0000-0000000000c1', 'claude-code', 'default', '2026-09-01T00:00:00+00:00', 'running')";
+        assert!(conn.execute_batch(shared_thread).is_err(), "before the migration a thread has one run");
+
+        crate::schema::migrate(&conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), crate::schema::migration_count() as i64);
+        let kept: (String, Option<String>) =
+            conn.query_row("SELECT state, model FROM task_runs WHERE number = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(kept, ("running".to_string(), Some("opus".to_string())), "existing runs survive the rebuild");
+        conn.execute_batch(shared_thread).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM task_runs", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        // The rebuilt table keeps its cascade: deleting a task removes its runs.
+        conn.execute_batch("PRAGMA foreign_keys = ON; DELETE FROM task_items WHERE key = 'ADE-2';").unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM task_runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]

@@ -92,6 +92,8 @@ expression: scopes
   - "orchestration:operate"
 - - tasks.items.send
   - "orchestration:operate"
+- - tasks.items.send_batch
+  - "orchestration:operate"
 - - tasks.items.followup
   - "orchestration:operate"
 - - queue.add

@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use super::tasks::{NOTE_MENTION_PREFIX, TASK_MENTION_PREFIX, priority_label, status_label};
 use super::{DaemonAnswer, LiveSession, Orchestrator};
+use crate::app_tools::markdown_link;
 
 /// `tool_name` of the approval card these tools open.
 pub(crate) const APPROVAL_TOOL: &str = "kybern_notes_tasks";
@@ -271,7 +272,10 @@ impl Orchestrator {
             .note_ids
             .iter()
             .map(|id| match store.note_get(*id).ok().flatten().filter(|note| note.summary.deleted_at.is_none()) {
-                Some(note) => json!({ "id": id, "title": note.summary.title, "link": format!("{NOTE_MENTION_PREFIX}{id}") }),
+                Some(note) => json!({
+                    "id": id, "title": note.summary.title, "link": format!("{NOTE_MENTION_PREFIX}{id}"),
+                    "markdown": markdown_link(&note.summary.title, &format!("{NOTE_MENTION_PREFIX}{id}")),
+                }),
                 None => json!({ "id": id, "title": null, "unavailable": true }),
             })
             .collect();
@@ -441,7 +445,7 @@ impl Orchestrator {
             }
             Some(TaskStatus::Running) => bail!("Claim the task with kybern_task_claim to start working on it."),
             Some(TaskStatus::NeedsReview) => {
-                let run = self.inner.store.task_run_for_thread(thread.id)?.filter(|(task_id, _)| *task_id == task.id);
+                let run = self.inner.store.task_runs_for_thread(thread.id)?.into_iter().find(|(task_id, _)| *task_id == task.id);
                 let Some((_, number)) = run else {
                     bail!("Only a chat that runs {} can hand it over for review. Claim it with kybern_task_claim first.", task.key);
                 };
@@ -540,11 +544,13 @@ impl Orchestrator {
         if matches!(task.status, TaskStatus::Done | TaskStatus::Canceled) {
             bail!("The user closed {} as {}. Ask the user before working on it again.", task.key, status_label(task.status));
         }
-        if let Some((task_id, _)) = self.inner.store.task_run_for_thread(thread.id)?
-            && task_id != task.id
+        // A chat runs one task, or the several tasks it was sent with. It cannot take on another.
+        let runs = self.inner.store.task_runs_for_thread(thread.id)?;
+        if let Some((task_id, _)) = runs.first()
+            && !runs.iter().any(|(id, _)| *id == task.id)
         {
-            let other = self.inner.store.task_item_get(task_id)?.map(|task| task.key).unwrap_or_else(|| "another task".into());
-            bail!("This chat already works on {other}. A chat runs one task; start a new chat for {}.", task.key);
+            let other = self.inner.store.task_item_get(*task_id)?.map(|task| task.key).unwrap_or_else(|| "another task".into());
+            bail!("This chat already works on {other}. Start a new chat for {}.", task.key);
         }
         if let Some(run) = task.runs.last()
             && run.state.is_live()
@@ -725,7 +731,8 @@ impl Orchestrator {
                     let _locks = self.task_locks()?;
                     let store = &self.inner.store;
                     let current = store.task_item_get(task.id)?.ok_or_else(|| anyhow!("{} was deleted.", task.key))?;
-                    match store.task_run_for_thread(thread.id)? {
+                    let runs = store.task_runs_for_thread(thread.id)?;
+                    match runs.iter().find(|(task_id, _)| *task_id == current.id).copied().or_else(|| runs.first().copied()) {
                         Some((task_id, number)) if task_id == current.id => {
                             if latest_run_number(&current) != Some(number) {
                                 bail!("A newer run of {} replaced this chat. Do not claim it again.", current.key);
@@ -736,14 +743,21 @@ impl Orchestrator {
                                 ended_at: Some(None),
                                 ..Default::default()
                             };
-                            match store.task_run_update(
+                            // A combined run reopens every task it holds, so publish them all.
+                            let updates = store.task_run_updates(
                                 thread.id,
                                 patch,
                                 Some(TaskStatusChange { status: TaskStatus::Running, only_from: None }),
-                            )? {
-                                Some(update) => update.task,
-                                None => current,
+                            )?;
+                            let mut mine = None;
+                            for update in updates {
+                                if update.task.id == current.id {
+                                    mine = Some(update.task);
+                                } else {
+                                    self.publish_task(update.task);
+                                }
                             }
+                            mine.unwrap_or(current)
                         }
                         Some(_) => bail!("This chat already works on another task."),
                         None => {
@@ -768,12 +782,12 @@ impl Orchestrator {
     fn check_handover(&self, thread: &Thread, id: TaskItemId) -> Result<()> {
         let store = &self.inner.store;
         let task = store.task_item_get(id)?.ok_or_else(|| anyhow!("The task was deleted. Nothing was handed over."))?;
-        match store.task_run_for_thread(thread.id)? {
-            Some((task_id, number)) if task_id == task.id && latest_run_number(&task) == Some(number) => {}
-            Some((task_id, _)) if task_id == task.id => {
+        match store.task_runs_for_thread(thread.id)?.into_iter().find(|(task_id, _)| *task_id == task.id) {
+            Some((_, number)) if latest_run_number(&task) == Some(number) => {}
+            Some(_) => {
                 bail!("A newer run of {} replaced this chat, so it cannot hand the task over. Tell the user instead.", task.key)
             }
-            _ => bail!("Only a chat that runs {} can hand it over for review. Claim it with kybern_task_claim first.", task.key),
+            None => bail!("Only a chat that runs {} can hand it over for review. Claim it with kybern_task_claim first.", task.key),
         }
         ensure!(
             task.status == TaskStatus::Running,
@@ -965,6 +979,7 @@ fn note_row(note: &NoteSummary) -> Value {
         "revision": note.revision,
         "updated_at": note.updated_at,
         "link": format!("{NOTE_MENTION_PREFIX}{}", note.id),
+        "markdown": markdown_link(&note.title, &format!("{NOTE_MENTION_PREFIX}{}", note.id)),
     })
 }
 
@@ -990,6 +1005,7 @@ fn task_row(task: &TaskItem) -> Value {
         "criteria_total": items.len(),
         "latest_run": task.runs.last().map(|run| json!({ "thread_id": run.thread_id, "state": run.state })),
         "link": format!("{TASK_MENTION_PREFIX}{}", task.id),
+        "markdown": markdown_link(&format!("{} {}", task.key, task.title), &format!("{TASK_MENTION_PREFIX}{}", task.id)),
     })
 }
 

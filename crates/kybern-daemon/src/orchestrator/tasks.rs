@@ -16,9 +16,10 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use kybern_protocol::methods::{
-    Note, NoteId, TaskItem, TaskItemId, TaskItemSource, TaskItemsChangedNotification, TaskItemsCreateParams, TaskItemsFollowupParams,
-    TaskItemsFollowupResult, TaskItemsGetParams, TaskItemsSendParams, TaskItemsSendResult, TaskItemsUpdateParams, TaskRunDiff, TaskRunNote,
-    TaskRunState, TaskStatus,
+    Note, NoteId, TaskBatchMode, TaskBatchSkipped, TaskBatchStarted, TaskItem, TaskItemId, TaskItemSource, TaskItemsChangedNotification,
+    TaskItemsCreateParams, TaskItemsFollowupParams, TaskItemsFollowupResult, TaskItemsGetParams, TaskItemsSendBatchParams,
+    TaskItemsSendBatchResult, TaskItemsSendParams, TaskItemsSendResult, TaskItemsUpdateParams, TaskRunDiff, TaskRunNote, TaskRunState,
+    TaskStatus,
 };
 use kybern_protocol::*;
 use kybern_store::{NewTask, NoteTarget, TaskError, TaskPatch, TaskRunPatch, TaskStatusChange};
@@ -27,6 +28,10 @@ use uuid::Uuid;
 
 use super::{Orchestrator, truncate_utf8};
 
+/// The most tasks one `tasks.items.send_batch` call takes.
+const MAX_BATCH_TASKS: usize = 200;
+/// Separate runs started at the same time; the rest wait their turn.
+const SEPARATE_RUNS_AT_ONCE: usize = 4;
 /// Activity-only changes reach clients at most this often per run.
 const ACTIVITY_BROADCAST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// What the provider's copy of one attached note or task may hold, and of all of
@@ -296,23 +301,288 @@ impl Orchestrator {
         Ok(TaskItemsSendResult { task, thread_id: thread.id })
     }
 
+    // ---- sending several tasks ----
+
+    /// Send several tasks to an agent at once, as one run each or as one run for
+    /// all. A task that cannot start (it has a run in progress, was deleted, or its
+    /// run failed to start) is skipped with a reason and never fails the others.
+    pub async fn task_items_send_batch(&self, params: TaskItemsSendBatchParams) -> Result<TaskItemsSendBatchResult> {
+        let prompt = params.prompt.as_deref().map(str::trim).unwrap_or_default().to_owned();
+        let message = match (params.message.clone(), prompt.is_empty()) {
+            (Some(_), false) => return invalid("Send either a prompt or a message, not both."),
+            (Some(message), true) => message,
+            (None, false) => UserMessage::text(prompt),
+            (None, true) => return invalid("Write a prompt before sending these tasks to an agent."),
+        };
+        let mut ids: Vec<TaskItemId> = Vec::new();
+        for id in &params.ids {
+            if !ids.contains(id) {
+                ids.push(*id);
+            }
+        }
+        if ids.is_empty() {
+            return invalid("Choose at least one task to send.");
+        }
+        if ids.len() > MAX_BATCH_TASKS {
+            return invalid(&format!("Send at most {MAX_BATCH_TASKS} tasks at once."));
+        }
+
+        let mut skipped = Vec::new();
+        let ready = {
+            let _tasks = self.task_lock()?;
+            let mut ready = Vec::new();
+            for id in ids {
+                match self.inner.store.task_item_get(id)? {
+                    None => skipped.push(TaskBatchSkipped { id, reason: "Task not found. It may have been deleted.".into() }),
+                    Some(task) if task.runs.last().is_some_and(|run| run.state.is_live()) => {
+                        skipped.push(TaskBatchSkipped { id, reason: "Already running".into() })
+                    }
+                    Some(task) => ready.push(task),
+                }
+            }
+            ready
+        };
+        if ready.is_empty() {
+            return Ok(TaskItemsSendBatchResult { started: Vec::new(), skipped });
+        }
+        let started = match params.mode {
+            TaskBatchMode::Separate => self.send_tasks_separately(ready, &params, message, &mut skipped).await,
+            TaskBatchMode::Combined => self.send_tasks_together(ready, &params, message).await?,
+        };
+        Ok(TaskItemsSendBatchResult { started, skipped })
+    }
+
+    /// One thread per task, a few at a time. Each task goes through the single-task
+    /// path, so each has its own mention, saved follow-up, rollback and thread.
+    async fn send_tasks_separately(
+        &self,
+        tasks: Vec<TaskItem>,
+        params: &TaskItemsSendBatchParams,
+        message: UserMessage,
+        skipped: &mut Vec<TaskBatchSkipped>,
+    ) -> Vec<TaskBatchStarted> {
+        use futures::StreamExt;
+        let mut outcomes: Vec<(usize, TaskItemId, Result<TaskItemsSendResult>)> = futures::stream::iter(tasks.into_iter().enumerate())
+            .map(|(index, task)| {
+                let this = self.clone();
+                let send = TaskItemsSendParams {
+                    id: task.id,
+                    provider: params.provider.clone(),
+                    model: params.model.clone(),
+                    effort: params.effort.clone(),
+                    permission_mode: params.permission_mode,
+                    use_worktree: params.use_worktree,
+                    base_branch: params.base_branch.clone(),
+                    project_id: params.project_id,
+                    prompt: None,
+                    message: Some(message.clone()),
+                    note_ids: params.note_ids.clone(),
+                };
+                async move { (index, task.id, this.task_item_send(send).await) }
+            })
+            .buffer_unordered(SEPARATE_RUNS_AT_ONCE)
+            .collect()
+            .await;
+        outcomes.sort_by_key(|(index, ..)| *index);
+        let mut started = Vec::new();
+        for (_, id, outcome) in outcomes {
+            match outcome {
+                Ok(sent) => started.push(TaskBatchStarted { task: sent.task, thread_id: sent.thread_id }),
+                Err(error) => {
+                    let reason = match error.downcast_ref::<TaskError>() {
+                        Some(TaskError::Invalid(message)) if message.starts_with("This task already has a run in progress") => {
+                            "Already running".to_owned()
+                        }
+                        _ => error.to_string(),
+                    };
+                    skipped.push(TaskBatchSkipped { id, reason });
+                }
+            }
+        }
+        started
+    }
+
+    /// One thread for all of the tasks: the message carries every task, each task
+    /// records a run that points at the thread, and they follow it together.
+    async fn send_tasks_together(
+        &self,
+        tasks: Vec<TaskItem>,
+        params: &TaskItemsSendBatchParams,
+        message: UserMessage,
+    ) -> Result<Vec<TaskBatchStarted>> {
+        let (project_id, message, run_notes, tasks) = {
+            let _tasks = self.task_lock()?;
+            let store = &self.inner.store;
+            // Read the tasks again under the lock: they may have changed since the check.
+            let mut current = Vec::new();
+            for task in &tasks {
+                let task = store.task_item_get(task.id)?.ok_or(TaskError::NotFound("Task not found. It may have been deleted."))?;
+                if task.runs.last().is_some_and(|run| run.state.is_live()) {
+                    return invalid(&format!("{} is already running. Send the tasks again without it.", task.key));
+                }
+                current.push(task);
+            }
+            let mut owners: Vec<ProjectId> = current.iter().filter_map(|task| task.project_id).collect();
+            owners.sort();
+            owners.dedup();
+            if owners.len() > 1 {
+                return invalid("These tasks belong to different projects, so they cannot share one run. Send them as separate runs.");
+            }
+            let project_id = match (owners.first().copied(), params.project_id) {
+                (Some(project_id), _) | (None, Some(project_id)) => project_id,
+                (None, None) => return invalid("Choose a project to run these tasks in."),
+            };
+            if is_free_chat_project(project_id) {
+                return invalid("Choose a project to run these tasks in.");
+            }
+            store.project_get(project_id)?.ok_or(TaskError::NotFound("Project not found. Choose another project."))?;
+
+            let mut parts = message.parts;
+            let several = current.len() > 1;
+            for task in &current {
+                // The saved follow-up is cleared below, so the daemon delivers the
+                // exact text it clears. With several tasks it says which task it is for.
+                let pending = task.pending_followup.as_deref().map(str::trim).filter(|text| !text.is_empty());
+                match pending {
+                    Some(text) if several => append_pending_followup(&mut parts, Some(&format!("{}: {text}", task.key))),
+                    other => append_pending_followup(&mut parts, other),
+                }
+            }
+            // Every task enters as a reference chip, in the order sent: the provider's copy expands them.
+            let mut mentions = Vec::new();
+            for task in &current {
+                let reference = format!("{TASK_MENTION_PREFIX}{}", task.id);
+                if !parts.iter().any(|part| matches!(part, ContentPart::Mention { path, .. } if *path == reference)) {
+                    mentions.push(task_mention(task));
+                }
+            }
+            parts.splice(0..0, mentions);
+            let mut run_notes = Vec::new();
+            let mut seen = Vec::new();
+            for part in &parts {
+                let ContentPart::Mention { path, .. } = part else { continue };
+                let Some(note_id) = path.strip_prefix(NOTE_MENTION_PREFIX).and_then(|id| id.parse::<NoteId>().ok()) else { continue };
+                if seen.contains(&note_id) {
+                    continue;
+                }
+                seen.push(note_id);
+                if let Some(note) = store.note_get(note_id)?.filter(|note| note.summary.deleted_at.is_none()) {
+                    run_notes.push(TaskRunNote { note_id, revision: note.summary.revision });
+                }
+            }
+            for note_id in params.note_ids.clone().unwrap_or_default() {
+                if seen.contains(&note_id) {
+                    continue;
+                }
+                seen.push(note_id);
+                let note = live_note(store.note_get(note_id)?)?;
+                let title = if note.summary.title.trim().is_empty() { "Untitled note".to_owned() } else { note.summary.title.clone() };
+                parts.push(ContentPart::Mention {
+                    name: title.clone(),
+                    path: format!("{NOTE_MENTION_PREFIX}{note_id}"),
+                    display_name: Some(title),
+                });
+                run_notes.push(TaskRunNote { note_id, revision: note.summary.revision });
+            }
+            (project_id, UserMessage { parts }, run_notes, current)
+        };
+
+        let title = match tasks.as_slice() {
+            [only] => only.title.clone(),
+            [first, rest @ ..] => format!("{} and {} more", first.title, rest.len()),
+            [] => String::new(),
+        };
+        let thread = self
+            .create_thread_with_id(
+                methods::ThreadsCreateParams {
+                    project_id: Some(project_id),
+                    provider: params.provider.clone(),
+                    model: params.model.clone(),
+                    effort: params.effort.clone(),
+                    permission_mode: params.permission_mode,
+                    use_worktree: params.use_worktree,
+                    base_branch: params.base_branch.clone(),
+                    title: Some(title),
+                    message: None,
+                },
+                Uuid::now_v7(),
+            )
+            .await?;
+
+        // Record every run before the first turn starts so no event of it is missed.
+        let previous: Vec<(TaskItem, TaskStatus)> = tasks.iter().map(|task| (task.clone(), task.status)).collect();
+        let recorded = (|| -> Result<Vec<TaskItem>> {
+            let _locks = self.task_locks()?;
+            let store = &self.inner.store;
+            let ids: Vec<TaskItemId> = tasks.iter().map(|task| task.id).collect();
+            store.task_runs_start(&ids, thread.id, &thread.provider, thread.model.as_deref(), &run_notes)?;
+            self.track_task_thread(thread.id);
+            let mut started = Vec::new();
+            for (task, previous_status) in &previous {
+                // The saved follow-up is part of this prompt now. Text saved since the
+                // task was read (while the thread was being made) is not, so it stays.
+                let current = store.task_item_get(task.id)?.ok_or(TaskError::NotFound("Task not found. It may have been deleted."))?;
+                let remaining = match (current.pending_followup.as_deref(), task.pending_followup.as_deref()) {
+                    (Some(now), Some(consumed)) => now.strip_prefix(consumed).unwrap_or(now).trim().to_owned(),
+                    (Some(now), None) => now.to_owned(),
+                    (None, _) => String::new(),
+                };
+                let updated = store.task_item_update(task.id, TaskPatch { pending_followup: Some(remaining), ..Default::default() })?;
+                if *previous_status == TaskStatus::Done {
+                    self.sync_note_line(&updated);
+                }
+                started.push(updated);
+            }
+            for task in &started {
+                self.publish_task(task.clone());
+            }
+            Ok(started)
+        })();
+        let recorded = match recorded {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                self.rollback_task_runs(&previous, thread.id);
+                let _ = self.archive_thread(thread.id).await;
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = self.send(thread.id, message).await {
+            self.rollback_task_runs(&previous, thread.id);
+            let _ = self.archive_thread(thread.id).await;
+            return Err(error);
+        }
+        let store = &self.inner.store;
+        Ok(recorded
+            .into_iter()
+            .map(|task| TaskBatchStarted { task: store.task_item_get(task.id).ok().flatten().unwrap_or(task), thread_id: thread.id })
+            .collect())
+    }
+
     /// Undo a run whose first message never went out.
     fn rollback_task_run(&self, task: &TaskItem, thread_id: ThreadId, previous_status: TaskStatus) {
+        self.rollback_task_runs(&[(task.clone(), previous_status)], thread_id);
+    }
+
+    /// Undo the runs of one thread whose first message never went out, giving each
+    /// task back the status it had before.
+    fn rollback_task_runs(&self, tasks: &[(TaskItem, TaskStatus)], thread_id: ThreadId) {
         let Ok(_locks) = self.task_locks() else { return };
         let store = &self.inner.store;
         if let Err(error) = store.task_run_delete(thread_id) {
-            tracing::warn!(%error, task = %task.key, "could not remove a task run that never started");
+            tracing::warn!(%error, "could not remove task runs that never started");
         }
         self.inner.task_threads.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&thread_id);
-        let restored = self.set_task_status_system(task.id, previous_status, None);
-        match restored {
-            Ok(Some(restored)) => self.publish_task(restored),
-            Ok(None) => {
-                if let Ok(Some(current)) = store.task_item_get(task.id) {
-                    self.publish_task(current);
+        for (task, previous_status) in tasks {
+            match self.set_task_status_system(task.id, *previous_status, None) {
+                Ok(Some(restored)) => self.publish_task(restored),
+                Ok(None) => {
+                    if let Ok(Some(current)) = store.task_item_get(task.id) {
+                        self.publish_task(current);
+                    }
                 }
+                Err(error) => tracing::warn!(%error, task = %task.key, "could not restore a task's status after a failed send"),
             }
-            Err(error) => tracing::warn!(%error, task = %task.key, "could not restore a task's status after a failed send"),
         }
     }
 
@@ -511,11 +781,17 @@ impl Orchestrator {
                 TaskStatusChange { status: TaskStatus::Running, only_from: None }
             }
         });
-        let Some(update) = store.task_run_update(thread_id, patch, status)? else { return Ok(()) };
-        if update.status_changed {
-            self.sync_note_line(&update.task);
+        // Every task that runs in this thread moves together: one for a task's own
+        // run, several for a combined one.
+        let updates = store.task_run_updates(thread_id, patch, status)?;
+        if updates.is_empty() {
+            return Ok(());
         }
-        let task = update.task;
+        for update in &updates {
+            if update.status_changed {
+                self.sync_note_line(&update.task);
+            }
+        }
         let now = Instant::now();
         let mut published = self.inner.task_published.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if activity_only && published.get(&thread_id).is_some_and(|at| now.duration_since(*at) < ACTIVITY_BROADCAST_INTERVAL) {
@@ -527,7 +803,9 @@ impl Orchestrator {
             published.insert(thread_id, now);
         }
         drop(published);
-        self.publish_task(task);
+        for update in updates {
+            self.publish_task(update.task);
+        }
         Ok(())
     }
 
@@ -562,13 +840,12 @@ impl Orchestrator {
             };
             let Ok(_tasks) = this.task_lock() else { return };
             let patch = TaskRunPatch { diff: Some(Some(stats)), ..Default::default() };
-            match this.inner.store.task_run_patch(thread_id, patch) {
-                Ok(Some(changed)) => {
-                    if let Ok(Some(task)) = this.inner.store.task_item_get(changed.id) {
-                        this.publish_task(task);
+            match this.inner.store.task_run_updates(thread_id, patch, None) {
+                Ok(changed) => {
+                    for update in changed {
+                        this.publish_task(update.task);
                     }
                 }
-                Ok(None) => {}
                 Err(error) => tracing::warn!(%thread_id, %error, "could not store a task run's diff"),
             }
         });
@@ -1949,6 +2226,245 @@ mod tests {
         let mut neither = fixture.send_params(&third, vec![]);
         neither.prompt = None;
         assert!(fixture.orchestrator.task_item_send(neither).await.is_err());
+    }
+
+    fn batch_params(fixture: &Fixture, tasks: &[&TaskItem], mode: TaskBatchMode) -> TaskItemsSendBatchParams {
+        TaskItemsSendBatchParams {
+            ids: tasks.iter().map(|task| task.id).collect(),
+            mode,
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            model: None,
+            effort: None,
+            permission_mode: None,
+            use_worktree: Some(false),
+            base_branch: None,
+            project_id: Some(fixture.project.id),
+            prompt: Some("Fix these.".into()),
+            message: None,
+            note_ids: None,
+        }
+    }
+
+    fn first_message(fixture: &Fixture, thread_id: ThreadId) -> UserMessage {
+        fixture
+            .store
+            .events_for_thread(thread_id)
+            .unwrap()
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::TurnStarted { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .expect("the first turn started")
+    }
+
+    #[tokio::test]
+    async fn separate_batch_starts_a_thread_per_task_and_skips_what_cannot_start() {
+        let fixture = Fixture::new();
+        let (a, b, busy, gone) = (fixture.task("Fix login"), fixture.task("Fix logout"), fixture.task("Busy"), fixture.task("Gone"));
+        fixture.manual_run(&busy);
+        fixture.orchestrator.task_item_delete(gone.id).unwrap();
+        let global = fixture
+            .orchestrator
+            .task_item_create(TaskItemsCreateParams {
+                scope: TaskScope::Global,
+                project_id: None,
+                title: "Loose".into(),
+                body: None,
+                status: None,
+                priority: None,
+                note_ids: None,
+                source: None,
+            })
+            .unwrap();
+
+        let mut params = batch_params(&fixture, &[&a, &busy, &b, &gone, &a], TaskBatchMode::Separate);
+        params.ids.push(global.id);
+        params.project_id = None;
+        let result = fixture.orchestrator.task_items_send_batch(params.clone()).await.unwrap();
+        assert_eq!(result.started.iter().map(|started| started.task.id).collect::<Vec<_>>(), [a.id, b.id], "order kept, repeats ignored");
+        let (first, second) = (result.started[0].thread_id, result.started[1].thread_id);
+        assert_ne!(first, second, "one thread per task");
+        for (started, task) in result.started.iter().zip([&a, &b]) {
+            assert_eq!(started.task.runs.len(), 1);
+            assert_eq!(started.task.runs[0].thread_id, started.thread_id);
+            let message = first_message(&fixture, started.thread_id);
+            assert_eq!(message.parts[0], task_mention(task), "each message carries its own task");
+            assert_eq!(message.parts[1], ContentPart::Text { text: "Fix these.".into() });
+            assert_eq!(fixture.store.thread_get(started.thread_id).unwrap().unwrap().title, task.title);
+        }
+        let reasons: Vec<(TaskItemId, &str)> = result.skipped.iter().map(|skipped| (skipped.id, skipped.reason.as_str())).collect();
+        assert_eq!(reasons.len(), 3);
+        assert!(reasons.contains(&(busy.id, "Already running")));
+        assert!(reasons.iter().any(|(id, reason)| *id == gone.id && reason.contains("not found")));
+        assert!(
+            reasons.iter().any(|(id, reason)| *id == global.id && reason.contains("Choose a project")),
+            "a global task needs a project"
+        );
+        assert_eq!(fixture.current(&busy).runs.len(), 1, "the busy task kept its single run");
+        assert!(fixture.store.task_item_get(gone.id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn separate_batch_isolates_a_failing_task_from_the_rest() {
+        let fixture = Fixture::new();
+        let (a, b) = (fixture.task("One"), fixture.task("Two"));
+        let mut params = batch_params(&fixture, &[&a, &b], TaskBatchMode::Separate);
+        params.note_ids = Some(vec![Uuid::now_v7()]);
+        let failed = fixture.orchestrator.task_items_send_batch(params.clone()).await.unwrap();
+        assert!(failed.started.is_empty(), "an unknown note fails every task, each on its own");
+        assert_eq!(failed.skipped.len(), 2);
+        assert!(failed.skipped.iter().all(|skipped| !skipped.reason.is_empty()));
+        assert!(fixture.store.threads_list(None, true).unwrap().is_empty(), "nothing was left behind");
+        assert!(fixture.current(&a).runs.is_empty() && fixture.current(&b).runs.is_empty());
+
+        let mut empty = params.clone();
+        empty.prompt = Some("  ".into());
+        assert!(fixture.orchestrator.task_items_send_batch(empty).await.is_err(), "an empty prompt");
+        let mut none = params;
+        none.ids.clear();
+        assert!(fixture.orchestrator.task_items_send_batch(none).await.is_err(), "no tasks");
+    }
+
+    #[tokio::test]
+    async fn combined_batch_runs_every_task_in_one_thread_and_they_move_together() {
+        let fixture = Fixture::new();
+        let (a, b, c, busy) = (fixture.task("Fix login"), fixture.task("Fix logout"), fixture.task("Fix signup"), fixture.task("Busy"));
+        fixture.manual_run(&busy);
+        // A saved follow-up on one task travels with the run and is cleared.
+        fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(b.id, "Mind the cookie.")).await.unwrap();
+        let note = fixture.note("Spec", "details");
+        let mut params = batch_params(&fixture, &[&a, &b, &busy, &c], TaskBatchMode::Combined);
+        params.note_ids = Some(vec![note.summary.id]);
+        let result = fixture.orchestrator.task_items_send_batch(params).await.unwrap();
+
+        assert_eq!(result.started.iter().map(|started| started.task.id).collect::<Vec<_>>(), [a.id, b.id, c.id]);
+        let thread_id = result.started[0].thread_id;
+        assert!(result.started.iter().all(|started| started.thread_id == thread_id), "one shared thread");
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!((result.skipped[0].id, result.skipped[0].reason.as_str()), (busy.id, "Already running"));
+        assert_eq!(fixture.store.threads_list(None, true).unwrap().len(), 2, "the busy task's thread and the shared one");
+        let thread = fixture.store.thread_get(thread_id).unwrap().unwrap();
+        assert_eq!(thread.title, "Fix login and 2 more");
+        for task in [&a, &b, &c] {
+            let current = fixture.current(task);
+            assert_eq!(current.runs.len(), 1);
+            assert_eq!((current.runs[0].number, current.runs[0].thread_id), (1, thread_id), "{} runs in the shared thread", task.key);
+            assert_eq!(current.runs[0].notes, vec![TaskRunNote { note_id: note.summary.id, revision: 1 }]);
+            assert_eq!(current.pending_followup, None);
+        }
+        assert_eq!(fixture.store.task_runs_for_thread(thread_id).unwrap().len(), 3);
+        assert_eq!(fixture.current(&busy).runs.len(), 1);
+
+        // One message with every task, in order, then the prompt, the saved follow-up and the note.
+        let message = first_message(&fixture, thread_id);
+        assert_eq!(&message.parts[..3], &[task_mention(&a), task_mention(&b), task_mention(&c)]);
+        assert_eq!(message.parts[3], ContentPart::Text { text: format!("Fix these.\n\n{}: Mind the cookie.", b.key) });
+        assert!(
+            matches!(&message.parts[4], ContentPart::Mention { path, .. } if *path == format!("{NOTE_MENTION_PREFIX}{}", note.summary.id))
+        );
+
+        // No agent exists in this fixture, so the first turn fails and every task settles for review together.
+        for task in [&a, &b, &c] {
+            let settled = fixture.wait_for(task, |task| task.status == TaskStatus::NeedsReview).await;
+            assert_eq!(settled.runs[0].state, TaskRunState::Failed);
+        }
+        let thread = fixture.store.thread_get(thread_id).unwrap().unwrap();
+        // A new turn reopens all of them; its end moves all to review, except one the user closed.
+        fixture.emit(&thread, turn_started());
+        for task in [&a, &b, &c] {
+            let reopened = fixture.current(task);
+            assert_eq!((reopened.status, reopened.runs[0].state), (TaskStatus::Running, TaskRunState::Running), "{}", task.key);
+        }
+        fixture.orchestrator.task_item_update(update(b.id, TaskStatus::Done)).unwrap();
+        fixture.emit(&thread, turn_completed(StopReason::Completed));
+        for (task, status) in [(&a, TaskStatus::NeedsReview), (&b, TaskStatus::Done), (&c, TaskStatus::NeedsReview)] {
+            let done = fixture.current(task);
+            assert_eq!((done.status, done.runs[0].state), (status, TaskRunState::Completed), "{}", task.key);
+        }
+
+        // A follow-up from any task's page goes to the shared thread.
+        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(c.id, "One more thing.")).await.unwrap();
+        assert_eq!(sent.sent_to, Some(thread_id));
+        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(a.id, "And this.")).await.unwrap();
+        assert_eq!(sent.sent_to, Some(thread_id));
+    }
+
+    #[tokio::test]
+    async fn a_task_that_runs_alone_after_a_combined_run_follows_only_its_own_thread() {
+        let fixture = Fixture::new();
+        let (a, b) = (fixture.task("One"), fixture.task("Two"));
+        let result = fixture.orchestrator.task_items_send_batch(batch_params(&fixture, &[&a, &b], TaskBatchMode::Combined)).await.unwrap();
+        let shared = result.started[0].thread_id;
+        for task in [&a, &b] {
+            fixture.wait_for(task, |task| task.status == TaskStatus::NeedsReview).await;
+        }
+        let solo = fixture.orchestrator.task_item_send(fixture.send_params(&a, vec![])).await.unwrap();
+        fixture.wait_for(&a, |task| task.runs.len() == 2 && task.status == TaskStatus::NeedsReview).await;
+        let thread = fixture.store.thread_get(shared).unwrap().unwrap();
+        fixture.emit(&thread, turn_started());
+        assert_eq!(fixture.current(&a).status, TaskStatus::NeedsReview, "the newer run owns task a");
+        assert_eq!(fixture.current(&b).status, TaskStatus::Running, "task b still follows the shared thread");
+        assert_eq!(fixture.current(&a).runs[1].thread_id, solo.thread_id);
+        let sent = fixture.orchestrator.task_item_followup(TaskItemsFollowupParams::text(a.id, "Now alone.")).await.unwrap();
+        assert_eq!(sent.sent_to, Some(solo.thread_id), "a follow-up goes to the task's latest run");
+    }
+
+    #[tokio::test]
+    async fn rolling_back_a_combined_run_removes_every_run_and_restores_each_status() {
+        let mut fixture = Fixture::new();
+        let (a, b) = (fixture.task("One"), fixture.task("Two"));
+        fixture.orchestrator.task_item_update(update(b.id, TaskStatus::Done)).unwrap();
+        let (a, b) = (fixture.current(&a), fixture.current(&b));
+        let thread = fixture.manual_run(&a);
+        fixture.store.task_runs_start(&[b.id], thread.id, &thread.provider, None, &[]).unwrap();
+        assert_eq!(fixture.store.task_runs_for_thread(thread.id).unwrap().len(), 2);
+        fixture.drain();
+
+        fixture.orchestrator.rollback_task_runs(&[(a.clone(), TaskStatus::Todo), (b.clone(), TaskStatus::Done)], thread.id);
+        assert!(fixture.store.task_runs_for_thread(thread.id).unwrap().is_empty());
+        assert_eq!((fixture.current(&a).status, fixture.current(&a).runs.len()), (TaskStatus::Todo, 0));
+        assert_eq!((fixture.current(&b).status, fixture.current(&b).runs.len()), (TaskStatus::Done, 0));
+        assert_eq!(fixture.drain().len(), 2, "both tasks are published again");
+        fixture.emit(&thread, turn_completed(StopReason::Completed));
+        assert!(fixture.drain().is_empty(), "the thread no longer drives any task");
+    }
+
+    #[tokio::test]
+    async fn combined_batch_refuses_tasks_of_different_projects_before_creating_anything() {
+        let fixture = Fixture::new();
+        let other_dir = fixture.root.join("other");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        let other = fixture.orchestrator.add_project(other_dir.to_string_lossy().into_owned(), Some("other".into())).unwrap();
+        let a = fixture.task("Mine");
+        let b = fixture
+            .orchestrator
+            .task_item_create(TaskItemsCreateParams {
+                scope: TaskScope::Project,
+                project_id: Some(other.id),
+                title: "Theirs".into(),
+                body: None,
+                status: Some(TaskStatus::Todo),
+                priority: None,
+                note_ids: None,
+                source: None,
+            })
+            .unwrap();
+        let error = fixture
+            .orchestrator
+            .task_items_send_batch(batch_params(&fixture, &[&a, &b], TaskBatchMode::Combined))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("different projects"), "{error}");
+        assert!(fixture.store.threads_list(None, true).unwrap().is_empty());
+        assert!(fixture.current(&a).runs.is_empty() && fixture.current(&b).runs.is_empty());
+
+        // Everything skipped is not an error: the caller reads the reasons.
+        fixture.manual_run(&a);
+        let result = fixture.orchestrator.task_items_send_batch(batch_params(&fixture, &[&a], TaskBatchMode::Combined)).await.unwrap();
+        assert!(result.started.is_empty());
+        assert_eq!(result.skipped.len(), 1);
     }
 
     #[tokio::test]
