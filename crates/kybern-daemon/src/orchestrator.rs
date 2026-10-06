@@ -424,6 +424,7 @@ impl Orchestrator {
             (thread, events, live)
         };
         self.broadcast_committed_collaboration(events);
+        self.subagents_archive_below(thread.id)?;
         if let Some(live) = live {
             let _ = live.session.close().await;
         }
