@@ -22,6 +22,7 @@ import { Button } from "@/components/kit/button"
 import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/kit/menu"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { COMPOSER_INPUT_SHELL_CLASS_NAME, COMPOSER_INPUT_SURFACE_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
+import { ComposerColumnFrame } from "@/components/kit/chat/ComposerColumnFrame"
 import { Kbd } from "@/components/kit/kbd"
 import { clockTime, mod } from "@/lib/format"
 import { copyText } from "@/lib/hooks"
@@ -215,83 +216,85 @@ export function SubagentBar({ thread }: { thread: Thread }) {
 
   const label = (text: string) => <span className="@max-[600px]:sr-only">{text}</span>
   return (
-    <div className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, "mx-auto w-14/15 min-w-0")} data-subagent-bar="">
-      <div
-        className={cn(
-          COMPOSER_INPUT_SURFACE_CLASS_NAME,
-          "@container flex min-h-12 min-w-0 items-center gap-2.5 py-[7px] pr-[7px] pl-4 text-[13px]",
-        )}
-      >
-        <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap text-foreground/88">
-          <IconSwap
-            className="size-3.5"
-            active={working ? "a" : "b"}
-            a={<MatrixLoader variant={queued ? "twinkle" : "orbit"} cycle={1600} className={queued ? "text-muted-foreground/40" : "text-foreground/70"} />}
-            b={
-              phase === "failed" ? <CircleAlertIcon className="size-3.5 text-destructive" /> : phase === "stopped" ? <StopIcon className="size-2.5 text-muted-foreground/60" /> : <CheckIcon className="size-3.5 text-muted-foreground/70" />
-            }
-          />
-          {working && !queued && span ? (
-            <span>
-              Working <ElapsedText startedAt={span.startedAt} className="text-foreground/88" />
-            </span>
-          ) : (
-            <span>{state.label}</span>
-          )}
-        </span>
-        <span aria-hidden className="h-4 w-px shrink-0 bg-[var(--color-border-heavy)]" />
-        <span className="flex min-w-0 items-center gap-2.5 overflow-hidden text-xs">
-          <span className="inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap text-foreground/85">
-            <ProviderMark kind={thread.provider.kind} size={12} className="size-3" />
-            {model && <span>{model}</span>}
-            {effort && <span className="sa-secondary text-[var(--color-text-foreground-secondary)]">{effort}</span>}
-          </span>
-          {tokens && <span className="sa-secondary truncate tabular-nums text-[var(--color-text-foreground-secondary)]">{tokens}</span>}
-        </span>
-        <span className="min-w-1 flex-1" />
+    <ComposerColumnFrame>
+      <div className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, "min-w-0")} data-subagent-bar="">
         <div
-          ref={actions}
-          className="flex shrink-0 items-center gap-0.5"
-          onFocusCapture={() => { focusWasInActions.current = true }}
-          onBlurCapture={(event) => { if (event.relatedTarget) focusWasInActions.current = false }}
-        >
-          {working ? (
-            <>
-              <BarButton ref={openParent} ghost title="Open parent" onClick={() => openParentOf(thread)}>
-                <BackToParentIcon className="size-3.5" />
-                {label("Open parent")}
-              </BarButton>
-              {canBackground && (
-                <BarButton ghost animate title="Run in background" onClick={() => void runSubagentInBackground(thread)}>
-                  <BackgroundTrayIcon className="size-3.5" />
-                  {label("Run in background")}
-                </BarButton>
-              )}
-              {canStop && (
-                <BarButton outline animate title="Stop" onClick={() => void stopOneSubagent(thread)}>
-                  <StopIcon className="size-3" />
-                  <span>Stop</span>
-                </BarButton>
-              )}
-            </>
-          ) : (
-            <>
-              {phase === "failed" && failureText && (
-                <BarButton ghost title="Copy error" onClick={() => void copyText(failureText).then(() => toast("Copied the error"))}>
-                  {label("Copy error")}
-                </BarButton>
-              )}
-              <BarButton ref={openParent} outline title={`Open parent (${mod}↑)`} onClick={() => openParentOf(thread)}>
-                <BackToParentIcon className="size-3.5" />
-                {label("Open parent")}
-                <Kbd className="bg-transparent px-0 text-[11px] font-normal text-foreground/40 @max-[600px]:hidden">{mod}↑</Kbd>
-              </BarButton>
-            </>
+          className={cn(
+            COMPOSER_INPUT_SURFACE_CLASS_NAME,
+            "@container flex min-h-12 min-w-0 items-center gap-2.5 py-[7px] pr-[7px] pl-4 text-[13px]",
           )}
+        >
+          <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap text-foreground/88">
+            <IconSwap
+              className="size-3.5"
+              active={working ? "a" : "b"}
+              a={<MatrixLoader variant={queued ? "twinkle" : "orbit"} cycle={1600} className={queued ? "text-muted-foreground/40" : "text-foreground/70"} />}
+              b={
+                phase === "failed" ? <CircleAlertIcon className="size-3.5 text-destructive" /> : phase === "stopped" ? <StopIcon className="size-2.5 text-muted-foreground/60" /> : <CheckIcon className="size-3.5 text-muted-foreground/70" />
+              }
+            />
+            {working && !queued && span ? (
+              <span>
+                Working <ElapsedText startedAt={span.startedAt} className="text-foreground/88" />
+              </span>
+            ) : (
+              <span>{state.label}</span>
+            )}
+          </span>
+          <span aria-hidden className="h-4 w-px shrink-0 bg-[var(--color-border-heavy)]" />
+          <span className="flex min-w-0 items-center gap-2.5 overflow-hidden text-xs">
+            <span className="inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap text-foreground/85">
+              <ProviderMark kind={thread.provider.kind} size={12} className="size-3" />
+              {model && <span>{model}</span>}
+              {effort && <span className="sa-secondary text-[var(--color-text-foreground-secondary)]">{effort}</span>}
+            </span>
+            {tokens && <span className="sa-secondary truncate tabular-nums text-[var(--color-text-foreground-secondary)]">{tokens}</span>}
+          </span>
+          <span className="min-w-1 flex-1" />
+          <div
+            ref={actions}
+            className="flex shrink-0 items-center gap-0.5"
+            onFocusCapture={() => { focusWasInActions.current = true }}
+            onBlurCapture={(event) => { if (event.relatedTarget) focusWasInActions.current = false }}
+          >
+            {working ? (
+              <>
+                <BarButton ref={openParent} ghost title="Open parent" onClick={() => openParentOf(thread)}>
+                  <BackToParentIcon className="size-3.5" />
+                  {label("Open parent")}
+                </BarButton>
+                {canBackground && (
+                  <BarButton ghost animate title="Run in background" onClick={() => void runSubagentInBackground(thread)}>
+                    <BackgroundTrayIcon className="size-3.5" />
+                    {label("Run in background")}
+                  </BarButton>
+                )}
+                {canStop && (
+                  <BarButton outline animate title="Stop" onClick={() => void stopOneSubagent(thread)}>
+                    <StopIcon className="size-3" />
+                    <span>Stop</span>
+                  </BarButton>
+                )}
+              </>
+            ) : (
+              <>
+                {phase === "failed" && failureText && (
+                  <BarButton ghost title="Copy error" onClick={() => void copyText(failureText).then(() => toast("Copied the error"))}>
+                    {label("Copy error")}
+                  </BarButton>
+                )}
+                <BarButton ref={openParent} outline title={`Open parent (${mod}↑)`} onClick={() => openParentOf(thread)}>
+                  <BackToParentIcon className="size-3.5" />
+                  {label("Open parent")}
+                  <Kbd className="bg-transparent px-0 text-[11px] font-normal text-foreground/40 @max-[600px]:hidden">{mod}↑</Kbd>
+                </BarButton>
+              </>
+            )}
+          </div>
+          <span role="status" className="sr-only">{announcement}</span>
         </div>
-        <span role="status" className="sr-only">{announcement}</span>
       </div>
-    </div>
+    </ComposerColumnFrame>
   )
 }
 

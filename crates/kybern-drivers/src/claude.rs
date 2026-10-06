@@ -7,7 +7,7 @@
 //! turn that ends with a `result` frame. Permission prompts arrive as
 //! `control_request{subtype:"can_use_tool"}` and are answered on stdin.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -753,6 +753,10 @@ struct TurnState {
     /// The same two cursors for each subagent, keyed by the tool call that
     /// launched it. Subagents run concurrently, so they cannot share the root's.
     child_streams: HashMap<String, (Option<String>, Option<u64>)>,
+    /// `subagent_type` of recent Agent/Task launch calls, oldest first. Claude Code
+    /// 2.1.290 omits it from `task_started`, so the role is recovered from the launching
+    /// call's input by tool call id.
+    agent_roles: VecDeque<(String, String)>,
     last_total_cost: f64,
     last_bound: Option<(String, Option<String>)>,
     /// uuid of the most recent assistant frame this turn (the rewind anchor).
@@ -766,7 +770,18 @@ struct TurnState {
     queued_duration_ms: u64,
 }
 
+/// Launch calls remembered for their role; older ones are forgotten first.
+const MAX_AGENT_ROLES: usize = 256;
+
 impl TurnState {
+    fn remember_agent_role(&mut self, tool_call_id: &str, role: &str) {
+        self.agent_roles.retain(|(id, _)| id != tool_call_id);
+        if self.agent_roles.len() >= MAX_AGENT_ROLES {
+            self.agent_roles.pop_front();
+        }
+        self.agent_roles.push_back((tool_call_id.to_string(), role.to_string()));
+    }
+
     /// The message and thinking-block cursors of the root stream (`None`) or of one subagent.
     fn stream_cursor(&mut self, parent: Option<&str>) -> (&mut Option<String>, &mut Option<u64>) {
         match parent {
@@ -995,6 +1010,16 @@ impl ClaudeSession {
         self.child.write(&json!({ "type": "control_response", "response": response })).await
     }
 
+    /// Gives an agent task without a role the `subagent_type` its launching call carried.
+    async fn fill_agent_role(&self, task: &mut DriverRuntimeTask) {
+        if task.kind != RuntimeTaskKind::Agent || task.provider_type.is_some() {
+            return;
+        }
+        let Some(call) = task.tool_call_id.as_deref() else { return };
+        let st = self.state.lock().await;
+        task.provider_type = st.agent_roles.iter().rev().find(|(id, _)| id == call).map(|(_, role)| role.clone());
+    }
+
     async fn handle_system(&self, v: &Value) {
         match v.get("subtype").and_then(|s| s.as_str()).unwrap_or("") {
             "init" => {
@@ -1055,7 +1080,8 @@ impl ClaudeSession {
                 .await;
             }
             "task_started" => {
-                if let Some(task) = claude_task_started(v) {
+                if let Some(mut task) = claude_task_started(v) {
+                    self.fill_agent_role(&mut task).await;
                     // The launch prompt becomes the first message of the subagent's own thread.
                     if task.kind == RuntimeTaskKind::Agent
                         && let Some(prompt) = v.get("prompt").and_then(Value::as_str).filter(|prompt| !prompt.trim().is_empty())
@@ -1086,7 +1112,8 @@ impl ClaudeSession {
             "background_tasks_changed" => {
                 if let Some(tasks) = v.get("tasks").or_else(|| v.get("running_background_tasks")).and_then(Value::as_array) {
                     for task in tasks {
-                        if let Some(task) = claude_background_task(task) {
+                        if let Some(mut task) = claude_background_task(task) {
+                            self.fill_agent_role(&mut task).await;
                             self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
                         }
                     }
@@ -1214,9 +1241,17 @@ impl ClaudeSession {
                     self.state.lock().await.thinking.entry(message_id.clone()).or_default().push_str(text);
                 }
                 "tool_use" => {
+                    let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                    if matches!(name, "Agent" | "Task")
+                        && let (Some(id), Some(role)) =
+                            (block.get("id").and_then(Value::as_str), block.pointer("/input/subagent_type").and_then(Value::as_str))
+                        && !role.trim().is_empty()
+                    {
+                        self.state.lock().await.remember_agent_role(id, role);
+                    }
                     self.emit(DriverEvent::ToolStarted(ToolCall {
                         id: block.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string(),
-                        name: block.get("name").and_then(|n| n.as_str()).unwrap_or("tool").to_string(),
+                        name: name.to_string(),
                         input: block.get("input").cloned().unwrap_or(Value::Null),
                         parent_id: parent.clone(),
                     }))
@@ -1336,16 +1371,16 @@ fn claude_task_started(value: &Value) -> Option<DriverRuntimeTask> {
         "monitor" | "monitor_mcp" => RuntimeTaskKind::Monitor,
         _ => RuntimeTaskKind::Agent,
     };
-    // The agent's own role (`Explore`, `general-purpose`) says more than the generic task type.
+    // An agent's role (`Explore`, `general-purpose`) is its `subagent_type`. The generic task
+    // type (`local_agent`) is no role, so without one the role stays absent.
     let provider_type = match kind {
         RuntimeTaskKind::Agent => value
             .get("subagent_type")
             .or_else(|| value.get("subagentType"))
             .and_then(Value::as_str)
             .filter(|role| !role.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or(provider_type),
-        _ => provider_type,
+            .map(str::to_string),
+        _ => Some(provider_type),
     };
     let status = value.get("status").and_then(Value::as_str).map(claude_task_status).unwrap_or(RuntimeTaskStatus::Running);
     let backgrounded = value.get("is_backgrounded").or_else(|| value.get("isBackgrounded")).and_then(Value::as_bool).unwrap_or(false);
@@ -1368,7 +1403,7 @@ fn claude_task_started(value: &Value) -> Option<DriverRuntimeTask> {
         status,
         title,
         detail: value.get("summary").and_then(Value::as_str).map(str::to_string),
-        provider_type: Some(provider_type),
+        provider_type,
         parent_id: value.get("parent_task_id").or_else(|| value.get("parentTaskId")).and_then(Value::as_str).map(str::to_string),
         tool_call_id: tool_call_id.clone(),
         provider_thread_id: None,
@@ -2165,6 +2200,59 @@ mod tests {
         );
     }
 
+    /// Claude Code 2.1.290 sends `task_started` with `task_type: "local_agent"` and no
+    /// `subagent_type`; the role is only in the launching Agent call's input.
+    #[tokio::test]
+    async fn subagent_role_comes_from_the_launch_call_when_task_started_lacks_it() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(64);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            _native_mcp_config: None,
+        });
+        let launch = |id: &str, role: Option<&str>| {
+            let input = role.map_or(json!({ "prompt": "go" }), |role| json!({ "subagent_type": role, "prompt": "go" }));
+            json!({"type":"assistant", "parent_tool_use_id":null, "message":{"id":format!("msg-{id}"), "content":[
+                {"type":"tool_use", "id":id, "name":"Agent", "input":input}]}})
+        };
+        let started = |task: &str, id: &str| {
+            json!({"type":"system", "subtype":"task_started", "task_id":task, "tool_use_id":id,
+                "description":"look", "task_type":"local_agent", "prompt":"go"})
+        };
+        for frame in [
+            launch("toolu_a", Some("Explore")),
+            started("task-a", "toolu_a"),
+            launch("toolu_b", None),
+            started("task-b", "toolu_b"),
+            json!({"type":"system", "subtype":"background_tasks_changed", "tasks":[
+                {"task_id":"task-a", "tool_use_id":"toolu_a", "task_type":"local_agent"}]}),
+        ] {
+            session.handle_frame(frame).await;
+        }
+        let mut roles = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let DriverEvent::RuntimeTaskStarted(task) = event {
+                roles.push((task.id, task.kind, task.provider_type));
+            }
+        }
+        assert_eq!(
+            roles,
+            vec![
+                ("task-a".to_string(), RuntimeTaskKind::Agent, Some("Explore".to_string())),
+                ("task-b".to_string(), RuntimeTaskKind::Agent, None),
+                ("task-a".to_string(), RuntimeTaskKind::Agent, Some("Explore".to_string())),
+            ]
+        );
+        child.kill().await;
+    }
+
     #[test]
     fn parses_native_task_lifecycle_and_capabilities() {
         let task = claude_task_started(&json!({
@@ -2177,6 +2265,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(task.kind, RuntimeTaskKind::Agent);
+        assert_eq!(task.provider_type, None, "the generic task type is not a role");
         assert_eq!(task.status, RuntimeTaskStatus::Running);
         assert_eq!(task.title, "Inspect the daemon");
         assert!(task.capabilities.stop);

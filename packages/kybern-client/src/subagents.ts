@@ -55,10 +55,13 @@ export function isSubagentQueued(thread: { subagent?: SubagentInfo | null }): bo
   return thread.subagent?.status === "pending";
 }
 
-/** Claude's `general-purpose` reads as "General"; any other type or role is shown as written. */
+/** Generic task types a harness reports when it names no role; they are never shown as one. */
+const GENERIC_TASK_TYPES = new Set(["local_agent", "agent", "sub_agent", "task"]);
+
+/** Claude's `general-purpose` reads as "General"; any other role is shown as written. Generic task types give no label. */
 export function subagentTypeLabel(agentType: string | null | undefined): string | null {
   const value = agentType?.trim();
-  if (!value) return null;
+  if (!value || GENERIC_TASK_TYPES.has(value.toLowerCase())) return null;
   if (value.toLowerCase() === "general-purpose" || value.toLowerCase() === "general") return "General";
   return value;
 }

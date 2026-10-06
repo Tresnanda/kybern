@@ -103,6 +103,8 @@ test("type labels use the display name for Claude's general agent", () => {
   assert.equal(subagentTypeLabel("Explore"), "Explore");
   assert.equal(subagentTypeLabel("  "), null);
   assert.equal(subagentTypeLabel(undefined), null);
+  assert.equal(subagentTypeLabel("local_agent"), null);
+  assert.equal(subagentTypeLabel("Agent"), null);
 });
 
 test("the detail line is live progress while working and the result once settled", () => {
