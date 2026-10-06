@@ -107,6 +107,9 @@ pub struct NativeToolBridge {
     /// Role and bounded project context for an explicitly opted-in project
     /// coordinator. Ordinary threads always leave this unset.
     pub coordinator_instructions: Option<String>,
+    /// Kybern's "Working in Kybern" guide, rendered from this session's tools.
+    /// Every thread may carry one; it is independent of the coordinator role.
+    pub guide: Option<String>,
     pub tools: Vec<NativeToolDefinition>,
     pub restrictions: NativeToolRestrictions,
 }
@@ -119,6 +122,7 @@ impl fmt::Debug for NativeToolBridge {
             .field("endpoint", &self.endpoint)
             .field("authorization", &self.authorization.as_ref().map(|_| "<redacted>"))
             .field("coordinator_instructions", &self.coordinator_instructions.as_ref().map(|_| "<coordinator-scoped>"))
+            .field("guide", &self.guide.as_ref().map(String::len))
             .field("tools", &self.tools)
             .field("restrictions", &self.restrictions)
             .finish()
@@ -147,12 +151,32 @@ pub struct NativeToolRestrictions {
     pub require_enforcement: bool,
 }
 
+impl NativeToolRestrictions {
+    /// Whether a bridge tool of this name may be exposed under these restrictions.
+    pub fn permits(&self, name: &str) -> bool {
+        (self.allowed_tools.is_empty() || self.allowed_tools.iter().any(|allowed| allowed == name))
+            && !self.denied_tools.iter().any(|denied| denied == name)
+    }
+}
+
 impl NativeToolBridge {
+    /// The system or developer text a provider receives: the guide, then a
+    /// coordinator's role. Deterministic, so the provider's prefix stays cacheable.
+    pub fn provider_instructions(&self) -> Option<String> {
+        match (self.guide.as_deref(), self.coordinator_instructions.as_deref()) {
+            (Some(guide), Some(role)) => Some(format!("{guide}\n{role}")),
+            (Some(text), None) | (None, Some(text)) => Some(text.to_owned()),
+            (None, None) => None,
+        }
+    }
+
+    /// The guide for the first prompt of a harness that has no system channel.
+    pub fn guide(&self) -> Option<&str> {
+        self.guide.as_deref()
+    }
+
     pub fn tools(&self) -> impl Iterator<Item = &NativeToolDefinition> {
-        self.tools.iter().filter(|tool| {
-            (self.restrictions.allowed_tools.is_empty() || self.restrictions.allowed_tools.iter().any(|name| name == &tool.name))
-                && !self.restrictions.denied_tools.iter().any(|name| name == &tool.name)
-        })
+        self.tools.iter().filter(|tool| self.restrictions.permits(&tool.name))
     }
 
     pub fn has_tool(&self, name: &str) -> bool {
@@ -168,6 +192,9 @@ impl NativeToolBridge {
         }
         if self.coordinator_instructions.as_ref().is_some_and(|instructions| instructions.is_empty() || instructions.len() > 64 * 1024) {
             return Err(DriverError::Unsupported("native tool bridge has invalid coordinator instructions".into()));
+        }
+        if self.guide.as_ref().is_some_and(|guide| guide.is_empty() || guide.len() > 16 * 1024) {
+            return Err(DriverError::Unsupported("native tool bridge has an invalid guide".into()));
         }
         for tool in &self.tools {
             if tool.name.is_empty()
@@ -462,6 +489,7 @@ mod lifecycle_tests {
             endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
             authorization: Some("secret-capability".into()),
             coordinator_instructions: Some("secret-coordinator-context".into()),
+            guide: None,
             tools: Vec::new(),
             restrictions: NativeToolRestrictions::default(),
         };
@@ -470,6 +498,30 @@ mod lifecycle_tests {
         assert!(!debug.contains("secret-coordinator-context"));
         assert!(debug.contains("<redacted>"));
         assert!(debug.contains("<coordinator-scoped>"));
+    }
+
+    #[test]
+    fn provider_instructions_put_the_guide_before_the_coordinator_role() {
+        let mut bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: None,
+            authorization: None,
+            coordinator_instructions: None,
+            guide: None,
+            tools: Vec::new(),
+            restrictions: NativeToolRestrictions::default(),
+        };
+        assert_eq!(bridge.provider_instructions(), None);
+        bridge.coordinator_instructions = Some("ROLE".into());
+        assert_eq!(bridge.provider_instructions().as_deref(), Some("ROLE"));
+        bridge.guide = Some("GUIDE".into());
+        assert_eq!(bridge.provider_instructions().as_deref(), Some("GUIDE\nROLE"));
+        assert_eq!(bridge.guide(), Some("GUIDE"));
+        bridge.coordinator_instructions = None;
+        assert_eq!(bridge.provider_instructions().as_deref(), Some("GUIDE"));
+        assert!(bridge.validate().is_ok());
+        bridge.guide = Some(String::new());
+        assert!(bridge.validate().is_err());
     }
 
     #[tokio::test]

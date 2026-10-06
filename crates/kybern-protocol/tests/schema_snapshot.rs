@@ -189,6 +189,18 @@ fn task_items_wire_shape_is_stable() {
     }))
     .unwrap();
     assert!(send.prompt.is_none() && send.message.is_some_and(|message| message.parts.len() == 1));
+    // The batch send defaults to separate runs; combined is named, and a result lists both lists.
+    let batch: TaskItemsSendBatchParams = serde_json::from_value(serde_json::json!({
+        "ids": [uuid::Uuid::nil()], "provider": {"kind": "codex", "instance": "default"}, "prompt": "Fix them"
+    }))
+    .unwrap();
+    assert_eq!((batch.ids.len(), batch.mode), (1, TaskBatchMode::Separate));
+    assert_eq!(serde_json::to_value(TaskBatchMode::Combined).unwrap(), "combined");
+    assert_eq!(TaskItemsSendBatch::NAME, "tasks.items.send_batch");
+    let result: TaskItemsSendBatchResult =
+        serde_json::from_value(serde_json::json!({"started": [], "skipped": [{"id": uuid::Uuid::nil(), "reason": "Already running"}]}))
+            .unwrap();
+    assert_eq!(result.skipped[0].reason, "Already running");
 }
 
 #[test]
