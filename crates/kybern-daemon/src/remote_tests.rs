@@ -877,7 +877,7 @@ async fn reconnect_reattaches_terminal_and_closed_identity_cannot_spawn_again() 
 }
 
 #[tokio::test]
-async fn interrupted_host_recovery_pauses_remaining_follow_ups() {
+async fn interrupted_host_recovery_ends_the_turn_as_interrupted_and_drains_follow_ups() {
     let host = Host::start().await;
     let mut thread = host.thread();
     thread.status = ThreadStatus::Running;
@@ -887,9 +887,21 @@ async fn interrupted_host_recovery_pauses_remaining_follow_ups() {
         .enqueue(QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("wait for the interrupted turn") })
         .unwrap();
     host.state.orchestrator.recover_after_restart().await.unwrap();
+    // The cut-off turn is interrupted (not failed) and the thread is idle, so
+    // the follow-up is dispatched instead of waiting for the user.
+    let events = host.state.store.events_for_thread(thread.id).unwrap();
+    assert!(events.iter().any(|event| matches!(event.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. })));
+    assert!(!events.iter().any(|event| matches!(event.payload, EventPayload::TurnFailed { .. })));
     host.state.orchestrator.drain_queues().await.unwrap();
-    assert_eq!(host.state.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Failed);
-    assert_eq!(host.state.store.queue_list(Some(thread.id)).unwrap().len(), 1);
+    assert!(host.state.store.queue_list(Some(thread.id)).unwrap().is_empty());
+    assert!(
+        host.state
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(&event.payload, EventPayload::TurnStarted { message, .. } if message == &UserMessage::text("wait for the interrupted turn")))
+    );
 }
 
 #[tokio::test]

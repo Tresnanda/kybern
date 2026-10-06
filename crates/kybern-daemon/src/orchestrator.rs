@@ -23,6 +23,7 @@ use crate::config::Paths;
 use crate::settings::SettingsStore;
 
 mod agent_items;
+mod delegation;
 mod notes;
 mod subagents;
 mod tasks;
@@ -1112,22 +1113,12 @@ impl Orchestrator {
             }
             if let Some(actor_thread) = actor_thread {
                 let parent = self.inner.store.thread_get(actor_thread)?.ok_or_else(|| anyhow!("caller thread not found"))?;
-                let crosses_provider = child.provider.kind != parent.provider.kind;
-                let requested =
-                    child.permission_mode.unwrap_or(if crosses_provider && parent.permission_mode != PermissionMode::FullAccess {
-                        PermissionMode::Supervised
-                    } else {
-                        parent.permission_mode
-                    });
-                let allowed = parent.permission_mode == PermissionMode::FullAccess
-                    || requested == PermissionMode::Supervised
-                    || (!crosses_provider && requested == parent.permission_mode);
-                if !allowed {
-                    return Err(anyhow!(
-                        "child permission mode has no conservative subset mapping for the parent harness; use supervised or delegate from a full-access parent"
-                    ));
-                }
-                child.permission_mode = Some(requested);
+                child.permission_mode = Some(delegation::resolve_child_permission(
+                    parent.permission_mode,
+                    parent.provider.kind,
+                    child.provider.kind,
+                    child.permission_mode,
+                )?);
             }
             if project.is_git {
                 child.base_revision =
@@ -2171,6 +2162,14 @@ impl Orchestrator {
             if agent_items::is_tool(name) {
                 return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
             }
+            if delegation::is_tool(name) {
+                return self.execute_agent_tool(&thread, turn_id, &live, name, arguments).await;
+            }
+            if name.starts_with("kybern_collaboration_") && !self.collaboration_tools_enabled(&thread)? {
+                return Err(anyhow!(
+                    "The kybern_collaboration_* tools are only for project coordinators and their workers. To hand work to another agent use kybern_agent_delegate; to message another thread use kybern_thread_send."
+                ));
+            }
             if name.starts_with("kybern_collaboration_") || name == "kybern_thread_send" {
                 let object = arguments.as_object_mut().ok_or_else(|| anyhow!("tool arguments must be a JSON object"))?;
                 let existing_group = self.inner.store.collaboration_group_for_thread(thread_id)?;
@@ -2724,6 +2723,8 @@ struct Inner {
     agent_item_ops: Mutex<()>,
     /// Routing state for the read-only child threads of provider subagents.
     subagents: std::sync::Mutex<subagents::SubagentRouter>,
+    /// Orchestrator V2 delegation engine state (batches, waiters).
+    delegation: delegation::DelegationState,
 }
 
 struct LiveSession {
@@ -2985,6 +2986,7 @@ impl Orchestrator {
                 agent_items: std::sync::Mutex::new(Default::default()),
                 agent_item_ops: Mutex::new(()),
                 subagents: std::sync::Mutex::new(Default::default()),
+                delegation: Default::default(),
             }),
         }
     }
@@ -3254,10 +3256,32 @@ impl Orchestrator {
                 self.inner.store.approval_resolve(a.id, &decision)?;
                 self.emit(t.id, Some(a.turn_id), EventPayload::ApprovalResolved { approval_id: a.id, decision })?;
             }
-            self.emit(t.id, last_turn, EventPayload::TurnFailed { error: "daemon restarted while the turn was running".into() })?;
-            t.status = ThreadStatus::Failed;
+            // A restart is not the agent's failure: end the turn as interrupted and
+            // leave the thread idle so its queue keeps draining.
+            self.emit(
+                t.id,
+                last_turn,
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Interrupted,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 0,
+                    terminal_message_id: None,
+                },
+            )?;
+            self.emit(
+                t.id,
+                last_turn,
+                EventPayload::ProviderNotice {
+                    level: NoticeLevel::Warning,
+                    text: "Kybern restarted while this turn was running. Send a message to continue.".into(),
+                    data: None,
+                },
+            )?;
+            t.status = ThreadStatus::Idle;
             self.update_thread(t)?;
         }
+        self.delegation_recover_after_restart()?;
         for group in self.inner.store.collaboration_groups_list(None, true)? {
             for mut assignment in self.inner.store.collaboration_assignments(group.id, false)? {
                 if matches!(assignment.status, AssignmentStatus::Waiting | AssignmentStatus::Working)
@@ -3451,12 +3475,24 @@ impl Orchestrator {
         Ok(())
     }
 
-    fn update_thread(&self, mut thread: Thread) -> Result<Thread> {
+    fn update_thread(&self, thread: Thread) -> Result<Thread> {
         let _updates = self.inner.thread_updates.lock().map_err(|_| anyhow!("thread update lock poisoned"))?;
-        // A late provider completion must not unarchive a thread and allow the
-        // daemon queue worker to resume it while its session is being closed.
-        if self.inner.store.thread_get(thread.id)?.is_some_and(|current| current.status == ThreadStatus::Archived) {
-            thread.status = ThreadStatus::Archived;
+        self.write_thread_update(thread, true)
+    }
+
+    /// Persist and publish a thread. The caller holds `thread_updates`. With
+    /// `keep_stored_delegation` a stale copy cannot roll a delegation back:
+    /// only [`Orchestrator::delegation_update`] changes it.
+    fn write_thread_update(&self, mut thread: Thread, keep_stored_delegation: bool) -> Result<Thread> {
+        if let Some(current) = self.inner.store.thread_get(thread.id)? {
+            // A late provider completion must not unarchive a thread and allow the
+            // daemon queue worker to resume it while its session is being closed.
+            if current.status == ThreadStatus::Archived {
+                thread.status = ThreadStatus::Archived;
+            }
+            if keep_stored_delegation {
+                thread.delegation = current.delegation;
+            }
         }
         thread.updated_at = Utc::now();
         self.inner.store.thread_upsert(&thread)?;
@@ -3777,7 +3813,30 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Archive a thread and, with it, every agent it delegated work to. Running
+    /// children are stopped first; delegated worktrees are removed when safe.
     pub async fn archive_thread(&self, thread_id: ThreadId) -> Result<()> {
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if thread.coordinator_project_id.is_some() {
+            return Err(anyhow!("Use Delete coordinator to remove a project coordinator, or pause its agents temporarily."));
+        }
+        let descendants = self.delegation_descendants(thread_id)?;
+        self.delegation_cancel_tree(thread_id, true).await?;
+        self.archive_single(thread_id).await?;
+        for descendant in &descendants {
+            if descendant.status != ThreadStatus::Archived
+                && let Err(error) = self.archive_single(descendant.id).await
+            {
+                tracing::warn!(thread_id = %descendant.id, %error, "could not archive a delegated agent");
+            }
+        }
+        for id in descendants.iter().map(|descendant| descendant.id).chain([thread_id]) {
+            self.delegation_cleanup_on_archive(id).await;
+        }
+        Ok(())
+    }
+
+    async fn archive_single(&self, thread_id: ThreadId) -> Result<()> {
         {
             let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
             let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
@@ -3869,6 +3928,9 @@ impl Orchestrator {
         }
         if thread.status == ThreadStatus::Archived {
             return Err(anyhow!("thread is archived"));
+        }
+        if thread.delegation.as_ref().is_some_and(|info| info.worktree_state == Some(WorktreeState::Removed)) {
+            return Err(delegation::worktree_removed_error());
         }
 
         if is_compact_message(&message) {
@@ -4133,9 +4195,11 @@ impl Orchestrator {
             Ok(live) => live,
             Err(error) => {
                 self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: error.to_string() })?;
+                let thread_id = thread.id;
                 let mut failed = thread;
                 failed.status = ThreadStatus::Failed;
                 self.update_thread(failed)?;
+                self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(error.to_string()));
                 return Err(error);
             }
         };
@@ -4196,10 +4260,12 @@ impl Orchestrator {
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
+            let thread_id = thread.id;
             let mut t = thread;
             t.status = ThreadStatus::Failed;
             self.update_thread(t)?;
             *live.turn.lock().await = None;
+            self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(e.to_string()));
             return Err(e.into());
         }
         self.collaboration_delivery_submitted(thread.id, turn_id, message_id)?;
@@ -4221,6 +4287,9 @@ impl Orchestrator {
             self.stop_runtime_task(thread_id, "").await?;
             return Ok(());
         }
+        // Stop cascades to everything this thread delegated; a delegated child
+        // stopped directly (Lineage Stop) is cancelled and its parent told.
+        self.delegation_cancel_tree(thread_id, true).await?;
         self.interrupt_with_grace(thread_id, Duration::from_secs(5)).await
     }
 
@@ -4994,6 +5063,11 @@ impl Orchestrator {
             .as_ref()
             .map(|gateway| {
                 let mut tools = crate::app_tools::native_tool_definitions();
+                // Ordinary threads delegate with kybern_agent_*; the collaboration
+                // tools are for project coordinators and their workers only.
+                if !self.collaboration_tools_enabled(thread).unwrap_or(false) {
+                    tools.retain(|tool| !tool.name.starts_with("kybern_collaboration_"));
+                }
                 if self.inner.computer.offered_to(thread.provider.kind) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
                 }
@@ -5422,6 +5496,11 @@ impl Orchestrator {
                 t.status = ThreadStatus::Failed;
                 let _ = self.update_thread(t);
             }
+            self.delegation_turn_finished(
+                thread_id,
+                turn.id,
+                delegation::TurnOutcome::Failed("provider exited before finishing the turn".into()),
+            );
         }
         if cleanup_barrier.is_some() {
             self.inner.releasing.lock().await.remove(&thread_id);
@@ -5490,6 +5569,7 @@ impl Orchestrator {
                 Err("app tool request is stale".to_string())
             } else {
                 let timeout = if name == "kybern_collaboration_wait"
+                    || delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || crate::computer::ComputerUse::is_tool(&name)
                     || agent_items::WRITE_TOOLS.contains(&name.as_str())
                 {
@@ -5955,6 +6035,7 @@ impl Orchestrator {
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
                 self.maybe_generate_title(&t);
+                self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Completed { stop_reason, terminal_message_id });
             }
             DriverEvent::TurnFailed { error } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
@@ -5971,11 +6052,12 @@ impl Orchestrator {
                 } else {
                     self.checkpoint(&t, turn_id, "after").await;
                 }
-                self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error })?;
+                self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: error.clone() })?;
                 // A failed turn may have hit a plan limit.
                 self.inner.usage.turn_finished(t.provider.kind);
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
+                self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(error));
             }
             DriverEvent::CommandsUpdated(commands) => {
                 self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
@@ -7565,6 +7647,7 @@ mod tests {
                         policy: None,
                     })
                     .unwrap();
+                fixture.store.project_coordinator_put(thread.project_id, thread.id, group.id).unwrap();
                 if coordinator {
                     thread.coordinator_project_id = Some(thread.project_id);
                     thread.collaboration_group_id = Some(group.id);
@@ -7699,6 +7782,7 @@ mod tests {
                 policy: None,
             })
             .unwrap();
+        fixture.store.project_coordinator_put(thread.project_id, thread.id, group.id).unwrap();
         let worker = fixture.thread(ThreadStatus::Idle);
         fixture
             .store
@@ -7851,6 +7935,7 @@ mod tests {
                 policy: None,
             })
             .unwrap();
+        fixture.store.project_coordinator_put(thread.project_id, thread.id, group.id).unwrap();
         let worker = fixture.thread(ThreadStatus::Idle);
         fixture
             .store
@@ -8023,7 +8108,21 @@ mod tests {
     #[tokio::test]
     async fn native_context_write_retries_without_uuid_preserve_one_revision() {
         let fixture = Fixture::new();
-        let thread = fixture.thread(ThreadStatus::Idle);
+        let coordinator = fixture
+            .orchestrator
+            .project_coordinator_get_or_create(methods::CollaborationCoordinatorGetOrCreateParams {
+                operation_id: Uuid::now_v7(),
+                project_id: fixture.project.id,
+                provider: ProviderInstance::default_for(ProviderKind::Codex),
+                model: None,
+                effort: None,
+                permission_mode: Some(PermissionMode::Supervised),
+                coordinator_mode: Some(CoordinatorMode::Ordinary),
+                initial_goal: Some("Remember project facts".into()),
+            })
+            .await
+            .unwrap();
+        let thread = coordinator.thread;
         let (live, _) = fixture.active_app_tool_session(&thread).await;
         let arguments =
             json!({"request_key":"remember-test-command", "key":"test-command", "kind":"research", "body":"Run cargo test -p sample."});
@@ -8052,7 +8151,8 @@ mod tests {
         assert_eq!(first, retry);
         assert!(first["operation_id"].as_str().is_some_and(|id| Uuid::parse_str(id).is_ok()));
         let group = fixture.store.collaboration_group_for_thread(thread.id).unwrap().unwrap();
-        let entries = fixture.store.collaboration_context_latest(group).unwrap();
+        let entries: Vec<_> =
+            fixture.store.collaboration_context_latest(group).unwrap().into_iter().filter(|entry| entry.key == "test-command").collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].revision, 1);
         let mut changed = arguments;
@@ -8063,7 +8163,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("operation id already belongs"));
-        assert_eq!(fixture.store.collaboration_context_latest(group).unwrap()[0].body, "Run cargo test -p sample.");
+        assert_eq!(
+            fixture.store.collaboration_context_latest(group).unwrap().into_iter().find(|entry| entry.key == "test-command").unwrap().body,
+            "Run cargo test -p sample."
+        );
     }
 
     #[tokio::test]
@@ -8143,7 +8246,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordinary_thread_reads_project_knowledge_without_creating_a_group() {
+    async fn ordinary_thread_is_refused_project_knowledge_and_the_role_prefix_stays_stable() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
         let coordinator = fixture
@@ -8183,7 +8286,8 @@ mod tests {
             )
             .unwrap();
         let (live, _) = fixture.active_app_tool_session(&thread).await;
-        let result = fixture
+        // Orchestrator V2: an ordinary thread is not offered the collaboration tools.
+        let refused = fixture
             .orchestrator
             .execute_native_app_tool_call(
                 thread.id,
@@ -8193,8 +8297,8 @@ mod tests {
                 json!({"keys":["shared.fact"], "limit":10}),
             )
             .await
-            .unwrap();
-        assert_eq!(result["entries"][0]["key"], "shared.fact");
+            .unwrap_err();
+        assert!(refused.to_string().contains("only for project coordinators") && refused.to_string().contains("kybern_agent_delegate"));
         assert_eq!(fixture.store.collaboration_group_for_thread(thread.id).unwrap(), None);
         let role_after = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
         assert_eq!(role_before, role_after, "changing project knowledge must not replace the cached system prefix");
@@ -8262,7 +8366,7 @@ mod tests {
         let first = spawn().await;
         let guide = first.guide().expect("an ordinary thread gets the guide").to_owned();
         assert_eq!(first.provider_instructions().as_deref(), Some(guide.as_str()), "no coordinator role on an ordinary thread");
-        assert!(guide.starts_with("# Working in Kybern") && guide.contains("## Notes and tasks") && guide.contains("## Helpers"));
+        assert!(guide.starts_with("# Working in Kybern") && guide.contains("## Notes and tasks"));
         assert!(!guide.contains("The user's Mac"), "Codex has no Kybern computer tools");
         assert_eq!(spawn().await.guide(), Some(guide.as_str()), "respawn and resume keep the prefix byte-identical");
 
@@ -10049,4 +10153,6 @@ for line in sys.stdin:
         assert_eq!(kinds.iter().filter(|kind| **kind == "turn_completed").count(), 1);
         assert!(!kinds.contains(&"turn_failed"));
     }
+
+    include!("orchestrator/delegation_tests.rs");
 }
