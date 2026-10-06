@@ -1,4 +1,5 @@
 mod access;
+mod agent_guide;
 mod app_tools;
 mod artifacts;
 mod auth;

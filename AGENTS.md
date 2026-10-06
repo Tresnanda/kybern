@@ -14,7 +14,7 @@ before touching UI.
 | `crates/kybern-git` | Snapshots, diffs, worktrees via the `git` CLI. |
 | `crates/kybern-drivers` | One module per agent: `claude`, `codex`, `opencode`, `pi` (also omp), `cursor`. All implement `AgentDriver` + `AgentSession` from `lib.rs`. |
 | `crates/kybern` | The shipped package: `kybernd` and `kybern` binaries as thin wrappers over the two library crates below. |
-| `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints; `orchestrator/agent_items.rs` is the agents' Notes and Tasks tools: agents fully edit only what they created, never close tasks, ask `kybern_notes_tasks` consent outside Full access/Auto, and file at most 10 tasks a turn), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`, `usage.rs` (account plan limits: one cache fed by turn-free live reads and turn reports, pushed as `usage.limits.changed`), `computer/` (computer use). |
+| `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints; `orchestrator/agent_items.rs` is the agents' Notes and Tasks tools: agents fully edit only what they created, never close tasks, ask `kybern_notes_tasks` consent outside Full access/Auto, and file at most 10 tasks a turn), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`, `usage.rs` (account plan limits: one cache fed by turn-free live reads and turn reports, pushed as `usage.limits.changed`), `computer/` (computer use), `agent_guide.rs` (the "Working in Kybern" guide every session receives, rendered from its tools and byte-stable for prompt caching; wording changes bump `GUIDE_VERSION` and the golden file; the `tell_agents_about_kybern` setting turns it off). |
 | `crates/kybern-client` | Async JSON-RPC client shared by the CLI and the desktop shell. |
 | `crates/kybern-cli` | The `kybern` CLI (`lib.rs`). Also the integration harness. |
 | `apps/desktop` | Desktop app. `src-tauri` is the Tauri 2 shell (crate `kybern-desktop`: resolves or spawns `kybernd`, exposes `endpoint`/`data_dir_path`). `src/` is the React app (see below). |
@@ -232,7 +232,7 @@ replay events received during hydration; preserve row identity and reading posit
   `docs/harness-parity.md` for spawned-agent and background-process lifecycle,
   controls, recovery, and UI parity.
 - Provider subagents: every runtime task of kind `Agent` gets a read-only child
-  thread (`Thread.subagent`, store migration 16, `orchestrator/subagents.rs`),
+  thread (`Thread.subagent`, store migration 17, `orchestrator/subagents.rs`),
   created and refreshed from the task snapshot and fed with the subagent's own
   prompt, messages, reasoning and tool calls under its own turn. Drivers tag that
   output with an `EventOrigin::Agent` origin, a tool `parent_id`, or

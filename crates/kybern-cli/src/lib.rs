@@ -474,6 +474,37 @@ enum TaskCmd {
         /// Prompt text; defaults to the task's title and description.
         prompt: Vec<String>,
     },
+    /// Start an agent on several tasks at once: a thread each, or one thread for all with --combined.
+    #[command(name = "send-batch")]
+    SendBatch {
+        /// Task keys or ids. Tasks that already have a run in progress are skipped.
+        #[arg(required = true)]
+        tasks: Vec<String>,
+        /// One run for every task instead of a run each.
+        #[arg(long)]
+        combined: bool,
+        /// Prompt text sent with every task's reference.
+        #[arg(long, default_value = "Work on the attached tasks.")]
+        prompt: String,
+        /// Agent to run; defaults to the default provider in settings.
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        #[arg(long, value_parser = parse_mode)]
+        mode: Option<PermissionMode>,
+        /// Run in a new git worktree.
+        #[arg(long)]
+        worktree: bool,
+        /// Branch to start from.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Project to run global tasks in.
+        #[arg(long)]
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1686,6 +1717,50 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&sent)?);
             } else {
                 println!("{} started on thread {}. Follow it with `kybern task show {}`.", sent.task.key, sent.thread_id, sent.task.key);
+            }
+        }
+        TaskCmd::SendBatch { tasks, combined, prompt, provider, model, effort, mode, worktree, branch, project } => {
+            let mut ids = Vec::new();
+            let mut keys = std::collections::HashMap::new();
+            for task in &tasks {
+                let task = resolve_task(client, task).await?;
+                keys.insert(task.id, task.key.clone());
+                ids.push(task.id);
+            }
+            let project_id = match &project {
+                Some(project) => Some(resolve_project(client, project, false).await?),
+                None => None,
+            };
+            let provider = match provider {
+                Some(provider) => provider.parse::<ProviderKind>().map_err(|e: String| anyhow!(e))?,
+                None => client.call::<SettingsGet>(Empty {}).await?.default_provider,
+            };
+            let sent = client
+                .call::<TaskItemsSendBatch>(TaskItemsSendBatchParams {
+                    ids,
+                    mode: if combined { TaskBatchMode::Combined } else { TaskBatchMode::Separate },
+                    provider: ProviderInstance::default_for(provider),
+                    model,
+                    effort,
+                    permission_mode: mode,
+                    use_worktree: if worktree { Some(true) } else { None },
+                    base_branch: branch,
+                    project_id,
+                    prompt: Some(prompt),
+                    message: None,
+                    note_ids: None,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&sent)?);
+            } else {
+                for started in &sent.started {
+                    println!("{} started on thread {}.", started.task.key, started.thread_id);
+                }
+                for skipped in &sent.skipped {
+                    let name = keys.get(&skipped.id).cloned().unwrap_or_else(|| skipped.id.to_string());
+                    println!("{name} skipped: {}.", skipped.reason.trim_end_matches('.'));
+                }
             }
         }
     }

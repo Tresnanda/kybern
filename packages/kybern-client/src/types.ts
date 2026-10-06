@@ -1154,6 +1154,48 @@ export interface TaskItemsSendParams {
   note_ids?: NoteId[];
 }
 
+/** One run per task (`separate`, started in parallel), or one thread that every task records a run for (`combined`). */
+export type TaskBatchMode = "separate" | "combined";
+
+/** Send several tasks to an agent at once. Mirrors `TaskItemsSendParams` with `ids`; the same message and agent settings apply to every task. */
+export interface TaskItemsSendBatchParams {
+  /** The tasks to send, in order. Repeats are ignored. At most 200. */
+  ids: TaskItemId[];
+  /** Defaults to `separate`. */
+  mode?: TaskBatchMode;
+  provider: ProviderInstance;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  use_worktree?: boolean | null;
+  base_branch?: string | null;
+  /** The project to run global tasks in. Required when any task is global; a project's tasks run in their own project. */
+  project_id?: ProjectId | null;
+  /** The prompt text. Exactly one of `prompt` or `message` is required. The daemon adds a `kybern://task/<id>` mention for each task at the start. */
+  prompt?: string;
+  /** The full first message. Each task's mention is added at the start when the message has none for it. */
+  message?: UserMessage;
+  /** Notes attached as `kybern://note/<id>` mentions to every run. */
+  note_ids?: NoteId[];
+}
+
+/** A combined run lists every task with the same thread. */
+export interface TaskBatchStarted {
+  task: TaskItem;
+  thread_id: ThreadId;
+}
+
+/** A task that did not start; `reason` is words for the user, such as "Already running". */
+export interface TaskBatchSkipped {
+  id: TaskItemId;
+  reason: string;
+}
+
+export interface TaskItemsSendBatchResult {
+  started: TaskBatchStarted[];
+  skipped: TaskBatchSkipped[];
+}
+
 export interface TaskItemsFollowupParams {
   id: TaskItemId;
   /** Plain text. Exactly one of `text` or `message` is required. */
@@ -1395,6 +1437,8 @@ export interface Settings {
   background: BackgroundSettings;
   access: AccessSettings;
   computer_use: ComputerUseSettings;
+  /** Give new agent sessions a short guide to Kybern. Defaults to on. */
+  tell_agents_about_kybern: boolean;
 }
 
 /** Whether an agent may ask to use the real cursor and focus. */
@@ -1759,6 +1803,7 @@ export interface Methods {
   "tasks.items.delete": [{ id: TaskItemId }, Empty];
   "tasks.items.restore": [{ id: TaskItemId }, TaskItem];
   "tasks.items.send": [TaskItemsSendParams, { task: TaskItem; thread_id: ThreadId }];
+  "tasks.items.send_batch": [TaskItemsSendBatchParams, TaskItemsSendBatchResult];
   "tasks.items.followup": [TaskItemsFollowupParams, { task: TaskItem; sent_to?: ThreadId | null }];
   "queue.list": [{ thread_id?: ThreadId }, { messages: QueuedMessage[] }];
   "queue.remove": [

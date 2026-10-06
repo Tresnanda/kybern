@@ -370,6 +370,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         TaskItemsRestore::NAME => ok(state.orchestrator.task_item_restore(parse::<TaskItemsIdParams>(params)?.id).map_err(task_err)?),
         TaskItemsSend::NAME => ok(state.orchestrator.task_item_send(parse(params)?).await.map_err(task_err)?),
+        TaskItemsSendBatch::NAME => ok(state.orchestrator.task_items_send_batch(parse(params)?).await.map_err(task_err)?),
         TaskItemsFollowup::NAME => ok(state.orchestrator.task_item_followup(parse(params)?).await.map_err(task_err)?),
         QueueUpdate::NAME => {
             state.orchestrator.update_queued(parse(params)?).map_err(bad)?;

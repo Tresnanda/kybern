@@ -1835,6 +1835,7 @@ mod tests {
             endpoint: None,
             authorization: None,
             coordinator_instructions: None,
+            guide: None,
             tools: ["kybern_thread_read", "kybern_thread_send", "unsupported_daemon_tool"]
                 .into_iter()
                 .map(|name| crate::NativeToolDefinition {

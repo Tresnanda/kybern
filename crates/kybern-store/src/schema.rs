@@ -342,7 +342,39 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE notes ADD COLUMN created_by_thread_id TEXT;
     ALTER TABLE task_items ADD COLUMN created_by_thread_id TEXT;
     ",
-    // v16: read-only child threads that mirror provider-native subagents. The
+    // v16: a combined run is one thread that several tasks each record a run for,
+    // so a thread id no longer identifies one run. SQLite cannot drop a UNIQUE
+    // constraint, so the table is rebuilt (in one transaction) with a plain index.
+    "
+    BEGIN;
+    CREATE TABLE task_runs_v16 (
+        task_id TEXT NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        thread_id TEXT NOT NULL,
+        provider_kind TEXT NOT NULL,
+        provider_instance TEXT NOT NULL,
+        model TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        state TEXT NOT NULL,
+        activity TEXT,
+        diff_added INTEGER,
+        diff_removed INTEGER,
+        diff_files INTEGER,
+        notes TEXT NOT NULL DEFAULT '[]',
+        PRIMARY KEY (task_id, number)
+    );
+    INSERT INTO task_runs_v16(task_id, number, thread_id, provider_kind, provider_instance, model, started_at, ended_at, state,
+                              activity, diff_added, diff_removed, diff_files, notes)
+    SELECT task_id, number, thread_id, provider_kind, provider_instance, model, started_at, ended_at, state,
+           activity, diff_added, diff_removed, diff_files, notes
+    FROM task_runs ORDER BY rowid;
+    DROP TABLE task_runs;
+    ALTER TABLE task_runs_v16 RENAME TO task_runs;
+    CREATE INDEX task_runs_thread ON task_runs(thread_id);
+    COMMIT;
+    ",
+    // v17: read-only child threads that mirror provider-native subagents. The
     // JSON `subagent` column marks them and carries their lifecycle; one
     // runtime task of one session maps to exactly one child thread.
     "

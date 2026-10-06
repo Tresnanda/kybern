@@ -327,8 +327,11 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
       if (visibleThreadIds.size === 0 && next.selected.kind === "none") {
         const first = projects.projects[0]
-        if (first) useStore.getState().selectDraft(first.id)
-        else useStore.getState().selectFreeDraft()
+        // Boot picks the first view for you; it is not a step to come back to.
+        useStore.getState().replaceNavigation(() => {
+          if (first) useStore.getState().selectDraft(first.id)
+          else useStore.getState().selectFreeDraft()
+        })
       }
     } catch (e) {
       if (isCurrentHydration(generation)) {
@@ -350,8 +353,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     state.set({ selected: { kind: "none" } })
     if (collectSplitThreadIds(useStore.getState().splitView).length > 0) return
     const first = incoming[0]
-    if (first) useStore.getState().selectDraft(first.id)
-    else useStore.getState().selectFreeDraft()
+    useStore.getState().replaceNavigation(() => {
+      if (first) useStore.getState().selectDraft(first.id)
+      else useStore.getState().selectFreeDraft()
+    })
   }
 
   function isCurrentHydration(generation: number): boolean {
@@ -752,7 +757,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const s = useStore.getState()
     s.set((st) => ({ threads: { ...st.threads, [t.id]: t } }))
     if (opts.paneId) s.focusSplitPane(opts.paneId)
-    s.selectThread(t.id)
+    s.selectCreatedThread(t.id)
     void loadThread(t.id)
     return t.id
   }

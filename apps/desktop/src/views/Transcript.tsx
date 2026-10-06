@@ -6,7 +6,7 @@ import { ResponseImage } from "@/components/kybern/ResponseImage"
 import { responseImages } from "@/lib/responseImages"
 import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
 import { computerConsent, connectorApproval, isUserInput, notesTasksConsent, parseKybernMention } from "@/lib/userInput"
-import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, type AgentItemTool, type AgentNoteResult, type AgentTaskResult } from "@/lib/agentItemTools"
+import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards, type AgentItemTool, type AgentItemWrite } from "@/lib/agentItemTools"
 import { AgentItemCard } from "./AgentItemCard"
 import { openNote } from "@/state/notes"
 import { openTask } from "@/state/tasks"
@@ -129,8 +129,8 @@ interface AgentActivityDetail {
 interface SettledWorkPresentation {
   agentBlocks: Block[]
   disclosureBlocks: Block[]
-  /** The notes and tasks this turn's agent filed or changed, latest write per item. */
-  itemWrites: { id: string; result: AgentNoteResult | AgentTaskResult }[]
+  /** The notes and tasks this turn's agent filed or changed, every write in call order. */
+  itemWrites: AgentItemWrite[]
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
 }
@@ -174,20 +174,18 @@ function settledWorkPresentation(blocks: readonly Block[], tasks: readonly Runti
     ) agentBlocks.push(block)
     else disclosureBlocks.push(block)
   }
-  const writes = new Map<string, { id: string; result: AgentNoteResult | AgentTaskResult }>()
+  const writes: AgentItemWrite[] = []
   for (const block of hierarchy.roots) {
     if (block.kind !== "tool" || !block.complete || block.isError || !agentItemTool(block.call.name)?.write) continue
     const result = agentItemWriteResult(parseAgentItemResult(block.output))
     if (!result) continue
-    const key = `${result.kind}:${result.id}`
-    writes.delete(key)
-    writes.set(key, { id: block.call.id, result })
+    writes.push({ id: block.call.id, result })
   }
 
   return {
     agentBlocks,
     disclosureBlocks,
-    itemWrites: [...writes.values()],
+    itemWrites: writes,
     tasksByToolCall,
     childrenByParent: hierarchy.childrenByParent,
   }
@@ -698,6 +696,8 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
     () => settledWorkPresentation(group.work, launchedTasks),
     [group.work, launchedTasks],
   )
+  // A note or task the answer links to is a chip there; its card stays in the fold.
+  const itemCards = useMemo(() => placeItemCards(settledWork.itemWrites, group.answer?.text), [settledWork.itemWrites, group.answer?.text])
   const hasWork = group.work.length > 0
   const hasPrimaryAgentActivity = settledWork.agentBlocks.length > 0
   const hasDisclosedWork = settledWork.disclosureBlocks.length > 0
@@ -777,7 +777,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                   </CollapsibleTrigger>
                   <CollapsiblePanel>
                     <div className="chat-paint-host ms-5 mt-0.5 space-y-0.5 ps-0.5">
-                      <ItemCardsBelowAnswer.Provider value={true}>
+                      <ItemCardsInline.Provider value={itemCards.inlineCallIds}>
                         <WorkRows
                           blocks={settledWork.disclosureBlocks}
                           tasksByToolCall={settledWork.tasksByToolCall}
@@ -785,7 +785,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
                           compact
                           onOpenAgentActivity={onOpenAgentActivity}
                         />
-                      </ItemCardsBelowAnswer.Provider>
+                      </ItemCardsInline.Provider>
                     </div>
                   </CollapsiblePanel>
                 </Collapsible>
@@ -815,9 +815,9 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity }
               </p>
             )}
 
-            {settledWork.itemWrites.length > 0 && (
+            {itemCards.below.length > 0 && (
               <div className="chat-paint-host mt-2 space-y-1.5" data-agent-items>
-                {settledWork.itemWrites.map((write) => <AgentItemCard key={write.id} result={write.result} style={CHAT_FONT} inset={false} />)}
+                {itemCards.below.map((write) => <AgentItemCard key={write.id} result={write.result} style={CHAT_FONT} inset={false} />)}
               </div>
             )}
 
@@ -1471,8 +1471,12 @@ const WorkRow = memo(function WorkRow({
   }
 })
 
-/** Inside a settled turn the item cards sit under the answer, so rows skip their own. */
-const ItemCardsBelowAnswer = createContext(false)
+/**
+ * Inside a settled turn the item cards sit under the answer, so rows skip their own,
+ * except the calls named here: items the answer links to keep their card in the fold.
+ * Outside a settled turn (null) every row shows its card.
+ */
+const ItemCardsInline = createContext<ReadonlySet<string> | null>(null)
 
 function ToolRow({
   block,
@@ -1490,7 +1494,7 @@ function ToolRow({
   showTimestamp?: boolean
 }) {
   const [open, setOpen] = useTranscriptRowState("open", false)
-  const cardsBelowAnswer = useContext(ItemCardsBelowAnswer)
+  const inlineCards = useContext(ItemCardsInline)
   const active = !!task && isRuntimeTaskActive(task)
   const { activity, visual, surface, screenshots, label, hasOutput, item, itemWrite } = useMemo(() => {
     const activity = toolLine(block.call, block.complete && !active)
@@ -1549,7 +1553,7 @@ function ToolRow({
           ? <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/tool-row:text-foreground" />
           : canExpand && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
       </button>
-      {itemWrite && !cardsBelowAnswer && <AgentItemCard result={itemWrite} style={CHAT_FONT} />}
+      {itemWrite && (!inlineCards || inlineCards.has(block.call.id)) && <AgentItemCard result={itemWrite} style={CHAT_FONT} />}
       {canExpand && (
         <DisclosureRegion open={open} contentClassName="ms-[1.375rem] min-w-0 pt-1.5">
           {hasChildActivity && (

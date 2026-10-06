@@ -1,7 +1,7 @@
 import * as Clipboard from "expo-clipboard";
-import { memo, useContext, useMemo } from "react";
+import { createContext, memo, useContext, useMemo, type ReactNode } from "react";
 import { router } from "expo-router";
-import { chatLink } from "../../../../packages/kybern-client/src/chatLinks";
+import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks";
 import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
@@ -9,10 +9,37 @@ import { Icon, IconButton, T, styles } from "./primitives";
 import { useTheme } from "./theme";
 import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
+import { NoteRef } from "./NoteRef";
 
 export function openLink(url: string) {
   if (/^(https?:|mailto:)/i.test(url))
     void Linking.openURL(url).catch(() => {});
+}
+/** In a chat message a task reference also reads its title and notices when it is deleted. */
+const ChatRefs = createContext(false);
+
+function RefChip({ reference, label, checklist }: { reference: KybernRef; label: string; checklist?: boolean }) {
+  const chat = useContext(ChatRefs);
+  return reference.target === "task" ? (
+    <TaskRef id={reference.id} label={label} checklist={checklist} chat={chat} />
+  ) : (
+    <NoteRef id={reference.id} label={label} />
+  );
+}
+/** Plain text, with any bare `kybern://note|task/<id>` in it drawn as a reference. */
+function RefText({ text, checklist }: { text: string; checklist?: boolean }) {
+  if (!text.includes("kybern://")) return <>{text}</>;
+  return (
+    <>
+      {splitKybernRefs(text).map((part, i): ReactNode =>
+        "ref" in part ? (
+          <RefChip key={i} reference={part.ref} label={part.text} checklist={checklist} />
+        ) : (
+          part.text
+        ),
+      )}
+    </>
+  );
 }
 function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
   const { colors } = useTheme();
@@ -28,6 +55,19 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
                 {<Inline text={part.slice(2, -2)} checklist={checklist} />}
               </Text>
             );
+          const codeRef =
+            part.startsWith("`") && part.endsWith("`")
+              ? kybernRef(part.slice(1, -1))
+              : null;
+          if (codeRef)
+            return (
+              <RefChip
+                key={i}
+                reference={codeRef}
+                label=""
+                checklist={checklist}
+              />
+            );
           if (part.startsWith("`") && part.endsWith("`"))
             return (
               <Text
@@ -42,10 +82,16 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
               </Text>
             );
           const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
+          const linked = link ? kybernRef(link[2]!) : null;
           const taskId = link ? taskLinkId(link[2]!) : null;
-          if (link && taskId)
+          if (link && (linked || taskId))
             return (
-              <TaskRef key={i} id={taskId} label={link[1]!} checklist={checklist} />
+              <RefChip
+                key={i}
+                reference={linked ?? { target: "task", id: taskId! }}
+                label={link[1]!}
+                checklist={checklist}
+              />
             );
           if (link)
             return (
@@ -75,7 +121,7 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
                 {part.slice(1, -1)}
               </Text>
             );
-          return part;
+          return <RefText key={i} text={part} checklist={checklist} />;
         })}
     </>
   );
@@ -146,38 +192,47 @@ export const Code = memo(function Code({
     </View>
   );
 });
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({
+  text,
+  chat = false,
+}: {
+  text: string;
+  /** A message in a conversation: references read their title and notice deletions. */
+  chat?: boolean;
+}) {
   const sections = useMemo(() => text.split(/(```[\s\S]*?(?:```|$))/g), [text]);
   return (
-    <View style={{ gap: 10 }}>
-      {sections.filter(Boolean).map((section, s) => {
-        if (section.startsWith("```")) {
-          const first = section.indexOf("\n");
-          return (
-            <Code
-              key={`code:${s}`}
-              language={section.slice(3, first < 0 ? undefined : first).trim()}
-              text={
-                first < 0
-                  ? ""
-                  : section
-                      .slice(first + 1)
-                      .replace(/```$/, "")
-                      .trimEnd()
-              }
-            />
-          );
-        }
-        return section
-          .replace(/^(#{1,6} .+)$/gm, "\n\n$1\n\n")
-          .trim()
-          .split(/\n\s*\n/)
-          .filter(Boolean)
-          .map((para, p) => (
-            <MarkdownParagraph key={`${s}-${p}`} para={para} />
-          ));
-      })}
-    </View>
+    <ChatRefs value={chat}>
+      <View style={{ gap: 10 }}>
+        {sections.filter(Boolean).map((section, s) => {
+          if (section.startsWith("```")) {
+            const first = section.indexOf("\n");
+            return (
+              <Code
+                key={`code:${s}`}
+                language={section.slice(3, first < 0 ? undefined : first).trim()}
+                text={
+                  first < 0
+                    ? ""
+                    : section
+                        .slice(first + 1)
+                        .replace(/```$/, "")
+                        .trimEnd()
+                }
+              />
+            );
+          }
+          return section
+            .replace(/^(#{1,6} .+)$/gm, "\n\n$1\n\n")
+            .trim()
+            .split(/\n\s*\n/)
+            .filter(Boolean)
+            .map((para, p) => (
+              <MarkdownParagraph key={`${s}-${p}`} para={para} />
+            ));
+        })}
+      </View>
+    </ChatRefs>
   );
 });
 // Completed paragraphs retain native text, selection and table scroll state while

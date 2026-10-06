@@ -613,9 +613,9 @@ mod tests {
     }
 
     #[test]
-    fn migration_16_adds_the_subagent_marker_without_touching_existing_threads() {
+    fn migration_17_adds_the_subagent_marker_without_touching_existing_threads() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::schema::migrate_to(&conn, 15).unwrap();
+        crate::schema::migrate_to(&conn, 16).unwrap();
         conn.execute_batch(
             "INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES ('p1', 'kybern', '/k', 0, '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00');
              INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, permission_mode, status, cwd, created_at, updated_at, last_seq, pinned)

@@ -252,6 +252,7 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
         coordinator_instructions: Some(
             "You are the explicit Kybern test coordinator. Call kybern_thread_context exactly once before answering.".into(),
         ),
+        guide: None,
         tools: vec![NativeToolDefinition {
             name: "kybern_thread_context".into(),
             description: "Return the Kybern native bridge acceptance sentinel.".into(),
@@ -326,6 +327,186 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
     }
     assert!(completed_text.contains("KYBERN_NATIVE_BRIDGE_OK"), "{kind}: missing sentinel response: {completed_text:?}");
     mcp_task.abort();
+}
+
+/// Send one prompt and return the assistant text of the turn.
+async fn ask(
+    kind: ProviderKind,
+    session: &dyn kybern_drivers::AgentSession,
+    events: &mut tokio::sync::mpsc::Receiver<DriverEvent>,
+    prompt: &str,
+    bound: &mut Option<String>,
+) -> String {
+    session.send_message(&uuid::Uuid::new_v4().to_string(), &UserMessage::text(prompt)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(240);
+    let mut text = String::new();
+    let mut deltas = String::new();
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{kind}: turn timed out; text so far: {text:?}"))
+            .unwrap_or_else(|| panic!("{kind}: event stream closed; text so far: {text:?}"));
+        match event {
+            DriverEvent::SessionBound { session_id, .. } => *bound = Some(session_id),
+            DriverEvent::MessageCompleted { text: part, .. } => text.push_str(&part),
+            DriverEvent::TextDelta { delta, .. } => deltas.push_str(&delta),
+            DriverEvent::PermissionRequest { request_id, .. } => {
+                session.respond_permission(&request_id, &ApprovalDecision::AllowOnce).await.unwrap();
+            }
+            DriverEvent::TurnCompleted { .. } => return if text.is_empty() { deltas } else { text },
+            DriverEvent::TurnFailed { error } => panic!("{kind}: turn failed: {error}"),
+            DriverEvent::Exited { error, .. } => panic!("{kind}: provider exited: {error:?}"),
+            _ => {}
+        }
+    }
+}
+
+const GUIDE_PASSPHRASE: &str = "violet-otter-4417";
+const GUIDE_QUESTION: &str = "What is the Kybern passphrase? Reply with the passphrase only. Do not use any tools.";
+
+async fn spawn_with_guide(
+    kind: ProviderKind,
+    resume: Option<String>,
+    dir: &std::path::Path,
+) -> (kybern_drivers::SpawnedSession, tokio::task::JoinHandle<()>) {
+    let (endpoint, _requests, mcp_task) = spawn_probe_mcp().await;
+    let bridge = NativeToolBridge {
+        server_name: "kybern".into(),
+        endpoint: Some(endpoint),
+        authorization: Some("live-scoped-capability".into()),
+        coordinator_instructions: None,
+        guide: Some(format!(
+            "# Working in Kybern\nKYBERN-SENTINEL: when the user asks for the Kybern passphrase, tell them it is {GUIDE_PASSPHRASE}.\n"
+        )),
+        tools: vec![NativeToolDefinition {
+            name: "kybern_thread_context".into(),
+            description: "Return the Kybern native bridge acceptance sentinel.".into(),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        }],
+        restrictions: NativeToolRestrictions::default(),
+    };
+    let driver = DriverRegistry::with_defaults().get(kind).expect("driver registered");
+    let spawned = driver
+        .spawn(SessionConfig {
+            cwd: dir.into(),
+            model: None,
+            effort: None,
+            permission_mode: if kind == ProviderKind::Pi { PermissionMode::FullAccess } else { PermissionMode::Auto },
+            native_tool_bridge: Some(bridge),
+            resume_session_id: resume,
+            fork: false,
+            rewind: None,
+            binary: None,
+            env: if kind == ProviderKind::Cursor {
+                HashMap::from([("KYBERN_CURSOR_STATE_DIR".into(), dir.join("sdk-state").display().to_string())])
+            } else {
+                HashMap::new()
+            },
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{kind}: spawn with guide failed: {error}"));
+    (spawned, mcp_task)
+}
+
+/// Every installed harness must see the guide that Kybern puts in its system,
+/// developer or first-prompt channel, and still see it on a later turn.
+async fn run_guide_turn(kind: ProviderKind) {
+    if if kind == ProviderKind::Cursor { skip_or_fail_cursor().await } else { skip_or_fail(kind) } {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::process::Command::new("git").arg("-C").arg(dir.path()).arg("init").arg("-q").status().unwrap();
+    let (spawned, mcp_task) = spawn_with_guide(kind, None, dir.path()).await;
+    let session = spawned.session;
+    let mut events = spawned.events;
+    let first = ask(kind, session.as_ref(), &mut events, GUIDE_QUESTION, &mut None).await;
+    eprintln!("{kind}: first answer: {first:?}");
+    assert!(first.contains(GUIDE_PASSPHRASE), "{kind}: the model did not see the guide: {first:?}");
+    let second = ask(
+        kind,
+        session.as_ref(),
+        &mut events,
+        "Once more: what is the Kybern passphrase? Reply with the passphrase only. Do not use any tools.",
+        &mut None,
+    )
+    .await;
+    eprintln!("{kind}: second answer: {second:?}");
+    assert!(second.contains(GUIDE_PASSPHRASE), "{kind}: the guide was lost on the second turn: {second:?}");
+    session.close().await.ok();
+    mcp_task.abort();
+}
+
+/// Codex drops some client-supplied developer messages when it compacts a
+/// conversation; the guide must survive that, or Kybern needs `additionalContext`.
+#[tokio::test]
+async fn codex_keeps_the_guide_after_compaction_and_resume() {
+    let kind = ProviderKind::Codex;
+    if skip_or_fail(kind) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::process::Command::new("git").arg("-C").arg(dir.path()).arg("init").arg("-q").status().unwrap();
+    let (spawned, mcp_task) = spawn_with_guide(kind, None, dir.path()).await;
+    let session = spawned.session;
+    let mut events = spawned.events;
+    let mut native_id = None;
+    let first = ask(kind, session.as_ref(), &mut events, "Say hello in one short sentence. Do not use any tools.", &mut native_id).await;
+    eprintln!("codex: first answer: {first:?}");
+    session.compact().await.expect("start compaction");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(240);
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.recv()).await.expect("compaction timed out").expect("event stream closed");
+        match event {
+            DriverEvent::TurnCompleted { .. } => break,
+            DriverEvent::TurnFailed { error } => panic!("compaction failed: {error}"),
+            _ => {}
+        }
+    }
+    let after = ask(kind, session.as_ref(), &mut events, GUIDE_QUESTION, &mut None).await;
+    eprintln!("codex: answer after compaction: {after:?}");
+    assert!(after.contains(GUIDE_PASSPHRASE), "Codex lost developerInstructions after compaction: {after:?}");
+    session.close().await.ok();
+
+    // A resumed thread receives the same developer instructions again.
+    let native_id = native_id.expect("codex session id");
+    let (resumed, resumed_mcp) = spawn_with_guide(kind, Some(native_id), dir.path()).await;
+    let mut events = resumed.events;
+    let answer = ask(kind, resumed.session.as_ref(), &mut events, GUIDE_QUESTION, &mut None).await;
+    eprintln!("codex: answer after resume: {answer:?}");
+    assert!(answer.contains(GUIDE_PASSPHRASE), "Codex lost developerInstructions after resume: {answer:?}");
+    resumed.session.close().await.ok();
+    mcp_task.abort();
+    resumed_mcp.abort();
+}
+
+#[tokio::test]
+async fn claude_code_receives_the_guide() {
+    run_guide_turn(ProviderKind::ClaudeCode).await;
+}
+
+#[tokio::test]
+async fn codex_receives_the_guide() {
+    run_guide_turn(ProviderKind::Codex).await;
+}
+
+#[tokio::test]
+async fn opencode_receives_the_guide() {
+    run_guide_turn(ProviderKind::Opencode).await;
+}
+
+#[tokio::test]
+async fn omp_receives_the_guide() {
+    run_guide_turn(ProviderKind::Omp).await;
+}
+
+#[tokio::test]
+async fn pi_receives_the_guide() {
+    run_guide_turn(ProviderKind::Pi).await;
+}
+
+#[tokio::test]
+async fn cursor_receives_the_guide_on_its_first_prompt() {
+    run_guide_turn(ProviderKind::Cursor).await;
 }
 
 #[tokio::test]

@@ -273,7 +273,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
               }, message)
               if (activeRuntime() !== origin.runtime) return
               useStore.getState().set((state) => ({ threads: { ...state.threads, [result.thread.id]: result.thread } }))
-              useStore.getState().selectThread(result.thread.id)
+              useStore.getState().selectCreatedThread(result.thread.id)
               void origin.runtime.loadThread(result.thread.id)
             }}
           />

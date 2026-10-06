@@ -275,7 +275,7 @@ impl AgentDriver for OpencodeDriver {
                 context_windows: HashMap::new(),
                 session_id: None,
                 model: config.model.clone(),
-                coordinator_instructions: config.native_tool_bridge.as_ref().and_then(|bridge| bridge.coordinator_instructions.clone()),
+                coordinator_instructions: config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
                 mode: config.permission_mode,
                 parts: HashMap::new(),
                 message_roles: HashMap::new(),
@@ -1842,6 +1842,7 @@ mod tests {
             endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
             authorization: Some("session-capability".into()),
             coordinator_instructions: None,
+            guide: None,
             tools: vec![],
             restrictions: crate::NativeToolRestrictions { require_enforcement: true, ..Default::default() },
         };
@@ -1861,6 +1862,7 @@ mod tests {
             endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
             authorization: Some("session-capability".into()),
             coordinator_instructions: None,
+            guide: None,
             tools: vec![],
             restrictions: Default::default(),
         };
