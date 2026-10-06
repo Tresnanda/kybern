@@ -245,6 +245,12 @@ replay events received during hydration; preserve row identity and reading posit
   `parent_thread_id` is set, and clients must keep them out of normal lists
   (`isSubagentThread` in `packages/kybern-client`). Archiving a thread archives
   its subagent threads.
+  Desktop: a subagent is an ordinary thread page (`views/subagents/`: breadcrumb,
+  divider, read-only `SubagentBar`, "N subagents" group row, composer strip, hover
+  card, nested sidebar rows). Rules for grouping, phases, copy and sidebar
+  visibility live in `packages/kybern-client/src/subagents.ts`; live elapsed text
+  goes through the shared `lib/elapsedClock.ts` (no React renders per tick).
+  Keyboard navigation (⌘[, ⌘], ⌘↑ Open parent) is instant; pointer pushes the page.
 - Events are append-only. New behavior means a new `EventPayload` variant plus
   handling in `store/projection.rs` and `apps/desktop/src/state/transcript.ts`.
   Clients ignore unknown kinds.
