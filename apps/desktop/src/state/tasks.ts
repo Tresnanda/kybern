@@ -756,18 +756,24 @@ export async function sendTasks(params: TaskBatchParams): Promise<TaskBatchResul
     return { started: result.started, failed: [], skipped: result.skipped }
   }
   const ids = items.map((item) => item.id)
-  const settled = await Promise.allSettled(
-    items.map((item) =>
-      sendTask({
-        id: item.id,
-        ...common,
-        use_worktree: item.use_worktree,
-        base_branch: item.use_worktree ? item.base_branch : null,
-        project_id: item.project_id,
-        message: { ...message, parts: messageForTask(message.parts, item.id, ids) },
-      }),
-    ),
-  )
+  // Four at a time, like the daemon's batch path: each run may create a worktree.
+  const settled: PromiseSettledResult<Awaited<ReturnType<typeof sendTask>>>[] = []
+  for (let start = 0; start < items.length; start += 4) {
+    settled.push(
+      ...(await Promise.allSettled(
+        items.slice(start, start + 4).map((item) =>
+          sendTask({
+            id: item.id,
+            ...common,
+            use_worktree: item.use_worktree,
+            base_branch: item.use_worktree ? item.base_branch : null,
+            project_id: item.project_id,
+            message: { ...message, parts: messageForTask(message.parts, item.id, ids) },
+          }),
+        ),
+      )),
+    )
+  }
   const started: TaskBatchResult["started"] = []
   const failed: TaskBatchResult["failed"] = []
   settled.forEach((outcome, index) => {
