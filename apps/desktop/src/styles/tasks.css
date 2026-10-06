@@ -31,6 +31,12 @@
   --task-on-solid: var(--task-main);
   --task-seg-on: #fff;
   --task-seg-on-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.08);
+  /* A picked row or card: one step above the keyboard-focus tint (--task-sel). */
+  --task-chosen: color-mix(in srgb, var(--foreground) 8%, transparent);
+  --task-chosen-hover: color-mix(in srgb, var(--foreground) 10.5%, transparent);
+  /* Floating surfaces over the list: the selection bar. */
+  --task-float: var(--color-background-elevated-primary-opaque, #fff);
+  --task-shadow-float: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 10px 28px -8px rgb(0 0 0 / 0.18), 0 2px 6px -2px rgb(0 0 0 / 0.08);
 }
 
 .dark {
@@ -55,6 +61,10 @@
   --task-check-on: rgb(255 255 255 / 0.42);
   --task-seg-on: var(--task-sel);
   --task-seg-on-shadow: none;
+  --task-chosen: color-mix(in srgb, var(--foreground) 9.5%, transparent);
+  --task-chosen-hover: color-mix(in srgb, var(--foreground) 12%, transparent);
+  --task-float: color-mix(in srgb, var(--task-main), #fff 7%);
+  --task-shadow-float: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 0 0 0.5px rgb(0 0 0 / 0.7), 0 14px 36px -10px rgb(0 0 0 / 0.65);
 }
 
 @media (prefers-contrast: more) {
@@ -66,6 +76,8 @@
     --task-hair: color-mix(in srgb, var(--foreground) 22%, transparent);
     --task-fill: color-mix(in srgb, var(--foreground) 9%, transparent);
     --task-sel: color-mix(in srgb, var(--foreground) 14%, transparent);
+    --task-chosen: color-mix(in srgb, var(--foreground) 16%, transparent);
+    --task-chosen-hover: color-mix(in srgb, var(--foreground) 19%, transparent);
   }
 }
 
@@ -439,6 +451,9 @@
   white-space: nowrap;
   overflow: hidden;
 }
+.tk-hints[data-hidden] {
+  visibility: hidden;
+}
 .tk-hints b {
   margin-inline-end: 5px;
   font-weight: 500;
@@ -490,6 +505,13 @@
 .tk-list {
   container-type: inline-size;
   padding: 4px 0 24px;
+}
+/* Room for the selection bar, so the last row scrolls clear of it. */
+.tk-list[data-selecting] {
+  padding-bottom: 76px;
+}
+.tk-board[data-selecting] .tk-col-body {
+  padding-bottom: 76px;
 }
 .tk-group {
   display: flex;
@@ -580,9 +602,13 @@
   white-space: nowrap;
 }
 .tk-row .st {
+  position: relative;
   display: flex;
   width: 26px;
   flex: none;
+  align-self: stretch;
+  align-items: center;
+  cursor: pointer;
 }
 .tk-row .t {
   min-width: 120px;
@@ -1538,4 +1564,256 @@
   margin-block: -2px;
   margin-inline-start: -3px;
   color: var(--task-fg3);
+}
+
+/* ---------- selecting tasks ---------- */
+
+/* The checkbox: the status glyph's box, drawn as a rounded square. Ink when checked. */
+.tk-check {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  color: var(--task-fg3);
+}
+.tk-check svg {
+  display: block;
+}
+.tk-check .box {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.tk-check .tick {
+  fill: none;
+  stroke: var(--task-on-solid);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+.tk-check[aria-checked="true"] {
+  color: var(--task-solid);
+}
+.tk-check[aria-checked="true"] .box {
+  fill: currentColor;
+}
+.tk-check[aria-checked="true"] .tick {
+  opacity: 1;
+}
+
+/* List: the glyph and the checkbox share the 26 x 40 cell and cross-fade. */
+.tk-row .st .task-glyph,
+.tk-row .st .tk-check {
+  transition: opacity var(--duration-micro) var(--ease-out);
+}
+.tk-row .st .tk-check {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  translate: 0 -50%;
+  opacity: 0;
+}
+/* Shown over the glyph on hover, on any hovered row once something is picked, and always when picked. */
+.tk-row .st:hover .tk-check,
+.tk-list[data-selecting] .tk-row:hover .tk-check,
+.tk-row[data-selected] .tk-check {
+  opacity: 1;
+}
+.tk-row .st:hover .task-glyph,
+.tk-list[data-selecting] .tk-row:hover .st .task-glyph,
+.tk-row[data-selected] .st .task-glyph {
+  opacity: 0;
+}
+.tk-row .st:hover .tk-check:not([aria-checked="true"]) {
+  color: var(--task-fg1);
+}
+.tk-row[data-selected] {
+  background: var(--task-chosen);
+}
+.tk-row[data-selected]:hover {
+  background: var(--task-chosen-hover);
+}
+/* Rows are full-bleed, so neighbors merge into one band. The focused row keeps its own ring. */
+.tk-row[data-selected][data-focused] {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--foreground) 14%, transparent);
+}
+
+/* Board: the checkbox takes the corner where priority rests; nothing else moves. */
+.tk-card .tk-check {
+  position: absolute;
+  top: 12px;
+  inset-inline-end: 12px;
+  opacity: 0;
+  transition: opacity var(--duration-micro) var(--ease-out);
+}
+.tk-card .tk-check::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}
+.tk-card .r1 .pr {
+  transition: opacity var(--duration-micro) var(--ease-out);
+}
+.tk-card:hover .tk-check,
+.tk-card[data-selected] .tk-check {
+  opacity: 1;
+}
+.tk-card:hover .r1 .pr,
+.tk-card[data-selected] .r1 .pr {
+  opacity: 0;
+}
+.tk-card[data-selected] {
+  background: var(--task-card-hover);
+  box-shadow: var(--task-shadow-card-hover), 0 0 0 1.5px color-mix(in srgb, var(--foreground) 46%, transparent);
+}
+
+/* The selection bar: one raised surface, centered over the page's foot. */
+.tk-selbar {
+  position: absolute;
+  z-index: 3;
+  inset-inline: 0;
+  bottom: 48px; /* clears the 36px hint line; 16px when hints are hidden */
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.tk-page[data-no-hints] .tk-selbar {
+  bottom: 16px;
+}
+.tk-selbar-inner {
+  display: flex;
+  height: 44px;
+  align-items: center;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 14px; /* the buttons' 8px plus the 6px padding: concentric */
+  background: var(--task-float);
+  box-shadow: var(--task-shadow-float);
+  pointer-events: auto;
+  /* Rises 8px and clears its blur over 200ms; leaves faster and smaller, 140ms over 4px. */
+  transition:
+    opacity 200ms var(--ease-smooth-out),
+    translate 200ms var(--ease-smooth-out),
+    filter 200ms var(--ease-smooth-out);
+}
+@starting-style {
+  .tk-selbar-inner {
+    opacity: 0;
+    translate: 0 8px;
+    filter: blur(2px);
+  }
+}
+.tk-selbar[data-leaving] .tk-selbar-inner {
+  opacity: 0;
+  translate: 0 4px;
+  pointer-events: none;
+  transition-duration: 140ms;
+}
+.tk-selbar .count {
+  padding: 0 12px 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--task-fg);
+  white-space: nowrap;
+}
+.tk-selbar .tk-btn {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--task-fg1);
+  gap: 7px;
+}
+.tk-selbar .tk-btn .gl {
+  display: flex;
+  color: var(--task-fg2);
+}
+.tk-selbar .tk-btn.x {
+  width: 32px;
+  padding: 0;
+  margin-inline-start: 4px;
+  color: var(--task-fg3);
+}
+.tk-selbar .primary {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  margin-inline-end: 6px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: var(--task-solid);
+  color: var(--task-on-solid);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: opacity var(--duration-quick) var(--ease-out), scale var(--duration-micro) var(--ease-out);
+}
+.tk-selbar .primary:hover {
+  opacity: 0.9;
+}
+.tk-selbar .primary[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+.tk-selbar .primary:active,
+.tk-selbar .tk-btn:active {
+  scale: 0.97;
+}
+.tk-selbar .primary[aria-disabled="true"]:active {
+  scale: none;
+}
+.tk-selbar :is(.primary, .tk-btn):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tk-selbar-inner {
+    transition: opacity var(--duration-quick) var(--ease-out);
+  }
+  .tk-selbar-inner,
+  .tk-selbar[data-leaving] .tk-selbar-inner {
+    translate: none;
+    filter: none;
+  }
+  .tk-selbar .primary:active,
+  .tk-selbar .tk-btn:active {
+    scale: none;
+  }
+}
+
+/* The batch composer on the Tasks page: the task page's dock, over the list. */
+.tk-page > .tk-dock {
+  z-index: 3;
+}
+.tk-dock-line .skip {
+  flex: none;
+  color: var(--task-fg2);
+}
+/* Many chips: in a batch each task chip keeps one line and truncates its title (the
+   full title is its tooltip), so three to eight tasks flow two or three to a line. */
+.tk-dock[data-batch] .composer-editor .chat-inline-token {
+  display: inline-block;
+  max-width: min(16rem, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.tk-dock[data-batch] .composer-editor .chat-inline-token > svg {
+  display: inline-block;
+  margin-inline-end: 0.25em;
+  vertical-align: -0.1em;
+}
+
+/* The send disc grows into a labeled pill when the button must say how many runs start. */
+button.tk-send-pill {
+  width: auto !important;
+  padding: 0 14px !important;
+  font-size: 13px !important;
+  font-weight: 500;
+  white-space: nowrap;
+}
+button.tk-send-pill:hover {
+  scale: 1 !important;
+  opacity: 0.9;
 }

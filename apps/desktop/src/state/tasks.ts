@@ -30,6 +30,17 @@ import {
 import { activeRuntime, errorText, loadThread } from "./rpc"
 import { useStore, type AppState } from "./store"
 import {
+  EMPTY_SELECTION,
+  extendSelection,
+  focusAfterRemoval,
+  messageForTask,
+  pruneSelection,
+  rangeSelection,
+  selectAllSelection,
+  toggleSelection,
+  type SelectionState,
+} from "./tasksSelection"
+import {
   DEFAULT_TASK_PREFS,
   isLiveRun,
   latestRun,
@@ -57,6 +68,14 @@ export interface RunComposerRequest {
   nonce: number
 }
 
+/** The batch Send to agent composer on the Tasks page, for the tasks that will start. */
+export interface BatchComposerRequest {
+  /** Tasks that start, in the order shown; the ones with a live run are in `skipped`. */
+  ids: TaskItemId[]
+  skipped: TaskItemId[]
+  nonce: number
+}
+
 export interface TaskMenuRequest {
   taskId: TaskItemId
   kind: "status" | "priority"
@@ -79,6 +98,17 @@ interface TasksState {
   quickAdd: QuickAdd | null
   composer: RunComposerRequest | null
   menu: TaskMenuRequest | null
+  /** Tasks picked on the list or board. Per window, not saved. */
+  selected: ReadonlySet<TaskItemId>
+  /** Where a ⇧-click range starts, and where the last one ended. */
+  anchorId: TaskItemId | null
+  rangeEndId: TaskItemId | null
+  /** The tasks the list or board shows, in order: what ⌘A and ranges walk. */
+  rendered: readonly TaskItemId[]
+  /** The selection bar's Status or Priority menu, opened by S or P. */
+  bulkMenu: "status" | "priority" | null
+  /** Send to agent for the selection. */
+  batch: BatchComposerRequest | null
   /** Set when "New task" should focus the detail page's title. */
   titleFocus: TaskItemId | null
 }
@@ -106,6 +136,12 @@ export const useTasks = create<TasksState>()(() => ({
   quickAdd: null,
   composer: null,
   menu: null,
+  selected: EMPTY_SELECTION.selected,
+  anchorId: null,
+  rangeEndId: null,
+  rendered: [],
+  bulkMenu: null,
+  batch: null,
   titleFocus: null,
 }))
 
@@ -180,6 +216,12 @@ export function attachTasksFeed(client: KybernClient, ownerKey: string): () => v
       quickAdd: null,
       composer: null,
       menu: null,
+      selected: EMPTY_SELECTION.selected,
+      anchorId: null,
+      rangeEndId: null,
+      rendered: [],
+      bulkMenu: null,
+      batch: null,
     })
   }
   const off = client.onNotification(TASK_ITEMS_CHANGED_NOTIFICATION, (params) => applyChange(params as TaskItemsChangedNotification))
@@ -307,6 +349,96 @@ export function openTaskMenu(taskId: TaskItemId, kind: "status" | "priority") {
 
 export function closeTaskMenu() {
   if (useTasks.getState().menu) useTasks.setState({ menu: null })
+}
+
+// ---- selection ----
+
+const selectionOf = (state: TasksState): SelectionState => ({ selected: state.selected, anchorId: state.anchorId, rangeEndId: state.rangeEndId })
+
+function applySelection(next: SelectionState) {
+  useTasks.setState({ selected: next.selected, anchorId: next.anchorId, rangeEndId: next.rangeEndId })
+}
+
+/** The tasks the list or board is showing, in order. Called by the view that shows them. */
+export function setRenderedTasks(ids: readonly TaskItemId[]) {
+  const current = useTasks.getState().rendered
+  if (current.length === ids.length && current.every((id, index) => id === ids[index])) return
+  useTasks.setState({ rendered: ids })
+}
+
+/** ⌘-click, the checkbox, X. */
+export function toggleSelected(id: TaskItemId) {
+  applySelection(toggleSelection(selectionOf(useTasks.getState()), id))
+}
+
+/** ⇧-click: everything between the anchor and `id`, in the order shown. */
+export function selectRangeTo(id: TaskItemId) {
+  const state = useTasks.getState()
+  applySelection(rangeSelection(state.rendered, selectionOf(state), id, state.focusedId))
+}
+
+/** ⌘A. */
+export function selectAllTasks() {
+  const state = useTasks.getState()
+  applySelection(selectAllSelection(state.rendered, selectionOf(state)))
+}
+
+/** ⇧↑ / ⇧↓. Returns the row the focus moves to. */
+export function extendTaskSelection(direction: 1 | -1): TaskItemId | null {
+  const state = useTasks.getState()
+  const { state: next, target } = extendSelection(state.rendered, selectionOf(state), state.focusedId, direction)
+  applySelection(next)
+  return target
+}
+
+export function clearSelection() {
+  const state = useTasks.getState()
+  if (state.selected.size || state.anchorId) applySelection(EMPTY_SELECTION)
+}
+
+/** Keep only these tasks selected, as after a batch where some did not start. */
+export function setSelection(ids: readonly TaskItemId[]) {
+  applySelection({ selected: new Set(ids), anchorId: ids[0] ?? null, rangeEndId: ids[0] ?? null })
+}
+
+/** Drop selected tasks that are gone or no longer shown. */
+export function pruneSelected(keep: (id: TaskItemId) => boolean) {
+  const current = selectionOf(useTasks.getState())
+  const next = pruneSelection(current, keep)
+  if (next !== current) applySelection(next)
+}
+
+export function setBulkMenu(menu: "status" | "priority" | null) {
+  if (useTasks.getState().bulkMenu !== menu) useTasks.setState({ bulkMenu: menu })
+}
+
+/** The selected tasks, in the order shown. */
+export function selectedTasks(): TaskItem[] {
+  const { selected, tasks, rendered } = useTasks.getState()
+  const ordered = [...rendered.filter((id) => selected.has(id)), ...[...selected].filter((id) => !rendered.includes(id))]
+  return ordered.flatMap((id) => (tasks[id] ? [tasks[id]!] : []))
+}
+
+/**
+ * Send to agent for the selection: the batch composer, for the tasks without a live run.
+ * With none to start there is nothing to compose, so say why.
+ */
+export function openBatchComposer(): boolean {
+  const tasks = selectedTasks()
+  const ids = tasks.filter((task) => !isLiveRun(latestRun(task))).map((task) => task.id)
+  if (!tasks.length) return false
+  if (!ids.length) {
+    toast("These tasks already have live runs")
+    return false
+  }
+  const skipped = tasks.filter((task) => !ids.includes(task.id)).map((task) => task.id)
+  useTasks.setState({ batch: { ids, skipped, nonce: ++nonce }, bulkMenu: null })
+  return true
+}
+
+/** Hide the batch composer; the selection stays. */
+export function closeBatchComposer() {
+  if (useTasks.getState().batch) useTasks.setState({ batch: null })
 }
 
 // ---- navigation ----
@@ -486,7 +618,8 @@ export async function deleteTask(id: TaskItemId, options: { quiet?: boolean } = 
   useTasks.setState((state) => {
     const tasks = { ...state.tasks }
     delete tasks[id]
-    return { tasks, focusedId: state.focusedId === id ? null : state.focusedId }
+    const gone = state.selected.has(id) ? pruneSelection(selectionOf(state), (other) => other !== id) : null
+    return { tasks, focusedId: state.focusedId === id ? null : state.focusedId, ...(gone ? { selected: gone.selected, anchorId: gone.anchorId, rangeEndId: gone.rangeEndId } : {}) }
   })
   try {
     await client().call("tasks.items.delete", { id })
@@ -501,6 +634,45 @@ export async function deleteTask(id: TaskItemId, options: { quiet?: boolean } = 
     action: { label: "Undo", onClick: () => void restoreTask(id) },
   })
   return true
+}
+
+/**
+ * Delete the selected tasks, one toast with Undo, and clear the selection. Returns where
+ * the focus should go: the next row left standing.
+ */
+export async function deleteSelectedTasks(): Promise<TaskItemId | null> {
+  const state = useTasks.getState()
+  const ids = selectedTasks().map((task) => task.id)
+  if (!ids.length) return null
+  const after = focusAfterRemoval(state.rendered, new Set(ids))
+  clearSelection()
+  if (ids.length === 1) {
+    await deleteTask(ids[0]!)
+    return after
+  }
+  const removed = ids.flatMap((id) => (getTask(id) ? [getTask(id)!] : []))
+  const results = await Promise.all(removed.map((task) => deleteTask(task.id, { quiet: true })))
+  const gone = removed.filter((_, index) => results[index])
+  if (gone.length) {
+    toast(`Deleted ${gone.length} ${gone.length === 1 ? "task" : "tasks"}`, {
+      duration: 8000,
+      action: { label: "Undo", onClick: () => void Promise.all(gone.map((task) => restoreTask(task.id))) },
+    })
+  }
+  return after
+}
+
+/** Set one status on several tasks. One toast says how many changed. */
+export async function setTasksStatus(ids: readonly TaskItemId[], status: TaskStatus) {
+  const targets = ids.filter((id) => getTask(id) && getTask(id)!.status !== status)
+  const done = (await Promise.all(targets.map((id) => setTaskStatus(id, status)))).filter(Boolean).length
+  if (done > 1) toast(`Updated ${done} tasks`)
+}
+
+export async function setTasksPriority(ids: readonly TaskItemId[], priority: TaskPriority) {
+  const targets = ids.filter((id) => getTask(id) && getTask(id)!.priority !== priority)
+  const done = (await Promise.all(targets.map((id) => setTaskPriority(id, priority)))).filter(Boolean).length
+  if (done > 1) toast(`Updated ${done} tasks`)
 }
 
 export async function restoreTask(id: TaskItemId): Promise<TaskItem | null> {
@@ -526,6 +698,84 @@ export async function sendTask(params: TaskRunSendParams): Promise<{ task: TaskI
   const result = await client().call("tasks.items.send", params)
   upsert(result.task)
   return result
+}
+
+// ---- batch send ----
+
+export type TaskBatchMode = "separate" | "combined"
+
+/** One task of a batch and where its run happens. */
+export interface TaskBatchItem {
+  id: TaskItemId
+  project_id: ProjectId
+  use_worktree: boolean
+  base_branch: string | null
+}
+
+export interface TaskBatchParams {
+  mode: TaskBatchMode
+  items: TaskBatchItem[]
+  provider: ProviderInstance
+  model?: string | null
+  effort?: string | null
+  permission_mode?: PermissionMode
+  /** The composer's message, with every task's chip; each task's run gets its own copy. */
+  message: UserMessage
+}
+
+export interface TaskBatchResult {
+  started: { task: TaskItem; thread_id: ThreadId }[]
+  /** Separate runs only: tasks whose send failed, with the daemon's words. */
+  failed: { id: TaskItemId; error: string }[]
+  /** Tasks the daemon left alone, such as one that gained a live run meanwhile. */
+  skipped: { id: TaskItemId; reason: string }[]
+}
+
+/**
+ * Start runs for several tasks. Separate runs send each task on its own (`tasks.items.send`,
+ * in parallel) with the shared message and only that task's chip; a combined run is one
+ * thread for every task (`tasks.items.send_batch`, which adds each task's chip itself). Throws when nothing started, so the
+ * composer keeps the message and says what went wrong.
+ */
+export async function sendTasks(params: TaskBatchParams): Promise<TaskBatchResult> {
+  const { items, message } = params
+  const common = { provider: params.provider, model: params.model, effort: params.effort, permission_mode: params.permission_mode }
+  if (params.mode === "combined") {
+    const first = items[0]
+    if (!first) throw new Error("Choose at least one task to start.")
+    const result = await client().call("tasks.items.send_batch", {
+      ids: items.map((item) => item.id),
+      mode: "combined",
+      ...common,
+      use_worktree: first.use_worktree,
+      base_branch: first.use_worktree ? first.base_branch : null,
+      project_id: first.project_id,
+      message,
+    })
+    for (const { task } of result.started) upsert(task)
+    return { started: result.started, failed: [], skipped: result.skipped }
+  }
+  const ids = items.map((item) => item.id)
+  const settled = await Promise.allSettled(
+    items.map((item) =>
+      sendTask({
+        id: item.id,
+        ...common,
+        use_worktree: item.use_worktree,
+        base_branch: item.use_worktree ? item.base_branch : null,
+        project_id: item.project_id,
+        message: { ...message, parts: messageForTask(message.parts, item.id, ids) },
+      }),
+    ),
+  )
+  const started: TaskBatchResult["started"] = []
+  const failed: TaskBatchResult["failed"] = []
+  settled.forEach((outcome, index) => {
+    if (outcome.status === "fulfilled") started.push(outcome.value)
+    else failed.push({ id: items[index]!.id, error: errorText(outcome.reason) })
+  })
+  if (!started.length && settled.length) throw (settled[0] as PromiseRejectedResult).reason
+  return { started, failed, skipped: [] }
 }
 
 /**
