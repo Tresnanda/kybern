@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chatLink } from "../src/chatLinks.ts";
+import { chatLink, kybernRef, kybernRefsIn, splitKybernRefs } from "../src/chatLinks.ts";
 import { createHistoryPagingGate, EARLIER_HISTORY_ENTRIES } from "../src/historyPaging.ts";
 
 test("chat references separate connected files from external URLs and preserve location suffixes", () => {
@@ -20,6 +20,39 @@ test("chat references separate connected files from external URLs and preserve l
   assert.deepEqual(chatLink("#overview"), { kind: "anchor", id: "overview" });
   assert.deepEqual(chatLink("../guide.md", "docs/sub/start.md"), { kind: "file", path: "docs/sub/../guide.md" });
   assert.deepEqual(chatLink("/workspace/other.md", "docs/start.md"), { kind: "file", path: "/workspace/other.md" });
+});
+
+const NOTE = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const TASK = "0199A1B2-C3D4-7E5F-8A9B-FFFFFFFFFFFF";
+
+test("kybern note and task links classify as references, other kybern URIs stay unsupported", () => {
+  assert.deepEqual(chatLink(`kybern://note/${NOTE}`), { kind: "kybern", target: "note", id: NOTE });
+  assert.deepEqual(chatLink(`<kybern://task/${TASK}/>`), { kind: "kybern", target: "task", id: TASK.toLowerCase() });
+  assert.deepEqual(kybernRef(` KYBERN://Task/${NOTE} `), { target: "task", id: NOTE });
+  for (const url of ["kybern://note/7b0c", `kybern://thread/${NOTE}`, "kybern://computer", "kybern://pair?code=1", `kybern://note/${NOTE}/extra`, `kybern://note/${NOTE}?x=1`, `xkybern://note/${NOTE}`])
+    assert.deepEqual(chatLink(url), { kind: "unsupported" }, url);
+  assert.equal(kybernRef("https://example.com"), null);
+});
+
+test("bare kybern references are found in running text and keep their punctuation outside", () => {
+  assert.deepEqual(splitKybernRefs("no refs here"), [{ text: "no refs here" }]);
+  const parts = splitKybernRefs(`Filed kybern://task/${TASK}, see (kybern://note/${NOTE}).`);
+  assert.deepEqual(parts.map((p) => p.text), ["Filed ", `kybern://task/${TASK}`, ", see (", `kybern://note/${NOTE}`, ")."]);
+  assert.deepEqual(parts[1].ref, { target: "task", id: TASK.toLowerCase() });
+  assert.equal(splitKybernRefs(`https://example.com/kybern://note/${NOTE}`).length, 1);
+  assert.equal(splitKybernRefs(`kybern://note/${NOTE}-more`).length, 1);
+});
+
+test("a message references an item as a link, a bare URI or inline code, but not inside a fenced block", () => {
+  assert.deepEqual(kybernRefsIn(null), []);
+  assert.deepEqual(kybernRefsIn("Nothing to see"), []);
+  assert.deepEqual(kybernRefsIn(`Filed [ADE-12 Title](kybern://task/${TASK}).`), [{ target: "task", id: TASK.toLowerCase() }]);
+  assert.deepEqual(kybernRefsIn(`Saved \`kybern://note/${NOTE}\` for later`), [{ target: "note", id: NOTE }]);
+  assert.deepEqual(kybernRefsIn(`Open kybern://note/${NOTE}\n\nand again [x](kybern://note/${NOTE.toUpperCase()})`), [{ target: "note", id: NOTE }]);
+  assert.deepEqual(kybernRefsIn(["Example:", "```md", `[x](kybern://note/${NOTE})`, "```", "", `~~~~`, `kybern://task/${TASK}`, "~~~~"].join("\n")), []);
+  assert.deepEqual(kybernRefsIn(["```", "unclosed", `kybern://note/${NOTE}`].join("\n")), []);
+  assert.deepEqual(kybernRefsIn(["```", "x", "```", `kybern://note/${NOTE}`].join("\n")), [{ target: "note", id: NOTE }]);
+  assert.deepEqual(kybernRefsIn("kybern://note/not-a-uuid"), []);
 });
 
 test("history prefetch waits for reading intent and loads each nearby cursor once", () => {

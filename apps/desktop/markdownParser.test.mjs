@@ -29,6 +29,26 @@ const examples = [
   "  first\r\n\r\n  - one\r\n\tcontinued\r\n\r\n  ```\r\n  code\r\n  ```\r\n",
   "- [ ] task\n- [x] done\n\n**open\n\nclose**\n\n[late]\n\n[late]: /path\n",
 ]
+const NOTE = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+const TASK = "0199a1b2-c3d4-7e5f-8a9b-ffffffffffff"
+const anchors = (source) => [...render(createMarkdownParser().parse(source)).matchAll(/<a href="([^"]*)">([^<]*)<\/a>/g)].map((m) => [m[1], m[2]])
+test("note and task references become links in every written form, and nothing else keeps a kybern href", () => {
+  assert.deepEqual(anchors(`Filed [ADE-12 Title](kybern://task/${TASK}) and [Plan](kybern://note/${NOTE}).`), [
+    [`kybern://task/${TASK}`, "ADE-12 Title"],
+    [`kybern://note/${NOTE}`, "Plan"],
+  ])
+  assert.deepEqual(anchors(`Bare kybern://note/${NOTE}, in **bold kybern://task/${TASK}** and \`kybern://task/${TASK}\`.`), [
+    [`kybern://note/${NOTE}`, `kybern://note/${NOTE}`],
+    [`kybern://task/${TASK}`, `kybern://task/${TASK}`],
+    [`kybern://task/${TASK}`, `kybern://task/${TASK}`],
+  ])
+  assert.deepEqual(anchors(`- item kybern://note/${NOTE}\n\n| a |\n| - |\n| kybern://task/${TASK} |`).map(([href]) => href), [`kybern://note/${NOTE}`, `kybern://task/${TASK}`])
+  // Not references: other kybern URIs lose their href; code spans with other text and fences stay source.
+  assert.deepEqual(anchors("[x](kybern://note/7b0c) [y](kybern://thread/" + NOTE + ") [z](kybern://computer)"), [["", "x"], ["", "y"], ["", "z"]])
+  const source = render(createMarkdownParser().parse(`Run \`open kybern://note/${NOTE}\`\n\n\`\`\`\nkybern://task/${TASK}\n\`\`\``))
+  assert.equal(source.includes("<a "), false)
+  assert.equal(source.includes(`kybern://task/${TASK}`), true)
+})
 test("incremental Markdown matches the full renderer at every character prefix", () => {
   for (const source of examples) {
     const parser = createMarkdownParser()

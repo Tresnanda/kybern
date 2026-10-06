@@ -221,17 +221,43 @@ html[data-project-reordering="true"] * {
   white-space: nowrap;
   border-radius: 0.25em;
 }
-.chat-inline-token > svg {
+.chat-inline-token > svg,
+.chat-inline-token-lead > svg {
   width: 0.95em;
   height: 0.95em;
   flex-shrink: 0;
   align-self: center;
   translate: 0 0.02em;
 }
-button.chat-inline-token:hover {
+.chat-inline-token-lead {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25em;
+}
+.chat-inline-token[role="link"]:hover {
   text-decoration: underline;
   text-decoration-thickness: from-font;
   text-underline-position: from-font;
+}
+/* A reference whose item is gone: readable, quiet, not a link. */
+.chat-inline-token[data-gone] {
+  --token-color: var(--muted-foreground);
+  font-weight: 400;
+}
+/* Inside a message a chip wraps like a link: the icon stays with the first
+   word and the rest of the title flows onto the next lines, so a long title
+   can never push past the bubble. The composer keeps its compact atomic chip. */
+.chat-markdown .chat-inline-token {
+  display: inline;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.chat-markdown .chat-inline-token-lead {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 /* The composer's rich input. Tokens inside it are atomic: arrows step over
    them and Backspace removes one whole. */

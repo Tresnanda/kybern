@@ -35,7 +35,7 @@ function CollaborationMessageNotice({ preview, text, expanded, setExpanded }: {
           <T variant="caption" style={{ flex: 1 }}>{preview.purpose} · {sender}</T>
         </Tap>
         {expanded && <View style={{ paddingBottom: 12, gap: 12 }}>
-          <Markdown text={preview.body} />
+          <Markdown chat text={preview.body} />
           <Tap label="Copy original agent message" onPress={() => void Clipboard.setStringAsync(text)} style={{ minHeight: 48, justifyContent: "center" }}>
             <T variant="caption" tone="secondary">Copy original message</T>
           </Tap>
@@ -350,5 +350,5 @@ const StreamedMarkdown = memo(function StreamedMarkdown({
   active: boolean;
 }) {
   const shown = useStreamedText(text, complete, active);
-  return <Markdown text={shown} />;
+  return <Markdown chat text={shown} />;
 });
