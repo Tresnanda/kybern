@@ -572,6 +572,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ComputerSetupParams = parse(params)?;
             ok(crate::computer::setup(state.orchestrator.computer(), p.action).await.map_err(internal)?)
         }
+        CursorStatusGet::NAME => ok(crate::cursor_setup::status(state).await),
+        CursorSetup::NAME => {
+            let p: CursorSetupParams = parse(params)?;
+            ok(crate::cursor_setup::setup(state, p.action).await.map_err(bad)?)
+        }
         ComputerNotesList::NAME => ok(ComputerNotesResult { notes: state.orchestrator.computer().notes().list() }),
         ComputerNoteSet::NAME => {
             let p: ComputerNoteSetParams = parse(params)?;

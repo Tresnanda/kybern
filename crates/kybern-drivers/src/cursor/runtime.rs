@@ -12,6 +12,8 @@ use crate::ndjson::{NdjsonChild, SessionLifetime};
 use crate::{DriverError, DriverEvent, ProbeContext, Result};
 
 pub const SDK_VERSION: &str = "1.0.35";
+const NODE_MINIMUM: &str = "22.13";
+const SETUP_HINT: &str = "Install it in Settings → Agent providers, or run `kybern cursor install`.";
 const HOST: &str = include_str!("sdk/host.mjs");
 const PACKAGE: &str = include_str!("sdk/package.json");
 const LOCK: &str = include_str!("sdk/package-lock.json");
@@ -53,7 +55,9 @@ fn node(context: &ProbeContext) -> Result<PathBuf> {
             .map_err(|_| DriverError::BinaryNotFound("KYBERN_CURSOR_NODE must point to Node.js 22.13 or newer".into()));
     }
     which::which_in("node", env(context, "PATH"), context.cwd.clone().unwrap_or_else(|| PathBuf::from("."))).map_err(|_| {
-        DriverError::BinaryNotFound("Cursor SDK needs Node.js 22.13 or newer. Install Node, then run `kybern cursor install`".into())
+        DriverError::BinaryNotFound(format!(
+            "Cursor’s SDK needs Node.js {NODE_MINIMUM} or newer. Install Node.js, then set up Cursor in Settings → Agent providers"
+        ))
     })
 }
 
@@ -94,11 +98,11 @@ pub(super) async fn probe(context: &ProbeContext) -> Result<(PathBuf, Value)> {
 fn diagnostic(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     if text.contains("ENOENT") || text.contains("Cannot find module") {
-        return "Cursor SDK is not installed. Run `kybern cursor install`, then `kybern cursor login`.".into();
+        return format!("Cursor’s SDK isn’t installed. {SETUP_HINT}");
     }
     let text: String = text.chars().take(4000).collect();
     if text.trim().is_empty() {
-        "Cursor SDK host exited unexpectedly. Check Node.js and run `kybern cursor install`.".into()
+        "Cursor SDK host exited unexpectedly. Check Node.js, then install Cursor’s SDK again in Settings → Agent providers or with `kybern cursor install`.".into()
     } else {
         text.trim().into()
     }
@@ -139,8 +143,9 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     let _cleanup = Staging(staging.clone());
     std::fs::write(staging.join("package.json"), PACKAGE)?;
     std::fs::write(staging.join("package-lock.json"), LOCK)?;
-    let npm = which::which(if cfg!(windows) { "npm.cmd" } else { "npm" })
-        .map_err(|_| DriverError::BinaryNotFound("Install npm with Node.js, then run `kybern cursor install`".into()))?;
+    let npm = npm().map_err(|_| {
+        DriverError::BinaryNotFound("Cursor’s SDK installs with npm, which comes with Node.js. Install Node.js, then try again.".into())
+    })?;
     let mut cmd = Command::new(npm);
     cmd.args(["ci", "--ignore-scripts", "--no-audit", "--no-fund"]).current_dir(&staging).envs(&context.env);
     let output = tokio::time::timeout(Duration::from_secs(300), crate::process_tree::output(&mut cmd))
@@ -151,6 +156,89 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     }
     std::fs::rename(&staging, &destination)?;
     Ok(destination)
+}
+
+fn npm() -> std::result::Result<PathBuf, which::Error> {
+    which::which(if cfg!(windows) { "npm.cmd" } else { "npm" })
+}
+
+/// npm installs the SDK; it ships with Node.js but can be missing.
+pub fn npm_available() -> bool {
+    npm().is_ok()
+}
+
+/// Whether the pinned SDK is in place where new sessions load it.
+pub fn installed(context: &ProbeContext) -> bool {
+    let Ok(dir) = sdk_dir(context) else { return false };
+    std::fs::read(dir.join("node_modules/@cursor/sdk/package.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|manifest| manifest["version"] == SDK_VERSION)
+}
+
+/// The Node.js that will run the SDK, e.g. `v24.1.0`, or why it cannot.
+pub async fn node_version(context: &ProbeContext) -> Result<String> {
+    let mut cmd = Command::new(node(context)?);
+    cmd.arg("--version").envs(&context.env);
+    let output = tokio::time::timeout(Duration::from_secs(10), crate::process_tree::output(&mut cmd))
+        .await
+        .map_err(|_| DriverError::Protocol("Node.js did not report its version. Check your Node.js installation.".into()))??;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !node_supported(&version) {
+        return Err(DriverError::BinaryNotFound(format!(
+            "Cursor’s SDK needs Node.js {NODE_MINIMUM} or newer, and this machine has {}. Update Node.js, then try again.",
+            if version.is_empty() { "an unknown version" } else { &version }
+        )));
+    }
+    Ok(version)
+}
+
+fn node_supported(version: &str) -> bool {
+    let mut parts = version.trim().trim_start_matches('v').split('.').map(|part| part.parse::<u32>().ok());
+    match (parts.next().flatten(), parts.next().flatten()) {
+        (Some(major), Some(minor)) => major > 22 || (major == 22 && minor >= 13),
+        _ => false,
+    }
+}
+
+/// Sign-in state from the SDK's credential store. Never includes the key.
+pub async fn auth_status(context: &ProbeContext) -> Result<Value> {
+    let mut cmd = command(context, "status")?;
+    let output = tokio::time::timeout(Duration::from_secs(20), crate::process_tree::output(&mut cmd))
+        .await
+        .map_err(|_| DriverError::Protocol("Cursor SDK did not report its sign-in state in time.".into()))??;
+    if !output.status.success() {
+        return Err(DriverError::Protocol(diagnostic(&output.stderr)));
+    }
+    let line = String::from_utf8_lossy(&output.stdout);
+    let line = line.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or_default();
+    serde_json::from_str(line).map_err(|e| DriverError::Protocol(format!("Cursor SDK status: {e}")))
+}
+
+/// Forget the SDK's saved sign-in on this machine.
+pub async fn sign_out(context: &ProbeContext) -> Result<()> {
+    let mut cmd = command(context, "logout")?;
+    let output = tokio::time::timeout(Duration::from_secs(20), crate::process_tree::output(&mut cmd))
+        .await
+        .map_err(|_| DriverError::Protocol("Cursor didn’t finish signing out. Try again.".into()))??;
+    if !output.status.success() {
+        return Err(DriverError::Protocol(diagnostic(&output.stderr)));
+    }
+    Ok(())
+}
+
+/// A browser sign-in that prints its page as `{"status":"login-url","url":…}`
+/// on stdout instead of opening a browser here: the daemon may be remote, so
+/// the client that asked opens the page. Ends with `{"status":"logged-in"}`.
+pub fn login_command(context: &ProbeContext) -> Result<Command> {
+    let mut cmd = command(context, "login")?;
+    cmd.env("KYBERN_CURSOR_LOGIN_EVENTS", "1");
+    Ok(cmd)
+}
+
+/// The SDK's error text for a failed setup process, without credentials.
+pub fn setup_error(stderr: &[u8]) -> String {
+    diagnostic(stderr)
 }
 
 pub(crate) struct Connection {
@@ -334,5 +422,54 @@ for line in sys.stdin:
         })
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn node_minimum_is_22_13() {
+        assert!(node_supported("v22.13.0"));
+        assert!(node_supported("v24.1.0\n"));
+        assert!(!node_supported("v22.12.1"));
+        assert!(!node_supported("v20.19.0"));
+        assert!(!node_supported(""));
+    }
+
+    #[test]
+    fn installed_requires_the_pinned_sdk_version() {
+        let root = tempfile::tempdir().unwrap();
+        let context = ProbeContext {
+            env: std::collections::BTreeMap::from([("KYBERN_CURSOR_SDK_DIR".into(), root.path().display().to_string())]),
+            ..Default::default()
+        };
+        assert!(!installed(&context));
+        let package = root.path().join("node_modules/@cursor/sdk");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("package.json"), r#"{"version":"0.0.1"}"#).unwrap();
+        assert!(!installed(&context));
+        std::fs::write(package.join("package.json"), format!(r#"{{"version":"{SDK_VERSION}"}}"#)).unwrap();
+        assert!(installed(&context));
+    }
+
+    async fn status_retrying(context: &ProbeContext) -> Result<Value> {
+        for _ in 0..50 {
+            match auth_status(context).await {
+                Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    tokio::time::sleep(Duration::from_millis(20)).await
+                }
+                result => return result,
+            }
+        }
+        auth_status(context).await
+    }
+
+    #[tokio::test]
+    async fn auth_status_reads_the_last_json_line_and_reports_failures() {
+        let root = tempfile::tempdir().unwrap();
+        let context = fixture(root.path(), "import json\nprint('noise')\nprint(json.dumps({'status':'logged-in','email':'a@b.c'}))\n");
+        let status = status_retrying(&context).await.unwrap();
+        assert_eq!(status["status"], "logged-in");
+        assert_eq!(status["email"], "a@b.c");
+        let failing = fixture(root.path(), "import sys\nsys.stderr.write('Cannot find module @cursor/sdk')\nsys.exit(1)\n");
+        let error = status_retrying(&failing).await.unwrap_err().to_string();
+        assert!(error.contains("isn’t installed"), "{error}");
     }
 }

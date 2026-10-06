@@ -74,6 +74,8 @@ interface ModelPickerProps {
   /** `choice` is set when a favorite from another harness is picked. */
   onProviderChange: (provider: ProviderInstance, choice?: { model?: string; effort?: string }) => Promise<boolean>
   onReload: () => void
+  /** Open setup for an agent that can't run yet. */
+  onSetUpProvider?: (kind: ProviderKind) => void
 }
 
 export function ModelPicker(props: ModelPickerProps) {
@@ -121,6 +123,7 @@ function ModelPickerPanel({
   onEffortChange,
   onProviderChange,
   onReload,
+  onSetUpProvider,
   inputRef,
   close,
 }: ModelPickerProps & { inputRef: React.RefObject<HTMLInputElement | null>; close: () => void }) {
@@ -298,6 +301,9 @@ function ModelPickerPanel({
           <div role="radiogroup" aria-label="Agent" className="flex min-w-0 items-center gap-0.5">
             {providers.map((item) => {
               const selected = item.kind === provider.kind
+              // An agent that isn't set up stays dim but leads to its setup,
+              // rather than a dead control.
+              const setUp = !item.available && onSetUpProvider
               return (
                 <Tooltip key={item.kind}>
                   <TooltipTrigger
@@ -306,14 +312,21 @@ function ModelPickerPanel({
                         type="button"
                         role="radio"
                         aria-checked={selected}
-                        aria-label={item.display_name}
-                        disabled={!item.available || busy}
-                        onClick={() => void switchAgent(item.kind)}
+                        aria-label={item.available ? item.display_name : `${item.display_name}, not set up`}
+                        aria-disabled={setUp ? true : undefined}
+                        disabled={setUp ? false : !item.available || busy}
+                        onClick={() => {
+                          if (!setUp) return void switchAgent(item.kind)
+                          close()
+                          onSetUpProvider(item.kind)
+                        }}
                         className={cn(
                           "press-row inline-flex size-7 shrink-0 items-center justify-center rounded-[0.4rem] outline-none transition-[background-color,opacity] duration-150 focus-visible:ring-1 focus-visible:ring-ring",
                           selected
                             ? "bg-[var(--color-background-button-secondary)]"
-                            : "opacity-45 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-100 disabled:opacity-20 disabled:hover:bg-transparent",
+                            : setUp
+                              ? "opacity-20 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-60"
+                              : "opacity-45 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-100 disabled:opacity-20 disabled:hover:bg-transparent",
                         )}
                       />
                     }
@@ -321,7 +334,7 @@ function ModelPickerPanel({
                     <ProviderMark kind={item.kind} size={14} className="size-3.5" />
                   </TooltipTrigger>
                   <TooltipPopup side="top" sideOffset={6} variant="picker">
-                    {item.available ? item.display_name : `${item.display_name} isn’t installed`}
+                    {item.available ? item.display_name : setUp ? `Set up ${item.display_name}` : `${item.display_name} isn’t installed`}
                   </TooltipPopup>
                 </Tooltip>
               )

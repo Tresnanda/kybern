@@ -62,7 +62,7 @@ curl -fL --progress-bar -o "$TMP/app.tar.gz" "$URL"
 tar -xzf "$TMP/app.tar.gz" -C "$TMP"
 [ -d "$TMP/kybern.app" ] || { echo "the archive did not contain kybern.app" >&2; exit 1; }
 
-if pgrep -xq kybern; then
+if pgrep -xq kybern-desktop; then
   echo "==> closing the running kybern"
   osascript -e 'tell application "kybern" to quit' >/dev/null 2>&1 || true
   sleep 1

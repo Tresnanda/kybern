@@ -192,6 +192,10 @@ expression: scopes
   - "orchestration:read"
 - - computer.setup
   - "access:write"
+- - cursor.status
+  - "orchestration:read"
+- - cursor.setup
+  - "access:write"
 - - computer.frame
   - "orchestration:read"
 - - computer.notes.list

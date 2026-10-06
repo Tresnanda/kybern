@@ -156,6 +156,8 @@ export interface AppState {
   paletteOpen: boolean
   settingsOpen: boolean
   settingsTab: "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
+  /** A settings row to bring into view when Settings opens, e.g. `provider:cursor`. */
+  settingsFocus: string | null
   collapsedProjects: Record<ProjectId, boolean>
   /** Project order the user dragged into place. Empty means alphabetical. */
   projectOrder: ProjectId[]
@@ -333,6 +335,7 @@ export function createEnvironmentStore(
     paletteOpen: false,
     settingsOpen: false,
     settingsTab: "general",
+    settingsFocus: null,
     collapsedProjects: {},
     projectOrder: [],
     sidebarFilter: DEFAULT_SIDEBAR_FILTER,

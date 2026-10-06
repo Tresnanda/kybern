@@ -1423,6 +1423,35 @@ export interface ComputerSetupParams {
   action: ComputerSetupAction;
 }
 
+export type CursorAccount = "signed_in" | "signed_out" | "api_key" | "unknown";
+
+/** The Cursor SDK on the daemon machine, set up from Settings or `kybern cursor`. */
+export interface CursorSetupStatus {
+  /** The exact `@cursor/sdk` version this daemon installs and requires. */
+  sdk_version: string;
+  installed: boolean;
+  /** The Node.js version the SDK runs on, e.g. `v24.1.0`. */
+  node_version?: string | null;
+  /** What to fix on the machine before installing, e.g. a missing Node.js. */
+  problem?: string | null;
+  account: CursorAccount;
+  email?: string | null;
+  /** An install is running in the background. */
+  installing: boolean;
+  /** A browser sign-in is waiting for the user. */
+  signing_in: boolean;
+  /** The page that completes the pending sign-in. */
+  login_url?: string | null;
+  /** Why the last install or sign-in failed. */
+  error?: string | null;
+}
+
+export type CursorSetupAction = "install" | "sign_in" | "cancel_sign_in" | "sign_out";
+
+export interface CursorSetupParams {
+  action: CursorSetupAction;
+}
+
 /** What agents learned about using one app, shown to later sessions. */
 export interface ComputerNote {
   bundle_id: string;
@@ -1814,6 +1843,8 @@ export interface Methods {
   "settings.update": [SettingsUpdateParams, Settings];
   "computer.status": [Empty, ComputerStatus];
   "computer.setup": [ComputerSetupParams, ComputerStatus];
+  "cursor.status": [Empty, CursorSetupStatus];
+  "cursor.setup": [CursorSetupParams, CursorSetupStatus];
   "computer.frame": [ComputerFrameParams, ComputerFrameResult];
   "computer.notes.list": [Empty, ComputerNotesResult];
   "computer.notes.set": [ComputerNoteSetParams, ComputerNotesResult];

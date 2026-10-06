@@ -1235,6 +1235,64 @@ method!(ComputerFrameGet, "computer.frame", Some(Scope::OrchestrationRead), Comp
 // Installs software on the daemon machine, so paired devices cannot call it.
 method!(ComputerSetup, "computer.setup", Some(Scope::AccessWrite), ComputerSetupParams, ComputerStatus);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorAccount {
+    SignedIn,
+    SignedOut,
+    /// `CURSOR_API_KEY` is set for the provider, which overrides browser sign-in.
+    ApiKey,
+    /// The SDK is not installed, or its sign-in state could not be read.
+    Unknown,
+}
+
+/// The Cursor SDK on the daemon machine: what `kybern cursor install` and
+/// `kybern cursor login` set up, readable without a terminal.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CursorSetupStatus {
+    /// The exact `@cursor/sdk` version this daemon installs and requires.
+    pub sdk_version: String,
+    pub installed: bool,
+    /// The Node.js version the SDK runs on, e.g. `v24.1.0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_version: Option<String>,
+    /// What to fix on the machine before installing, e.g. a missing Node.js.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+    pub account: CursorAccount,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// An install is running in the background.
+    pub installing: bool,
+    /// A browser sign-in is waiting for the user.
+    pub signing_in: bool,
+    /// The page that completes the pending sign-in. Open it on any device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_url: Option<String>,
+    /// Why the last install or sign-in failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+method!(CursorStatusGet, "cursor.status", Some(Scope::OrchestrationRead), Empty, CursorSetupStatus);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorSetupAction {
+    /// Install the pinned SDK in the background; poll `cursor.status`.
+    Install,
+    /// Start a browser sign-in. The result carries `login_url` once Cursor issues it.
+    SignIn,
+    CancelSignIn,
+    SignOut,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CursorSetupParams {
+    pub action: CursorSetupAction,
+}
+// Installs software and stores credentials on the daemon machine.
+method!(CursorSetup, "cursor.setup", Some(Scope::AccessWrite), CursorSetupParams, CursorSetupStatus);
+
 /// What agents learned about using one app, shown to later sessions the first
 /// time they use it. Stored as Markdown under `<data dir>/computer-notes/`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2414,6 +2472,8 @@ registry!(
     SettingsUpdate,
     ComputerStatusGet,
     ComputerSetup,
+    CursorStatusGet,
+    CursorSetup,
     ComputerFrameGet,
     ComputerNotesList,
     ComputerNoteSet,
