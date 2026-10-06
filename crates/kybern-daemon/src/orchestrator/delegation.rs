@@ -1002,8 +1002,16 @@ impl Orchestrator {
             }
             TurnOutcome::Failed(error) => (DelegationStatus::Failed, Some(error), None),
         };
-        let result = self.last_assistant_text(child.id, Some(turn_id), terminal);
+        let mut result = self.last_assistant_text(child.id, Some(turn_id), terminal);
         let (head_commit, diffstat) = self.worktree_outcome(child, &info).await;
+        if head_commit.is_some() && !Repo::new(&child.cwd).is_clean().await.unwrap_or(true) {
+            // The branch and diffstat only describe commits; say so when edits were left uncommitted.
+            let note = "[Kybern: this worktree still has uncommitted changes that are not on the branch. Ask the agent to commit them, or inspect the worktree before merging.]";
+            result = Some(match result {
+                Some(text) if !text.trim().is_empty() => format!("{text}\n\n{note}"),
+                _ => note.to_string(),
+            });
+        }
         let updated = self.delegation_update(child.id, |info| {
             if info.status != DelegationStatus::Running {
                 return false;

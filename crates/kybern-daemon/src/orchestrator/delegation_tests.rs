@@ -458,6 +458,26 @@ async fn delegate_worktree_is_seeded_from_uncommitted_state_and_reports_its_bran
 }
 
 #[tokio::test]
+async fn worktree_result_warns_when_the_child_left_uncommitted_changes() {
+    let t = Delegating::new().await;
+    init_project_repo(&t.fixture.root);
+    let result = t.delegate(json!({"task": "Implement the feature", "workspace": "worktree"})).await;
+    let child = t.delegation(&result["task_id"]);
+    let worktree = child.worktree.clone().expect("a worktree child has its own checkout");
+    let agent = t.agent("Implement the feature").await;
+    std::fs::write(std::path::Path::new(&worktree.path).join("left-over.txt"), "not committed\n").unwrap();
+    agent.finish("All done.").await;
+    let done = eventually(|| async {
+        let thread = t.delegation(&result["task_id"]);
+        (thread.delegation.as_ref().unwrap().status != DelegationStatus::Running).then_some(thread)
+    })
+    .await;
+    let text = done.delegation.unwrap().result.unwrap();
+    assert!(text.starts_with("All done."), "{text}");
+    assert!(text.contains("uncommitted changes that are not on the branch"), "{text}");
+}
+
+#[tokio::test]
 async fn worktree_delegation_needs_a_git_project() {
     let t = Delegating::new().await;
     let error = t.tool("kybern_agent_delegate", json!({"task": "x", "workspace": "worktree"})).await.unwrap_err();

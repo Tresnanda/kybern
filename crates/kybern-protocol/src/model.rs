@@ -798,12 +798,18 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
         for conflict in &item.conflicts {
             out.push_str(&format!("\n  conflict: edited {} owned by thread {}", conflict.path, conflict.owner_thread_id));
         }
+        if item.status != DelegationStatus::Completed
+            && let Some(error) = &item.error
+        {
+            out.push_str("\n  Error: ");
+            out.push_str(error);
+        }
         match (&item.result, &item.error) {
             (Some(result), _) if !result.trim().is_empty() => {
                 out.push_str("\n  Result:\n");
                 out.push_str(result);
             }
-            (_, Some(error)) => {
+            (_, Some(error)) if item.status == DelegationStatus::Completed => {
                 out.push_str("\n  Error: ");
                 out.push_str(error);
             }
@@ -1834,6 +1840,17 @@ mod orchestration_tests {
         assert!(text.contains(&format!("conflict: edited src/x.rs owned by thread {}", id(5))));
         assert!(text.contains("Error: boom"));
         assert!(text.ends_with("Integrate these results. For another round, delegate again with a full brief."));
+    }
+
+    #[test]
+    fn interrupted_agents_show_their_error_next_to_the_partial_result() {
+        let mut interrupted = item(DelegationWorkspace::Shared);
+        interrupted.status = DelegationStatus::Interrupted;
+        interrupted.result = Some("Waiting for sleep".into());
+        interrupted.error = Some("interrupted by a Kybern restart".into());
+        let text = agent_results_text(&[interrupted]);
+        assert!(text.contains("Error: interrupted by a Kybern restart"), "{text}");
+        assert!(text.contains("Result:\nWaiting for sleep"), "{text}");
     }
 
     #[test]
