@@ -472,3 +472,21 @@ export function messageStateWord(state: ThreadMessageState | "steered" | "queued
       return "Sent";
   }
 }
+
+// ---- finding a child by its operation ----
+
+const operationIndexes = new WeakMap<object, Map<string, unknown>>();
+
+/**
+ * The thread a delegation operation started, before its call result names the thread. The index is
+ * built once per thread table (one scan, shared by every launch row) and only when asked for.
+ */
+export function threadByOperation<T extends { delegation?: { operation_id: string } | null }>(threads: Record<string, T>, operationId: string): T | undefined {
+  let index = operationIndexes.get(threads);
+  if (!index) {
+    index = new Map();
+    for (const thread of Object.values(threads)) if (thread.delegation) index.set(thread.delegation.operation_id, thread);
+    operationIndexes.set(threads, index);
+  }
+  return index.get(operationId) as T | undefined;
+}

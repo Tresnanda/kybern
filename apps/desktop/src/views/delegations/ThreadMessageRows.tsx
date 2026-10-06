@@ -2,7 +2,7 @@
 // card of delegated results a parent gets back, and the "Sent to" row on the sending side.
 // Closed details unmount (DisclosureRegion); long bodies clamp behind "Show more".
 
-import { memo, useMemo, useState, type ReactNode } from "react"
+import { memo, useContext, useMemo, useState, type ReactNode } from "react"
 
 import {
   delegationState,
@@ -13,14 +13,17 @@ import {
   resultPreview,
   type ChildPhase,
 } from "../../../../../packages/kybern-client/src/delegations.ts"
-import { parseSendInput, parseSendResult, sendStateWord, type SendResult } from "../../../../../packages/kybern-client/src/orchestrationTools.ts"
+import { liveSend, type LiveSend } from "../../../../../packages/kybern-client/src/messageStates.ts"
+import { parseSendInput, parseSendResult } from "../../../../../packages/kybern-client/src/orchestrationTools.ts"
 import type { Block } from "../../../../../packages/kybern-client/src/transcript.ts"
 import { Logo, ProviderMark } from "@/components/kybern/bits"
+import { TextSwap } from "@/components/kybern/motion"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { Button } from "@/components/kit/button"
 import { getChatTranscriptTextStyle } from "@/components/kit/chat/chatTypography"
 import { clockTime } from "@/lib/format"
+import { ImageThreadContext } from "@/lib/imageThread"
 import {
   ArrowUpRightIcon,
   ChatBubbleIcon,
@@ -34,12 +37,15 @@ import {
   SteerIcon,
   TriangleAlertIcon,
   Undo2Icon,
+  XIcon,
 } from "@/lib/kit/icons"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
 import { cn } from "@/lib/utils"
 import type { AgentResultItem, ThreadMessagePart, ThreadMessagePurpose } from "@/protocol"
+import { useSeedThreadMessages } from "@/state/delegations"
 import { useStore } from "@/state/store"
 import { openThreadView } from "@/state/subagents"
+import { useMessageRecord, useReplyRecord } from "@/state/threadMessages"
 import { ClampedMarkdown, ConflictsList, DetailSection, FilesList, WorkspaceFacts } from "../lineage/detail"
 import { ChildGlyph, Chip } from "../lineage/parts"
 import { phaseWordClass } from "../lineage/phaseStyles"
@@ -165,7 +171,8 @@ function ResultItemRow({ item, at }: { item: AgentResultItem; at: string }) {
   const files = item.files_touched?.length ?? 0
   const conflicts = item.conflicts?.length ?? 0
   const worktree = item.workspace === "worktree"
-  const live = useStore((s) => s.threads[item.thread_id])
+  // Only the archived flag is shown, so a child's token and progress updates do not re-render the row.
+  const archived = useStore((s) => s.threads[item.thread_id]?.status === "archived")
   return (
     <li className="min-w-0" data-agent-result={item.task_id}>
       <button
@@ -215,7 +222,7 @@ function ResultItemRow({ item, at }: { item: AgentResultItem; at: string }) {
             <Button variant="subtle" size="chip" onClick={() => openThreadView(item.thread_id)}>
               <ArrowUpRightIcon /> Open
             </Button>
-            {live?.status === "archived" && <span className="text-xs text-foreground/50">Archived</span>}
+            {archived && <span className="text-xs text-foreground/50">Archived</span>}
             <time dateTime={at} className="sr-only">{clockTime(at)}</time>
           </div>
         </div>
@@ -249,16 +256,20 @@ export const AgentResultsCard = memo(function AgentResultsCard({ items, at }: { 
 
 // ---- "Sent to" ----
 
-function sendGlyph(result: SendResult | null, complete: boolean, isError: boolean): ReactNode {
+function sendGlyph(live: LiveSend, complete: boolean, isError: boolean): ReactNode {
   const props = { className: "size-3", "aria-hidden": true as const }
   if (isError) return <CircleAlertIcon {...props} className="size-3 text-destructive" />
   if (!complete) return <ClockIcon {...props} />
-  if (result?.reply || result?.state === "answered") return <CheckIcon {...props} />
-  switch (result?.state) {
+  switch (live.state) {
+    case "answered":
+    case "delivered":
+      return <CheckIcon {...props} />
     case "held":
       return <HandRaisedIcon {...props} className="size-3 text-amber-600 dark:text-amber-300/90" />
     case "steered":
       return <SteerIcon {...props} />
+    case "dismissed":
+      return <XIcon {...props} />
     case "failed":
       return <CircleAlertIcon {...props} className="size-3 text-destructive" />
     default:
@@ -272,16 +283,24 @@ export const SentToRow = memo(function SentToRow({ block, legacy }: { block: Too
   const result = useMemo(() => (block.complete ? parseSendResult(block.output) : null), [block.complete, block.output])
   const target = useStore((state) => (input.threadId ? state.threads[input.threadId] : undefined))
   const [open, setOpen] = useTranscriptRowState<boolean>("sent-to", false)
+  // The tool output is how the send stood when it returned; the record of this one message (and its
+  // reply) is how it stands now. Each selector changes only when its own record does.
+  const ownerId = useContext(ImageThreadContext)
+  const messageId = result?.messageId
+  const record = useMessageRecord(ownerId, messageId)
+  const replyRecord = useReplyRecord(ownerId, messageId)
+  useSeedThreadMessages(ownerId, !!input.threadId && !!input.body && !!messageId)
+  const live = useMemo(() => liveSend(result, record, replyRecord, block.complete, block.isError), [result, record, replyRecord, block.complete, block.isError])
   if (!input.threadId || !input.body) return legacy
   const title = target?.title || "another thread"
-  const word = sendStateWord(result, block.complete, block.isError)
-  const held = result?.state === "held"
-  const failed = block.isError || result?.state === "failed"
+  const word = live.word
+  const held = live.held
+  const failed = block.isError || live.state === "failed"
   const preview = plainLine(input.body, 160)
-  const replyPreview = result?.reply ? plainLine(result.reply.body, 160) : ""
+  const replyPreview = live.reply ? plainLine(live.reply.body, 160) : ""
   const label = `Sent ${purposeLabel(input.purpose).toLowerCase()} to ${title}, ${word}`
   return (
-    <div className="rounded-lg py-1" data-sent-to={input.purpose} data-sent-message-id={result?.messageId}>
+    <div className="rounded-lg py-1" data-sent-to={input.purpose} data-sent-state={live.state ?? undefined} data-sent-message-id={messageId}>
       <button
         type="button"
         aria-expanded={open}
@@ -292,15 +311,15 @@ export const SentToRow = memo(function SentToRow({ block, legacy }: { block: Too
         <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-colors group-hover/st:text-foreground">
           <PurposeIcon purpose={input.purpose} />
         </span>
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 leading-6 text-muted-foreground transition-colors group-hover/st:text-foreground" style={CHAT_FONT}>
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden leading-6 text-muted-foreground transition-colors group-hover/st:text-foreground" style={CHAT_FONT}>
           <span className="shrink-0">{block.complete ? "Sent to" : "Sending to"}</span>
           {target && <ProviderMark kind={target.provider.kind} size={12} className="size-3 shrink-0" />}
           <span className="min-w-0 truncate" title={title}>{title}</span>
           <span className="shrink-0 text-foreground/40">· {purposeLabel(input.purpose)}</span>
         </span>
         <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs", failed ? "text-destructive" : held ? "text-amber-700 dark:text-amber-300/90" : "text-foreground/55")}>
-          {sendGlyph(result, block.complete, block.isError)}
-          {word}
+          {sendGlyph(live, block.complete, block.isError)}
+          <TextSwap text={word} />
         </span>
         <DisclosureChevron open={open} className="size-3 text-muted-foreground/65 group-hover/st:text-foreground" />
       </button>
@@ -312,6 +331,7 @@ export const SentToRow = memo(function SentToRow({ block, legacy }: { block: Too
             <span className="min-w-0 truncate">Reply: “{replyPreview}”</span>
           </p>
         )}
+        {live.state === "dismissed" && <p className="min-w-0 truncate text-xs leading-5 text-foreground/55">Dismissed in {title}. It was not delivered.</p>}
         {held && (
           <p className="flex min-w-0 items-center gap-2 text-xs leading-5 text-foreground/70">
             <span className="min-w-0 truncate">Waiting for you to approve it in {title}.</span>
@@ -326,12 +346,12 @@ export const SentToRow = memo(function SentToRow({ block, legacy }: { block: Too
           <DetailSection label="Message">
             <ClampedMarkdown text={input.body} variant="user" />
           </DetailSection>
-          {result?.reply && (
+          {live.reply && (
             <DetailSection label="Reply">
-              <ClampedMarkdown text={result.reply.body} />
+              <ClampedMarkdown text={live.reply.body} />
             </DetailSection>
           )}
-          {result?.waitTimedOut && <p className="text-xs text-foreground/55">No reply yet. It will arrive here when the thread answers.</p>}
+          {result?.waitTimedOut && !live.reply && <p className="text-xs text-foreground/55">No reply yet. It will arrive here when the thread answers.</p>}
           {target && (
             <div>
               <Button variant="subtle" size="chip" onClick={() => openThreadView(target.id)}>

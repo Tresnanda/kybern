@@ -4,6 +4,7 @@ import { readProviderCache } from "./providerCache"
 import { create, type UseBoundStore, type StoreApi } from "zustand"
 import { reloadOnHotUpdate } from "@/lib/hot"
 import { DEFAULT_SIDEBAR_FILTER, type SidebarFilter } from "./sidebarOrganize"
+import type { ThreadMessageIndex } from "../../../../packages/kybern-client/src/messageStates.ts"
 import { isChildThread } from "../../../../packages/kybern-client/src/subagents.ts"
 
 import type {
@@ -178,6 +179,8 @@ export interface AppState {
   queued: Record<ThreadId, QueuedMessage[]>
   /** Messages another thread sent here that need the reader's approval, per recipient. */
   heldMessages: Record<ThreadId, ThreadMessageRecord[]>
+  /** Bounded records of the messages a thread sent or received, for the live state of "Sent to" rows. See `threadMessages.ts`. */
+  messageRecords: Record<ThreadId, ThreadMessageIndex>
   composerDrafts: Record<
     string,
     {
@@ -375,6 +378,7 @@ export function createEnvironmentStore(
     sidebarFilter: DEFAULT_SIDEBAR_FILTER,
     queued: {},
     heldMessages: {},
+    messageRecords: {},
     composerDrafts: {},
     handoffThread: null,
     handoffTarget: null,

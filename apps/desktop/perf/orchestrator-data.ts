@@ -127,8 +127,9 @@ export const mainBlocks: Block[] = [
   end("e1", "turn-1", 600, 40000),
   user("u2", "turn-2", [{ type: "agent_results", items: resultItems }], 118),
   assistant("a3", "turn-2", "The session store and the migration are done, each in its own worktree. The end-to-end test failed to start because port 4173 is taken. I’ll ask the form agent how it handles errors, tell the reviewer what changed, and keep the failed test for later.", 110),
+  // The tool returned before the form agent answered; the live record and its reply (below) say it is answered now.
   sendCall("s1", "turn-2", { thread_id: "c-form", purpose: "question", body: "How does the form report a failed sign-in? I want the session store’s error to show up in the same place.", wait_for_reply: true }, {
-    message_id: "m-1", state: "answered", delivered_as: "queued", reply: { message_id: "m-1r", from_thread_id: "c-form", body: "It sets `formError` on the form state and renders it above the submit button. Pass the store’s error to `setFormError`." },
+    message_id: "m-1", state: "queued", delivered_as: "queued", wait_timed_out: true,
   }, 100),
   sendCall("s2", "turn-2", { thread_id: "c-review", purpose: "message", delivery: "steer", body: "The session store keeps tokens in memory only. Please check that sign-out clears them." }, { message_id: "m-2", state: "steered", delivered_as: "steered" }, 90),
   sendCall("s3", "turn-2", { thread_id: "c-fail", purpose: "task", body: "Retry the end-to-end test on port 4180. The dev server is on 4173." }, { message_id: "m-3", state: "held", delivered_as: "held" }, 80),
@@ -161,3 +162,20 @@ export const held: ThreadMessageRecord[] = [
   { id: "h-1", operation_id: "ho-1", from_thread_id: "c-review", to_thread_id: "c-form", purpose: "question", body: "The submit button stays enabled while the request is in flight. Is that intended, or should it be disabled until the response arrives?", delivery: "steer", state: "held", held_reason: "Review the form has broader permissions than this thread.", created_at: ago(18), updated_at: ago(18) },
   { id: "h-2", operation_id: "ho-2", from_thread_id: "c-session", to_thread_id: "c-form", purpose: "message", body: "The session store now exports `useSession`. Import it from `src/auth/useSession` instead of reading the cookie.", delivery: "queue", state: "held", held_reason: null, created_at: ago(9), updated_at: ago(9) },
 ]
+
+// ---- live records of the messages the main thread sent (what `threads.messages.list` returns for it) ----
+
+const record = (extra: Partial<ThreadMessageRecord> & Pick<ThreadMessageRecord, "id" | "to_thread_id" | "purpose" | "body" | "state">, seconds: number): ThreadMessageRecord =>
+  ({ operation_id: `so-${extra.id}`, from_thread_id: "main", delivery: "queue", created_at: ago(seconds), updated_at: ago(seconds), ...extra })
+
+/** m-1 was answered after its tool call returned; m-2 was steered; m-3 waits for approval until the reader resolves it. */
+export const sentRecords: ThreadMessageRecord[] = [
+  record({ id: "m-1", to_thread_id: "c-form", purpose: "question", body: "How does the form report a failed sign-in?", state: "answered" }, 100),
+  record({ id: "m-1r", from_thread_id: "c-form", to_thread_id: "main", purpose: "reply", reply_to: "m-1", state: "delivered",
+    body: "It sets `formError` on the form state and renders it above the submit button. Pass the store’s error to `setFormError`." }, 70),
+  record({ id: "m-2", to_thread_id: "c-review", purpose: "message", delivery: "steer", body: "The session store keeps tokens in memory only.", state: "steered" }, 90),
+  record({ id: "m-3", to_thread_id: "c-fail", purpose: "task", body: "Retry the end-to-end test on port 4180.", state: "held", held_reason: "Its permissions are broader than the test agent's." }, 80),
+]
+
+/** The same message once the reader approves it in the test agent's thread. */
+export const resolvedRecord: ThreadMessageRecord = { ...sentRecords[3]!, state: "delivered", held_reason: null, updated_at: ago(5) }

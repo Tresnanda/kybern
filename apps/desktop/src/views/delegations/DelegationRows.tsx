@@ -16,6 +16,7 @@ import {
   launchGroupDefaultOpen,
   launchGroupTitle,
   launchState,
+  threadByOperation,
   workspaceLabel,
   type ChildPhase,
 } from "../../../../../packages/kybern-client/src/delegations.ts"
@@ -62,19 +63,19 @@ interface Launch {
 function launchIds(block: ToolBlock) {
   const result = parseDelegateResult(block.output)
   const input = parseDelegateInput(block.call.input)
-  return { result, input, threadId: result?.threadId ?? null, operationId: input.operationId }
+  // A call that errored never started a child, so it is never looked up by its operation.
+  return { result, input, threadId: result?.threadId ?? null, operationId: block.isError ? null : input.operationId }
 }
 
 function useLaunches(blocks: readonly ToolBlock[]): Launch[] {
   const ids = useMemo(() => blocks.map(launchIds), [blocks])
-  // One subscription for the whole set; unrelated thread updates leave the array unchanged.
+  // One subscription for the whole set; unrelated thread updates leave the array unchanged. A call
+  // without a thread id yet is found through one operation index per thread table, shared by every row.
   const threads = useStore(
     useShallow((state) =>
       ids.map(({ threadId, operationId }) => {
         if (threadId) return state.threads[threadId]
-        if (!operationId) return undefined
-        for (const thread of Object.values(state.threads)) if (thread.delegation?.operation_id === operationId) return thread
-        return undefined
+        return operationId ? threadByOperation(state.threads, operationId) : undefined
       }),
     ),
   )
@@ -227,7 +228,7 @@ function MemberRow({
       )}
     >
       <LaunchGlyph phase={launch.state.phase} />
-      <span className="shrink-0 text-foreground/90" style={{ fontSize: 13 }}>{launch.title}</span>
+      <span className="min-w-0 max-w-[60%] truncate text-foreground/90" style={{ fontSize: 13 }} title={launch.title}>{launch.title}</span>
       <span className="sa-secondary min-w-0 flex-1 truncate text-xs text-foreground/45" title={meta}>{meta}</span>
       {conflicts > 0 && (
         <span className="inline-flex shrink-0 items-center gap-1 text-xs text-foreground/70">

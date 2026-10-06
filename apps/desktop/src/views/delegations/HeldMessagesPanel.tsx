@@ -39,6 +39,7 @@ const HeldRow = memo(function HeldRow({ message, divided }: { message: ThreadMes
   const name = messageSenderName({ from_thread_id: message.from_thread_id, from_title: sender ?? "" })
   const headline = heldHeadline(name, message.purpose)
   const preview = plainLine(message.body, 200)
+  const kindWord = purposeLabel(message.purpose).toLowerCase()
   const act = async (kind: "deliver" | "dismiss") => {
     setBusy(kind)
     const done = kind === "deliver" ? await deliverHeldMessage(message) : await dismissHeldMessage(message)
@@ -78,10 +79,10 @@ const HeldRow = memo(function HeldRow({ message, divided }: { message: ThreadMes
         </div>
       </ComposerStackedPanelRowMain>
       <div className="flex shrink-0 items-center gap-0.5">
-        <Button variant="ghost" size="chip" disabled={!connected || busy !== null} onClick={() => void act("dismiss")}>
+        <Button variant="ghost" size="chip" aria-label={`Dismiss ${kindWord} from ${name}`} disabled={!connected || busy !== null} onClick={() => void act("dismiss")}>
           {busy === "dismiss" ? "Dismissing…" : "Dismiss"}
         </Button>
-        <Button variant="subtle" size="chip" disabled={!connected || busy !== null} onClick={() => void act("deliver")}>
+        <Button variant="subtle" size="chip" aria-label={`Deliver ${kindWord} from ${name}`} disabled={!connected || busy !== null} onClick={() => void act("deliver")}>
           {busy === "deliver" ? "Delivering…" : "Deliver"}
         </Button>
       </div>

@@ -91,28 +91,29 @@ const FILES_PREVIEW = 6
 function FileLine({ file }: { file: string }) {
   const slash = file.lastIndexOf("/")
   return (
-    <li className="min-w-0 truncate font-mono text-[11.5px] leading-5 text-foreground/75" title={file}>
+    <div role="listitem" className="min-w-0 truncate font-mono text-[11.5px] leading-5 text-foreground/75" title={file}>
       {slash >= 0 && <span className="text-foreground/45">{file.slice(0, slash + 1)}</span>}
       {file.slice(slash + 1)}
-    </li>
+    </div>
   )
 }
 
 /** Six files, then "Show all" opens a bounded scroller; past 30 it is virtualized. */
 export function FilesList({ files }: { files: readonly string[] }) {
   const [all, setAll] = useState(false)
-  const scroller = useRef<HTMLUListElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
   if (files.length === 0) return null
   const shown = all ? files : files.slice(0, FILES_PREVIEW)
   return (
     <DetailSection label={`Files touched · ${files.length}`}>
-      <ul ref={scroller} className={cn("flex min-w-0 flex-col", all && files.length > FILES_PREVIEW && "max-h-44 overflow-y-auto overscroll-contain")}>
+      {/* VirtualRows wraps each row in an element of its own, so this is a role list of role items, not ul and li. */}
+      <div role="list" aria-label={`Files touched · ${files.length}`} ref={scroller} className={cn("flex min-w-0 flex-col", all && files.length > FILES_PREVIEW && "max-h-44 overflow-y-auto overscroll-contain")}>
         {all && files.length > 30 ? (
           <VirtualRows items={files} getKey={(file) => file} estimateSize={() => 20} viewport={scroller}>{(file) => <FileLine file={file} />}</VirtualRows>
         ) : (
           shown.map((file) => <FileLine key={file} file={file} />)
         )}
-      </ul>
+      </div>
       {files.length > FILES_PREVIEW && (
         <button type="button" aria-expanded={all} onClick={() => setAll((value) => !value)} className={QUIET_BUTTON}>
           {all ? "Show fewer" : `Show all ${filesLabel(files.length)}`}

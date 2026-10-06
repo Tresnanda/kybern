@@ -13,10 +13,11 @@ import { TooltipProvider } from "../src/components/kit/tooltip"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
 import { setEnvironmentRuntime } from "../src/state/rpc"
+import { recordThreadMessage } from "../src/state/threadMessages"
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { emptyThreadState } from "../src/state/transcript"
-import { formBlocks, held, mainBlocks, projects, providers, threads } from "./orchestrator-data"
+import { formBlocks, held, mainBlocks, projects, providers, resolvedRecord, sentRecords, threads } from "./orchestrator-data"
 import "../src/index.css"
 
 declare const __ORCH_THEME__: "dark" | "light"
@@ -29,6 +30,11 @@ const check = (name: string, value: unknown) => { checks[name] = !!value }
 const results = (value: unknown) => { ((window as any).__orchestratorResults ??= []).push(value); post(value) }
 /** Ask the native runner for a named screenshot; it resumes this page when the file is written. */
 const shot = (name: string) => new Promise<void>((resolve) => {
+  // A window that is not frontmost reports itself hidden and stalls CSS animations at their first frame, which leaves
+  // entering rows transparent. Finish the finite ones so every snapshot shows settled content.
+  for (const animation of document.getAnimations()) {
+    try { if (animation.effect?.getComputedTiming().iterations !== Infinity) animation.finish() } catch { /* not finishable */ }
+  }
   ;(window as any).__screenshotContinue = resolve
   post({ screenshot: `${name}-${theme}` })
 })
@@ -50,6 +56,7 @@ const connection = {
     if (method === "harness_updates.list") return { updates: [] }
     if (method === "daemon.activity") return { live_sessions: 3, idle_sessions: 1, terminals: 2, connections: 1, queued_messages: 0 }
     if (method === "threads.search") return { threads: [], next_cursor: null }
+    if (method === "threads.messages.list") return { messages: params.thread_id === "main" ? sentRecords.map((record) => ({ ...record })) : [] }
     if (method === "threads.messages.deliver" || method === "threads.messages.dismiss") {
       const record = heldRecords.find((item) => item.id === params.message_id)!
       heldRecords = heldRecords.filter((item) => item.id !== params.message_id)
@@ -135,7 +142,7 @@ async function run() {
   transcripts["c-form"].blocks = formBlocks
   useStore.getState().set({
     projects, threads, providers, selected: { kind: "thread", id: "main" }, splitView: null, transcripts, composerDrafts: {}, connection: { state: "open" },
-    rightOpen: true, rightTabs: ["collaboration"], rightTab: "collaboration", envOpen: false, heldMessages: {}, queued: {},
+    rightOpen: true, rightTabs: ["collaboration"], rightTab: "collaboration", envOpen: false, heldMessages: {}, messageRecords: {}, queued: {},
     settings: { default_provider: "codex", default_permission_mode: "supervised", worktrees_default: true, generate_titles: true, providers: {}, notifications: true, auto_update_harnesses: false, auto_update_daemon: false, background: { session_idle_minutes: 15, max_idle_sessions: 3, terminal_idle_minutes: 30, daemon_idle_exit_minutes: 0, save_power_on_battery: true }, access: { tailscale: false }, orchestration: { max_active_children: 4, max_depth: 2 } } as any,
   })
   const root = createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error) }) })
@@ -158,11 +165,23 @@ async function run() {
   await shot("shell-results")
   scrollTranscript("end"); await sleep(300)
   await shot("shell-sent")
+  const sent = (id: string) => document.querySelector<HTMLElement>(`[data-sent-message-id="${id}"]`)
+  check("the records were listed once for the thread", calls.filter((call) => call.method === "threads.messages.list" && call.params.thread_id === "main").length === 1)
+  check("a question answered after its call returned reads Answered with the reply", sent("m-1")?.dataset.sentState === "answered" && !!sent("m-1")?.textContent?.includes("Answered") && !!sent("m-1")?.textContent?.includes("Reply: “It sets formError"))
+  check("a steered send reads Sent now", sent("m-2")?.dataset.sentState === "steered" && !!sent("m-2")?.textContent?.includes("Sent now"))
+  check("a held send waits for approval", sent("m-3")?.dataset.sentState === "held" && !!sent("m-3")?.textContent?.includes("Held for approval") && !!sent("m-3")?.textContent?.includes("Waiting for you to approve"))
+  // The reader approves it in the test agent's thread: the daemon reports the new state on this thread.
+  recordThreadMessage("main", resolvedRecord); await sleep(450)
+  check("a resolved hold shows its live state and stops asking", sent("m-3")?.dataset.sentState === "delivered" && !!sent("m-3")?.textContent?.includes("Delivered") && !sent("m-3")?.textContent?.includes("Waiting for you to approve") && !sent("m-3")?.textContent?.includes("Held for approval"))
+  check("the other rows did not change", sent("m-1")?.dataset.sentState === "answered" && sent("m-2")?.dataset.sentState === "steered")
+  await shot("shell-sent-resolved")
 
   // 2. Lineage detail: the working child with files and a conflict, then the worktree children.
   await toggleDetail("c-form"); await toggleDetail("c-session")
   check("detail mounts only when open", !!row("c-form")?.textContent?.includes("Files touched") && !row("c-kept")?.textContent?.includes("Files touched"))
   check("conflict names its owner", !!row("c-form")?.textContent?.includes("is owned by “Wire up the session store”"))
+  const files = row("c-form")?.querySelector('[role="list"][aria-label^="Files touched"]')
+  check("files touched is a list of list items without a ul wrapper", !!files && files.tagName === "DIV" && files.querySelectorAll('[role="listitem"]').length === 5 && !row("c-form")?.querySelector("ul > div"))
   await shot("lineage-working")
   await toggleDetail("c-form"); await toggleDetail("c-session")
   await toggleDetail("c-kept"); await toggleDetail("c-fail"); await toggleDetail("n-explore")
@@ -188,6 +207,7 @@ async function run() {
   await sleep(700)
   check("inbound purposes render", ["task", "question", "reply", "warning", "message"].every((purpose) => !!document.querySelector(`[data-inbound-message="${purpose}"]`)))
   check("a reply names the question it answers", !!document.body.textContent?.includes("Reply to “Should the form announce an error"))
+  check("held actions name their message", ["Deliver question from", "Dismiss question from"].every((label) => Array.from(document.querySelectorAll('[data-testid="held-message-row"] button[aria-label]')).some((button) => button.getAttribute("aria-label")!.startsWith(label))))
   check("held messages wait in the composer stack", document.querySelectorAll('[data-testid="held-message-row"]').length === 2)
   check("queued structured message reads as an update", !!document.body.textContent?.includes("1 agent update waiting"))
   scrollTranscript("top"); await sleep(250)

@@ -44,6 +44,7 @@ import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
 import { mergeProjects, selectsMissingProject } from "./projects"
+import { recordThreadMessage, resolveThreadMessage, unseedThreadMessages } from "./threadMessages"
 import {
   diffKey,
   isThreadFocused,
@@ -209,6 +210,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         toolOutputs.invalidatePending()
         canReuseSnapshots = false
         hydrationGeneration++
+        unseedThreadMessages()
       }
       if (status === "open") {
         s.set({ connection: { state: "open" }, info: client?.info ?? null })
@@ -652,15 +654,9 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     if (ev.kind === "thread_created") {
       s.set((st) => ({ threads: { ...st.threads, [ev.thread.id]: ev.thread } }))
     }
-    if (ev.kind === "thread_message_held") {
-      const message = ev.message
-      s.set((st) => {
-        const current = st.heldMessages[message.to_thread_id] ?? []
-        if (current.some((item) => item.id === message.id)) return {}
-        return { heldMessages: { ...st.heldMessages, [message.to_thread_id]: [...current, message] } }
-      })
-    }
+    if (ev.kind === "thread_message_held" || ev.kind === "thread_message_updated") recordThreadMessage(ev.thread_id, ev.message)
     if (ev.kind === "thread_message_resolved") {
+      resolveThreadMessage(ev.thread_id, ev.message_id, ev.resolution)
       s.set((st) => {
         const current = st.heldMessages[ev.thread_id]
         if (!current?.some((item) => item.id === ev.message_id)) return {}

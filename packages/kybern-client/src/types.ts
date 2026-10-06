@@ -815,6 +815,8 @@ export type EventPayload =
   | { kind: "message_steered"; message_id: MessageId; message: UserMessage }
   | { kind: "thread_notes_updated"; notes: ThreadNotes }
   | { kind: "thread_message_held"; message: ThreadMessageRecord }
+  /** A thread message changed state after it was created. Sent on the sender's thread and the recipient's. */
+  | { kind: "thread_message_updated"; message: ThreadMessageRecord }
   | { kind: "thread_message_resolved"; message_id: MessageId; resolution: HeldResolution }
   | { kind: "collaboration_group_updated"; group: CollaborationGroup }
   | { kind: "collaboration_member_updated"; member: GroupMember }

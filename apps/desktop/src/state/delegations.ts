@@ -2,7 +2,7 @@
 // held thread messages. The pure rules live in `packages/kybern-client/src/delegations.ts`;
 // this module is the React and RPC side.
 
-import { useMemo } from "react"
+import { useEffect, useMemo } from "react"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
@@ -10,18 +10,22 @@ import { descendantsOf, lineageCounts, lineageRows, type LineageCounts, type Lin
 import type { MessageId, Thread, ThreadId, ThreadMessageRecord } from "@/protocol"
 import { errorText, interrupt, rpc } from "./rpc"
 import { useStore, type AppState } from "./store"
+import { recordThreadMessage, seedThreadMessages } from "./threadMessages"
 
 const NO_MESSAGES: readonly ThreadMessageRecord[] = []
 
-/** The thread's descendants. The signature changes only when a row would look different. */
+/**
+ * The thread's descendants. The signature changes only when a row would look different. Results and
+ * errors are written once, with `completed_at`, so their lengths mark them without joining the text.
+ */
 const lineageKey = (thread: Thread) =>
   [
     thread.id, thread.title, thread.status, thread.parent_thread_id ?? "", thread.provider.kind, thread.model ?? "",
     thread.worktree?.branch ?? "", thread.created_at,
-    thread.subagent?.status ?? "", thread.subagent?.backgrounded ? "b" : "", thread.subagent?.completed_at ?? "", thread.subagent?.result ?? "",
+    thread.subagent?.status ?? "", thread.subagent?.backgrounded ? "b" : "", thread.subagent?.completed_at ?? "", thread.subagent?.result?.length ?? "",
     thread.delegation?.status ?? "", thread.delegation?.completed_at ?? "", thread.delegation?.worktree_state ?? "",
     thread.delegation?.files_touched?.length ?? "", thread.delegation?.files_touched?.at(-1) ?? "", thread.delegation?.conflicts?.length ?? "", thread.delegation?.head_commit ?? "",
-    thread.delegation?.result ?? "", thread.delegation?.error ?? "",
+    thread.delegation?.result?.length ?? "", thread.delegation?.error?.length ?? "",
   ].join("|")
 
 /**
@@ -114,8 +118,9 @@ function dropHeld(message: ThreadMessageRecord) {
 /** Approve a held message; the daemon delivers it as the sender asked and the panel row leaves. */
 export async function deliverHeldMessage(message: ThreadMessageRecord): Promise<boolean> {
   try {
-    await rpc().call("threads.messages.deliver", { message_id: message.id as MessageId })
+    const updated = await rpc().call("threads.messages.deliver", { message_id: message.id as MessageId })
     dropHeld(message)
+    recordThreadMessage(message.to_thread_id, updated)
     return true
   } catch (error) {
     toast.error("Unable to deliver the message. Check the connection, then try again.", { description: errorText(error) })
@@ -125,11 +130,34 @@ export async function deliverHeldMessage(message: ThreadMessageRecord): Promise<
 
 export async function dismissHeldMessage(message: ThreadMessageRecord): Promise<boolean> {
   try {
-    await rpc().call("threads.messages.dismiss", { message_id: message.id as MessageId })
+    const updated = await rpc().call("threads.messages.dismiss", { message_id: message.id as MessageId })
     dropHeld(message)
+    recordThreadMessage(message.to_thread_id, updated)
     return true
   } catch (error) {
     toast.error("Unable to dismiss the message. Check the connection, then try again.", { description: errorText(error) })
     return false
   }
+}
+
+// ---- live state of sent messages ----
+
+const seeding = new Set<ThreadId>()
+
+/**
+ * Seed a thread's message records once per connection, when it shows a "Sent to" row. Events keep
+ * them current after that. An older daemon has no thread messages; the rows keep the tool output.
+ */
+export function useSeedThreadMessages(threadId: ThreadId | null | undefined, enabled: boolean) {
+  const connected = useStore((state) => state.connection.state === "open")
+  const seeded = useStore((state) => (threadId ? state.messageRecords[threadId]?.seeded === true : false))
+  useEffect(() => {
+    if (!threadId || !enabled || !connected || seeded || seeding.has(threadId)) return
+    seeding.add(threadId)
+    void rpc()
+      .call("threads.messages.list", { thread_id: threadId })
+      .then((result) => seedThreadMessages(threadId, result.messages))
+      .catch(() => undefined)
+      .finally(() => seeding.delete(threadId))
+  }, [threadId, enabled, connected, seeded])
 }
