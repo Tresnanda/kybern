@@ -74,6 +74,9 @@ import { addProject, archiveThread, errorText, loadThread, refreshProviders, rem
 import { canSplitPane, findThreadPaneByThreadId, resolveFocusedThreadPane } from "@/state/splitView"
 import { DEFAULT_SIDEBAR_FILTER, isFiltering, moveProject, orderProjects, threadMatchesFilter, type SidebarFilter } from "@/state/sidebarOrganize"
 import { createProjectThreadsSelector, useStore } from "@/state/store"
+import { createSidebarSubagentsSelector, createUserThreadsSelector, nowMs, useDismissedSubagentRows } from "@/state/subagents"
+import { visibleSubagentThreads } from "../../../../packages/kybern-client/src/subagents.ts"
+import { SubagentSidebarRow } from "./subagents/SubagentSidebarRow"
 
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
@@ -127,9 +130,11 @@ export function ThreadSidebar() {
   const [projectPickerOpen, setProjectPickerOpen] = useState(false)
   const [enterSurface] = useState(() => !isLaunching())
   const connection = useStore((s) => s.connection)
-  const threads = useStore((s) => s.threads)
+  // Subagent threads change every few seconds; this list is stable across them.
+  const selectUserThreads = useMemo(() => createUserThreadsSelector(), [])
+  const threads = useStore(selectUserThreads)
   const freeThreads = useMemo(
-    () => Object.values(threads).filter((thread) => isFreeChatProject(thread.project_id) && thread.status !== "archived" && !thread.parent_thread_id).sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    () => Object.values(threads).filter((thread) => isFreeChatProject(thread.project_id) && thread.status !== "archived" && !thread.parent_thread_id && !thread.subagent).sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
     [threads],
   )
   const freeDraftSelected = selected.kind === "draft" && !selected.draft.projectId
@@ -148,7 +153,7 @@ export function ThreadSidebar() {
     if (!attentionIds && !filtering) return null
     const ids = new Set<ThreadId>()
     for (const thread of Object.values(threads)) {
-      if (thread.status === "archived") continue
+      if (thread.status === "archived" || thread.subagent) continue
       if (attentionIds && !attentionIds.has(thread.id)) continue
       if (filtering && !threadMatchesFilter(thread, sidebarFilter, threadActivity[thread.id]?.state ?? undefined)) continue
       ids.add(thread.id)
@@ -175,7 +180,7 @@ export function ThreadSidebar() {
   // Agents to filter by: the ones that have threads here, plus the chosen one.
   const threadAgents = useMemo(() => {
     const kinds = new Set<ProviderKind>()
-    for (const thread of Object.values(threads)) if (thread.status !== "archived") kinds.add(thread.provider.kind)
+    for (const thread of Object.values(threads)) if (thread.status !== "archived" && !thread.subagent) kinds.add(thread.provider.kind)
     if (sidebarFilter.agent) kinds.add(sidebarFilter.agent)
     return [...kinds].sort((a, b) => (PROVIDER_LABEL[a] ?? a).localeCompare(PROVIDER_LABEL[b] ?? b))
   }, [sidebarFilter.agent, threads])
@@ -487,6 +492,10 @@ function ProjectItem({
 }) {
   const selectThreads = useMemo(() => createProjectThreadsSelector(project.id), [project.id])
   const threads = useStore(useShallow(selectThreads))
+  // Working subagents nest under their parents; progress updates do not touch the sidebar.
+  const selectSubagents = useMemo(() => createSidebarSubagentsSelector(project.id), [project.id])
+  const subagentThreads = useStore(selectSubagents)
+  const dismissedSubagents = useDismissedSubagentRows()
   const filtering = !!filterThreadIds
   const collapsed = useStore((s) => !!s.collapsedProjects[project.id])
   const toggle = useStore((s) => s.toggleProject)
@@ -513,15 +522,44 @@ function ProjectItem({
     return undefined
   })
   const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({})
+  const selectedThreadId = selected.kind === "thread" ? selected.id : undefined
   const orderedRows = useMemo(() => {
+    const shownSubagents = visibleSubagentThreads(subagentThreads, { selectedId: selectedThreadId, dismissed: dismissedSubagents, now: nowMs() })
+    // Parents (and the viewed row's ancestors) open on their own while they have subagents to show.
+    const withSubagents = new Set(shownSubagents.map((thread) => thread.parent_thread_id))
+    const defaultOpen = (thread: Thread) => withSubagents.has(thread.id)
     if (filterThreadIds) {
-      const filtered = threads.filter((thread) => filterThreadIds.has(thread.id))
-      return collaborationThreadRows(filtered, expandedThreads, selected.kind === "thread" ? selected.id : undefined)
+      const filtered: Thread[] = threads.filter((thread) => filterThreadIds.has(thread.id))
+      const allowed = new Set(filtered.map((thread) => thread.id))
+      // A subagent follows its parent through the filter, however deeply nested.
+      for (let grew = true; grew; ) {
+        grew = false
+        for (const thread of shownSubagents) {
+          if (!allowed.has(thread.id) && thread.parent_thread_id && allowed.has(thread.parent_thread_id)) {
+            allowed.add(thread.id)
+            filtered.push(thread)
+            grew = true
+          }
+        }
+      }
+      return collaborationThreadRows(filtered, expandedThreads, selectedThreadId, defaultOpen)
     }
     const ordered = coordinator ? [coordinator, ...threads.filter(thread => thread.id !== coordinator.id)] : threads
-    return collaborationThreadRows(ordered, expandedThreads, selected.kind === "thread" ? selected.id : undefined)
-  }, [filterThreadIds, coordinator, threads, expandedThreads, selected])
-  const visible = showAll || filtering ? orderedRows : orderedRows.slice(0, MAX_PROJECT_THREADS)
+    return collaborationThreadRows([...ordered, ...shownSubagents], expandedThreads, selectedThreadId, defaultOpen)
+  }, [filterThreadIds, coordinator, threads, subagentThreads, dismissedSubagents, expandedThreads, selectedThreadId])
+  // Subagent rows ride along with their parent; only real threads count toward the cap.
+  const topRows = useMemo(() => orderedRows.filter((row) => !row.thread.subagent).length, [orderedRows])
+  const visible = useMemo(() => {
+    if (showAll || filtering) return orderedRows
+    let counted = 0
+    let cutting = false
+    return orderedRows.filter((row) => {
+      if (row.thread.subagent) return !cutting
+      cutting = counted >= MAX_PROJECT_THREADS
+      if (!cutting) counted += 1
+      return !cutting
+    })
+  }, [orderedRows, showAll, filtering])
 
   return (
     <SidebarMenuItem className="rounded-md" data-project-id={project.id}>
@@ -610,17 +648,19 @@ function ProjectItem({
           <div className="min-h-0 overflow-hidden">
             <ul className={cn("mx-0 my-0 flex w-full min-w-0 translate-x-0 flex-col border-l-0 px-0 py-0", SIDEBAR_NESTED_LIST_GAP_CLASS_NAME, disclosureContentClassName(open))}>
               {!coordinator && !filtering && <CreateCoordinatorRow project={project} />}
-              {visible.map(({ thread, depth, childCount, open: childrenOpen }) => (
+              {visible.map(({ thread, depth, childCount, open: childrenOpen }) => thread.subagent ? (
+                <SubagentSidebarRow key={thread.id} thread={thread} depth={depth} childCount={childCount} childrenOpen={childrenOpen} onToggleChildren={() => setExpandedThreads(value => ({ ...value, [thread.id]: !childrenOpen }))} />
+              ) : (
                 <ThreadRow key={thread.id} thread={thread} depth={depth} childCount={childCount} childrenOpen={childrenOpen} onToggleChildren={() => setExpandedThreads(value => ({ ...value, [thread.id]: !childrenOpen }))} />
               ))}
-              {!filtering && orderedRows.length > MAX_PROJECT_THREADS && (
+              {!filtering && topRows > MAX_PROJECT_THREADS && (
                 <li>
                   <button
                     type="button"
                     onClick={() => setShowAll((v) => !v)}
                     className="h-7 w-full cursor-pointer justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:text-foreground"
                   >
-                    {showAll ? "Show less" : `Show ${orderedRows.length - MAX_PROJECT_THREADS} more`}
+                    {showAll ? "Show less" : `Show ${topRows - MAX_PROJECT_THREADS} more`}
                   </button>
                 </li>
               )}
@@ -716,7 +756,7 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
             style={{ insetInlineStart: 17 + level * 20 }} />
         ))}
         {childCount > 0 && <button type="button"
-          aria-label={`${childrenOpen ? "Collapse" : "Expand"} ${childCount} helpers for ${thread.title || "Untitled"}`}
+          aria-label={`${childrenOpen ? "Collapse" : "Expand"} ${childCount} nested ${childCount === 1 ? "thread" : "threads"} of ${thread.title || "Untitled"}`}
           aria-expanded={childrenOpen}
           onClick={onToggleChildren}
           className="absolute z-20 top-1/2 -translate-y-1/2 inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"

@@ -319,10 +319,14 @@ export default function kybernExtension(pi) {
   const deniedTools = configuredToolSet("KYBERN_PI_DENIED_TOOLS");
   const coordinatorOnly = process.env.KYBERN_PI_COORDINATOR_ONLY === "1";
   const coordinatorInstructions = process.env.KYBERN_PI_SYSTEM_PROMPT || "";
-  let coordinatorBootstrapPending = coordinatorInstructions.length > 0;
+  // A guide-only session (no coordinator role) adds the text to the system
+  // prompt each turn and skips the persisted bootstrap message, which would
+  // only repeat the same text in the conversation.
+  const bootstrapEnabled = process.env.KYBERN_PI_NO_BOOTSTRAP !== "1";
+  let coordinatorBootstrapPending = bootstrapEnabled && coordinatorInstructions.length > 0;
 
   function restoreCoordinatorBootstrap(ctx) {
-    if (!coordinatorInstructions) {
+    if (!coordinatorInstructions || !bootstrapEnabled) {
       coordinatorBootstrapPending = false;
       return;
     }

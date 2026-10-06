@@ -28,6 +28,15 @@ import { createRetentionPolicy } from "./retention"
 import { windowHoldsTranscript } from "./windowSurfaceState"
 import { advanceSequence } from "./bootstrap"
 import {
+  EMPTY_NAV_HISTORY,
+  moveNavHistory,
+  navEntryFromSelected,
+  recordNavEntry,
+  type NavEntry,
+  type NavHistory,
+  type NavMode,
+} from "./navHistory"
+import {
   persistWorkspace,
   readWorkspace,
   workspaceKey,
@@ -132,6 +141,8 @@ export interface AppState {
     /** Tasks page; `taskId` is the open task, if any. */
     | { kind: "tasks"; taskId?: string }
     | { kind: "none" }
+  /** Back and forward steps through the main views. Not persisted. */
+  navHistory: NavHistory
   /** The chat (thread or draft) to return to when Home is chosen from another page. */
   homeSelection: { kind: "thread"; id: ThreadId } | { kind: "draft"; draft: Draft } | null
   /** Persisted recursive pane tree for showing up to four chat threads together. */
@@ -191,6 +202,8 @@ export interface AppActions {
   transcript: (id: ThreadId) => ThreadState
   updateTranscript: (id: ThreadId, f: (t: ThreadState) => ThreadState) => void
   selectThread: (id: ThreadId) => void
+  /** Show a thread just created from the draft on screen: the draft's history step becomes the thread's. */
+  selectCreatedThread: (id: ThreadId) => void
   selectDraft: (projectId: ProjectId, purpose?: "thread" | "coordinator") => void
   selectFreeDraft: () => void
   selectPulls: () => void
@@ -201,6 +214,13 @@ export interface AppActions {
   selectTasks: (taskId?: string) => void
   /** Return to the last chat, or the home screen when none is left. */
   selectHome: () => void
+  /** Run a selection that is not the user's move (boot, a removed project) so it replaces the current history step. */
+  replaceNavigation: (select: () => void) => void
+  /**
+   * Show the nearest valid history entry in `delta`'s direction, alone (split view is not
+   * history), without recording a new step. Returns the entry shown, or null at the end.
+   */
+  moveNavigation: (delta: -1 | 1, isValid: (entry: NavEntry) => boolean) => NavEntry | null
   /** Record that a thread needs attention (bell + sidebar unread marker). */
   pushNotification: (threadId: ThreadId, kind: NotificationKind, seq: number, at: string) => void
   /** Clear a thread's notification (it has been opened / acknowledged). */
@@ -299,6 +319,18 @@ export function createEnvironmentStore(
   const notificationState = readThreadNotificationState(environmentId)
   const persistSplitView = (view: SplitView | null) =>
     saveSplitView(view, environmentId)
+  // How the next change to `selected` is recorded in `navHistory`. "restore" is
+  // back/forward itself, which must not add a step.
+  let navMode: NavMode | "restore" = "push"
+  const withNavMode = (mode: NavMode | "restore", run: () => void) => {
+    const previous = navMode
+    navMode = mode
+    try {
+      run()
+    } finally {
+      navMode = previous
+    }
+  }
   const store = create<Store>()((set, get) => ({
     environmentId,
     connection: { state: "connecting" },
@@ -316,6 +348,7 @@ export function createEnvironmentStore(
     diffs: {},
     gitStatuses: {},
     selected: { kind: "none" },
+    navHistory: EMPTY_NAV_HISTORY,
     homeSelection: null,
     splitView: readPersistedSplitView(environmentId),
     sidebarOpen: true,
@@ -412,6 +445,11 @@ export function createEnvironmentStore(
         persistSplitView(next)
         return { selected: { kind: "thread", id }, splitView: next }
       }),
+    selectCreatedThread: (id) => {
+      const state = get()
+      if (state.selected.kind === "draft") withNavMode("replace", () => state.selectThread(id))
+      else state.selectThread(id)
+    },
     pushNotification: (threadId, kind, seq, at) =>
       set((state) => {
         if (state.threads[threadId]?.parent_thread_id) return clearNotificationPatch(state, threadId)
@@ -483,6 +521,21 @@ export function createEnvironmentStore(
         return set({ selected: home, splitView: null })
       }
       s.selectFreeDraft()
+    },
+    replaceNavigation: (select) => withNavMode("replace", select),
+    moveNavigation: (delta, isValid) => {
+      const move = moveNavHistory(get().navHistory, delta, isValid)
+      if (!move) return null
+      persistSplitView(null)
+      withNavMode("restore", () =>
+        set((s) => ({
+          navHistory: move.history,
+          selected: move.entry,
+          splitView: null,
+          homeSelection: move.entry.kind === "thread" || move.entry.kind === "draft" ? s.homeSelection : rememberHome(s),
+        })),
+      )
+      return move.entry
     },
     splitFocusedPane: (direction, threadId, side = "second") => {
       const state = get()
@@ -691,11 +744,14 @@ export function createEnvironmentStore(
       ) {
         const projectId =
           state.threads[threadId]?.project_id ?? Object.keys(state.projects)[0]
-        set({
-          selected: projectId
-            ? { kind: "draft", draft: { projectId } }
-            : { kind: "none" },
-        })
+        // Falling back to a draft is not the user's move: it replaces the thread's step.
+        withNavMode("replace", () =>
+          set({
+            selected: projectId
+              ? { kind: "draft", draft: { projectId } }
+              : { kind: "none" },
+          }),
+        )
       }
     },
     reconcileSplitThreads: (threadIds) => {
@@ -729,6 +785,19 @@ export function createEnvironmentStore(
     setProjectOrder: (projectOrder) => set({ projectOrder }),
     setSidebarFilter: (filter) => set((s) => ({ sidebarFilter: { ...s.sidebarFilter, ...filter } })),
   }))
+  // Every change of the main view is a history step, recorded here rather than
+  // at each of the places that select one.
+  const startView = navEntryFromSelected(store.getState().selected)
+  if (startView) store.setState({ navHistory: recordNavEntry(EMPTY_NAV_HISTORY, startView) })
+  store.subscribe((next, previous) => {
+    if (navMode === "restore" || next.selected === previous.selected) return
+    // Moving between panes of a split view is layout, not navigation.
+    if (next.splitView) return
+    const entry = navEntryFromSelected(next.selected)
+    if (!entry) return
+    const navHistory = recordNavEntry(next.navHistory, entry, navMode)
+    if (navHistory !== next.navHistory) store.setState({ navHistory })
+  })
   // Only persist workspace changes, never every streaming token.
   store.subscribe((next, previous) => {
     if (
@@ -810,7 +879,7 @@ export const selectThreadsForProject = (
   projectId: ProjectId
 ): Thread[] =>
   Object.values(s.threads)
-    .filter((t) => t.project_id === projectId && t.status !== "archived")
+    .filter((t) => t.project_id === projectId && t.status !== "archived" && !t.subagent)
     .sort(
       (a, b) =>
         Number(b.pinned) - Number(a.pinned) ||
@@ -819,7 +888,7 @@ export const selectThreadsForProject = (
 
 export const selectRecentThreads = (s: AppState): Thread[] =>
   Object.values(s.threads)
-    .filter((t) => t.status !== "archived")
+    .filter((t) => t.status !== "archived" && !t.subagent)
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
 
 export const selectSelectedThread = (s: AppState): Thread | null =>

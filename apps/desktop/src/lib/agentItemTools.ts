@@ -8,6 +8,7 @@
 // live state itself.
 
 import type { JsonValue, ToolCall } from "@/protocol"
+import { kybernRefKey, kybernRefsIn } from "../../../../packages/kybern-client/src/chatLinks.ts"
 
 export type AgentItemToolName =
   | "notes_search"
@@ -164,6 +165,37 @@ export function parseAgentItemResult(output: JsonValue | null | undefined): Agen
 /** A write's result worth a card: it names one note or task the tool changed. */
 export function agentItemWriteResult(result: AgentItemResult | null): AgentNoteResult | AgentTaskResult | null {
   return result && (result.kind === "note" || result.kind === "task") && result.action ? result : null
+}
+
+export interface AgentItemWrite {
+  /** The tool call that wrote it. */
+  id: string
+  result: AgentNoteResult | AgentTaskResult
+}
+
+/**
+ * Where a settled turn shows its notes and tasks. An item the final answer
+ * references (a link, a bare URI or inline code) already appears there as a chip,
+ * so its card is not repeated under the answer: it stays inline in the work fold,
+ * at the call that created it (or, for an item that only changed, its last call).
+ * Every other item keeps one card under the answer, from its latest write.
+ * `writes` are in call order.
+ */
+export function placeItemCards(writes: readonly AgentItemWrite[], answer: string | null | undefined): { below: AgentItemWrite[]; inlineCallIds: ReadonlySet<string> } {
+  const mentioned = new Set(kybernRefsIn(answer).map(kybernRefKey))
+  const perItem = new Map<string, AgentItemWrite[]>()
+  for (const write of writes) {
+    const key = `${write.result.kind}:${write.result.id.toLowerCase()}`
+    perItem.set(key, [...(perItem.get(key) ?? []), write])
+  }
+  const below: AgentItemWrite[] = []
+  const inlineCallIds = new Set<string>()
+  for (const [key, history] of perItem) {
+    if (mentioned.has(key)) inlineCallIds.add((history.find((write) => write.result.action === "created") ?? history.at(-1)!).id)
+    else below.push(history.at(-1)!)
+  }
+  below.sort((a, b) => writes.indexOf(a) - writes.indexOf(b))
+  return { below, inlineCallIds }
 }
 
 /** A task key the agent passed (`ADE-14`), not an id or link. */

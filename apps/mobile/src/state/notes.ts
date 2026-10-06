@@ -1,7 +1,7 @@
 // Notes for the connected computer. The runtime attaches the live client on
 // every connection: the list loads once the subscription is ready, again after
 // each reconnect, and `notes.changed` notifications keep it current in between.
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import {
   NOTES_CHANGED_NOTIFICATION,
   type KybernClient,
@@ -48,17 +48,27 @@ const getState = () => state;
 export function getNotes() {
   return state;
 }
+const subscribe = (fn: () => void) => {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+};
 export function useNotes() {
-  return useSyncExternalStore(
-    (fn) => {
-      listeners.add(fn);
-      return () => {
-        listeners.delete(fn);
-      };
-    },
-    getState,
-    getState,
+  return useSyncExternalStore(subscribe, getState, getState);
+}
+/** One note's summary, live. Re-renders only when that note changes. */
+export function useNote(id: string | undefined) {
+  const get = useCallback(
+    () => (id ? state.notes.find((note) => note.id === id) : undefined),
+    [id],
   );
+  return useSyncExternalStore(subscribe, get, get);
+}
+/** Whether the list has been read, so a missing note really is gone. */
+export function useNotesKnown() {
+  const get = useCallback(() => state.loaded && !state.unsupported, []);
+  return useSyncExternalStore(subscribe, get, get);
 }
 /** Open editors watch for changes made on other devices. */
 export function subscribeNoteChanges(

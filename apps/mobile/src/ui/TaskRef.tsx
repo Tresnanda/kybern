@@ -1,31 +1,48 @@
 import { router } from "expo-router";
 import { Text, View } from "react-native";
-import { useTask } from "../state/tasks";
+import { useTask, useTasksKnown } from "../state/tasks";
 import { STATUS_LABEL } from "../state/tasksModel";
 import { StatusGlyph } from "./TaskGlyphs";
 import { useTheme } from "./theme";
+
+/** A link that is just its own `kybern://` URI says nothing more than "a task" or "a note". */
+export function writtenRefLabel(label: string) {
+  const text = label.replace(/\s+/g, " ").trim();
+  return /^kybern:\/\//i.test(text) ? "" : text;
+}
 
 /**
  * A `kybern://task/<id>` link drawn as a live reference: the task's status glyph
  * and key, plus its status word on checklist lines. It follows the task as it
  * runs and opens it on tap. Before the task list arrives it shows the link text.
+ * In a chat message (`chat`) it also reads the task's title, and a task that is
+ * gone from the list reads "Deleted task" and stops being a link.
  */
 export function TaskRef({
   id,
   label,
   checklist = false,
+  chat = false,
 }: {
   id: string;
   label: string;
   checklist?: boolean;
+  chat?: boolean;
 }) {
   const task = useTask(id);
+  const known = useTasksKnown();
   const { colors } = useTheme();
-  const key = task?.key ?? label;
+  const written = writtenRefLabel(label);
+  if (chat && !task && known)
+    return (
+      <Text style={{ color: colors.muted }}>Deleted task</Text>
+    );
+  const key = task?.key ?? (written || "Task");
+  const title = chat ? task?.title.trim() : "";
   return (
     <Text
       accessibilityRole="link"
-      accessibilityLabel={`${key}${task ? `, ${STATUS_LABEL[task.status]}` : ""}. Open task`}
+      accessibilityLabel={`${key}${title ? ` ${title}` : ""}${task ? `, ${STATUS_LABEL[task.status]}` : ""}. Open task`}
       suppressHighlighting={false}
       onPress={() => router.push({ pathname: "/todo-item", params: { id } })}
       style={{
@@ -42,6 +59,7 @@ export function TaskRef({
         </View>
       ) : null}
       {key}
+      {title ? ` ${title}` : null}
       {checklist && task ? (
         <Text style={{ color: colors.secondary, fontWeight: "400" }}>
           {`  ${STATUS_LABEL[task.status]}`}

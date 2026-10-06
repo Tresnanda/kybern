@@ -11,10 +11,12 @@ import { Command, CommandCollection, CommandDialog, CommandDialogPopup, CommandE
 import { Kbd, KbdGroup } from "@/components/kit/kbd"
 import { AutocompleteItem } from "@/components/kit/autocomplete"
 import { mod, relativeTime } from "@/lib/format"
-import { ClockIcon, FolderOpenIcon, ListChecksIcon, MoonIcon, NewThreadIcon, NoteIcon, PanelRightCloseIcon, PencilIcon, PlusIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
+import { ArrowLeftIcon, ArrowRightIcon, ClockIcon, FolderOpenIcon, ListChecksIcon, MoonIcon, NewThreadIcon, NoteIcon, PanelRightCloseIcon, PencilIcon, PlusIcon, SettingsIcon, SquareSplitVertical, SunIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { isFreeChatProject, type NoteSummary, type TaskItem } from "@/protocol"
 import { newThread } from "@/state/nav"
+import { goBack, goForward, isNavEntryValid } from "@/state/navigation"
+import { canMoveNavHistory } from "@/state/navHistory"
 import { createAndOpenNote, openNote, useAllNotes } from "@/state/notes"
 import { isEmptyThreadNote, noteTitle } from "@/state/notesModel"
 import { openQuickNote } from "@/state/quickNote"
@@ -54,6 +56,8 @@ export function Palette() {
   const projects = useStore((s) => s.projects)
   const liveNotes = useAllNotes()
   const selected = useStore((s) => s.selected)
+  const navHistory = useStore((s) => s.navHistory)
+  const settingsOpen = useStore((s) => s.settingsOpen)
   const { theme, setTheme } = useTheme()
   const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
   const close = () => set({ paletteOpen: false })
@@ -118,6 +122,43 @@ export function Palette() {
                 </KbdGroup>
               ),
               run: () => useStore.getState().splitFocusedPane("horizontal"),
+            },
+          ]
+        : []),
+      // Back also closes Settings, so it is offered whenever either applies. Forward waits behind Settings.
+      ...(settingsOpen || canMoveNavHistory(navHistory, -1, (entry) => isNavEntryValid(entry))
+        ? [
+            {
+              id: "go-back",
+              label: "Go back",
+              keywords: "back previous history navigate return",
+              group: "Suggested" as const,
+              icon: <ArrowLeftIcon className="size-[15px]" />,
+              meta: (
+                <KbdGroup className="shrink-0">
+                  <Kbd>{mod}</Kbd>
+                  <Kbd>[</Kbd>
+                </KbdGroup>
+              ),
+              run: () => void goBack(),
+            },
+          ]
+        : []),
+      ...(!settingsOpen && canMoveNavHistory(navHistory, 1, (entry) => isNavEntryValid(entry))
+        ? [
+            {
+              id: "go-forward",
+              label: "Go forward",
+              keywords: "forward next history navigate",
+              group: "Suggested" as const,
+              icon: <ArrowRightIcon className="size-[15px]" />,
+              meta: (
+                <KbdGroup className="shrink-0">
+                  <Kbd>{mod}</Kbd>
+                  <Kbd>]</Kbd>
+                </KbdGroup>
+              ),
+              run: () => void goForward(),
             },
           ]
         : []),
@@ -244,10 +285,11 @@ export function Palette() {
     const themes: Item[] = [
       {
         id: "theme",
-        label: dark ? "Switch to light theme" : "Switch to dark theme",
-        keywords: "theme dark light appearance",
+        label: "Toggle theme",
+        keywords: "theme dark light appearance switch mode toggle",
         group: "Themes",
         icon: dark ? <SunIcon className="size-[15px]" /> : <MoonIcon className="size-[15px]" />,
+        meta: <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">{dark ? "Switch to light" : "Switch to dark"}</span>,
         run: () => setTheme(dark ? "light" : "dark"),
       },
     ]
@@ -259,7 +301,7 @@ export function Palette() {
       { value: "Projects", items: projectItems },
       { value: "Themes", items: themes },
     ].filter((g) => g.items.length > 0)
-  }, [threads, projects, allNotes, allTasks, selected, dark, set, setTheme])
+  }, [threads, projects, allNotes, allTasks, selected, navHistory, settingsOpen, dark, set, setTheme])
 
   return (
     <CommandDialog open={open} onOpenChange={(o) => set({ paletteOpen: o })}>
@@ -279,7 +321,7 @@ export function Palette() {
                         value={item}
                         onClick={() => {
                           close()
-                          if (item.id !== "settings" && item.id !== "theme") set({ settingsOpen: false })
+                          if (item.id !== "settings" && item.id !== "theme" && item.id !== "go-back" && item.id !== "go-forward") set({ settingsOpen: false })
                           item.run()
                         }}
                         className={cn("cursor-pointer items-center gap-2 rounded-lg px-2.5", item.group === "Threads" ? "py-2" : "py-1.5")}

@@ -103,6 +103,11 @@ expression: schema_for!(Settings)
         "foreground": "ask",
         "show_cursor": false
       }
+    },
+    "tell_agents_about_kybern": {
+      "description": "Give new agent sessions a short guide to Kybern: images, notes and\ntasks, other threads, helpers. Applies to sessions started after the change.",
+      "type": "boolean",
+      "default": true
     }
   },
   "$defs": {

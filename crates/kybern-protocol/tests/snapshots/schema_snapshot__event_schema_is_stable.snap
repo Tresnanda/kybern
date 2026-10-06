@@ -970,6 +970,17 @@ expression: schema_for!(ThreadEvent)
             "null"
           ],
           "format": "uuid"
+        },
+        "subagent": {
+          "description": "Set when this thread mirrors one provider-native subagent. Such a thread\nis read-only: it records what the subagent said and did, and its\n`parent_thread_id` is the thread (or subagent thread) that launched it.\nClients that do not know about subagent threads must hide them from\nthread lists.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1063,6 +1074,228 @@ expression: schema_for!(ThreadEvent)
         "path",
         "branch"
       ]
+    },
+    "SubagentInfo": {
+      "description": "Provider-native subagent metadata carried by a read-only child [`Thread`].\n\nThe title, model and effort live on the thread itself. This struct holds\nthe rest of what a subagent page needs and is refreshed (through\n`thread_updated`) whenever the parent's runtime task for it changes.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "description": "Provider-stable id of the runtime task in the parent thread. Together\nwith the root thread it identifies this child thread.",
+          "type": "string"
+        },
+        "root_thread_id": {
+          "description": "The thread that owns the provider session. For a subagent launched by\nanother subagent this is the root, not `Thread::parent_thread_id`.\n`tasks.stop` and `tasks.background` accept the child thread id and\nresolve the session through it.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_turn_id": {
+          "description": "Turn of the root thread that launched the subagent.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "tool_call_id": {
+          "description": "Tool call in the parent that launched it, when the provider has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Provider agent type or role (`Explore`, `worker`, `task:general`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/RuntimeTaskStatus"
+        },
+        "backgrounded": {
+          "type": "boolean",
+          "default": false
+        },
+        "last_tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "description": "Latest progress or final result summary from the provider, as reported\n(see `progress` and `result` for the normalized one-line forms).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "description": "One live line while the subagent works: the provider's latest activity\ntext, else the last tool it used (`Using Read`). Cleared once it settles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "First line of the subagent's final answer once it settled (its last\nmessage, else the provider's result summary, else the failure message).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stats": {
+          "$ref": "#/$defs/RuntimeTaskStats",
+          "default": {}
+        },
+        "capabilities": {
+          "description": "Whether `tasks.stop` / `tasks.background` currently work for it.",
+          "$ref": "#/$defs/RuntimeTaskCapabilities",
+          "default": {
+            "stop": false,
+            "background": false
+          }
+        },
+        "transcript": {
+          "description": "False when the harness only reports lifecycle (Pi/OMP and providers\nwithout native subagent forwarding): the transcript holds just the\nprompt and the outcome.",
+          "type": "boolean",
+          "default": false
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "task_id",
+        "root_thread_id",
+        "parent_turn_id",
+        "status",
+        "started_at"
+      ]
+    },
+    "RuntimeTaskStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "waiting",
+        "stopping",
+        "completed",
+        "failed",
+        "stopped",
+        "interrupted"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ]
+    },
+    "RuntimeTaskStats": {
+      "type": "object",
+      "properties": {
+        "token_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tool_uses": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cpu_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rss_kb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "RuntimeTaskCapabilities": {
+      "type": "object",
+      "properties": {
+        "stop": {
+          "description": "The provider exposes a targeted stop operation for this task.",
+          "type": "boolean",
+          "default": false
+        },
+        "background": {
+          "description": "The provider can detach this foreground task without interrupting it.",
+          "type": "boolean",
+          "default": false
+        }
+      }
     },
     "QueuedMessage": {
       "type": "object",
@@ -2097,109 +2330,6 @@ expression: schema_for!(ThreadEvent)
         "process",
         "monitor"
       ]
-    },
-    "RuntimeTaskStatus": {
-      "type": "string",
-      "enum": [
-        "pending",
-        "running",
-        "waiting",
-        "stopping",
-        "completed",
-        "failed",
-        "stopped",
-        "interrupted"
-      ]
-    },
-    "Usage": {
-      "type": "object",
-      "properties": {
-        "input_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "output_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "cache_read_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "default": 0
-        },
-        "cache_write_tokens": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "default": 0
-        }
-      },
-      "required": [
-        "input_tokens",
-        "output_tokens"
-      ]
-    },
-    "RuntimeTaskStats": {
-      "type": "object",
-      "properties": {
-        "token_count": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "tool_uses": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "duration_ms": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "cpu_percent": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "rss_kb": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        }
-      }
-    },
-    "RuntimeTaskCapabilities": {
-      "type": "object",
-      "properties": {
-        "stop": {
-          "description": "The provider exposes a targeted stop operation for this task.",
-          "type": "boolean",
-          "default": false
-        },
-        "background": {
-          "description": "The provider can detach this foreground task without interrupting it.",
-          "type": "boolean",
-          "default": false
-        }
-      }
     },
     "AsyncQuestionRequest": {
       "type": "object",

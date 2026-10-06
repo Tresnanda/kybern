@@ -8,6 +8,7 @@ import {
   agentItemTool,
   agentItemWriteResult,
   parseAgentItemResult,
+  placeItemCards,
   splitChecklistPreview,
 } from "./src/lib/agentItemTools.ts"
 
@@ -77,4 +78,36 @@ test("a task preview splits its description from its checklist", () => {
 test("raw results indent their JSON and leave other text alone", () => {
   assert.equal(agentItemResultText('{"a":1}'), '{\n  "a": 1\n}')
   assert.equal(agentItemResultText("Task ADE-9 not found."), "Task ADE-9 not found.")
+})
+
+const TASK_ID = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+const NOTE_ID = "0199a1b2-c3d4-7e5f-8a9b-ffffffffffff"
+const write = (id, kind, itemId, action) => ({ id, result: { kind, id: itemId, action } })
+
+test("an item the answer links to keeps its card in the fold, at the call that created it", () => {
+  const writes = [write("c1", "task", TASK_ID, "created"), write("c2", "note", NOTE_ID, "created"), write("c3", "task", TASK_ID, "updated")]
+  // Nothing referenced: one card per item under the answer, from the latest write, in write order.
+  let placed = placeItemCards(writes, "Done.")
+  assert.deepEqual(placed.below.map((w) => w.id), ["c2", "c3"])
+  assert.equal(placed.inlineCallIds.size, 0)
+  // A link, a bare URI or inline code each count.
+  for (const answer of [`Filed [ADE-1 Fix](kybern://task/${TASK_ID}).`, `Filed kybern://task/${TASK_ID}.`, `Filed \`kybern://task/${TASK_ID.toUpperCase()}\``]) {
+    placed = placeItemCards(writes, answer)
+    assert.deepEqual(placed.below.map((w) => w.id), ["c2"], answer)
+    assert.deepEqual([...placed.inlineCallIds], ["c1"], answer)
+  }
+  // The note's reference does not move the task's card.
+  placed = placeItemCards(writes, `See [Plan](kybern://note/${NOTE_ID})`)
+  assert.deepEqual(placed.below.map((w) => w.id), ["c3"])
+  assert.deepEqual([...placed.inlineCallIds], ["c2"])
+})
+
+test("a referenced item that only changed in this turn keeps its card at its last write; fenced examples do not count", () => {
+  const writes = [write("c1", "note", NOTE_ID, "appended"), write("c2", "note", NOTE_ID, "updated")]
+  const placed = placeItemCards(writes, `Added to kybern://note/${NOTE_ID}`)
+  assert.equal(placed.below.length, 0)
+  assert.deepEqual([...placed.inlineCallIds], ["c2"])
+  const fenced = placeItemCards(writes, ["Example:", "```", `kybern://note/${NOTE_ID}`, "```"].join("\n"))
+  assert.deepEqual(fenced.below.map((w) => w.id), ["c2"])
+  assert.equal(placeItemCards(writes, null).below.length, 1)
 })

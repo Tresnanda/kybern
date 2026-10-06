@@ -145,20 +145,62 @@ impl AgentDriver for CursorDriver {
                 description: "Compact the Cursor conversation".into(),
             }]))
             .await;
-        Ok(SpawnedSession { session: Box::new(Session { connection, model: Mutex::new(config.model) }), events })
+        // A brand-new conversation has never seen the guide; a resumed one already
+        // carries it in its history. The SDK has no system channel, so the guide
+        // rides on the first prompt.
+        let guide =
+            if config.resume_session_id.is_none() { config.native_tool_bridge.as_ref().and_then(|bridge| bridge.guide()) } else { None };
+        Ok(SpawnedSession {
+            session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide.map(str::to_owned)) }),
+            events,
+        })
     }
 }
 
 struct Session {
     connection: Connection,
     model: Mutex<Option<String>>,
+    /// Kybern's guide, until the first prompt that can carry it is sent.
+    guide: Mutex<Option<String>>,
+}
+
+const GUIDE_OPEN: &str = "<kybern_instructions>";
+const GUIDE_CLOSE: &str = "</kybern_instructions>";
+
+/// The provider's copy of the first prompt: the guide in a tagged block, then the user's request.
+fn with_guide(guide: &str, text: &str) -> String {
+    format!("{GUIDE_OPEN}\n{guide}\n{GUIDE_CLOSE}\n\n{text}")
+}
+
+/// The user's own text of a saved prompt that began with the guide block.
+pub(crate) fn without_guide(text: &str) -> &str {
+    text.strip_prefix(GUIDE_OPEN)
+        .and_then(|rest| rest.split_once(GUIDE_CLOSE))
+        .map(|(_, request)| request.strip_prefix("\n\n").unwrap_or(request))
+        .unwrap_or(text)
 }
 
 #[async_trait]
 impl AgentSession for Session {
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
-        self.connection.call("send", json!({"messageId": message_id, "message": sdk_message(message)})).await?;
-        Ok(())
+        let mut payload = sdk_message(message);
+        let text = payload["text"].as_str().unwrap_or("").to_owned();
+        // Slash commands (skills, /compress) must stay at the start of the prompt;
+        // the guide waits for the next ordinary one.
+        let guide = if text.trim_start().starts_with('/') { None } else { self.guide.lock().await.take() };
+        if let Some(guide) = &guide {
+            payload["text"] = Value::String(with_guide(guide, &text));
+        }
+        match self.connection.call("send", json!({"messageId": message_id, "message": payload})).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                // The agent never saw it; offer it again with the retry.
+                if guide.is_some() {
+                    *self.guide.lock().await = guide;
+                }
+                Err(error)
+            }
+        }
     }
     async fn compact(&self) -> Result<()> {
         self.send_message(&uuid::Uuid::new_v4().to_string(), &UserMessage::text("/compress")).await
@@ -217,6 +259,15 @@ mod tests {
         assert!(validate_mode(PermissionMode::Supervised).is_err());
         assert!(validate_mode(PermissionMode::AcceptEdits).is_err());
     }
+    #[test]
+    fn guide_wraps_the_first_prompt_and_is_removed_from_saved_history() {
+        let prompt = with_guide("GUIDE", "Fix the bug");
+        assert_eq!(prompt, "<kybern_instructions>\nGUIDE\n</kybern_instructions>\n\nFix the bug");
+        assert_eq!(without_guide(&prompt), "Fix the bug");
+        assert_eq!(without_guide("plain request"), "plain request");
+        assert_eq!(without_guide("<kybern_instructions>unclosed"), "<kybern_instructions>unclosed");
+    }
+
     #[test]
     fn separates_native_ids_and_preserves_images_and_skill_syntax() {
         assert_eq!(sdk_id("cursor-sdk:local-123").unwrap(), "local-123");

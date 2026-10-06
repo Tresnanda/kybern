@@ -85,6 +85,12 @@ export function useTask(id: string | undefined) {
   return useSyncExternalStore(subscribe, get, get);
 }
 
+/** Whether the list has been read, so a missing task really is gone. */
+export function useTasksKnown() {
+  const get = useCallback(() => state.loaded && !state.unsupported, []);
+  return useSyncExternalStore(subscribe, get, get);
+}
+
 /** Called when the active computer changes: tasks never leak across computers. */
 export function resetTasks() {
   clearTimeout(toastTimer);

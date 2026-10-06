@@ -19,6 +19,7 @@ import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@/lib/kit/desktopChrome"
 import { cn } from "@/lib/utils"
 import type { ThreadId } from "@/protocol"
 import { newThread } from "@/state/nav"
+import { useNavigationShortcuts } from "@/state/navigation"
 import { boot, loadThread } from "@/state/rpc"
 import { useEnvironments, activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
@@ -118,6 +119,7 @@ function Workspace() {
   useTasksSync()
   useUsageLimitsSync()
 
+  useNavigationShortcuts()
   useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && !panelless })
   useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen && !dockless })
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })

@@ -120,16 +120,21 @@ impl AppTools {
         let thread = self.thread(thread_id)?;
         let project = self.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("owning project no longer exists"))?;
         let notes = self.store.thread_notes(thread_id)?;
-        // The task this thread is a run of, if any.
-        let task = match self.store.task_run_for_thread(thread_id)? {
-            Some((task_id, number)) => self.store.task_item_get(task_id)?.map(|task| {
+        // The tasks this thread is a run of, if any: one, or several for a combined run.
+        let tasks: Vec<Value> = self
+            .store
+            .task_runs_for_thread(thread_id)?
+            .into_iter()
+            .filter_map(|(task_id, number)| self.store.task_item_get(task_id).ok().flatten().map(|task| (task, number)))
+            .map(|(task, number)| {
                 json!({
                     "id": task.id, "key": task.key, "title": task.title, "status": task.status, "run_number": number,
                     "link": format!("kybern://task/{}", task.id),
+                    "markdown": markdown_link(&format!("{} {}", task.key, task.title), &format!("kybern://task/{}", task.id)),
                 })
-            }),
-            None => None,
-        };
+            })
+            .collect();
+        let task = tasks.first().cloned();
         Ok(json!({
             "thread": {
                 "id": thread.id,
@@ -154,6 +159,7 @@ impl AppTools {
             },
             "notes": notes,
             "task": task,
+            "tasks": tasks,
             "collaboration": {
                 "available": true,
                 "guidance": "Use kybern_threads_search and kybern_thread_read to inspect prior chats without waking them. Use kybern_thread_send for an addressed durable message. kybern_collaboration_spawn creates a managed Kybern child chat; group setup is automatic. Provider-native subagents and external plugins remain separate options."
@@ -279,6 +285,24 @@ impl AppTools {
     }
 }
 
+/// A ready-made Markdown link for a note or task, so agents never paste a raw
+/// `kybern://` URI. Brackets and backslashes in the label are escaped and line
+/// breaks become spaces, so a title cannot end the link early.
+pub(crate) fn markdown_link(label: &str, uri: &str) -> String {
+    let mut escaped = String::with_capacity(label.len());
+    for ch in label.trim().chars() {
+        match ch {
+            '[' | ']' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            '\n' | '\r' | '\t' => escaped.push(' '),
+            _ => escaped.push(ch),
+        }
+    }
+    format!("[{escaped}]({uri})")
+}
+
 pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
     use kybern_drivers::NativeToolDefinition;
     let object = |properties: Value, required: &[&str]| {
@@ -343,7 +367,7 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
 }
 
 /// How agents may use the user's notes and tasks; repeated in every write tool.
-const NOTES_TASKS_POLICY: &str = "Notes and tasks belong to the user: create them only when the user asks, except that you may file up to 3 follow-up tasks per turn for out-of-scope problems you notice. Always tell the user what you filed or changed. You cannot delete notes or tasks, or mark a task Done or Canceled; the user closes tasks. The user may be asked to approve.";
+const NOTES_TASKS_POLICY: &str = "Notes and tasks belong to the user: create them only when the user asks, except that you may file up to 3 follow-up tasks per turn for out-of-scope problems you notice. Always tell the user what you filed or changed, linking it with the result's `markdown` field. You cannot delete notes or tasks, or mark a task Done or Canceled; the user closes tasks. The user may be asked to approve.";
 
 /// Tools for the user's notes and tasks. They run in the orchestrator, which owns
 /// the approvals, the per-turn limit and the change notifications.
@@ -362,7 +386,7 @@ fn notes_tasks_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
     let priority = json!({"type":["integer","null"],"minimum":0,"maximum":4,"description":"0 none, 1 urgent, 2 high, 3 medium, 4 low."});
     let write = |text: &str| format!("{text} {NOTES_TASKS_POLICY}");
     vec![
-        NativeToolDefinition { name: "kybern_notes_search".into(), description: "Search the user's Kybern notes by title and text, or list recent notes when query is empty. Searches every project unless project_id is given. Returns ids, titles, snippets, and kybern://note links; read one with kybern_note_read. Read-only.".into(), input_schema: object(json!({
+        NativeToolDefinition { name: "kybern_notes_search".into(), description: "Search the user's Kybern notes by title and text, or list recent notes when query is empty. Searches every project unless project_id is given. Returns ids, titles, snippets, kybern://note links, and a ready-made `markdown` link to paste into your answer; read one with kybern_note_read. Read-only.".into(), input_schema: object(json!({
             "query":{"type":["string","null"]}, "project_id": optional_uuid("Only notes of this project."), "limit":{"type":"integer","minimum":1,"maximum":50}
         }), &[]) },
         NativeToolDefinition { name: "kybern_note_read".into(), description: "Read one Kybern note's markdown body. agent_editable is true only for notes an agent created; you may rewrite those with kybern_note_update, and only append to the user's own notes. Read-only.".into(), input_schema: object(json!({"note_id": uuid("Note id.")}), &["note_id"]) },
@@ -501,6 +525,13 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn markdown_links_escape_titles_that_would_end_the_link_early() {
+        assert_eq!(markdown_link("ADE-12 Fix login", "kybern://task/abc"), "[ADE-12 Fix login](kybern://task/abc)");
+        assert_eq!(markdown_link("Plan [draft] \\ v2\nnext", "kybern://note/n"), "[Plan \\[draft\\] \\\\ v2 next](kybern://note/n)");
+        assert_eq!(markdown_link("  padded  ", "kybern://note/n"), "[padded](kybern://note/n)");
+    }
+
+    #[test]
     fn native_operation_retries_are_scoped_without_model_generated_uuids() {
         let thread = Uuid::now_v7();
         let session = Uuid::now_v7();
@@ -578,6 +609,7 @@ mod tests {
                 parent_thread_id: None,
                 coordinator_project_id: None,
                 collaboration_group_id: None,
+                subagent: None,
             };
             let thread = make_thread(Uuid::now_v7());
             let other_thread = make_thread(Uuid::now_v7());

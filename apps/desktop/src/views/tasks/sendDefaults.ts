@@ -1,6 +1,6 @@
 // Where a task's run starts by default: the agent, model, effort, permission and
 // workspace last used for that project, else the app's settings.
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 
 import { PROVIDER_LABEL } from "@/lib/format"
@@ -63,6 +63,41 @@ export function useSendDefaults(projectId: ProjectId | null, version = 0): SendC
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectId, providers, settings, project, version],
   )
+}
+
+/**
+ * The send settings a run composer shows: the project's defaults with whatever the
+ * person changed on top. Changing the project starts over (`reset`).
+ */
+export function useSendPicker(projectId: ProjectId | null) {
+  const available = useStore(useShallow(selectAvailableProviders))
+  const defaults = useSendDefaults(projectId)
+  const [picked, setPicked] = useState<Partial<SendConfig>>({})
+  const config: SendConfig = { ...defaults, ...picked }
+  const pick = (patch: Partial<SendConfig>) => setPicked((current) => ({ ...current, ...patch }))
+  const chooseProvider = (provider: ProviderInstance, choice?: { model?: string; effort?: string }) => {
+    const status = available.find((item) => item.kind === provider.kind)
+    const models = status?.models ?? []
+    const modes = status?.supported_permission_modes ?? []
+    const model = choice?.model ?? null
+    setPicked((current) => {
+      const mode = current.permissionMode ?? defaults.permissionMode
+      return {
+        ...current,
+        provider,
+        status,
+        model,
+        modelInfo: model ? findModel(models, model) : models.find((item) => item.is_default),
+        effort: choice?.effort ?? null,
+        permissionMode: modes.length && !modes.includes(mode) ? modes[0]! : mode,
+      }
+    })
+  }
+  const chooseModel = (model: string | undefined, effort: string | undefined) => {
+    const models = config.status?.models ?? []
+    pick({ model: model ?? null, modelInfo: model ? findModel(models, model) : models.find((item) => item.is_default), effort: effort ?? null })
+  }
+  return { config, pick, chooseProvider, chooseModel, reset: () => setPicked({}) }
 }
 
 export function agentLabel(config: Pick<SendConfig, "provider">): string {

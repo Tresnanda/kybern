@@ -89,7 +89,7 @@ fn parse_sdk(session: SavedSession, messages: &Value) -> Result<SessionHistory> 
         });
         if let Some(turn) = turn {
             if let Some(user) = turn.get("userMessage") {
-                history.user(at, UserMessage::text(user["text"].as_str().unwrap_or("")));
+                history.user(at, UserMessage::text(crate::cursor::without_guide(user["text"].as_str().unwrap_or(""))));
             }
             for (index, raw) in turn["steps"].as_array().into_iter().flatten().enumerate() {
                 let step = raw.get("step").unwrap_or(raw);
@@ -129,7 +129,7 @@ fn parse_sdk(session: SavedSession, messages: &Value) -> Result<SessionHistory> 
         }
         if item["type"] == "user" {
             if let Some(text) = message["text"].as_str() {
-                history.user(at, UserMessage::text(text));
+                history.user(at, UserMessage::text(crate::cursor::without_guide(text)));
             } else {
                 history.user(at, user_content(content));
             }
