@@ -402,12 +402,12 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
             description: concat!(
                 "Hand a self-contained task to another Kybern agent. It runs as a new child thread the user can open, in any installed harness and model. ",
                 "By default (mode \"async\") this returns at once: after delegating, end your turn instead of polling. Kybern wakes you with a message holding every finished agent's result, batched when several finish together. ",
-                "Use mode \"wait\" only for a short task whose answer you need before you can continue; it blocks up to 60 seconds, and a timeout does not stop the agent, so end your turn then. ",
+                "Use mode \"wait\" only for a short task whose answer you need before you can continue; it blocks up to 50 seconds (default 45), and a timeout does not stop the agent, so end your turn then. If the call itself times out or errors, retry with the same request_key: the retry returns the same agent instead of starting a second one. ",
                 "The agent sees only the task text you write, not this conversation: include the goal, the files or areas involved, constraints, what to verify and what to report. Give it a concise role (implementation, research, review, design, test or general). ",
                 "Agents are one-shot: for another round, delegate again with the full brief, the prior findings and any responses; do not rely on the old thread's memory. ",
                 "provider, model and effort default to yours; call kybern_agent_capabilities to see the choices. A child never gets more permissions than you have. ",
                 "workspace \"shared\" (default) works in your checkout and branch. The agent must not commit, stash, reset, checkout or rebase, and you integrate its edits; list owns globs (such as src/api/**) for the paths it may edit so Kybern warns it when it strays onto a sibling's. ",
-                "Choose workspace \"worktree\" for parallel implementers that edit overlapping code: the agent gets its own git worktree and branch (kybern/<id>) seeded from your current uncommitted changes, commits there, and its result carries the branch, commit and diffstat for you to merge with git. ",
+                "Choose workspace \"worktree\" for parallel implementers that edit overlapping code: the agent gets its own git worktree and branch (kybern/<id>) seeded from your current checkout (including uncommitted changes), commits there, and its result carries the branch, base commit, commit and diffstat. If your checkout is clean, merge the branch; otherwise apply only the agent's changes with `git diff <base>..<head> | git apply --3way` so Kybern's snapshot commit never lands in your history. ",
                 "The number of agents running at once and the depth of delegation are limited in Settings. ",
                 "Prefer your harness's own subagents for quick same-harness work they can run on the model you want; use this tool for other harnesses or models, or work Kybern should track and show to the user."
             ).into(),
@@ -423,7 +423,7 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "workspace": {"enum":["shared","worktree",null],"description":"shared (default) or worktree (git projects only)."},
                 "owns": {"type":["array","null"],"items":{"type":"string"},"description":"Shared workspace only: globs relative to the checkout root this agent owns, such as src/api/**."},
                 "mode": {"enum":["async","wait",null],"description":"async (default) or wait."},
-                "timeout_ms": {"type":["integer","null"],"minimum":1000,"maximum":60000,"description":"wait mode only; default 55000, at most 60000."}
+                "timeout_ms": {"type":["integer","null"],"minimum":1000,"maximum":50000,"description":"wait mode only; default 45000, at most 50000."}
             }), &["task"]),
         },
         NativeToolDefinition {

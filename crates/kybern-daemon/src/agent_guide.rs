@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 2;
+pub(crate) const GUIDE_VERSION: u32 = 3;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -118,7 +118,7 @@ pub(crate) fn render(tools: &GuideTools) -> String {
              Hand a self-contained task to another agent with `kybern_agent_delegate`; it runs as a child thread the user can open, on any installed harness and model (`kybern_agent_capabilities` lists them). Do this when the user asks for delegation or the work clearly runs in parallel; otherwise do it yourself.\n\
              - It returns at once: delegate, then end your turn. Kybern wakes you with the results, batched when several agents finish together. Use `mode: \"wait\"` only for a short task you need before you can go on.\n\
              - The agent sees only the brief you write: the goal, the files involved, constraints, what to verify and what to report. Agents are one-shot; for another round, delegate again with a full brief and the earlier findings.\n\
-             - `workspace: \"shared\"` (default) edits your checkout. The agent never commits, stashes, resets or switches branches; you integrate its edits. List `owns` globs such as `src/api/**` so Kybern warns it when it strays onto a sibling's paths. `workspace: \"worktree\"` gives it its own branch, seeded from your uncommitted changes, for parallel work on overlapping code; merge the branch it reports with git.\n\
+             - `workspace: \"shared\"` (default) edits your checkout. The agent never commits, stashes, resets or switches branches; you integrate its edits. List `owns` globs such as `src/api/**` so Kybern warns it when it strays onto a sibling's paths. `workspace: \"worktree\"` gives it its own branch, seeded from your checkout, for parallel work on overlapping code. If your checkout is clean, merge the branch it reports; otherwise apply only its changes with `git diff <base>..<head> | git apply --3way`.\n\
              - For quick work on your own harness, prefer its built-in subagents when they support the model you want. Use `kybern_agent_delegate` for other harnesses or models, or for work Kybern should track and show the user.\n\
              - `kybern_agent_status` lists your agents; `kybern_agent_cancel` stops one.\n",
         );
@@ -166,7 +166,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 2);
+        assert_eq!(GUIDE_VERSION, 3);
     }
 
     #[test]

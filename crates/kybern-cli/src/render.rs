@@ -94,6 +94,7 @@ fn messaging_summary(payload: &EventPayload) -> Option<String> {
             message.from_thread_id.map_or_else(|| "kybern".to_string(), |id| id.to_string())
         )),
         EventPayload::ThreadMessageResolved { message_id, resolution } => Some(format!("{resolution:?} {message_id}").to_lowercase()),
+        EventPayload::ThreadMessageUpdated { message } => Some(format!("{} {} {}", message.state.as_str(), message.purpose, message.id)),
         _ => None,
     }
 }
@@ -290,7 +291,11 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
                 let decision = prompt_approval(approval)?;
                 client.call::<ApprovalsRespond>(ApprovalsRespondParams { approval_id: approval.id, decision }).await?;
             }
-            EventPayload::ThreadMessageHeld { .. } | EventPayload::ThreadMessageResolved { .. } if !json => {
+            EventPayload::ThreadMessageHeld { .. }
+            | EventPayload::ThreadMessageResolved { .. }
+            | EventPayload::ThreadMessageUpdated { .. }
+                if !json =>
+            {
                 if line_open {
                     println!();
                     line_open = false;

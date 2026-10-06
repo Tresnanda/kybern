@@ -559,6 +559,11 @@ expression: schema_for!(Thread)
             "null"
           ],
           "format": "date-time"
+        },
+        "parent_notified": {
+          "description": "Whether the delegating parent has been handed this outcome (delivered,\nsteered or queued). Cleared when the delegation reaches a terminal state\nand set once its `AgentResultItem` is out, so a restart can re-send an\noutcome that was still waiting in the debounce window. Rows written\nbefore this field existed read as `true`: nothing is re-sent.",
+          "type": "boolean",
+          "default": true
         }
       },
       "required": [

@@ -142,6 +142,7 @@ enum Cmd {
     Threads {
         #[arg(long)]
         project: Option<String>,
+        /// Include archived threads in the list (they are hidden by default).
         #[arg(long)]
         archived: bool,
     },

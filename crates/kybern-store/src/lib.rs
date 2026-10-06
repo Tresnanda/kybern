@@ -1720,6 +1720,54 @@ impl Store {
         })
     }
 
+    /// Every thread message in one of `states`, oldest first (startup recovery).
+    pub fn thread_messages_in_states(&self, states: &[ThreadMessageState], limit: usize) -> Result<Vec<ThreadMessageRecord>> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        let states = states.iter().map(|state| snake(*state)).collect::<Result<Vec<_>>>()?;
+        let limit = limit.clamp(1, 10_000) as i64;
+        self.with(|c| {
+            let marks = (0..states.len()).map(|i| format!("?{}", i + 2)).collect::<Vec<_>>().join(",");
+            let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(limit)];
+            values.extend(states.into_iter().map(|state| Box::new(state) as Box<dyn rusqlite::ToSql>));
+            let mut st = c.prepare(&format!("{THREAD_MESSAGE_SELECT} WHERE state IN ({marks}) ORDER BY created_at, rowid LIMIT ?1"))?;
+            Ok(st
+                .query_map(rusqlite::params_from_iter(values.iter().map(|v| v.as_ref())), row_to_thread_message)?
+                .collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Move a message to `to` only while it is still in one of the `from` states
+    /// (one atomic UPDATE, so a newer state is never overwritten). Returns the
+    /// updated row when it changed, `None` when it did not or does not exist.
+    pub fn thread_message_transition(
+        &self,
+        id: MessageId,
+        from: &[ThreadMessageState],
+        to: ThreadMessageState,
+    ) -> Result<Option<ThreadMessageRecord>> {
+        if from.is_empty() {
+            return Ok(None);
+        }
+        let from = from.iter().map(|state| snake(*state)).collect::<Result<Vec<_>>>()?;
+        self.with(|c| {
+            let placeholders = (0..from.len()).map(|index| format!("?{}", index + 4)).collect::<Vec<_>>().join(",");
+            let mut values: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(id.to_string()), Box::new(snake(to)?), Box::new(Utc::now().to_rfc3339())];
+            values.extend(from.into_iter().map(|state| Box::new(state) as Box<dyn rusqlite::ToSql>));
+            let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|value| value.as_ref()).collect();
+            let changed = c.execute(
+                &format!("UPDATE thread_messages SET state = ?2, updated_at = ?3 WHERE id = ?1 AND state IN ({placeholders})"),
+                refs.as_slice(),
+            )?;
+            if changed == 0 {
+                return Ok(None);
+            }
+            Ok(c.query_row(&format!("{THREAD_MESSAGE_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread_message).optional()?)
+        })
+    }
+
     /// Messages sent to or from `thread_id`, oldest first. Only the newest
     /// `limit` rows (at most 200) are returned. `states` filters by state.
     pub fn thread_message_list_for_thread(
@@ -2130,7 +2178,7 @@ impl Store {
                    'project_coordinator_deleted', 'collaboration_group_updated', 'collaboration_member_updated',
                    'collaboration_assignment_updated', 'collaboration_message_updated', 'collaboration_context_updated',
                    'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated',
-                   'thread_message_held', 'thread_message_resolved'
+                   'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
                  ) ORDER BY seq",
             )?;
             let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
@@ -3733,6 +3781,7 @@ mod orchestration_tests {
             worktree_state: Some(WorktreeState::Active),
             started_at: Utc::now(),
             completed_at: None,
+            parent_notified: true,
         }
     }
 
@@ -3855,6 +3904,23 @@ mod orchestration_tests {
         assert_eq!(answered.state, ThreadMessageState::Answered);
         assert!(answered.updated_at >= question.updated_at);
         assert!(store.thread_message_update_state(Uuid::now_v7(), ThreadMessageState::Failed).unwrap().is_none());
+    }
+
+    #[test]
+    fn thread_message_transition_never_overwrites_a_newer_state() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let to = thread(&project, None, None);
+        store.thread_upsert(&to).unwrap();
+        let record = message(to.id, None, ThreadMessagePurpose::Message, ThreadMessageState::Held);
+        store.thread_message_insert(&record).unwrap();
+        let held_or_queued = [ThreadMessageState::Held, ThreadMessageState::Queued];
+        let queued = store.thread_message_transition(record.id, &held_or_queued, ThreadMessageState::Queued).unwrap().unwrap();
+        assert_eq!(queued.state, ThreadMessageState::Queued);
+        store.thread_message_update_state(record.id, ThreadMessageState::Delivered).unwrap();
+        assert!(store.thread_message_transition(record.id, &held_or_queued, ThreadMessageState::Queued).unwrap().is_none());
+        assert_eq!(store.thread_message_get(record.id).unwrap().unwrap().state, ThreadMessageState::Delivered);
+        assert!(store.thread_message_transition(Uuid::now_v7(), &held_or_queued, ThreadMessageState::Failed).unwrap().is_none());
     }
 
     #[test]

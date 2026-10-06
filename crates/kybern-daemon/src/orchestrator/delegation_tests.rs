@@ -437,7 +437,7 @@ async fn delegate_worktree_is_seeded_from_uncommitted_state_and_reports_its_bran
     let agent = t.agent("Implement the feature").await;
     assert_eq!(agent.cwd, PathBuf::from(&worktree.path));
     let sent = agent.transcript().await;
-    assert!(sent.contains(&format!("You work in your own worktree on branch {branch}, seeded from the parent's current changes. Commit your work on this branch before you finish. Do not push.")), "{sent}");
+    assert!(sent.contains(&format!("You work in your own worktree on branch {branch}, seeded from the parent's current changes. Commit your work on top of the branch's current history before you finish; do not rewrite, squash or rebase what is already there. Do not push.")), "{sent}");
 
     // The child commits; completion records the commit and diffstat against the seed.
     std::fs::write(std::path::Path::new(&worktree.path).join("feature.txt"), "a\nb\nc\n").unwrap();
@@ -951,7 +951,9 @@ async fn collaboration_tools_are_offered_only_to_coordinators_and_their_workers(
     let bridge = bridges.lock().unwrap().last().cloned().flatten().expect("bridge");
     assert!(bridge.has_tool("kybern_collaboration_spawn") && bridge.has_tool("kybern_agent_delegate"));
 
-    // A worker in the coordinator's group sees them too; a member of an ordinary group does not.
+    // A worker in the coordinator's group sees them too, and so does a member of an
+    // existing legacy group (its in-flight assignments must still report); a thread
+    // in no group does not.
     let worker = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::ClaudeCode);
     fixture
         .store
@@ -979,7 +981,15 @@ async fn collaboration_tools_are_offered_only_to_coordinators_and_their_workers(
         })
         .unwrap();
     assert!(fixture.store.collaboration_group_for_thread(loner.id).unwrap() == Some(ordinary_group.id));
-    assert!(!fixture.orchestrator.collaboration_tools_enabled(&loner).unwrap());
+    assert!(
+        fixture.orchestrator.collaboration_tools_enabled(&loner).unwrap(),
+        "a member of an active legacy group keeps the collaboration tools"
+    );
+    assert!(!fixture.orchestrator.collaboration_tools_enabled(&ordinary).unwrap(), "a thread in no group does not get them");
+    let mut stopped = fixture.store.collaboration_group_get(ordinary_group.id).unwrap().unwrap();
+    stopped.status = GroupStatus::Stopped;
+    fixture.store.collaboration_group_put(&stopped).unwrap();
+    assert!(!fixture.orchestrator.collaboration_tools_enabled(&loner).unwrap(), "a stopped group has nothing in flight");
 
     // Dispatch refuses them for an ordinary thread, with a pointer to the right tool.
     let (live, _) = fixture.active_app_tool_session(&ordinary).await;
@@ -1012,4 +1022,248 @@ fn delegation_tools_are_declared_and_bridge_sized() {
     for name in super::delegation::TOOL_NAMES {
         assert!(source.contains(&format!("\"{name}\"")), "{name} must be allow-listed in extension.ts");
     }
+}
+
+// ---- review fixes ----
+
+fn branch_list(root: &std::path::Path) -> String {
+    run_git(root, &["branch", "--format=%(refname:short)"])
+}
+
+#[tokio::test]
+async fn a_missing_worktree_directory_never_deletes_an_unmerged_branch() {
+    let t = Delegating::new().await;
+    let mut settings = t.fixture.orchestrator.inner.settings.get();
+    settings.orchestration.max_active_children = 8;
+    t.fixture.orchestrator.inner.settings.set(settings).unwrap();
+    init_project_repo(&t.fixture.root);
+    let unmerged = t.delegate(json!({"task": "keeps a commit", "workspace": "worktree"})).await;
+    let merged = t.delegate(json!({"task": "lands a commit", "workspace": "worktree"})).await;
+    let empty = t.delegate(json!({"task": "does nothing", "workspace": "worktree"})).await;
+    let path = |result: &serde_json::Value| PathBuf::from(t.delegation(&result["task_id"]).worktree.unwrap().path);
+    let branch = |result: &serde_json::Value| t.delegation(&result["task_id"]).delegation.unwrap().branch.unwrap();
+    for (result, file) in [(&unmerged, "pending.txt"), (&merged, "landed.txt")] {
+        std::fs::write(path(result).join(file), "x\n").unwrap();
+        run_git(&path(result), &["add", "."]);
+        run_git(&path(result), &["commit", "-q", "-m", file]);
+    }
+    run_git(&t.fixture.root, &["merge", "-q", "--no-ff", "-m", "merge landed", &branch(&merged)]);
+    // The directories vanish (the user deleted them, a cleanup tool ran).
+    for result in [&unmerged, &merged, &empty] {
+        std::fs::remove_dir_all(path(result)).unwrap();
+    }
+
+    t.fixture.orchestrator.archive_thread(t.parent.id).await.unwrap();
+
+    let state = |result: &serde_json::Value| t.delegation(&result["task_id"]).delegation.unwrap().worktree_state;
+    let branches = branch_list(&t.fixture.root);
+    assert_eq!(state(&unmerged), Some(WorktreeState::Kept), "unmerged work is kept even though its directory is gone");
+    assert!(branches.contains(&branch(&unmerged)), "the unmerged branch survives: {branches}");
+    assert_eq!(state(&merged), Some(WorktreeState::Removed));
+    assert!(!branches.contains(&branch(&merged)), "a merged branch goes: {branches}");
+    assert_eq!(state(&empty), Some(WorktreeState::Removed));
+    assert!(!branches.contains(&branch(&empty)), "a branch with no work goes: {branches}");
+    let worktrees = run_git(&t.fixture.root, &["worktree", "list", "--porcelain"]);
+    assert!(!worktrees.contains(&branch(&unmerged)), "the dead worktree registration is pruned: {worktrees}");
+
+    // Forcing the removal of a kept worktree still never deletes the unmerged branch.
+    let kept = t.delegation(&unmerged["task_id"]);
+    t.fixture.orchestrator.delegation_worktree_remove(kept.id, true).await.unwrap();
+    assert!(branch_list(&t.fixture.root).contains(&branch(&unmerged)));
+}
+
+#[tokio::test]
+async fn a_stopping_parent_cannot_delegate_and_the_flag_lifts_afterwards() {
+    let t = Delegating::new().await;
+    {
+        let _flag = t.fixture.orchestrator.delegation_flag_stopping(t.parent.id);
+        let error = t.tool("kybern_agent_delegate", json!({"task": "too late"})).await.unwrap_err();
+        assert!(error.to_string().contains("being stopped"), "{error}");
+        assert_eq!(t.fixture.store.delegation_children(t.parent.id).unwrap().len(), 0);
+    }
+    assert!(!t.fixture.orchestrator.delegation_is_stopping(t.parent.id));
+    t.delegate(json!({"task": "in time"})).await;
+
+    // A real stop flags the thread while it runs and clears the flag when done.
+    let child = t.fixture.store.delegation_children(t.parent.id).unwrap().remove(0);
+    t.fixture.orchestrator.interrupt(t.parent.id).await.ok();
+    assert!(!t.fixture.orchestrator.delegation_is_stopping(t.parent.id));
+    assert_eq!(t.fixture.store.thread_get(child.id).unwrap().unwrap().delegation.unwrap().status, DelegationStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn stop_cancels_a_whole_tree_and_interrupts_every_agent() {
+    let t = Delegating::new().await;
+    let a = t.delegate(json!({"task": "tree a"})).await;
+    let b = t.delegate(json!({"task": "tree b"})).await;
+    let (agent_a, agent_b) = (t.agent("tree a").await, t.agent("tree b").await);
+    let child_a = t.delegation(&a["task_id"]);
+    let live_a = t.child_session(&child_a).await;
+    let grand = t.fixture.tool(&child_a, &live_a, "g", "kybern_agent_delegate", json!({"task": "tree grand"})).await.unwrap();
+    let grand_agent = t.agent("tree grand").await;
+
+    t.fixture.orchestrator.archive_thread(t.parent.id).await.unwrap();
+
+    for result in [&a, &b, &grand] {
+        let thread = t.delegation(&result["task_id"]);
+        assert_eq!(thread.delegation.unwrap().status, DelegationStatus::Cancelled);
+        assert_eq!(thread.status, ThreadStatus::Archived);
+    }
+    assert_eq!((agent_a.interrupts.load(Ordering::SeqCst), agent_b.interrupts.load(Ordering::SeqCst), grand_agent.interrupts.load(Ordering::SeqCst)), (1, 1, 1));
+    assert!(!t.fixture.orchestrator.delegation_is_stopping(t.parent.id));
+}
+
+#[test]
+fn delegate_waits_are_bounded_to_fit_the_tool_timeout() {
+    let definitions = crate::app_tools::native_tool_definitions();
+    let delegate = definitions.iter().find(|tool| tool.name == "kybern_agent_delegate").unwrap();
+    assert_eq!(delegate.input_schema["properties"]["timeout_ms"]["maximum"], json!(50000));
+    assert!(delegate.input_schema["properties"]["timeout_ms"]["description"].as_str().unwrap().contains("default 45000"));
+    assert!(delegate.description.contains("request_key"), "retries are safe with a request_key");
+    assert!(delegate.description.contains("git apply --3way"));
+}
+
+#[tokio::test]
+async fn a_clean_checkout_seeds_the_worktree_from_head_without_a_snapshot_commit() {
+    let t = Delegating::new().await;
+    init_project_repo(&t.fixture.root);
+    assert_eq!(run_git(&t.fixture.root, &["status", "--porcelain"]), "", "the fixture checkout is clean");
+    let head = run_git(&t.fixture.root, &["rev-parse", "HEAD"]);
+    let commits_before = run_git(&t.fixture.root, &["rev-list", "--all", "--count"]);
+
+    let result = t.delegate(json!({"task": "Clean seed", "workspace": "worktree"})).await;
+    let child = t.delegation(&result["task_id"]);
+    let info = child.delegation.clone().unwrap();
+    assert_eq!(info.base_commit.as_deref(), Some(head.as_str()), "based directly on HEAD");
+    assert_eq!(run_git(&t.fixture.root, &["rev-list", "--all", "--count"]), commits_before, "no snapshot commit was created");
+
+    // The result carries the base commit and the integration guidance.
+    let dir = PathBuf::from(child.worktree.clone().unwrap().path);
+    std::fs::write(dir.join("feature.txt"), "a\n").unwrap();
+    run_git(&dir, &["add", "."]);
+    run_git(&dir, &["commit", "-q", "-m", "feature"]);
+    t.end_parent_turn().await;
+    t.agent("Clean seed").await.finish("done").await;
+    let items = eventually(|| async { t.queued_results().into_iter().next() }).await;
+    assert_eq!(items[0].base_commit.as_deref(), Some(head.as_str()));
+    let text = agent_results_text(&items);
+    assert!(text.contains(&format!("based on {head}")), "{text}");
+    assert!(text.contains("If your checkout is clean, merge the branch"), "{text}");
+    assert!(text.contains(&format!("git diff {head}..")) && text.contains("| git apply --3way"), "{text}");
+}
+
+#[tokio::test]
+async fn an_outcome_that_never_reached_the_parent_is_resent_after_a_restart() {
+    let t = Delegating::new().await;
+    let result = t.delegate(json!({"task": "report me"})).await;
+    t.end_parent_turn().await;
+    t.agent("report me").await.finish("the findings").await;
+    let child = t.delegation(&result["task_id"]);
+    eventually(|| async { t.queued_results().into_iter().next() }).await;
+    eventually(|| async { t.delegation(&result["task_id"]).delegation.unwrap().parent_notified.then_some(()) }).await;
+
+    // Delivered once: a restart sends nothing more.
+    let clear_queue = || {
+        for queued in t.fixture.store.queue_list(Some(t.parent.id)).unwrap() {
+            t.fixture.orchestrator.remove_queued(t.parent.id, queued.id).unwrap();
+        }
+    };
+    clear_queue();
+    t.fixture.orchestrator.recover_after_restart().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(t.queued_results().is_empty(), "a notified outcome is not repeated");
+
+    // The daemon died inside the debounce window: parent_notified was still false.
+    t.fixture.orchestrator.delegation_update(child.id, |info| {
+        info.parent_notified = false;
+        true
+    })
+    .unwrap();
+    t.fixture.orchestrator.recover_after_restart().await.unwrap();
+    let items = eventually(|| async { t.queued_results().into_iter().next() }).await;
+    assert_eq!((items[0].task_id, items[0].status, items[0].result.as_deref()), (child.delegation.unwrap().task_id, DelegationStatus::Completed, Some("the findings")));
+    eventually(|| async { t.delegation(&result["task_id"]).delegation.unwrap().parent_notified.then_some(()) }).await;
+}
+
+#[test]
+fn delegation_rows_written_before_parent_notified_existed_read_as_notified() {
+    let row = json!({
+        "task_id": Uuid::now_v7(), "operation_id": Uuid::now_v7(), "parent_thread_id": Uuid::now_v7(),
+        "depth": 1, "status": "completed", "started_at": chrono::Utc::now(),
+    });
+    let info: DelegationInfo = serde_json::from_value(row).unwrap();
+    assert!(info.parent_notified, "old rows must not be re-sent");
+}
+
+#[test]
+fn long_errors_and_result_batches_are_capped() {
+    use super::delegation::{cap_batch, cap_error};
+    let capped = cap_error("e".repeat(10_000));
+    assert!(capped.len() <= 4096 + 16 && capped.ends_with("[truncated]"), "{}", capped.len());
+    assert_eq!(cap_error("short"), "short");
+
+    let item = |n: u128, result: String| AgentResultItem {
+        task_id: Uuid::from_u128(n),
+        thread_id: Uuid::from_u128(n + 100),
+        title: format!("agent {n}"),
+        provider: ProviderKind::Codex,
+        model: None,
+        role: DelegationRole::General,
+        status: DelegationStatus::Completed,
+        result: Some(result),
+        error: None,
+        workspace: DelegationWorkspace::Shared,
+        branch: None,
+        head_commit: None,
+        base_commit: None,
+        diffstat: None,
+        files_touched: Vec::new(),
+        conflicts: Vec::new(),
+    };
+    let mut items = vec![item(1, "a".repeat(30_000)), item(2, "b".repeat(30_000)), item(3, "c".repeat(30_000))];
+    cap_batch(&mut items);
+    assert!(agent_results_text(&items).len() <= 64 * 1024 + 2048, "{}", agent_results_text(&items).len());
+    assert!(items[0].result.as_ref().unwrap().contains("use kybern_agent_status for the full result"), "the oldest shrinks first");
+    assert!(items[0].result.as_ref().unwrap().chars().count() < 700);
+    assert_eq!(items[2].result.as_ref().unwrap().len(), 30_000, "the newest stays whole while it fits");
+    let mut small = vec![item(4, "fine".into())];
+    cap_batch(&mut small);
+    assert_eq!(small[0].result.as_deref(), Some("fine"));
+}
+
+#[tokio::test]
+async fn a_failed_turn_error_is_capped_on_the_delegation() {
+    let t = Delegating::new().await;
+    let result = t.delegate(json!({"task": "noisy failure"})).await;
+    t.agent("noisy failure").await.tx.send(DriverEvent::TurnFailed { error: "x".repeat(20_000) }).await.unwrap();
+    let info = eventually(|| async {
+        let info = t.delegation(&result["task_id"]).delegation.unwrap();
+        (info.status == DelegationStatus::Failed).then_some(info)
+    })
+    .await;
+    assert!(info.error.unwrap().len() <= 4096 + 16);
+}
+
+#[tokio::test]
+async fn cancelling_drops_queues_only_for_descendants_that_were_running() {
+    let t = Delegating::new().await;
+    let result = t.delegate(json!({"task": "mid job"})).await;
+    let child = t.delegation(&result["task_id"]);
+    let child_live = t.child_session(&child).await;
+    let running = t.fixture.tool(&child, &child_live, "n1", "kybern_agent_delegate", json!({"task": "leaf running"})).await.unwrap();
+    let finished = t.fixture.tool(&child, &child_live, "n2", "kybern_agent_delegate", json!({"task": "leaf finished"})).await.unwrap();
+    t.agent("leaf finished").await.finish("leaf done").await;
+    eventually(|| async { (t.delegation(&finished["task_id"]).delegation.unwrap().status == DelegationStatus::Completed).then_some(()) }).await;
+    let (running, finished) = (t.delegation(&running["task_id"]), t.delegation(&finished["task_id"]));
+    for thread in [&running, &finished] {
+        t.fixture
+            .orchestrator
+            .enqueue(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("queued later") })
+            .unwrap();
+    }
+
+    t.tool("kybern_agent_cancel", json!({"task_id": result["task_id"]})).await.unwrap();
+
+    assert!(t.fixture.store.queue_list(Some(running.id)).unwrap().is_empty(), "a cancelled agent's queue is dropped");
+    assert_eq!(t.fixture.store.queue_list(Some(finished.id)).unwrap().len(), 1, "a finished agent keeps its queue");
 }

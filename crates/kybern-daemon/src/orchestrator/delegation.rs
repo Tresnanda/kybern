@@ -50,6 +50,20 @@ const MAX_TITLE_CHARS: usize = 60;
 const MAX_OWNS: usize = 32;
 const WAIT_DEFAULT_MS: u64 = 55_000;
 const WAIT_MAX_MS: u64 = 60_000;
+/// `kybern_agent_delegate` in wait mode: a worktree snapshot plus the wait must
+/// fit inside the 65 s native tool timeout.
+const DELEGATE_WAIT_DEFAULT_MS: u64 = 45_000;
+const DELEGATE_WAIT_MAX_MS: u64 = 50_000;
+/// Longest error kept on a delegation (UTF-8 bytes).
+const ERROR_CAP: usize = 4 * 1024;
+/// Most conflicts recorded on one delegation.
+pub(super) const CONFLICTS_CAP: usize = 50;
+/// Largest merged `AgentResults` batch, as flattened for the provider.
+const BATCH_CAP: usize = 64 * 1024;
+/// What an older item's result shrinks to when a batch is over [`BATCH_CAP`].
+const PREVIEW_CHARS: usize = 500;
+/// Rescans of a stopped thread's descendants before giving up.
+const STOP_PASSES: usize = 5;
 const DEFAULT_DEBOUNCE_MS: u64 = 1_500;
 const STATUS_LIMIT: usize = 20;
 
@@ -66,8 +80,12 @@ pub(super) struct DelegationState {
     inline_delivered: std::sync::Mutex<HashSet<Uuid>>,
     /// Notified after every delegation change so `wait` calls re-check.
     changed: Notify,
-    /// Serializes the limit check with the insert so parallel delegations cannot overshoot.
-    create: tokio::sync::Mutex<()>,
+    /// Serializes the limit check with the insert, per delegating thread, so
+    /// parallel delegations cannot overshoot while other parents are not held up
+    /// behind a slow worktree snapshot.
+    create: std::sync::Mutex<HashMap<ThreadId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    /// Threads being stopped or archived: they may not delegate any more work.
+    stopping: std::sync::Mutex<HashMap<ThreadId, usize>>,
     debounce_ms: std::sync::atomic::AtomicU64,
 }
 
@@ -78,7 +96,26 @@ impl Default for DelegationState {
             inline_delivered: Default::default(),
             changed: Notify::new(),
             create: Default::default(),
+            stopping: Default::default(),
             debounce_ms: std::sync::atomic::AtomicU64::new(DEFAULT_DEBOUNCE_MS),
+        }
+    }
+}
+
+/// Marks a thread as stopping until dropped.
+pub(super) struct StopFlag {
+    orchestrator: Orchestrator,
+    thread_id: ThreadId,
+}
+
+impl Drop for StopFlag {
+    fn drop(&mut self) {
+        let mut stopping = self.orchestrator.inner.delegation.stopping.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(count) = stopping.get_mut(&self.thread_id) {
+            *count -= 1;
+            if *count == 0 {
+                stopping.remove(&self.thread_id);
+            }
         }
     }
 }
@@ -208,6 +245,31 @@ fn truncate_with_marker(text: &str, max_bytes: usize) -> String {
     text
 }
 
+/// An error text kept on a delegation or sent to a parent.
+pub(super) fn cap_error(error: impl Into<String>) -> String {
+    let mut error = error.into();
+    if error.len() > ERROR_CAP {
+        truncate_utf8(&mut error, ERROR_CAP);
+        error.push_str(" [truncated]");
+    }
+    error
+}
+
+/// Keep a merged batch under [`BATCH_CAP`]: older items' results shrink to a
+/// short preview (oldest first) until it fits.
+pub(super) fn cap_batch(items: &mut [AgentResultItem]) {
+    for index in 0..items.len() {
+        if agent_results_text(items).len() <= BATCH_CAP {
+            return;
+        }
+        let item = &mut items[index];
+        let Some(result) = item.result.as_ref().filter(|result| result.chars().count() > PREVIEW_CHARS) else { continue };
+        let mut preview: String = result.chars().take(PREVIEW_CHARS).collect();
+        preview.push_str("… [preview only; use kybern_agent_status for the full result]");
+        item.result = Some(preview);
+    }
+}
+
 fn child_title(title: Option<&str>, task: &str) -> String {
     let source = title
         .map(str::trim)
@@ -260,7 +322,7 @@ fn delegation_brief(
             rules
         }
         DelegationWorkspace::Worktree => format!(
-            "You work in your own worktree on branch {}, seeded from the parent's current changes. Commit your work on this branch before you finish. Do not push.",
+            "You work in your own worktree on branch {}, seeded from the parent's current changes. Commit your work on top of the branch's current history before you finish; do not rewrite, squash or rebase what is already there. Do not push.",
             branch.unwrap_or("kybern/<child>")
         ),
     };
@@ -281,13 +343,14 @@ pub(super) fn agent_result_item(thread: &Thread) -> Option<AgentResultItem> {
         role: info.role,
         status: info.status,
         result: info.result.clone(),
-        error: info.error.clone(),
+        error: info.error.clone().map(cap_error),
         workspace: info.workspace,
         branch: info.branch.clone(),
         head_commit: info.head_commit.clone(),
+        base_commit: info.base_commit.clone(),
         diffstat: info.diffstat,
         files_touched: info.files_touched.iter().take(FILES_CAP_ITEM).cloned().collect(),
-        conflicts: info.conflicts.clone(),
+        conflicts: info.conflicts.iter().take(CONFLICTS_CAP).cloned().collect(),
     })
 }
 
@@ -347,8 +410,11 @@ impl Orchestrator {
     }
 
     /// Whether this thread may use the `kybern_collaboration_*` tools: project
-    /// coordinators and the members of a coordinator group. Everyone else
-    /// delegates with `kybern_agent_delegate`.
+    /// coordinators, the members of a coordinator group, and the members of any
+    /// other collaboration group that is still active or paused (legacy groups,
+    /// whose in-flight assignments must still be able to report and send; the
+    /// desktop shows `CollaborationPane` for them too). Threads in no such group
+    /// delegate with `kybern_agent_delegate`.
     pub(super) fn collaboration_tools_enabled(&self, thread: &Thread) -> Result<bool> {
         if thread.coordinator_project_id.is_some() {
             return Ok(true);
@@ -357,10 +423,37 @@ impl Orchestrator {
             Some(group_id) => Some(group_id),
             None => self.inner.store.collaboration_group_for_thread(thread.id)?,
         };
-        match group_id {
-            Some(group_id) => Ok(self.inner.store.project_coordinator_for_group(group_id)?.is_some()),
-            None => Ok(false),
+        let Some(group_id) = group_id else { return Ok(false) };
+        if self.inner.store.project_coordinator_for_group(group_id)?.is_some() {
+            return Ok(true);
         }
+        Ok(self
+            .inner
+            .store
+            .collaboration_group_get(group_id)?
+            .is_some_and(|group| matches!(group.status, GroupStatus::Active | GroupStatus::Paused)))
+    }
+
+    // ---- stopping and per-parent creation ----
+
+    /// Flag `thread_id` as stopping: from now on it cannot delegate. The flag
+    /// lifts when the guard drops.
+    pub(super) fn delegation_flag_stopping(&self, thread_id: ThreadId) -> StopFlag {
+        *self.inner.delegation.stopping.lock().unwrap_or_else(|error| error.into_inner()).entry(thread_id).or_insert(0) += 1;
+        StopFlag { orchestrator: self.clone(), thread_id }
+    }
+
+    pub(super) fn delegation_is_stopping(&self, thread_id: ThreadId) -> bool {
+        self.inner.delegation.stopping.lock().unwrap_or_else(|error| error.into_inner()).contains_key(&thread_id)
+    }
+
+    /// The lock that serializes `parent`'s limit check with its inserts.
+    fn delegation_create_lock(&self, parent: ThreadId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.inner.delegation.create.lock().unwrap_or_else(|error| error.into_inner());
+        if locks.len() > 64 {
+            locks.retain(|_, lock| std::sync::Arc::strong_count(lock) > 1);
+        }
+        locks.entry(parent).or_default().clone()
     }
 
     // ---- tool dispatch ----
@@ -510,7 +603,7 @@ impl Orchestrator {
     async fn agent_delegate(&self, parent: &Thread, turn_id: TurnId, live: &LiveSession, args: DelegateArgs) -> Result<Value> {
         let operation_id = args.operation_id.unwrap_or_else(Uuid::now_v7);
         let mode = args.mode.unwrap_or_default();
-        let timeout = Duration::from_millis(args.timeout_ms.unwrap_or(WAIT_DEFAULT_MS).clamp(1, WAIT_MAX_MS));
+        let timeout = Duration::from_millis(args.timeout_ms.unwrap_or(DELEGATE_WAIT_DEFAULT_MS).clamp(1, DELEGATE_WAIT_MAX_MS));
 
         if let Some(existing) = self.inner.store.delegation_find_by_operation(operation_id)? {
             return self.delegate_response(existing, parent.id, mode, timeout).await;
@@ -526,11 +619,16 @@ impl Orchestrator {
         validate_owns(&owns)?;
         Self::ensure_turn_active(live, turn_id).await?;
 
-        let _creating = self.inner.delegation.create.lock().await;
+        // One delegation at a time per parent: the limit check, the worktree
+        // snapshot and the insert are a single step. Other parents are unaffected.
+        let create_lock = self.delegation_create_lock(parent.id);
+        let _creating = create_lock.lock().await;
         // A retry that raced the first call finds the child created under the lock.
         if let Some(existing) = self.inner.store.delegation_find_by_operation(operation_id)? {
+            drop(_creating);
             return self.delegate_response(existing, parent.id, mode, timeout).await;
         }
+        ensure!(!self.delegation_is_stopping(parent.id), "This thread is being stopped, so it cannot delegate more work. End your turn.");
 
         // Limits.
         let (max_children, max_depth) = self.orchestration_limits();
@@ -589,7 +687,17 @@ impl Orchestrator {
                     "A worktree needs a git repository, and this project is not one. Use workspace \"shared\"."
                 );
                 let repo = Repo::new(&parent.cwd);
-                let base = repo.snapshot("kybern delegation base").await?;
+                // A clean checkout needs no snapshot: branch straight from HEAD, so
+                // nothing synthetic ever reaches the user's history. A dirty one is
+                // snapshotted so the child starts from the parent's current changes.
+                let clean_head = match repo.head().await {
+                    Some(head) if repo.is_clean().await.unwrap_or(false) => Some(head),
+                    _ => None,
+                };
+                let base = match clean_head {
+                    Some(head) => head,
+                    None => repo.snapshot("kybern delegation base").await?,
+                };
                 let branch = format!("kybern/{child_id}");
                 let dir = self.inner.paths.worktrees.join(&project.name).join(child_id.to_string());
                 if let Some(parent_dir) = dir.parent() {
@@ -623,6 +731,7 @@ impl Orchestrator {
             worktree_state: (workspace == DelegationWorkspace::Worktree).then_some(WorktreeState::Active),
             started_at: now,
             completed_at: None,
+            parent_notified: true,
         };
         let thread = Thread {
             id: child_id,
@@ -648,7 +757,7 @@ impl Orchestrator {
         };
         let created = {
             let guard = live.turn.lock().await;
-            if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
+            if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) || self.delegation_is_stopping(parent.id) {
                 None
             } else {
                 self.inner.store.thread_upsert(&thread)?;
@@ -692,7 +801,7 @@ impl Orchestrator {
             }],
         };
         if let Err(error) = self.send_with_id(child_id, message_id, message, false, false).await {
-            let reason = format!("The agent could not start: {error}");
+            let reason = cap_error(format!("The agent could not start: {error}"));
             let _ = self.delegation_update(child_id, |info| {
                 info.status = DelegationStatus::Failed;
                 info.error = Some(reason.clone());
@@ -865,11 +974,16 @@ impl Orchestrator {
         if delivered.len() > 1024 {
             delivered.clear();
         }
+        let mut settled = Vec::new();
         for thread in threads {
             if let Some(info) = thread.delegation.as_ref().filter(|info| info.status != DelegationStatus::Running) {
                 delivered.insert(info.task_id);
+                settled.push(info.task_id);
             }
         }
+        drop(delivered);
+        // The caller has the outcome, so a restart must not send it again.
+        self.delegation_mark_notified(&settled);
     }
 
     // ---- kybern_agent_cancel / kybern_thread_interrupt ----
@@ -880,8 +994,7 @@ impl Orchestrator {
             "You can only stop agents you delegated work to. Call kybern_agent_status to list them."
         );
         Self::ensure_turn_active(live, turn_id).await?;
-        self.delegation_cancel_tree(child.id, false).await?;
-        if let Err(error) = self.interrupt_with_grace(child.id, Duration::from_secs(5)).await {
+        if let Err(error) = self.delegation_stop(child.id, false).await {
             tracing::debug!(thread_id = %child.id, %error, "stopped agent had no live session to interrupt");
         }
         let child = self.inner.store.thread_get(child.id)?.unwrap_or(child);
@@ -916,6 +1029,19 @@ impl Orchestrator {
     /// restore if delivery then fails, or `None` when nothing was reopened.
     pub(super) fn delegation_reopen(&self, child_id: ThreadId) -> Result<Option<DelegationInfo>> {
         let mut previous = None;
+        // Reopening can take the parent past `max_active_children` (the limit
+        // guards new delegations, not follow-ups it asked for). The message is
+        // still delivered and this is not an error; the next delegate call is
+        // refused until the count drops.
+        if let Ok(Some(child)) = self.inner.store.thread_get(child_id)
+            && let Some(info) = child.delegation.as_ref()
+            && info.status != DelegationStatus::Running
+        {
+            let (max_children, _) = self.orchestration_limits();
+            if self.inner.store.delegation_active_count(info.parent_thread_id).unwrap_or(0) >= max_children {
+                tracing::info!(thread_id = %child_id, max_children, "a follow-up reopened a delegation beyond the active agent limit");
+            }
+        }
         let updated = self.delegation_update(child_id, |info| {
             if info.status == DelegationStatus::Running {
                 return false;
@@ -925,6 +1051,7 @@ impl Orchestrator {
             info.result = None;
             info.error = None;
             info.completed_at = None;
+            info.parent_notified = true;
             true
         })?;
         if let Some(updated) = updated
@@ -980,7 +1107,10 @@ impl Orchestrator {
         // child's reply to its parent can tell it apart from the batched result.
         self.messaging_turn_finished(thread_id, turn_id, &outcome).await;
         let Some(thread) = self.inner.store.thread_get(thread_id)? else { return Ok(()) };
-        if thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running) {
+        // A thread already running its next turn (a queued follow-up started
+        // before this bookkeeping ran) reports when that turn ends instead.
+        let next_turn_running = matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval);
+        if !next_turn_running && thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running) {
             self.delegation_complete_child(&thread, turn_id, outcome).await?;
         }
         // A finished parent turn is when merged child branches get cleaned up.
@@ -1000,7 +1130,7 @@ impl Orchestrator {
             TurnOutcome::Completed { stop_reason: StopReason::Error, terminal_message_id } => {
                 (DelegationStatus::Failed, Some("The agent stopped with an error.".to_string()), terminal_message_id)
             }
-            TurnOutcome::Failed(error) => (DelegationStatus::Failed, Some(error), None),
+            TurnOutcome::Failed(error) => (DelegationStatus::Failed, Some(cap_error(error)), None),
         };
         let mut result = self.last_assistant_text(child.id, Some(turn_id), terminal);
         let (head_commit, diffstat) = self.worktree_outcome(child, &info).await;
@@ -1022,6 +1152,7 @@ impl Orchestrator {
             info.head_commit = head_commit.clone();
             info.diffstat = diffstat;
             info.completed_at = Some(Utc::now());
+            info.parent_notified = false;
             true
         })?;
         if let Some(updated) = updated
@@ -1071,15 +1202,47 @@ impl Orchestrator {
             let mut pending = self.inner.delegation.pending.lock().unwrap_or_else(|error| error.into_inner());
             pending.remove(&parent_id).map(|batch| batch.items).unwrap_or_default()
         };
+        let mut already = Vec::new();
         {
             let mut delivered = self.inner.delegation.inline_delivered.lock().unwrap_or_else(|error| error.into_inner());
-            items.retain(|item| !delivered.remove(&item.task_id));
+            items.retain(|item| {
+                let inline = delivered.remove(&item.task_id);
+                if inline {
+                    already.push(item.task_id);
+                }
+                !inline
+            });
         }
+        self.delegation_mark_notified(&already);
         if items.is_empty() {
             return;
         }
-        if let Err(error) = self.deliver_agent_results(parent_id, items).await {
-            tracing::warn!(%parent_id, %error, "could not deliver delegated agent results");
+        let task_ids: Vec<Uuid> = items.iter().map(|item| item.task_id).collect();
+        match self.deliver_agent_results(parent_id, items).await {
+            Ok(()) => self.delegation_mark_notified(&task_ids),
+            Err(error) => {
+                tracing::warn!(%parent_id, %error, "could not deliver delegated agent results");
+            }
+        }
+    }
+
+    /// Record that these delegations' outcomes reached their parent, so a restart
+    /// does not send them again.
+    fn delegation_mark_notified(&self, task_ids: &[Uuid]) {
+        for task_id in task_ids {
+            let Ok(Some(thread)) = self.inner.store.delegation_find_by_task(*task_id) else { continue };
+            if thread.delegation.as_ref().is_some_and(|info| info.parent_notified || info.status == DelegationStatus::Running) {
+                continue;
+            }
+            if let Err(error) = self.delegation_update(thread.id, |info| {
+                if info.parent_notified || info.status == DelegationStatus::Running {
+                    return false;
+                }
+                info.parent_notified = true;
+                true
+            }) {
+                tracing::debug!(%task_id, %error, "could not record that a parent was notified");
+            }
         }
     }
 
@@ -1088,6 +1251,8 @@ impl Orchestrator {
         if parent.status == ThreadStatus::Archived {
             return Ok(());
         }
+        let mut items = items;
+        cap_batch(&mut items);
         if matches!(parent.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) && harness_supports_steer(parent.provider.kind) {
             let message = UserMessage { parts: vec![ContentPart::AgentResults { items: items.clone() }] };
             match self.steer(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: parent_id, message }).await {
@@ -1110,8 +1275,10 @@ impl Orchestrator {
                 merged.append(&mut items);
                 items = merged;
             }
+            cap_batch(&mut items);
             self.emit(parent_id, None, EventPayload::MessageRemoved { message_id: existing.id })?;
         }
+        cap_batch(&mut items);
         let message = methods::QueuedMessage {
             id: Uuid::now_v7(),
             thread_id: parent_id,
@@ -1139,38 +1306,81 @@ impl Orchestrator {
         Ok(found)
     }
 
-    /// Mark `thread_id`'s running delegated descendants cancelled and interrupt
-    /// them, dropping their queued messages. When `thread_id` is itself a
-    /// running delegation it is marked cancelled too (and its parent told when
-    /// `notify_parent`); interrupting `thread_id`'s own turn is the caller's job.
-    /// Failures on individual children are logged, never raised.
-    pub(super) async fn delegation_cancel_tree(&self, thread_id: ThreadId, notify_parent: bool) -> Result<()> {
-        let mut interrupt = Vec::new();
-        for descendant in self.delegation_descendants(thread_id)? {
+    /// Stop `thread_id` (user Stop, `kybern_agent_cancel`, `kybern_thread_interrupt`).
+    ///
+    /// The order matters. The thread is flagged as stopping first, so a delegate
+    /// call racing the stop is refused, and a barrier waits for one already
+    /// creating a child. The thread itself is marked cancelled when it is a
+    /// running delegation (and its parent told when `notify_parent`) before its
+    /// turn is interrupted, so the interrupt is not recorded as a result. Then the
+    /// thread's own turn and its descendants are interrupted concurrently, and
+    /// the descendants are rescanned until none is running. Returns the result of
+    /// interrupting the thread's own turn.
+    pub(super) async fn delegation_stop(&self, thread_id: ThreadId, notify_parent: bool) -> Result<()> {
+        let _stopping = self.delegation_flag_stopping(thread_id);
+        self.delegation_creation_barrier(thread_id).await;
+        self.delegation_mark_cancelled(thread_id, notify_parent)?;
+        let (own, ()) =
+            tokio::join!(self.interrupt_with_grace(thread_id, Duration::from_secs(5)), self.delegation_stop_descendants(thread_id));
+        own
+    }
+
+    /// Wait for a delegate call that is creating a child of `thread_id` right now.
+    pub(super) async fn delegation_creation_barrier(&self, thread_id: ThreadId) {
+        let lock = self.delegation_create_lock(thread_id);
+        let _ = tokio::time::timeout(Duration::from_secs(10), lock.lock()).await;
+    }
+
+    /// Mark every running delegated descendant of `root` cancelled, drop what is
+    /// queued for those, and interrupt them all at once. Rescans (bounded) so a
+    /// child created while the others were stopping is stopped too. Failures on
+    /// individual children are logged, never raised.
+    pub(super) async fn delegation_stop_descendants(&self, root: ThreadId) {
+        for _ in 0..STOP_PASSES {
+            let cancelled = match self.delegation_cancel_pass(root) {
+                Ok(cancelled) => cancelled,
+                Err(error) => {
+                    tracing::warn!(thread_id = %root, %error, "could not scan a stopped thread's delegated agents");
+                    return;
+                }
+            };
+            if cancelled.is_empty() {
+                return;
+            }
+            futures::future::join_all(cancelled.into_iter().map(|id| async move {
+                if let Err(error) = self.interrupt_with_grace(id, Duration::from_secs(5)).await {
+                    tracing::debug!(thread_id = %id, %error, "could not interrupt a cancelled agent");
+                }
+            }))
+            .await;
+        }
+    }
+
+    /// One scan: cancel the running descendants of `root`. Only a descendant that
+    /// was running and got cancelled loses its queued messages; a finished one
+    /// keeps its queue.
+    fn delegation_cancel_pass(&self, root: ThreadId) -> Result<Vec<ThreadId>> {
+        let mut cancelled = Vec::new();
+        for descendant in self.delegation_descendants(root)? {
             if descendant.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running)
                 && self.delegation_mark_cancelled(descendant.id, false)?
             {
-                interrupt.push(descendant.id);
+                self.delegation_drop_queued(descendant.id);
+                cancelled.push(descendant.id);
             }
-            self.delegation_drop_queued(descendant.id);
         }
-        self.delegation_mark_cancelled(thread_id, notify_parent)?;
-        futures::future::join_all(interrupt.into_iter().map(|id| async move {
-            if let Err(error) = self.interrupt_with_grace(id, Duration::from_secs(5)).await {
-                tracing::debug!(thread_id = %id, %error, "could not interrupt a cancelled agent");
-            }
-        }))
-        .await;
-        Ok(())
+        Ok(cancelled)
     }
 
-    fn delegation_mark_cancelled(&self, thread_id: ThreadId, notify_parent: bool) -> Result<bool> {
+    pub(super) fn delegation_mark_cancelled(&self, thread_id: ThreadId, notify_parent: bool) -> Result<bool> {
         let updated = self.delegation_update(thread_id, |info| {
             if info.status != DelegationStatus::Running {
                 return false;
             }
             info.status = DelegationStatus::Cancelled;
             info.completed_at = Some(Utc::now());
+            // Its parent only needs telling when a person (not the parent) stopped it.
+            info.parent_notified = !notify_parent;
             true
         })?;
         let Some(updated) = updated else { return Ok(false) };
@@ -1198,14 +1408,17 @@ impl Orchestrator {
     // ---- restart recovery ----
 
     /// Mark every delegation that was running when the daemon stopped as
-    /// interrupted and tell its parent (through the normal batch).
+    /// interrupted, then re-send every outcome that never reached its parent
+    /// (`parent_notified` false: it was still in the debounce window or queued
+    /// nowhere when the daemon went down), all through the normal batch.
     pub(super) fn delegation_recover_after_restart(&self) -> Result<()> {
-        for thread in self.inner.store.threads_list(None, true)? {
+        let threads = self.inner.store.threads_list(None, true)?;
+        for thread in &threads {
             if !thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running) {
                 continue;
             }
             let result = self.last_assistant_text(thread.id, None, None);
-            let updated = self.delegation_update(thread.id, |info| {
+            self.delegation_update(thread.id, |info| {
                 if info.status != DelegationStatus::Running {
                     return false;
                 }
@@ -1213,13 +1426,17 @@ impl Orchestrator {
                 info.error = Some("interrupted by a Kybern restart".into());
                 info.result = result.clone();
                 info.completed_at = Some(Utc::now());
+                info.parent_notified = false;
                 true
             })?;
-            if let Some(updated) = updated
-                && let Some(parent) = updated.parent_thread_id
-                && let Some(item) = agent_result_item(&updated)
-            {
-                self.delegation_push_result(parent, item);
+        }
+        for thread in self.inner.store.threads_list(None, true)? {
+            let Some(info) = thread.delegation.as_ref() else { continue };
+            if info.status == DelegationStatus::Running || info.parent_notified {
+                continue;
+            }
+            if let Some(item) = agent_result_item(&thread) {
+                self.delegation_push_result(info.parent_thread_id, item);
             }
         }
         Ok(())
@@ -1229,20 +1446,37 @@ impl Orchestrator {
 
     /// Whether the child's worktree can go without losing work: clean, and its
     /// branch merged into the parent's checkout or without commits of its own.
+    ///
+    /// When the worktree directory is gone, nothing can be said about its files,
+    /// so the branch alone decides: it is judged against git (does it exist, is
+    /// it an ancestor of the parent's HEAD, does it hold commits beyond
+    /// `base_commit`), never assumed empty.
     async fn worktree_disposition(&self, child: &Thread, info: &DelegationInfo) -> Result<WorktreeDisposition> {
         let dir = child.worktree.as_ref().map(|worktree| worktree.path.clone()).unwrap_or_else(|| child.cwd.clone());
-        if !Path::new(&dir).exists() {
-            return Ok(WorktreeDisposition { dir, clean: true, merged: false, no_work: true, missing: true });
-        }
         let branch = info.branch.clone().ok_or_else(|| anyhow!("delegation has no branch"))?;
-        let clean = Repo::new(&dir).is_clean().await?;
         let source = self.worktree_source_repo(child, info);
-        let merged = source.is_ancestor(&branch, "HEAD").await.unwrap_or(false);
-        let no_work = match info.base_commit.as_deref() {
-            Some(base) => source.is_ancestor(&branch, base).await.unwrap_or(false),
-            None => false,
+        let missing = !Path::new(&dir).exists();
+        let clean = if missing { true } else { Repo::new(&dir).is_clean().await? };
+        if missing {
+            // Drop the stale registration so git neither lists the dead worktree nor
+            // refuses to touch the branch because it looks checked out there.
+            if let Err(error) = source.worktree_prune().await {
+                tracing::debug!(%error, "git worktree prune failed");
+            }
+        }
+        let branch_exists = source.rev_parse(&format!("refs/heads/{branch}")).await.is_ok();
+        let (merged, no_work) = if branch_exists {
+            let merged = source.is_ancestor(&branch, "HEAD").await.unwrap_or(false);
+            let no_work = match info.base_commit.as_deref() {
+                Some(base) => source.is_ancestor(&branch, base).await.unwrap_or(false),
+                None => false,
+            };
+            (merged, no_work)
+        } else {
+            // Nothing left to protect or to delete.
+            (false, true)
         };
-        Ok(WorktreeDisposition { dir, clean, merged, no_work, missing: false })
+        Ok(WorktreeDisposition { dir, clean, merged, no_work, missing, branch_exists })
     }
 
     /// The parent's checkout, whose HEAD decides whether a child branch is merged.
@@ -1271,13 +1505,19 @@ impl Orchestrator {
         if !state.missing {
             source.worktree_remove(Path::new(&state.dir), force).await?;
         }
-        if let Some(branch) = info.branch.as_deref() {
+        if state.missing
+            && let Err(error) = source.worktree_prune().await
+        {
+            tracing::debug!(%error, "git worktree prune failed");
+        }
+        if let Some(branch) = info.branch.as_deref().filter(|_| state.branch_exists) {
             if state.merged {
                 if let Err(error) = source.delete_branch(branch, false).await {
                     tracing::debug!(%branch, %error, "merged delegation branch could not be deleted");
                 }
             } else if state.no_work {
-                // Nothing beyond the seed commit, which only holds the parent's own changes.
+                // Verified above: the branch tip is reachable from base_commit, so it holds
+                // nothing but the seed, which only copies the parent's own changes.
                 if let Err(error) = source.delete_branch(branch, true).await {
                     tracing::debug!(%branch, %error, "empty delegation branch could not be deleted");
                 }
@@ -1362,6 +1602,8 @@ struct WorktreeDisposition {
     merged: bool,
     no_work: bool,
     missing: bool,
+    /// Whether the delegation's branch still exists in the parent's repository.
+    branch_exists: bool,
 }
 
 /// The error a send gets when the child's worktree is already gone.

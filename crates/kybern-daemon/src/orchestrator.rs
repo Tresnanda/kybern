@@ -3286,6 +3286,7 @@ impl Orchestrator {
             self.update_thread(t)?;
         }
         self.delegation_recover_after_restart()?;
+        self.messaging_recover_after_restart().await?;
         for group in self.inner.store.collaboration_groups_list(None, true)? {
             for mut assignment in self.inner.store.collaboration_assignments(group.id, false)? {
                 if matches!(assignment.status, AssignmentStatus::Waiting | AssignmentStatus::Working)
@@ -3824,9 +3825,14 @@ impl Orchestrator {
         if thread.coordinator_project_id.is_some() {
             return Err(anyhow!("Use Delete coordinator to remove a project coordinator, or pause its agents temporarily."));
         }
-        let descendants = self.delegation_descendants(thread_id)?;
-        self.delegation_cancel_tree(thread_id, true).await?;
+        // The parent goes first (flagged, then archived with its session closed) so
+        // it cannot delegate more; then the cascade, rescanned until nothing runs.
+        let _stopping = self.delegation_flag_stopping(thread_id);
+        self.delegation_creation_barrier(thread_id).await;
+        self.delegation_mark_cancelled(thread_id, true)?;
         self.archive_single(thread_id).await?;
+        self.delegation_stop_descendants(thread_id).await;
+        let descendants = self.delegation_descendants(thread_id)?;
         for descendant in &descendants {
             if descendant.status != ThreadStatus::Archived
                 && let Err(error) = self.archive_single(descendant.id).await
@@ -4293,10 +4299,11 @@ impl Orchestrator {
             self.stop_runtime_task(thread_id, "").await?;
             return Ok(());
         }
-        // Stop cascades to everything this thread delegated; a delegated child
-        // stopped directly (Lineage Stop) is cancelled and its parent told.
-        self.delegation_cancel_tree(thread_id, true).await?;
-        self.interrupt_with_grace(thread_id, Duration::from_secs(5)).await
+        // The thread is flagged (it cannot delegate any more) and interrupted
+        // first, and the cascade over what it delegated runs alongside; a
+        // delegated child stopped directly (Lineage Stop) is cancelled and its
+        // parent told.
+        self.delegation_stop(thread_id, true).await
     }
 
     async fn interrupt_with_grace(&self, thread_id: ThreadId, grace: Duration) -> Result<()> {

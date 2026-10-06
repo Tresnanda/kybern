@@ -219,7 +219,7 @@ impl Orchestrator {
             Ok(state) => record.state = state,
             Err(error) => {
                 self.inner.messaging.waiters.lock().unwrap_or_else(|error| error.into_inner()).remove(&record.id);
-                let _ = self.inner.store.thread_message_update_state(record.id, ThreadMessageState::Failed);
+                self.message_failed(record.id);
                 return Err(error);
             }
         }
@@ -297,7 +297,7 @@ impl Orchestrator {
     /// asked and the harness can, otherwise queue it (the queue drains when the
     /// recipient is idle). Returns the state the message is now in. A message
     /// from a delegating parent reopens a finished child.
-    async fn deliver_thread_message(&self, record: &ThreadMessageRecord) -> Result<ThreadMessageState> {
+    pub(super) async fn deliver_thread_message(&self, record: &ThreadMessageRecord) -> Result<ThreadMessageState> {
         let recipient =
             self.inner.store.thread_get(record.to_thread_id)?.ok_or_else(|| anyhow!("The recipient thread no longer exists."))?;
         ensure!(recipient.subagent.is_none(), super::subagents::READ_ONLY_ERROR);
@@ -336,6 +336,18 @@ impl Orchestrator {
 
         let queued = methods::QueuedMessage { id: record.id, thread_id: recipient.id, message };
         let delivered = async {
+            // The queue worker only starts turns on idle threads and keeps a failed
+            // thread's queue until a person sends again, so a failed recipient (for
+            // example a delegated child that failed) is started directly.
+            if recipient.status == ThreadStatus::Failed {
+                match self.send_with_id(recipient.id, record.id, queued.message.clone(), false, false).await {
+                    Ok(_) => return Ok(ThreadMessageState::Delivered),
+                    Err(error) if error.downcast_ref::<super::ThreadBusy>().is_some() => {
+                        tracing::debug!(thread_id = %recipient.id, "failed recipient is busy again; queueing the message instead")
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             if record.delivery == ThreadMessageDelivery::Steer
                 && matches!(recipient.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
                 && harness_supports_steer(recipient.provider.kind)
@@ -358,11 +370,9 @@ impl Orchestrator {
         .await;
         match delivered {
             Ok(state) => {
-                // The queue worker may already have started the turn that consumes it.
-                let current = self.inner.store.thread_message_get(record.id)?.map(|stored| stored.state);
-                if current.is_none_or(|current| matches!(current, ThreadMessageState::Held | ThreadMessageState::Queued)) {
-                    self.inner.store.thread_message_update_state(record.id, state)?;
-                }
+                // The queue worker may already have started the turn that consumes it,
+                // so only a message still held or queued takes the new state.
+                self.message_transition(record.id, &[ThreadMessageState::Held, ThreadMessageState::Queued], state)?;
                 Ok(state)
             }
             Err(error) => {
@@ -382,6 +392,50 @@ impl Orchestrator {
                 entries.remove(0);
             }
             entries.push((turn_id, question_id));
+        }
+    }
+
+    // ---- state changes ----
+
+    /// Move a message to `to` while it is still in one of `from`, and announce the
+    /// change with `thread_message_updated` on the sender's thread (when it has
+    /// one) and the recipient's. Returns the updated record when it changed.
+    pub(super) fn message_transition(
+        &self,
+        id: MessageId,
+        from: &[ThreadMessageState],
+        to: ThreadMessageState,
+    ) -> Result<Option<ThreadMessageRecord>> {
+        let previous = self.inner.store.thread_message_get(id)?.map(|record| record.state);
+        let Some(updated) = self.inner.store.thread_message_transition(id, from, to)? else { return Ok(None) };
+        if previous != Some(to) {
+            self.announce_message(&updated);
+        }
+        Ok(Some(updated))
+    }
+
+    fn message_answered(&self, id: MessageId) -> Result<()> {
+        self.message_transition(
+            id,
+            &[ThreadMessageState::Queued, ThreadMessageState::Steered, ThreadMessageState::Delivered],
+            ThreadMessageState::Answered,
+        )?;
+        Ok(())
+    }
+
+    fn message_failed(&self, id: MessageId) {
+        if let Err(error) = self.message_transition(id, &[ThreadMessageState::Held, ThreadMessageState::Queued], ThreadMessageState::Failed)
+        {
+            tracing::warn!(message_id = %id, %error, "could not mark a thread message failed");
+        }
+    }
+
+    fn announce_message(&self, record: &ThreadMessageRecord) {
+        let targets = record.from_thread_id.into_iter().chain([record.to_thread_id]);
+        for thread_id in targets {
+            if let Err(error) = self.emit(thread_id, None, EventPayload::ThreadMessageUpdated { message: record.clone() }) {
+                tracing::debug!(%thread_id, %error, "could not announce a thread message change");
+            }
         }
     }
 
@@ -423,18 +477,18 @@ impl Orchestrator {
             && waiter.send(reply.clone()).is_ok()
         {
             reply.state = ThreadMessageState::Delivered;
-            self.inner.store.thread_message_update_state(reply.id, ThreadMessageState::Delivered)?;
-            self.inner.store.thread_message_update_state(original.id, ThreadMessageState::Answered)?;
+            self.message_transition(reply.id, &[ThreadMessageState::Queued], ThreadMessageState::Delivered)?;
+            self.message_answered(original.id)?;
             return Ok(reply);
         }
         match self.deliver_thread_message(&reply).await {
             Ok(state) => reply.state = state,
             Err(error) => {
-                let _ = self.inner.store.thread_message_update_state(reply.id, ThreadMessageState::Failed);
+                self.message_failed(reply.id);
                 return Err(error);
             }
         }
-        self.inner.store.thread_message_update_state(original.id, ThreadMessageState::Answered)?;
+        self.message_answered(original.id)?;
         Ok(reply)
     }
 
@@ -447,15 +501,27 @@ impl Orchestrator {
             Ok(Some(record)) if record.to_thread_id == thread_id => record,
             _ => return,
         };
-        if record.state == ThreadMessageState::Queued
-            && let Err(error) = self.inner.store.thread_message_update_state(record.id, ThreadMessageState::Delivered)
+        if matches!(record.state, ThreadMessageState::Queued | ThreadMessageState::Held)
+            && let Err(error) =
+                self.message_transition(record.id, &[ThreadMessageState::Queued, ThreadMessageState::Held], ThreadMessageState::Delivered)
         {
             tracing::warn!(%message_id, %error, "could not mark a thread message delivered");
         }
         if record.purpose == ThreadMessagePurpose::Question
-            && matches!(record.state, ThreadMessageState::Queued | ThreadMessageState::Delivered)
+            && matches!(record.state, ThreadMessageState::Queued | ThreadMessageState::Delivered | ThreadMessageState::Held)
         {
             self.messaging_remember_consumed(thread_id, turn_id, record.id);
+        }
+        // A follow-up from the delegating parent that reaches a child after it
+        // settled (it was queued while the child was still running) reopens the
+        // delegation, so this turn's completion notifies the parent again.
+        if let Some(from) = record.from_thread_id
+            && matches!(record.purpose, ThreadMessagePurpose::Message | ThreadMessagePurpose::Question | ThreadMessagePurpose::Reply)
+            && let Ok(Some(thread)) = self.inner.store.thread_get(thread_id)
+            && thread.delegation.as_ref().is_some_and(|info| info.parent_thread_id == from && info.status != DelegationStatus::Running)
+            && let Err(error) = self.delegation_reopen(thread_id)
+        {
+            tracing::warn!(%thread_id, %error, "could not reopen a delegation for a follow-up from its parent");
         }
     }
 
@@ -465,7 +531,7 @@ impl Orchestrator {
             && record.to_thread_id == thread_id
             && record.state == ThreadMessageState::Queued
         {
-            let _ = self.inner.store.thread_message_update_state(record.id, ThreadMessageState::Dismissed);
+            let _ = self.message_transition(record.id, &[ThreadMessageState::Queued], ThreadMessageState::Dismissed);
         }
     }
 
@@ -504,7 +570,7 @@ impl Orchestrator {
         if !blocked
             && replier.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running && info.parent_thread_id == asker_id)
         {
-            self.inner.store.thread_message_update_state(question.id, ThreadMessageState::Answered)?;
+            self.message_answered(question.id)?;
             return Ok(());
         }
         let text = match outcome {
@@ -524,6 +590,41 @@ impl Orchestrator {
         Ok(())
     }
 
+    // ---- restart recovery ----
+
+    /// Questions a recipient had taken (delivered or steered) but not answered
+    /// when the daemon stopped lose their owed automatic reply with the in-memory
+    /// record of them. The asker is told, from the recipient, so it can ask again.
+    pub(super) async fn messaging_recover_after_restart(&self) -> Result<()> {
+        let pending = self
+            .inner
+            .store
+            .thread_messages_in_states(&[ThreadMessageState::Delivered, ThreadMessageState::Steered], 1000)?
+            .into_iter()
+            .filter(|message| message.purpose == ThreadMessagePurpose::Question);
+        for question in pending {
+            if self.inner.store.thread_message_find_reply(question.id)?.is_some() {
+                continue;
+            }
+            let Some(asker_id) = question.from_thread_id else { continue };
+            let (Some(replier), Some(asker)) =
+                (self.inner.store.thread_get(question.to_thread_id)?, self.inner.store.thread_get(asker_id)?)
+            else {
+                continue;
+            };
+            if asker.status == ThreadStatus::Archived {
+                continue;
+            }
+            let text = "The recipient was interrupted by a Kybern restart before answering. Ask again if you still need this.".to_string();
+            if let Err(error) =
+                self.record_reply(&question, &replier, &asker, derived(question.id, 0x62), text, ThreadMessageDelivery::Queue).await
+            {
+                tracing::warn!(question_id = %question.id, %error, "could not tell an asker its question was interrupted by a restart");
+            }
+        }
+        Ok(())
+    }
+
     // ---- held messages ----
 
     /// The user approves a held message: it goes out with the delivery the sender asked for.
@@ -538,9 +639,10 @@ impl Orchestrator {
             ThreadMessageState::Dismissed => bail!("This message was dismissed. Ask the sender to send it again."),
             ThreadMessageState::Failed => bail!("This message could not be delivered. Ask the sender to send it again."),
         }
-        let state = self.deliver_thread_message(&record).await?;
-        let updated =
-            self.inner.store.thread_message_update_state(record.id, state)?.ok_or_else(|| anyhow!("That message no longer exists."))?;
+        self.deliver_thread_message(&record).await?;
+        // Whatever the message is now: delivery never overwrites a state a turn
+        // start or a reply already moved it to.
+        let updated = self.inner.store.thread_message_get(record.id)?.ok_or_else(|| anyhow!("That message no longer exists."))?;
         self.emit(record.to_thread_id, None, EventPayload::ThreadMessageResolved { message_id, resolution: HeldResolution::Delivered })?;
         Ok(updated)
     }
@@ -555,9 +657,8 @@ impl Orchestrator {
             _ => bail!("This message was already delivered, so it cannot be dismissed."),
         }
         let updated = self
-            .inner
-            .store
-            .thread_message_update_state(record.id, ThreadMessageState::Dismissed)?
+            .message_transition(record.id, &[ThreadMessageState::Held], ThreadMessageState::Dismissed)?
+            .or(self.inner.store.thread_message_get(record.id)?)
             .ok_or_else(|| anyhow!("That message no longer exists."))?;
         self.emit(record.to_thread_id, None, EventPayload::ThreadMessageResolved { message_id, resolution: HeldResolution::Dismissed })?;
         Ok(updated)
@@ -651,7 +752,9 @@ impl Orchestrator {
                 }
                 for owner in &siblings {
                     let owns = owner.delegation.as_ref().map(|other| other.owns.as_slice()).unwrap_or_default();
-                    if owns_path(owns, path) && !info.conflicts.iter().any(|known| known.path == *path && known.owner_thread_id == owner.id)
+                    if owns_path(owns, path)
+                        && info.conflicts.len() < delegation::CONFLICTS_CAP
+                        && !info.conflicts.iter().any(|known| known.path == *path && known.owner_thread_id == owner.id)
                     {
                         info.conflicts.push(DelegationConflict { path: path.clone(), owner_thread_id: owner.id, at: Utc::now() });
                         warnings.push((path.clone(), owner.clone()));
@@ -700,7 +803,7 @@ impl Orchestrator {
         match self.deliver_thread_message(&record).await {
             Ok(state) => record.state = state,
             Err(error) => {
-                let _ = self.inner.store.thread_message_update_state(record.id, ThreadMessageState::Failed);
+                self.message_failed(record.id);
                 return Err(error);
             }
         }

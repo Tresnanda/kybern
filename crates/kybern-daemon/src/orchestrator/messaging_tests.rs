@@ -836,3 +836,166 @@ async fn thread_context_guidance_and_the_guide_describe_the_new_tools() {
     assert!(golden.contains("`kybern_agent_delegate`") && golden.contains("end your turn") && golden.contains("held until the user approves"));
     assert!(golden.len() <= 6000);
 }
+
+// ---- review fixes ----
+
+fn updates(events: &[EventPayload], id: MessageId) -> Vec<ThreadMessageState> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            EventPayload::ThreadMessageUpdated { message } if message.id == id => Some(message.state),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_failed_child_is_started_directly_when_its_parent_messages_it() {
+    let t = Delegating::new().await;
+    let started = t.delegate(json!({"task": "Fail first"})).await;
+    let child = t.delegation(&started["task_id"]);
+    t.agent("Fail first").await.tx.send(DriverEvent::TurnFailed { error: "rate limited".into() }).await.unwrap();
+    eventually(|| async {
+        let thread = t.fixture.store.thread_get(child.id).unwrap().unwrap();
+        (thread.status == ThreadStatus::Failed && thread.delegation.as_ref().unwrap().status == DelegationStatus::Failed).then_some(())
+    })
+    .await;
+
+    // No queue worker runs here: the message must start the turn by itself.
+    let sent = t.tool("kybern_thread_send", json!({"thread_id": child.id, "body": "Try again please"})).await.unwrap();
+    let record = t.fixture.store.thread_message_get(Uuid::parse_str(sent["message_id"].as_str().unwrap()).unwrap()).unwrap().unwrap();
+    assert_eq!(record.state, ThreadMessageState::Delivered, "the turn started with the message");
+    assert!(t.fixture.store.queue_list(Some(child.id)).unwrap().is_empty(), "nothing waits in a queue that would never drain");
+    let info = t.fixture.store.thread_get(child.id).unwrap().unwrap().delegation.unwrap();
+    assert_eq!(info.status, DelegationStatus::Running, "the delegation reopened");
+    t.agent("Try again please").await;
+    assert_eq!(t.fixture.store.thread_get(child.id).unwrap().unwrap().status, ThreadStatus::Running);
+}
+
+#[tokio::test]
+async fn a_follow_up_queued_to_a_running_child_reopens_its_delegation_when_it_is_consumed() {
+    let t = Delegating::new().await;
+    let started = t.delegate(json!({"task": "First round"})).await;
+    let child = t.delegation(&started["task_id"]);
+    let agent = t.agent("First round").await;
+    // The child is still running, so the parent's message waits in its queue.
+    let sent = t.tool("kybern_thread_send", json!({"thread_id": child.id, "body": "Also check the docs"})).await.unwrap();
+    assert_eq!(sent["delivered_as"], "queued");
+    assert_eq!(t.delegation(&started["task_id"]).delegation.unwrap().status, DelegationStatus::Running);
+    agent.finish("round one").await;
+    eventually(|| async { (t.delegation(&started["task_id"]).delegation.unwrap().status == DelegationStatus::Completed).then_some(()) }).await;
+
+    t.fixture.orchestrator.drain_queues().await.unwrap();
+    eventually(|| async { agent.transcript().await.contains("Also check the docs").then_some(()) }).await;
+    let info = t.delegation(&started["task_id"]).delegation.unwrap();
+    assert_eq!(info.status, DelegationStatus::Running, "consuming the parent's follow-up reopened it");
+
+    agent.finish("round two").await;
+    eventually(|| async {
+        t.parent_messages.lock().await.iter().find_map(|m| match m.parts.as_slice() {
+            [ContentPart::AgentResults { items }] if items.iter().any(|item| item.result.as_deref() == Some("round two")) => Some(()),
+            _ => None,
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_question_in_flight_at_a_restart_gets_an_interrupted_reply() {
+    let chat = Chat::new();
+    let a = chat.party("Asker", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
+    let b = chat.party("Answerer", ProviderKind::ClaudeCode, PermissionMode::Supervised, false).await;
+    let asked = chat.send(&a, json!({"thread_id": b.thread.id, "body": "Which seed?", "purpose": "question"})).await;
+    let question = chat.record(&asked).id;
+    chat.drain().await;
+    eventually(|| async { (chat.state(question) == ThreadMessageState::Delivered).then_some(()) }).await;
+
+    chat.fixture.orchestrator.messaging_recover_after_restart().await.unwrap();
+
+    assert_eq!(chat.state(question), ThreadMessageState::Answered);
+    let reply = chat.fixture.store.thread_message_find_reply(question).unwrap().expect("the asker is told");
+    assert_eq!((reply.from_thread_id, reply.to_thread_id), (Some(b.thread.id), a.thread.id));
+    assert_eq!(reply.body, "The recipient was interrupted by a Kybern restart before answering. Ask again if you still need this.");
+    // Once is enough.
+    chat.fixture.orchestrator.messaging_recover_after_restart().await.unwrap();
+    let replies = chat.fixture.store.thread_message_list_for_thread(a.thread.id, None, 200).unwrap().into_iter().filter(|m| m.purpose == ThreadMessagePurpose::Reply).count();
+    assert_eq!(replies, 1);
+}
+
+#[tokio::test]
+async fn delivering_a_held_message_never_overwrites_a_newer_state() {
+    let chat = Chat::new();
+    let a = chat.party("Alpha", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
+    let b = chat.party("Beta", ProviderKind::ClaudeCode, PermissionMode::FullAccess, false).await;
+    let held = chat.send(&a, json!({"thread_id": b.thread.id, "body": "run it"})).await;
+    let stale = chat.record(&held);
+    assert_eq!(stale.state, ThreadMessageState::Held);
+    // A turn consumed the message and the store moved on while delivery was in flight.
+    chat.fixture.store.thread_message_update_state(stale.id, ThreadMessageState::Delivered).unwrap();
+
+    chat.fixture.orchestrator.deliver_thread_message(&stale).await.unwrap();
+
+    assert_eq!(chat.state(stale.id), ThreadMessageState::Delivered, "the newer state wins");
+}
+
+#[tokio::test]
+async fn thread_message_state_changes_are_announced_on_both_threads() {
+    let chat = Chat::new();
+    let a = chat.party("Alpha", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
+    let b = chat.party("Beta", ProviderKind::ClaudeCode, PermissionMode::Supervised, false).await;
+    let steered_to = chat.party("Running", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
+    let full = chat.party("Full", ProviderKind::ClaudeCode, PermissionMode::FullAccess, true).await;
+
+    // queued -> delivered
+    let queued = chat.record(&chat.send(&a, json!({"thread_id": b.thread.id, "body": "hello"})).await).id;
+    chat.drain().await;
+    eventually(|| async { (chat.state(queued) == ThreadMessageState::Delivered).then_some(()) }).await;
+    for thread in [&a.thread, &b.thread] {
+        assert_eq!(updates(&chat.events(thread), queued), vec![ThreadMessageState::Delivered], "on the sender's and the recipient's thread");
+    }
+
+    // queued -> steered
+    let steered = chat.record(&chat.send(&a, json!({"thread_id": steered_to.thread.id, "body": "now", "delivery": "steer"})).await).id;
+    for thread in [&a.thread, &steered_to.thread] {
+        assert_eq!(updates(&chat.events(thread), steered), vec![ThreadMessageState::Steered]);
+    }
+
+    // held -> dismissed
+    let held = chat.record(&chat.send(&a, json!({"thread_id": full.thread.id, "body": "risky"})).await).id;
+    assert!(updates(&chat.events(&full.thread), held).is_empty(), "creating a held message is announced by thread_message_held");
+    chat.fixture.orchestrator.thread_message_dismiss(held).await.unwrap();
+    for thread in [&a.thread, &full.thread] {
+        assert_eq!(updates(&chat.events(thread), held), vec![ThreadMessageState::Dismissed]);
+    }
+
+    // question -> answered (Beta's first turn has to end before it can start another)
+    eventually(|| async { recorded(&b, "hello").await.then_some(()) }).await;
+    chat.end_turn(&b).await;
+    let asked = chat.record(&chat.send(&a, json!({"thread_id": b.thread.id, "body": "why?", "purpose": "question"})).await).id;
+    chat.drain().await;
+    eventually(|| async { (chat.state(asked) == ThreadMessageState::Delivered).then_some(()) }).await;
+    eventually(|| async { recorded(&b, "why?").await.then_some(()) }).await;
+    chat.say(&b, "because").await;
+    chat.end_turn(&b).await;
+    eventually(|| async { (chat.state(asked) == ThreadMessageState::Answered).then_some(()) }).await;
+    assert_eq!(updates(&chat.events(&a.thread), asked), vec![ThreadMessageState::Delivered, ThreadMessageState::Answered]);
+}
+
+#[tokio::test]
+async fn conflicts_are_capped_per_delegation() {
+    let t = Delegating::new().await;
+    t.delegate(json!({"task": "Own everything", "owns": ["src/**"], "title": "Owner"})).await;
+    let editor = t.delegate(json!({"task": "Edit everywhere", "owns": ["docs/**"], "title": "Editor"})).await;
+    let editor_thread = t.delegation(&editor["task_id"]);
+    let live = t.child_session(&editor_thread).await;
+    for n in 0..60 {
+        t.fixture
+            .orchestrator
+            .process_driver_event(editor_thread.id, &live, edit_call(&format!("e{n}"), &format!("src/file{n}.rs")), false)
+            .await
+            .unwrap();
+    }
+    let info = t.fixture.store.thread_get(editor_thread.id).unwrap().unwrap().delegation.unwrap();
+    assert_eq!(info.conflicts.len(), 50);
+    assert_eq!(info.files_touched.len(), 60, "files are still all recorded");
+}

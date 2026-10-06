@@ -81,6 +81,12 @@ pub enum EventPayload {
         message_id: MessageId,
         resolution: HeldResolution,
     },
+    /// A thread message changed state after it was created (queued, steered,
+    /// delivered, answered, dismissed or failed). Emitted on the sender's
+    /// thread (when it has one) and on the recipient's.
+    ThreadMessageUpdated {
+        message: ThreadMessageRecord,
+    },
     TurnStarted {
         message_id: MessageId,
         message: UserMessage,
@@ -241,6 +247,7 @@ impl EventPayload {
             Self::CollaborationContextUpdated { .. } => "collaboration_context_updated",
             Self::ThreadMessageHeld { .. } => "thread_message_held",
             Self::ThreadMessageResolved { .. } => "thread_message_resolved",
+            Self::ThreadMessageUpdated { .. } => "thread_message_updated",
             Self::TurnStarted { .. } => "turn_started",
             Self::TurnResumed => "turn_resumed",
             Self::ProviderSessionBound { .. } => "provider_session_bound",
@@ -339,6 +346,22 @@ mod kind_tests {
                     delivery: ThreadMessageDelivery::Queue,
                     state: ThreadMessageState::Held,
                     held_reason: Some("permission".into()),
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                },
+            },
+            EventPayload::ThreadMessageUpdated {
+                message: ThreadMessageRecord {
+                    id: MessageId::nil(),
+                    operation_id: uuid::Uuid::nil(),
+                    from_thread_id: Some(ThreadId::nil()),
+                    to_thread_id: ThreadId::nil(),
+                    purpose: ThreadMessagePurpose::Message,
+                    reply_to: None,
+                    body: "hi".into(),
+                    delivery: ThreadMessageDelivery::Queue,
+                    state: ThreadMessageState::Delivered,
+                    held_reason: None,
                     created_at: chrono::Utc::now(),
                     updated_at: chrono::Utc::now(),
                 },

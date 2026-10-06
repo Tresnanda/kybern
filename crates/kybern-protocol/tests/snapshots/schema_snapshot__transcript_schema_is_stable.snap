@@ -753,6 +753,13 @@ expression: schema_for!(TranscriptEntry)
             "null"
           ]
         },
+        "base_commit": {
+          "description": "Worktree: the commit the worktree was seeded from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "diffstat": {
           "anyOf": [
             {

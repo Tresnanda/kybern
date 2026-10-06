@@ -603,6 +603,7 @@ fn apply_transcript_event(
             | EventPayload::ThreadNotesUpdated { .. }
             | EventPayload::ThreadMessageHeld { .. }
             | EventPayload::ThreadMessageResolved { .. }
+            | EventPayload::ThreadMessageUpdated { .. }
             | EventPayload::MessageRemoved { .. }
             | EventPayload::ThreadArchived
             | EventPayload::ToolCallOutputDelta { .. }

@@ -331,6 +331,11 @@ impl Repo {
         self.git(&args).await.map(|_| ())
     }
 
+    /// Forget worktrees whose directory no longer exists (`git worktree prune`).
+    pub async fn worktree_prune(&self) -> Result<()> {
+        self.git(&["worktree", "prune"]).await.map(|_| ())
+    }
+
     pub async fn worktree_remove(&self, path: &Path, force: bool) -> Result<()> {
         let p = path.to_string_lossy().to_string();
         let mut args = vec!["worktree", "remove"];
@@ -553,5 +558,23 @@ mod tests {
         // The snapshot is a dangling commit, so `-d` sees an unmerged branch.
         assert!(repo.delete_branch("kybern/child", false).await.is_err());
         repo.delete_branch("kybern/child", true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worktree_prune_forgets_a_deleted_worktree_so_its_branch_can_be_judged() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        let path = wt.path().join("child");
+        repo.worktree_add(&path, "kybern/x", None).await.unwrap();
+        std::fs::remove_dir_all(&path).unwrap();
+        assert!(repo.git(&["worktree", "list", "--porcelain"]).await.unwrap().contains("kybern/x"));
+        repo.worktree_prune().await.unwrap();
+        assert!(!repo.git(&["worktree", "list", "--porcelain"]).await.unwrap().contains("kybern/x"));
+        // The branch survives and, with no commits of its own, is an ancestor of HEAD.
+        assert!(repo.is_ancestor("kybern/x", "HEAD").await.unwrap());
+        repo.delete_branch("kybern/x", false).await.unwrap();
     }
 }

@@ -327,6 +327,23 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "A thread message changed state after it was created (queued, steered,\ndelivered, answered, dismissed or failed). Emitted on the sender's\nthread (when it has one) and on the recipient's.",
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/ThreadMessageRecord"
+        },
+        "kind": {
+          "type": "string",
+          "const": "thread_message_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "message_id": {
@@ -1469,6 +1486,11 @@ expression: schema_for!(ThreadEvent)
             "null"
           ],
           "format": "date-time"
+        },
+        "parent_notified": {
+          "description": "Whether the delegating parent has been handed this outcome (delivered,\nsteered or queued). Cleared when the delegation reaches a terminal state\nand set once its `AgentResultItem` is out, so a restart can re-send an\noutcome that was still waiting in the debounce window. Rows written\nbefore this field existed read as `true`: nothing is re-sent.",
+          "type": "boolean",
+          "default": true
         }
       },
       "required": [
@@ -1926,6 +1948,13 @@ expression: schema_for!(ThreadEvent)
           ]
         },
         "head_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_commit": {
+          "description": "Worktree: the commit the worktree was seeded from.",
           "type": [
             "string",
             "null"

@@ -259,6 +259,8 @@ export interface DelegationInfo {
   worktree_state?: WorktreeState | null;
   started_at: DateTime;
   completed_at?: DateTime | null;
+  /** Whether the delegating parent has been handed this outcome. Absent on old rows (treated as true). */
+  parent_notified?: boolean;
 }
 
 export type ThreadMessagePurpose = "task" | "message" | "question" | "reply" | "warning";
@@ -297,6 +299,8 @@ export interface AgentResultItem {
   error?: string | null;
   workspace: DelegationWorkspace;
   branch?: string | null;
+  /** Worktree only: the commit the child started from; apply `base_commit..head_commit` when the parent checkout is dirty. */
+  base_commit?: string | null;
   head_commit?: string | null;
   diffstat?: DiffStat | null;
   /** At most 50. */

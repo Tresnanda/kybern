@@ -435,6 +435,13 @@ pub struct DelegationInfo {
     pub started_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<DateTime<Utc>>,
+    /// Whether the delegating parent has been handed this outcome (delivered,
+    /// steered or queued). Cleared when the delegation reaches a terminal state
+    /// and set once its `AgentResultItem` is out, so a restart can re-send an
+    /// outcome that was still waiting in the debounce window. Rows written
+    /// before this field existed read as `true`: nothing is re-sent.
+    #[serde(default = "default_true")]
+    pub parent_notified: bool,
 }
 
 /// Why a message exists. `Task` is a delegation brief; `Warning` comes from
@@ -570,6 +577,9 @@ pub struct AgentResultItem {
     pub branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_commit: Option<String>,
+    /// Worktree: the commit the worktree was seeded from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diffstat: Option<DiffStat>,
     /// At most 50.
@@ -789,10 +799,18 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
                 let branch = item.branch.as_deref().unwrap_or("(unknown branch)");
                 let commit = item.head_commit.as_deref().unwrap_or("(no commit)");
                 out.push_str(&format!("\n  branch {branch} at {commit}"));
+                if let Some(base) = item.base_commit.as_deref() {
+                    out.push_str(&format!(", based on {base}"));
+                }
                 if let Some(stat) = item.diffstat {
                     out.push_str(&format!(", {} files +{} −{}", stat.files, stat.additions, stat.deletions));
                 }
-                out.push_str(". Merge it with git.");
+                match (item.base_commit.as_deref(), item.head_commit.as_deref()) {
+                    (Some(base), Some(head)) => out.push_str(&format!(
+                        ". If your checkout is clean, merge the branch with git. Otherwise apply only this agent's changes with `git diff {base}..{head} | git apply --3way`; do not merge the branch, because its first commit is a snapshot of your uncommitted changes."
+                    )),
+                    _ => out.push_str(". Merge it with git."),
+                }
             }
         }
         for conflict in &item.conflicts {
@@ -1816,6 +1834,7 @@ mod orchestration_tests {
             workspace,
             branch: Some("kybern/abc".into()),
             head_commit: Some("1234567".into()),
+            base_commit: Some("abcdef0".into()),
             diffstat: Some(DiffStat { files: 2, additions: 10, deletions: 4 }),
             files_touched: vec!["a.rs".into(), "b.rs".into()],
             conflicts: Vec::new(),
@@ -1834,7 +1853,16 @@ mod orchestration_tests {
         let text = agent_results_text(&[item(DelegationWorkspace::Worktree), item(DelegationWorkspace::Shared), failed]);
         assert!(text.starts_with("Results from 3 delegated agent(s):"));
         assert!(text.contains(&format!("- Port the parser (codex/gpt-5, implementation) — completed · task {} · thread {}", id(3), id(4))));
-        assert!(text.contains("branch kybern/abc at 1234567, 2 files +10 −4. Merge it with git."));
+        assert!(
+            text.contains(
+                "branch kybern/abc at 1234567, based on abcdef0, 2 files +10 −4. If your checkout is clean, merge the branch with git."
+            ),
+            "{text}"
+        );
+        assert!(text.contains("`git diff abcdef0..1234567 | git apply --3way`"), "{text}");
+        let mut bare = item(DelegationWorkspace::Worktree);
+        bare.base_commit = None;
+        assert!(agent_results_text(&[bare]).contains("branch kybern/abc at 1234567, 2 files +10 −4. Merge it with git."));
         assert!(text.contains("files touched: a.rs, b.rs"));
         assert!(text.contains("Result:\nDone. Tests pass."));
         assert!(text.contains(&format!("conflict: edited src/x.rs owned by thread {}", id(5))));
