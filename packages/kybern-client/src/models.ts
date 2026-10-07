@@ -28,10 +28,7 @@ export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id">>(
     catalog.find((model) => model.id === id) ??
     catalog.find((model) => model.resolved_id === id) ??
     catalog.find((model) => sameCursorModel(model.id, id)) ??
-    catalog.find(
-      (model) =>
-        !!model.resolved_id && withoutContext(model.resolved_id) === base,
-    )
+    catalog.find((model) => !!model.resolved_id && withoutContext(model.resolved_id) === base)
   );
 }
 
@@ -39,35 +36,13 @@ export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id">>(
 function cursorModelKey(selector: string): string | undefined {
   if (!selector.startsWith("cursor-model:")) return undefined;
   try {
-    const encoded = selector
-      .slice(13)
-      .replaceAll("-", "+")
-      .replaceAll("_", "/");
-    const bytes = Uint8Array.from(atob(encoded), (character) =>
-      character.charCodeAt(0),
-    );
-    const selection = JSON.parse(new TextDecoder().decode(bytes)) as {
-      id: string;
-      params: { id: string; value: string }[];
-    };
-    if (typeof selection.id !== "string" || !Array.isArray(selection.params))
-      return undefined;
-    const params = selection.params.filter(
-      (param) =>
-        ![
-          "effort",
-          "reason_effort",
-          "reasoning_effort",
-          "reasoningEffort",
-        ].includes(param.id),
-    );
-    return JSON.stringify([
-      selection.id,
-      params.sort((a, b) => a.id.localeCompare(b.id)),
-    ]);
-  } catch {
-    return undefined;
-  }
+    const encoded = selector.slice(13).replaceAll("-", "+").replaceAll("_", "/");
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    const selection = JSON.parse(new TextDecoder().decode(bytes)) as {id: string; params: {id: string; value: string}[]};
+    if (typeof selection.id !== "string" || !Array.isArray(selection.params)) return undefined;
+    const params = selection.params.filter((param) => !["effort", "reason_effort", "reasoning_effort", "reasoningEffort"].includes(param.id));
+    return JSON.stringify([selection.id, params.sort((a, b) => a.id.localeCompare(b.id))]);
+  } catch { return undefined; }
 }
 
 function sameCursorModel(left: string, right: string): boolean {
@@ -126,9 +101,7 @@ export function modelFamily(displayName: string): string {
 }
 
 /** Distinct backends in a catalog. More than one means names alone can be ambiguous. */
-export function catalogBackends(
-  catalog: readonly Pick<ProviderModel, "provider">[],
-): string[] {
+export function catalogBackends(catalog: readonly Pick<ProviderModel, "provider">[]): string[] {
   const seen = new Set<string>();
   for (const model of catalog) if (model.provider) seen.add(model.provider);
   return [...seen];
@@ -146,9 +119,7 @@ export function modelQualifier(
   if (!model?.provider) return null;
   const name = model.display_name.trim().toLowerCase();
   const twin = catalog.some(
-    (other) =>
-      other.provider !== model.provider &&
-      other.display_name.trim().toLowerCase() === name,
+    (other) => other.provider !== model.provider && other.display_name.trim().toLowerCase() === name,
   );
   return twin ? backendLabel(model.provider) : null;
 }
@@ -172,21 +143,14 @@ export interface ModelSection<T> {
  * backend holding the agent's default first, then alphabetical. Families
  * keep catalog order and single models share "Other" at the end.
  */
-export function modelSections<
-  T extends Pick<
-    ProviderModel,
-    "id" | "display_name" | "provider" | "is_default"
-  >,
->(catalog: readonly T[]): ModelSection<T>[] {
+export function modelSections<T extends Pick<ProviderModel, "id" | "display_name" | "provider" | "is_default">>(
+  catalog: readonly T[],
+): ModelSection<T>[] {
   const backends = catalogBackends(catalog);
   if (backends.length > 1) {
     const defaultBackend = catalog.find((model) => model.is_default)?.provider;
     const order = [...backends].sort((a, b) =>
-      a === defaultBackend
-        ? -1
-        : b === defaultBackend
-          ? 1
-          : backendLabel(a).localeCompare(backendLabel(b)),
+      a === defaultBackend ? -1 : b === defaultBackend ? 1 : backendLabel(a).localeCompare(backendLabel(b)),
     );
     const sections = order.map((backend) => ({
       key: `backend:${backend}`,
@@ -194,12 +158,10 @@ export function modelSections<
       models: catalog.filter((model) => model.provider === backend),
     }));
     const loose = catalog.filter((model) => !model.provider);
-    if (loose.length)
-      sections.push({ key: "backend:", label: "Other", models: loose });
+    if (loose.length) sections.push({ key: "backend:", label: "Other", models: loose });
     return sections;
   }
-  if (catalog.length <= MODEL_FLAT_LIMIT)
-    return [{ key: "all", label: null, models: [...catalog] }];
+  if (catalog.length <= MODEL_FLAT_LIMIT) return [{ key: "all", label: null, models: [...catalog] }];
   const families = new Map<string, T[]>();
   for (const model of catalog) {
     const family = modelFamily(model.display_name);
@@ -210,24 +172,21 @@ export function modelSections<
   const sections: ModelSection<T>[] = [];
   const other: T[] = [];
   for (const [family, models] of families) {
-    if (models.length > 1)
-      sections.push({ key: `family:${family}`, label: family, models });
+    if (models.length > 1) sections.push({ key: `family:${family}`, label: family, models });
     else other.push(...models);
   }
-  if (other.length)
-    sections.push({ key: "family:", label: "Other", models: other });
-  return sections.length > 1
-    ? sections
-    : [{ key: "all", label: null, models: [...catalog] }];
+  if (other.length) sections.push({ key: "family:", label: "Other", models: other });
+  return sections.length > 1 ? sections : [{ key: "all", label: null, models: [...catalog] }];
 }
 
 /**
  * Every query word must appear in the name, id or backend, so "grok cursor"
  * narrows to Cursor's Grok models. Names that start with the query rank first.
  */
-export function searchModels<
-  T extends Pick<ProviderModel, "id" | "display_name" | "provider">,
->(catalog: readonly T[], query: string): T[] {
+export function searchModels<T extends Pick<ProviderModel, "id" | "display_name" | "provider">>(
+  catalog: readonly T[],
+  query: string,
+): T[] {
   const search = query.trim().toLowerCase();
   if (!search) return [...catalog];
   const words = search.split(/\s+/);
@@ -236,27 +195,15 @@ export function searchModels<
     const name = model.display_name.toLowerCase();
     const haystack = `${name} ${model.id.toLowerCase()} ${model.provider ? backendLabel(model.provider).toLowerCase() : ""}`;
     if (!words.every((word) => haystack.includes(word))) return;
-    const rank = name.startsWith(search)
-      ? 0
-      : name.split(/[\s\-/]+/).some((part) => part.startsWith(words[0]!))
-        ? 1
-        : 2;
+    const rank = name.startsWith(search) ? 0 : name.split(/[\s\-/]+/).some((part) => part.startsWith(words[0]!)) ? 1 : 2;
     scored.push({ model, rank, index });
   });
-  return scored
-    .sort((a, b) => a.rank - b.rank || a.index - b.index)
-    .map((entry) => entry.model);
+  return scored.sort((a, b) => a.rank - b.rank || a.index - b.index).map((entry) => entry.model);
 }
 
 /** Most recent first, deduplicated, capped. */
-export function rememberModel(
-  recent: readonly string[],
-  id: string,
-  limit = 5,
-): string[] {
-  return id
-    ? [id, ...recent.filter((item) => item !== id)].slice(0, limit)
-    : [...recent];
+export function rememberModel(recent: readonly string[], id: string, limit = 5): string[] {
+  return id ? [id, ...recent.filter((item) => item !== id)].slice(0, limit) : [...recent];
 }
 
 /** A starred model. The harness is part of the key: the same id can mean different models per harness. */
@@ -265,20 +212,12 @@ export interface FavoriteModel {
   id: string;
 }
 
-export function isFavorite(
-  favorites: readonly FavoriteModel[],
-  kind: string,
-  id: string,
-): boolean {
+export function isFavorite(favorites: readonly FavoriteModel[], kind: string, id: string): boolean {
   return favorites.some((item) => item.kind === kind && item.id === id);
 }
 
 /** Adds or removes a favorite; new favorites go last so the list keeps the order they were starred in. */
-export function toggleFavorite(
-  favorites: readonly FavoriteModel[],
-  kind: string,
-  id: string,
-): FavoriteModel[] {
+export function toggleFavorite(favorites: readonly FavoriteModel[], kind: string, id: string): FavoriteModel[] {
   return isFavorite(favorites, kind, id)
     ? favorites.filter((item) => item.kind !== kind || item.id !== id)
     : [...favorites, { kind, id }];
