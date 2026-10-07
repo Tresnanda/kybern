@@ -216,6 +216,14 @@ pub enum EventPayload {
     ProviderCommandsUpdated {
         commands: Vec<crate::ProviderCommand>,
     },
+    /// A same-thread native account/harness transition. Context telemetry and
+    /// commands from the outgoing session no longer describe the new session.
+    SessionTransitioned {
+        from: ProviderInstance,
+        to: ProviderInstance,
+        native_resume: bool,
+        text: String,
+    },
     ProviderUsageUpdated {
         usage: ProviderUsage,
     },
@@ -285,6 +293,7 @@ impl EventPayload {
             Self::TurnCompleted { .. } => "turn_completed",
             Self::TurnFailed { .. } => "turn_failed",
             Self::ProviderCommandsUpdated { .. } => "provider_commands_updated",
+            Self::SessionTransitioned { .. } => "session_transitioned",
             Self::ProviderUsageUpdated { .. } => "provider_usage_updated",
             Self::ProviderNotice { .. } => "provider_notice",
             Self::CheckpointUpdated { .. } => "checkpoint_updated",

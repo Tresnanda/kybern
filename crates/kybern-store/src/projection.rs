@@ -573,6 +573,11 @@ fn apply_transcript_event(
                     out.push(TranscriptEntry::RuntimeTask { turn_id, seq: incoming.started_seq, at: incoming.started_at, task: incoming });
                 }
             }
+            EventPayload::SessionTransitioned { text, .. } => {
+                if let Some(turn_id) = turn_id.or(last_turn_id_value) {
+                    out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at });
+                }
+            }
             EventPayload::ProviderNotice { level, text, .. } => {
                 let Some(turn_id) = turn_id else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: *level, text: text.clone(), at: ev.at });
@@ -784,6 +789,9 @@ fn mark_turn_complete(out: &mut [TranscriptEntry], turn: TurnId) {
 pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
     let mut result = ProviderUsage::default();
     for event in events {
+        if matches!(event.payload, EventPayload::SessionTransitioned { .. }) {
+            result = ProviderUsage::default();
+        }
         if let EventPayload::ProviderUsageUpdated { usage } = &event.payload {
             if usage.context.is_some() {
                 result.context = usage.context.clone();

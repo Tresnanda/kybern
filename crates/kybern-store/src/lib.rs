@@ -1089,6 +1089,21 @@ impl Store {
         })
     }
 
+    /// Persist related session identities in one SQLite transaction.
+    pub fn meta_set_many(&self, values: &[(&str, &str)]) -> Result<()> {
+        self.with(|connection| {
+            let transaction = connection.unchecked_transaction()?;
+            for (key, value) in values {
+                transaction.execute(
+                    "INSERT INTO meta(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![key, value],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
     // ---- tokens ----
 
     pub fn token_insert(&self, id: Uuid, hash: &str, label: &str, scopes: &[Scope]) -> Result<()> {

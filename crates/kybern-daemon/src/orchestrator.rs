@@ -2704,6 +2704,7 @@ async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<Stri
 struct Inner {
     workspace_ops: Mutex<()>,
     commands: std::sync::Mutex<()>,
+    session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
     collaboration_writes: std::sync::Mutex<()>,
     question_answers: Mutex<()>,
     collaboration_commands: Mutex<()>,
@@ -2983,6 +2984,7 @@ impl Orchestrator {
         Self {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
+                session_admission: Mutex::new(HashMap::new()),
                 collaboration_writes: std::sync::Mutex::new(()),
                 question_answers: Mutex::new(()),
                 collaboration_commands: Mutex::new(()),
@@ -3906,6 +3908,14 @@ impl Orchestrator {
         retryable: bool,
     ) -> Result<(TurnId, MessageId, bool)> {
         let _workspace = self.inner.workspace_ops.lock().await;
+        let admission_gate = self.session_admission(thread_id).await;
+        let _admission = admission_gate.lock().await;
+        let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        if !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+            && let Some(mode) = self.thread_target(thread_id)?.pending_permission_mode
+        {
+            self.apply_permission_admitted(thread_id, mode).await?;
+        }
         let target = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         self.restore_worktree_if_cleaned(&target).await?;
         if target.subagent.is_some() {
@@ -5081,13 +5091,7 @@ impl Orchestrator {
         let waiting = {
             let sessions = self.inner.sessions.lock().await;
             if let Some(live) = sessions.get(&thread.id).cloned() {
-                let expected = serde_json::to_string(&(
-                    thread.provider.clone(),
-                    thread.model.clone(),
-                    thread.effort.clone(),
-                    thread.permission_mode,
-                    self.account_environment(thread)?,
-                ))?;
+                let expected = self.session_identity(thread)?;
                 let identity = self.inner.store.meta_get(&format!("live_identity:{}", thread.id))?;
                 if identity.as_deref().is_none_or(|identity| identity == expected) {
                     return Ok((live, true));
@@ -5201,16 +5205,7 @@ impl Orchestrator {
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
-        self.inner.store.meta_set(
-            &format!("live_identity:{}", thread.id),
-            &serde_json::to_string(&(
-                thread.provider.clone(),
-                thread.model.clone(),
-                thread.effort.clone(),
-                thread.permission_mode,
-                self.account_environment(thread)?,
-            ))?,
-        )?;
+        self.inner.store.meta_set(&format!("live_identity:{}", thread.id), &self.session_identity(thread)?)?;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;

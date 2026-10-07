@@ -840,6 +840,7 @@ export type EventPayload =
   | { kind: "collaboration_context_updated"; entry: ContextEntry }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "turn_resumed" }
+  | { kind: "session_transitioned"; from: ProviderInstance; to: ProviderInstance; native_resume: boolean; text: string }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
   | { kind: "provider_session_released"; reason: SessionReleaseReason }
   | { kind: "image_received"; id: string; origin: EventOrigin; source: string }

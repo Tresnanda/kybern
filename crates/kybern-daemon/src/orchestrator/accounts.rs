@@ -2,16 +2,21 @@
 use super::*;
 use anyhow::ensure;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Serialize, Deserialize)]
 struct Binding {
     session_id: Option<String>,
     /// Account native storage/config identity, including profile environment.
-    environment: std::collections::BTreeMap<String, String>,
+    environment_fingerprint: String,
     through: EventSeq,
 }
 
 impl Orchestrator {
+    pub(super) async fn session_admission(&self, thread_id: ThreadId) -> Arc<Mutex<()>> {
+        self.inner.session_admission.lock().await.entry(thread_id).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+    }
+
     pub(super) fn stored_target(&self, thread: &Thread) -> Result<Option<SessionTarget>> {
         self.inner
             .store
@@ -61,11 +66,13 @@ impl Orchestrator {
         )
         .await?;
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        self.inner.store.meta_set(&format!("target:{}", thread.id), &serde_json::to_string(&params.target)?)?;
-        self.inner.store.meta_set(
-            &format!("account_override:{}", thread.id),
-            if params.inherit_account { "" } else { &params.target.provider.instance },
-        )?;
+        let target_key = format!("target:{}", thread.id);
+        let override_key = format!("account_override:{}", thread.id);
+        let target_json = serde_json::to_string(&params.target)?;
+        self.inner.store.meta_set_many(&[
+            (&target_key, &target_json),
+            (&override_key, if params.inherit_account { "" } else { &params.target.provider.instance }),
+        ])?;
         self.thread_target(thread.id)
     }
 
@@ -81,6 +88,23 @@ impl Orchestrator {
         crate::provider_accounts::environment(&provider, thread.provider.kind, &thread.provider.instance)
     }
 
+    pub(super) fn environment_fingerprint(&self, thread: &Thread) -> Result<String> {
+        Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(&self.account_environment(thread)?)?)))
+    }
+
+    pub(super) fn session_identity(&self, thread: &Thread) -> Result<String> {
+        Ok(format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                thread.provider.clone(),
+                thread.model.clone(),
+                thread.effort.clone(),
+                thread.permission_mode,
+                self.environment_fingerprint(thread)?
+            ))?)
+        ))
+    }
+
     pub(super) fn binding_key(thread: &Thread) -> String {
         format!("native_binding:{}:{}:{}", thread.id, thread.provider.kind, thread.provider.instance)
     }
@@ -88,7 +112,7 @@ impl Orchestrator {
     pub(super) fn save_account_binding(&self, thread: &Thread) -> Result<()> {
         let binding = Binding {
             session_id: thread.provider_session_id.clone(),
-            environment: self.account_environment(thread)?,
+            environment_fingerprint: self.environment_fingerprint(thread)?,
             through: thread.last_seq,
         };
         self.inner.store.meta_set(&Self::binding_key(thread), &serde_json::to_string(&binding)?)
@@ -109,17 +133,31 @@ impl Orchestrator {
         if provider_changed {
             let binding =
                 self.inner.store.meta_get(&Self::binding_key(thread))?.map(|s| serde_json::from_str::<Binding>(&s)).transpose()?;
-            let environment = self.account_environment(thread)?;
-            let compatible = binding.filter(|binding| binding.environment == environment);
+            let fingerprint = self.environment_fingerprint(thread)?;
+            let compatible = binding.filter(|binding| binding.environment_fingerprint == fingerprint);
             let after = compatible.as_ref().map_or(0, |binding| binding.through);
             thread.provider_session_id = compatible.and_then(|binding| binding.session_id);
             // The provider receives only a saved, attributed delta. The UI keeps its original messages.
             self.inner.store.meta_set(&format!("handoff:{}", thread.id), &serde_json::to_string(&(after, thread.last_seq))?)?;
-            self.emit(thread.id, None, EventPayload::ProviderNotice { level: NoticeLevel::Info,
-                text: format!("Next message uses {} · {}. {} Conversation and workspace stay in this thread.", thread.provider.kind.display_name(), thread.provider.instance,
-                    if thread.provider_session_id.is_some() { "Resuming this account's native session with the conversation it missed." } else { "Starting a native session with portable conversation context." }),
-                data: Some(serde_json::json!({"transition": true, "from": previous, "to": thread.provider, "native_children_transferred": false})) })?;
-            self.emit(thread.id, None, EventPayload::ProviderUsageUpdated { usage: ProviderUsage::default() })?;
+            self.emit(
+                thread.id,
+                None,
+                EventPayload::SessionTransitioned {
+                    from: previous,
+                    to: thread.provider.clone(),
+                    native_resume: thread.provider_session_id.is_some(),
+                    text: format!(
+                        "Using {} · {}. {} Conversation and workspace stay in this thread.",
+                        thread.provider.kind.display_name(),
+                        thread.provider.instance,
+                        if thread.provider_session_id.is_some() {
+                            "Resuming this account's native session with the conversation it missed."
+                        } else {
+                            "Starting a native session with portable conversation context."
+                        }
+                    ),
+                },
+            )?;
         }
         Ok(())
     }
@@ -179,17 +217,32 @@ impl Orchestrator {
             .await?;
         }
         if let Some(mode) = params.permission_mode.take() {
-            if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            validate_permission(&thread, mode)?;
+            let gate = self.session_admission(thread.id).await;
+            let _admission = gate.lock().await;
+            let current = self.inner.store.thread_get(thread.id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+            if matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
                 self.inner.store.meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&mode)?)?;
             } else {
-                self.apply_permission(thread.id, mode).await?;
+                self.apply_permission_admitted(thread.id, mode).await?;
             }
         }
         self.update_thread_fields(params)
     }
 
     async fn apply_permission(&self, thread_id: ThreadId, mode: PermissionMode) -> Result<Thread> {
+        let gate = self.session_admission(thread_id).await;
+        let _admission = gate.lock().await;
+        self.apply_permission_admitted(thread_id, mode).await
+    }
+
+    pub(super) async fn apply_permission_admitted(&self, thread_id: ThreadId, mode: PermissionMode) -> Result<Thread> {
         let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        ensure!(
+            !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval),
+            "Permission change is waiting for the active turn. Stop and apply now, or wait for it to finish."
+        );
+        validate_permission(&thread, mode)?;
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
         if let Some(live) = live {
             // Claude bypassPermissions is a process launch flag. Restart/resume instead of persisting a rejected mode.
@@ -214,34 +267,36 @@ impl Orchestrator {
         self.update_thread(thread)
     }
 
-    pub async fn apply_pending_permission(&self, thread_id: ThreadId, stop_now: bool) -> Result<Thread> {
-        self.ensure_not_subagent(thread_id)?;
-        let state = self.thread_target(thread_id)?;
-        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-        let Some(mode) = state.pending_permission_mode else { return Ok(thread) };
-        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
-            ensure!(stop_now, "Permission change is waiting for this turn to finish.");
-            self.interrupt(thread_id).await?;
-            for _ in 0..100 {
-                if self
-                    .inner
-                    .store
-                    .thread_get(thread_id)?
-                    .is_none_or(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
-                {
-                    break;
+    pub fn apply_pending_permission(&self, thread_id: ThreadId, stop_now: bool) -> futures::future::BoxFuture<'_, Result<Thread>> {
+        Box::pin(async move {
+            self.ensure_not_subagent(thread_id)?;
+            let state = self.thread_target(thread_id)?;
+            let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+            let Some(mode) = state.pending_permission_mode else { return Ok(thread) };
+            if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+                ensure!(stop_now, "Permission change is waiting for this turn to finish.");
+                self.interrupt(thread_id).await?;
+                for _ in 0..100 {
+                    if self
+                        .inner
+                        .store
+                        .thread_get(thread_id)?
+                        .is_none_or(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                ensure!(
+                    self.inner
+                        .store
+                        .thread_get(thread_id)?
+                        .is_some_and(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)),
+                    "The agent is still stopping. Try Apply again when it stops."
+                );
             }
-            ensure!(
-                self.inner
-                    .store
-                    .thread_get(thread_id)?
-                    .is_some_and(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)),
-                "The agent is still stopping. Try Apply again when it stops."
-            );
-        }
-        self.apply_permission(thread_id, mode).await
+            self.apply_permission(thread_id, mode).await
+        })
     }
 
     pub async fn switch_continue(&self, params: methods::ThreadsSwitchContinueParams) -> Result<methods::ThreadsSendResult> {
@@ -273,6 +328,20 @@ impl Orchestrator {
         );
         self.send_client_message(methods::ThreadsSendParams { thread_id: thread.id, message, message_id: Some(params.message_id) }).await
     }
+}
+
+fn validate_permission(thread: &Thread, mode: PermissionMode) -> Result<()> {
+    let legacy_cursor = thread.provider_session_id.as_deref().is_some_and(|id| !id.starts_with("cursor-sdk:"));
+    if thread.provider.kind == ProviderKind::Cursor && !legacy_cursor {
+        ensure!(
+            matches!(mode, PermissionMode::Auto | PermissionMode::FullAccess),
+            "Cursor supports Auto and Full access. Choose one of those modes."
+        );
+    }
+    if thread.provider.kind == ProviderKind::Pi {
+        ensure!(mode != PermissionMode::Auto, "Pi does not support Auto. Choose Supervised, Accept edits, or Full access.");
+    }
+    Ok(())
 }
 
 pub(super) fn quota_failure(error: &str) -> bool {
@@ -318,7 +387,6 @@ fn bounded_context(thread_id: ThreadId, items: &[String], cap: usize) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::ensure;
     #[test]
     fn portable_selection_keeps_full_messages_order_and_budget() {
         let items = vec!["original constraint\n".into(), "x".repeat(20_000), "recent complete answer\n".into()];

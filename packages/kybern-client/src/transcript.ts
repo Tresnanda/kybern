@@ -155,7 +155,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
     case "thread_notes_updated":
     case "approval_requested": case "user_input_requested": case "approval_resolved":
     case "async_questions_requested": case "async_questions_answered":
-    case "provider_commands_updated": case "provider_usage_updated":
+    case "provider_commands_updated": case "provider_usage_updated": case "session_transitioned":
       return compactThreadState(applyEvent(compact, event))
     default:
       return { ...compact, lastSeq: event.seq }
@@ -446,6 +446,8 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       break
     case "provider_commands_updated":
       return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
+    case "session_transitioned":
+      return { ...state, providerUsage: undefined, providerCommands: [], blocks: [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: "info", text: ev.text }], lastSeq: ev.seq }
     case "provider_usage_updated":
       return { ...state, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
     case "session_imported":
