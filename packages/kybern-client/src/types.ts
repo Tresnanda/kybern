@@ -2072,8 +2072,8 @@ export interface Methods {
   "skills.list": [SkillsListParams, SkillsListResult];
   "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number }, { visual: HtmlVisual }];
   "threads.visuals.preview": [{ thread_id: ThreadId; html: string; width?: number; appearance?: "dark" | "light" }, { width: number; content_height: number; captured_height: number; console_messages: {level: string; text: string}[]; missing_images: string[]; screenshot: string }];
-  "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid }, { html: string }];
-  "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid }, { ticket: string }];
+  "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { html: string; truncated?: boolean }];
+  "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { ticket: string }];
   "threads.visuals.revoke": [{ thread_id: ThreadId; ticket: string }, Record<string, never>];
   "threads.artifacts.list": [{ thread_id: ThreadId; before_seq?: number | null; limit?: number }, { artifacts: ArtifactTool[]; next_before_seq: number | null }];
   "threads.artifacts.preview": [{ thread_id: ThreadId; path: string }, { ticket: string }];

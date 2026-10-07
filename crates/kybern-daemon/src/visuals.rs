@@ -45,14 +45,24 @@ pub(crate) async fn publish(
     store.visual_publish(thread_id, turn_id, &visual, &source)
 }
 pub(crate) fn read(store: &kybern_store::Store, params: HtmlReadParams) -> Result<HtmlReadResult> {
-    Ok(HtmlReadResult {
-        html: store
-            .visual_read(params.thread_id, params.visual_id)?
-            .ok_or_else(|| anyhow!("This visual no longer exists in this thread."))?,
-    })
+    if let Some(max_bytes) = params.max_bytes {
+        ensure!((1..=1024 * 1024).contains(&max_bytes), "Use a source preview limit of 1–1,048,576 bytes.");
+    }
+    let mut html =
+        store.visual_read(params.thread_id, params.visual_id)?.ok_or_else(|| anyhow!("This visual no longer exists in this thread."))?;
+    let truncated = params.max_bytes.is_some_and(|max| html.len() > max as usize);
+    if truncated {
+        let mut end = params.max_bytes.unwrap() as usize;
+        while !html.is_char_boundary(end) {
+            end -= 1;
+        }
+        html.truncate(end);
+    }
+    Ok(HtmlReadResult { html, truncated })
 }
 pub(crate) fn issue(store: &kybern_store::Store, params: HtmlReadParams) -> Result<ArtifactPreviewResult> {
-    let html = read(store, params.clone())?.html;
+    // A source-preview budget never changes the actual interactive document.
+    let html = read(store, HtmlReadParams { max_bytes: None, ..params.clone() })?.html;
     let mut entries = tickets().lock().map_err(|_| anyhow!("The visual cannot open. Try again."))?;
     entries.retain(|_, entry| entry.created.elapsed() < TTL);
     ensure!(
@@ -157,6 +167,52 @@ pub(crate) fn persisted_output(name: Option<&str>, mut value: serde_json::Value)
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn source_previews_bound_unicode_bytes_without_truncating_exports_or_frames() {
+        let store = kybern_store::Store::open_in_memory().unwrap();
+        let now = chrono::Utc::now();
+        let project = Project {
+            id: uuid::Uuid::now_v7(),
+            name: "Visual read fixture".into(),
+            path: "/scratch/visual-read".into(),
+            is_git: false,
+            worktrees_default: None,
+            task_prefix: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let thread: Thread = serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::now_v7(), "project_id": project.id, "title": "Source preview",
+            "provider": ProviderInstance::default_for(ProviderKind::Codex), "permission_mode": "supervised",
+            "status": "idle", "cwd": project.path, "pinned": false, "created_at": now, "updated_at": now, "last_seq": 0,
+        }))
+        .unwrap();
+        store.thread_upsert(&thread).unwrap();
+        let visual = HtmlVisual { id: uuid::Uuid::now_v7(), title: "Large embedded image".into(), height: 400 };
+        let html = format!("{}🧭<img src=\"data:image/png;base64,{}\">", "x".repeat(255_999), "A".repeat(1024 * 1024));
+        store.visual_publish(thread.id, uuid::Uuid::now_v7(), &visual, &html).unwrap();
+        let head = store.events_head_seq().unwrap();
+        let legacy: HtmlReadParams = serde_json::from_value(serde_json::json!({"thread_id": thread.id, "visual_id": visual.id})).unwrap();
+        assert!(legacy.max_bytes.is_none());
+        let preview = read(&store, HtmlReadParams { max_bytes: Some(256_000), ..legacy.clone() }).unwrap();
+        assert!(preview.truncated);
+        assert_eq!(preview.html.len(), 255_999);
+        assert!(html.starts_with(&preview.html));
+        assert!(serde_json::to_vec(&preview).unwrap().len() < 256_100, "Embedded-image bytes do not cross the preview wire boundary");
+        let exact_unicode = read(&store, HtmlReadParams { max_bytes: Some(256_003), ..legacy.clone() }).unwrap();
+        assert!(exact_unicode.html.ends_with('🧭'));
+        assert_eq!(exact_unicode.html.len(), 256_003);
+        assert_eq!(read(&store, legacy.clone()).unwrap().html, html, "Full export retains complete prepared source");
+        assert!(!read(&store, legacy.clone()).unwrap().truncated);
+        for max in [0, 1024 * 1024 + 1] {
+            assert!(read(&store, HtmlReadParams { max_bytes: Some(max), ..legacy.clone() }).is_err());
+        }
+        let frame = issue(&store, HtmlReadParams { max_bytes: Some(1), ..legacy }).unwrap();
+        assert_eq!(tickets().lock().unwrap().get(&frame.ticket).unwrap().html, html, "Interactive frames always receive the full document");
+        revoke(HtmlRevokeParams { thread_id: thread.id, ticket: frame.ticket });
+        assert_eq!(store.events_head_seq().unwrap(), head, "Preview and export reads never append transcript events");
+    }
     #[tokio::test]
     async fn frames_are_one_use_opaque_and_revoke_is_thread_scoped() {
         let thread = uuid::Uuid::new_v4();

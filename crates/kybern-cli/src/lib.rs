@@ -1675,7 +1675,8 @@ pub async fn run() -> Result<()> {
                 print_json(&result)?;
             }
             VisualsCmd::Read { thread, visual } => {
-                let result = client.call::<HtmlRead>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual }).await?;
+                let result =
+                    client.call::<HtmlRead>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual, max_bytes: None }).await?;
                 if json {
                     print_json(&result)?;
                 } else {
@@ -1683,7 +1684,9 @@ pub async fn run() -> Result<()> {
                 }
             }
             VisualsCmd::Frame { thread, visual } => {
-                print_json(&client.call::<HtmlFrame>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual }).await?)?;
+                print_json(
+                    &client.call::<HtmlFrame>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual, max_bytes: None }).await?,
+                )?;
             }
             VisualsCmd::Revoke { thread, ticket } => {
                 client.call::<HtmlRevoke>(HtmlRevokeParams { thread_id: thread.parse()?, ticket }).await?;

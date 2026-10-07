@@ -2158,10 +2158,15 @@ method!(HtmlPreview, "threads.visuals.preview", Some(Scope::OrchestrationRead), 
 pub struct HtmlReadParams {
     pub thread_id: ThreadId,
     pub visual_id: uuid::Uuid,
+    /// Optional source-preview byte budget. Full source remains the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HtmlReadResult {
     pub html: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 method!(HtmlRead, "threads.visuals.read", Some(Scope::OrchestrationRead), HtmlReadParams, HtmlReadResult);
 method!(HtmlFrame, "threads.visuals.frame", Some(Scope::OrchestrationRead), HtmlReadParams, ArtifactPreviewResult);

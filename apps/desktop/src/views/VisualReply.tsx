@@ -81,7 +81,7 @@ export const VisualReply = memo(function VisualReply({ threadId, visual }: { thr
   useEffect(() => {
     if (!open || !sourceOpen || source !== null) return
     let alive = true
-    void activeRuntime().rpc().call("threads.visuals.read", { thread_id: threadId, visual_id: visual.id }).then(result => { if (alive) { setTruncated(result.html.length > 256_000); setSource(result.html.slice(0, 256_000)) } }).catch(error => { if (alive) setError(errorText(error)) })
+    void activeRuntime().rpc().call("threads.visuals.read", { thread_id: threadId, visual_id: visual.id, max_bytes: 256_000 }).then(result => { if (alive) { setTruncated(result.truncated ?? result.html.length > 256_000); setSource(result.html.slice(0, 256_000)) } }).catch(error => { if (alive) setError(errorText(error)) })
     return () => { alive = false }
   }, [open, sourceOpen, source, threadId, visual.id])
   const save = async () => {
