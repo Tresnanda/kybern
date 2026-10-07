@@ -4318,12 +4318,19 @@ impl Orchestrator {
             elapsed_ms = startup_started.elapsed().as_millis() as u64,
         );
 
-        let portable = self.portable_message(&thread, &message)?;
-        let (workspace_message, workspace_transition) = self.workspace_transition_message(&thread, &portable)?;
+        let mut workspace_transition = None;
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            live.session.send_message(&message_id.to_string(), &self.provider_message(&workspace_message, &live)).await
+            match self.portable_message(&thread, &message)
+                .and_then(|portable| self.workspace_transition_message(&thread, &portable))
+            {
+                Ok((workspace_message, transition)) => {
+                    workspace_transition = transition;
+                    live.session.send_message(&message_id.to_string(), &self.provider_message(&workspace_message, &live)).await
+                }
+                Err(error) => Err(kybern_drivers::DriverError::Unsupported(error.to_string())),
+            }
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;

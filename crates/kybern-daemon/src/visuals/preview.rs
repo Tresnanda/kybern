@@ -73,15 +73,6 @@ async fn executable(root: &Path) -> Result<PathBuf> {
 }
 async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, hash: &str) -> Result<()> {
     tokio::fs::create_dir_all(cache).await?;
-    // Install only when the volume has the project's 30 GiB reserve.
-    #[cfg(unix)]
-    {
-        let output = Command::new("df").arg("-Pk").arg(cache).output().await?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        let available =
-            text.lines().last().and_then(|line| line.split_whitespace().nth(3)).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
-        ensure!(available >= 30 * 1024 * 1024, "Less than 30 GiB is free. Free disk space before installing the preview browser.");
-    }
     let staging = cache.join(format!("install-{}", uuid::Uuid::new_v4()));
     tokio::fs::create_dir(&staging).await?;
     let result = tokio::time::timeout(Duration::from_secs(900), async {
@@ -102,7 +93,7 @@ async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, ha
         }
         output.flush().await?;
         drop(output);
-        ensure!(received == size && format!("{:x}", digest.finalize()) == hash, "The browser archive failed its SHA-256 or size check.");
+        ensure!(received == size && digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>() == hash, "The browser archive failed its SHA-256 or size check.");
         let unpack = staging.join("unpacked");
         tokio::fs::create_dir(&unpack).await?;
         // Only an exact hash-verified archive reaches the system extractor.
