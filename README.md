@@ -715,6 +715,67 @@ every value is in minutes and `0` turns that limit off.
 agent processes (live and idle), terminals, queued follow-ups, and when it
 would exit if idle exit is on.
 
+### Accounts and continuing conversations
+
+Add accounts in Settings → Agent providers → Accounts. Each named account uses
+its harness's own sign-in and session storage. Create a new directory or reference
+an existing native account directory, then finish sign-in in the provided terminal.
+The default account keeps using the regular CLI configuration.
+
+Choose a global account for each harness, optionally override it for a project,
+and use the conversation's account picker for a thread override. Threads that
+follow defaults resolve the account on their next message. Running turns and
+queued messages retain their admitted account; background services keep their
+original owner. Model favorites and recent choices belong to each account.
+
+Changing an account or harness keeps the same Kybern conversation, draft, tasks,
+files, and checkout. A compatible native session resumes with the conversation
+it missed. Otherwise Kybern opens a native session with bounded, attributed
+conversation context and marks the transition. Native child processes, hidden
+reasoning, and tool state cannot be transferred between harnesses or accounts.
+When a confirmed 5-hour or weekly limit interrupts a task, **Switch and continue**
+lets you choose another account explicitly; accounts never rotate automatically.
+
+```sh
+kybern accounts create --provider claude-code Work
+kybern accounts list --provider claude-code
+kybern accounts sign-in --provider claude-code <account-id>
+kybern accounts default --provider claude-code <account-id>
+```
+
+### Reviews and visual replies
+
+Open a pull request from the Pull requests page or its linked conversation's
+Review dock. Review files, checks, and comments, keep drafts across navigation,
+and submit comments, approvals, or requested changes explicitly. Checkout, merge,
+and close require deliberate actions. Inline drafts stay tied to the commit you
+reviewed; a changed head must be reviewed before sending. **Send to agent** uses
+selected findings and preserves its repair conversation when a retry is needed.
+
+Ordinary thread worktrees can be inspected and removed from their thread menu.
+Active work, shared ownership, terminals, external processes, and ignored files
+are protected. Confirmed source recovery retains tracked and untracked files;
+continuing the conversation recreates its own worktree. Automatic cleanup is
+off by default and applies only to eligible archived worktrees.
+
+Every harness receives `kybern_html_preview` and `kybern_html_publish`. Preview
+returns a screenshot and console diagnostics; the first request installs a pinned
+headless browser. Publication needs no browser and stores a durable inline visual,
+embedding supported absolute local image references. Pages run scripts in an
+isolated sandbox, follow the app theme, and pause when hidden. Readers can expand
+the visual, inspect its source, or save HTML. This release adds the desktop UI;
+mobile feature parity follows separately.
+
+```sh
+kybern visuals preview <thread-id> visual.html --screenshot preview.png
+kybern visuals publish <thread-id> visual.html --title "Scenario comparison"
+kybern recover-omp-answer <thread-id> <turn-id>
+```
+
+The OMP recovery command appends a correction only when the original native
+session matches the saved text, reasoning, and tool order exactly. It preserves
+the original event log and separates progress from the exact final answer.
+
 ## Status
 
 Current capabilities (platform verification is documented per client):

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+
+<!-- kybern-release-title: Keep working across accounts and agents -->
+<!-- kybern-release-summary: Switch accounts in the same conversation, review pull requests in Kybern, and let agents reply with interactive visuals. -->
+
+- Add named accounts for every harness, with global defaults, project overrides, and a choice for each conversation. Switching keeps the conversation, drafts, files, tasks, and checkout together. Compatible native sessions resume; a fresh session receives saved conversation context. When a confirmed 5-hour or weekly limit interrupts work, choose another account and continue explicitly.
+- Switch harnesses in the same conversation. Queued messages keep the harness and account selected when they were queued, and background services keep their original owner and controls.
+- Message a running Claude subagent from its normal composer. Messages wait for that child's next tool call and show confirmed delivery. If it finishes first, the original message stays available with an explicit Send to parent action. Native subagent rows use their harness logos.
+- Review pull requests in Kybern's full page or right dock, with files, checks, review comments, saved drafts, inline comments, checkout, and explicit review and merge actions. Send selected findings to an agent without losing the review.
+- Preview and publish interactive HTML replies from every harness. Visuals appear inline, follow the app theme, expand for closer inspection, and support source viewing and HTML export. Published local images remain available after their source files are removed.
+- Clean up old thread worktrees with an inspection and recovery path. Active work and shared checkouts are protected; automatic cleanup is opt-in and keeps unmerged branches.
+- Apply Claude Full access changes by restarting and resuming the native session when idle, or offer Stop and apply now while work is running. Ordinary Enter sends a new message when only a Claude background service remains.
+- Group Cursor model choices that differ only by effort, while keeping context-size and other model variants distinct.
+- Fix Oh My Pi progress text appearing in the final answer. An explicit recovery command can repair an existing affected answer when its original native history matches exactly.
+
 ## 0.6.3
 
 <!-- kybern-release-title: Agents that delegate and talk to each other -->
