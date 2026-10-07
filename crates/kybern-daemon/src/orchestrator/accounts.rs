@@ -200,7 +200,42 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub(super) async fn handle_retained_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, event: DriverEvent) -> Result<()> {
+    pub(super) async fn handle_retained_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, mut event: DriverEvent) -> Result<()> {
+        if let DriverEvent::SubagentMessageDelivered { task_id, message_id } = &event {
+            // Acknowledgements refer to the native id and original session, even
+            // while that session is retained behind a different foreground owner.
+            self.acknowledge_subagent_message(thread_id, live.session_instance_id, task_id, message_id)?;
+            return Ok(());
+        }
+        let child_key = match &mut event {
+            DriverEvent::TextDelta { origin, .. }
+            | DriverEvent::ThinkingDelta { origin, .. }
+            | DriverEvent::ThinkingCompleted { origin, .. }
+            | DriverEvent::MessageCompleted { origin, .. }
+            | DriverEvent::ImageReceived { origin, .. } => match origin {
+                EventOrigin::Agent { task_id, .. } => Some(task_id),
+                EventOrigin::Root => None,
+            },
+            DriverEvent::SubagentPrompt { task_id, .. } | DriverEvent::SubagentOnly { task_id, .. } => Some(task_id),
+            _ => None,
+        };
+        if let Some(key) = child_key {
+            let public = live.task_aliases.lock().await.get(key.as_str()).cloned().unwrap_or_else(|| key.clone());
+            let owned = live.tasks.lock().await.values().find_map(|task| {
+                (task.kind == RuntimeTaskKind::Agent
+                    && (task.id == public
+                        || task.provider_thread_id.as_deref() == Some(key.as_str())
+                        || task.tool_call_id.as_deref() == Some(key.as_str())))
+                .then(|| task.id.clone())
+            });
+            if let Some(owned) = owned {
+                // The global child router may contain a reused raw native id
+                // from the receiving session. Only this owner's public id is safe.
+                *key = owned;
+                self.subagent_take_event(thread_id, event)?;
+            }
+            return Ok(());
+        }
         match event {
             DriverEvent::RuntimeTaskUpdated(update) => {
                 self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Progress).await?;

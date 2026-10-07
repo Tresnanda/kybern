@@ -510,3 +510,51 @@ async fn returning_cursor_account_exposes_compatible_legacy_id_and_accepts_its_e
     assert_eq!(thread.provider_session_id.as_deref(), Some("legacy-acp-native"));
     assert_eq!(thread.permission_mode, PermissionMode::Supervised);
 }
+
+#[tokio::test]
+async fn retained_child_output_keeps_its_owner_when_native_child_keys_are_reused() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Idle);
+    let (outgoing, _) = fixture.park(&thread, Instant::now()).await;
+    let mut native = agent_task("reused-child", Some("reused-launch"), None);
+    native.provider_thread_id = Some("reused-provider-child".into());
+    let old = fixture.orchestrator.persist_runtime_task_start(thread.id, &outgoing, Some(Uuid::now_v7()), native.clone()).await.unwrap();
+    let old_child = child_of(&fixture, thread.id, &old.id);
+    outgoing.retained.store(true, Ordering::Relaxed);
+    let (incoming, _) = fixture.park(&thread, Instant::now()).await;
+    let new = fixture.orchestrator.persist_runtime_task_start(thread.id, &incoming, Some(Uuid::now_v7()), native).await.unwrap();
+    let new_child = child_of(&fixture, thread.id, &new.id);
+    assert_ne!(old_child.id, new_child.id);
+    let root_count = fixture.store.events_for_thread(thread.id).unwrap().len();
+    let incoming_count = fixture.store.events_for_thread(new_child.id).unwrap().len();
+    for (key, text) in
+        [("reused-child", "raw child reply"), ("reused-provider-child", "provider child reply"), ("reused-launch", "launch child reply")]
+    {
+        fixture.orchestrator.handle_driver_event(thread.id, &outgoing, agent_text(key, key, text)).await.unwrap();
+    }
+    fixture.orchestrator.handle_driver_event(thread.id, &outgoing, agent_text("unknown-child", "unknown", "unowned reply")).await.unwrap();
+    fixture
+        .orchestrator
+        .handle_driver_event(
+            thread.id,
+            &outgoing,
+            DriverEvent::TextDelta { message_id: "outgoing-root".into(), origin: EventOrigin::Root, delta: "outgoing root reply".into() },
+        )
+        .await
+        .unwrap();
+    let old_events = fixture.store.events_for_thread(old_child.id).unwrap();
+    for text in ["raw child reply", "provider child reply", "launch child reply"] {
+        assert!(
+            old_events
+                .iter()
+                .any(|event| matches!(&event.payload, EventPayload::AssistantMessageCompleted { text: actual, .. } if actual == text))
+        );
+    }
+    assert!(
+        !old_events
+            .iter()
+            .any(|event| matches!(&event.payload, EventPayload::AssistantMessageCompleted { text, .. } if text == "unowned reply"))
+    );
+    assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().len(), root_count);
+    assert_eq!(fixture.store.events_for_thread(new_child.id).unwrap().len(), incoming_count);
+}
