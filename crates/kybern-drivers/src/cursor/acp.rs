@@ -144,6 +144,7 @@ mod native_mcp_tests {
             endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
             authorization: Some("session-capability".into()),
             coordinator_instructions: None,
+            guide: None,
             tools: vec![],
             restrictions: Default::default(),
         };
@@ -162,6 +163,7 @@ mod native_mcp_tests {
             endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
             authorization: Some("session-capability".into()),
             coordinator_instructions: None,
+            guide: None,
             tools: vec![],
             restrictions: NativeToolRestrictions { require_enforcement: true, ..Default::default() },
         };

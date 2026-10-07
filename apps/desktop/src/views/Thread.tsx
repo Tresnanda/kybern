@@ -14,6 +14,7 @@ import { TextSwap } from "@/components/kybern/motion"
 // queued follow-ups stacked above the input and the approval card.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useHotkey } from "@/lib/hooks"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
@@ -32,6 +33,7 @@ import {
   AnalyticsIcon,
   ArrowLeftIcon,
   ArchiveIcon,
+  BackToParentIcon,
   ChangesIcon,
   ClockIcon,
   ComputerTerminalIcon,
@@ -77,6 +79,11 @@ import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/kit/chat/co
 import { Composer, type ComposerHandle, type SlashCommand } from "./Composer"
 import { ENVIRONMENT_DOCKED_CONTENT_INSET_PX, EnvironmentPanel } from "./Environment"
 import { Transcript } from "./Transcript"
+import { SubagentStrip } from "./subagents/SubagentStrip"
+import { SubagentBar, SubagentBreadcrumb } from "./subagents/SubagentPage"
+import { openParentOf, openParentShortcut, stopOneSubagent, useAncestors, useHelperThreads, useSubagentDepth } from "@/state/subagents"
+import { pageDirection, playPageMotion, lastInputWasPointer } from "@/lib/navMotion"
+import { subagentPhase } from "../../../../packages/kybern-client/src/subagents.ts"
 import { CHAT_COLUMN_GUTTER, CHAT_COLUMN_GUTTER_PX } from "./chatLayout"
 import { ChatHeaderButton, ChatHeaderIconButton, SurfaceHeader } from "./chrome"
 
@@ -123,14 +130,20 @@ export function ThreadView({
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
   const runtimeTasks = useStore((s) => s.runtimeTasks[threadId] ?? EMPTY_TASKS)
   const activeTasks = useMemo(() => runtimeTasks.filter(isRuntimeTaskActive), [runtimeTasks])
-  const threads = useStore((s) => s.threads)
-  const helperThreads = useMemo(() => Object.values(threads).filter((candidate) => candidate.parent_thread_id === threadId && candidate.status !== "archived"), [threadId, threads])
+  // Agents get the subagent strip; processes and monitors keep the generic activity panel.
+  const activeAgentTasks = useMemo(() => activeTasks.filter((task) => task.kind === "agent"), [activeTasks])
+  const otherActiveTasks = useMemo(() => activeTasks.filter((task) => task.kind !== "agent"), [activeTasks])
+  const latestTurnId = useStore((s) => s.transcripts[threadId]?.blocks.at(-1)?.turnId ?? null)
+  const helperThreads = useHelperThreads(threadId)
+  const subagentDepth = useSubagentDepth(threadId)
   const providers = useStore((s) => s.providers)
   const set = useStore((s) => s.set)
   const requestedEnvOpen = useStore((s) => s.envOpen)
   const envOpen = requestedEnvOpen && isFocused
   const composer = useRef<ComposerHandle>(null)
   const overlay = useRef<HTMLDivElement>(null)
+  const page = useRef<HTMLDivElement>(null)
+  const previousDepth = useRef<{ id: ThreadId; depth: number } | null>(null)
   const [overlayHeight, setOverlayHeight] = useState(120)
 
   useEffect(() => {
@@ -140,6 +153,20 @@ export function ThreadView({
   useEffect(() => {
     if (isFocused) composer.current?.focus()
   }, [threadId, isFocused])
+
+  // Opening a subagent pushes the page in; going back to its parent reverses it. Keyboard
+  // navigation swaps instantly (see lib/navMotion.ts).
+  useLayoutEffect(() => {
+    const previous = previousDepth.current
+    previousDepth.current = { id: threadId, depth: subagentDepth }
+    if (!previous || previous.id === threadId || !page.current || !lastInputWasPointer()) return
+    const direction = pageDirection(previous.depth, subagentDepth)
+    if (direction) playPageMotion(page.current, direction)
+  }, [threadId, subagentDepth])
+
+  const settingsOpen = useStore((s) => s.settingsOpen)
+  // ⌘↑: Open parent, as in Finder. Back (⌘[) stays pure history.
+  useHotkey("mod+arrowup", () => void openParentShortcut(threadId), { allowInInput: true, enabled: isFocused && subagentDepth > 0 && !settingsOpen })
 
   // The composer floats over the transcript; keep the scroll inset in sync with its height.
   useLayoutEffect(() => {
@@ -155,7 +182,8 @@ export function ThreadView({
   const canSwitchCoordinator = !!thread?.coordinator_project_id && (thread.status === "idle" || thread.status === "failed")
   const approval = pending[0] ?? null
   const connector = approval ? connectorApproval(approval) : null
-  const hideInput = !!approval && isUserInput(approval) && !connector
+  // A subagent thread is read-only; the subagent page replaces the composer with its own bar.
+  const hideInput = (!!approval && isUserInput(approval) && !connector) || !!thread?.subagent
 
   const answer = (n: number): boolean => {
     if (!approval || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
@@ -304,7 +332,7 @@ export function ThreadView({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <Header threadId={threadId} splitPaneId={splitPaneId} />
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={page} className="relative flex min-h-0 flex-1 flex-col">
         <div className={cn("flex min-h-0 flex-1 flex-col", ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)} style={{ paddingRight: envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX : 0 }}>
           <Transcript threadId={threadId} bottomInset={overlayHeight} surfaceMode={splitPaneId ? "split" : "single"} />
         </div>
@@ -320,7 +348,7 @@ export function ThreadView({
           }}
         >
           <div className="pointer-events-auto flex min-h-0 flex-col">
-            <Composer
+            {thread.subagent ? <SubagentBar thread={thread} /> : <Composer
               className="thread-composer"
               showProviderUsage
               providerUsage={providerUsage}
@@ -355,7 +383,14 @@ export function ThreadView({
                 <ComposerPanelStack closed={hideInput}>
                   {thread.coordinator_project_id && <CoordinatorControlsPanel key={thread.id} thread={thread} />}
                   {helperThreads.length > 0 && <HelperThreadsPanel threads={helperThreads} />}
-                  {activeTasks.length > 0 && <RuntimeActivityPanel tasks={activeTasks} />}
+                  <SubagentStrip
+                    threadId={threadId}
+                    turnRunning={running}
+                    turnId={latestTurnId}
+                    hasActiveAgentTasks={activeAgentTasks.length > 0}
+                    fallback={<RuntimeActivityPanel tasks={activeAgentTasks} />}
+                  />
+                  {otherActiveTasks.length > 0 && <RuntimeActivityPanel tasks={otherActiveTasks} />}
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
@@ -363,7 +398,7 @@ export function ThreadView({
                   )}
                 </ComposerPanelStack>
               }
-            />
+            />}
           </div>
         </div>
       </div>
@@ -795,19 +830,9 @@ function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, sessi
 function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: PaneId }) {
   const [deleting, setDeleting] = useState(false)
   const thread = useStore((s) => s.threads[threadId])
-  const threads = useStore((s) => s.threads)
-  const mainThread = useMemo(() => {
-    if (!thread?.parent_thread_id) return undefined
-    const seen = new Set<ThreadId>([thread.id])
-    let current = thread
-    while (current.parent_thread_id && !seen.has(current.parent_thread_id)) {
-      const parent = threads[current.parent_thread_id]
-      if (!parent) break
-      seen.add(parent.id)
-      current = parent
-    }
-    return current.id === thread.id ? undefined : current
-  }, [thread, threads])
+  // The chain above this thread, topmost first. Child progress never re-renders the header.
+  const ancestors = useAncestors(threadId)
+  const mainThread = thread?.subagent ? undefined : ancestors[0]
   const providers = useStore((s) => s.providers)
   const splitView = useStore((s) => s.splitView)
   const set = useStore((s) => s.set)
@@ -836,7 +861,7 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
       trailing={
         <>
       {deleting && thread && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}
-          {others.length > 0 && (
+          {!thread.subagent && others.length > 0 && (
             <Menu>
               <MenuTrigger render={<ChatHeaderButton type="button" tone="outline" className="gap-1.5" />}>
                 <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
@@ -879,22 +904,43 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
                   </>
                 )}
               </MenuGroup>
-              <MenuSeparator />
-              <MenuGroup>
-                <MenuItem
-                  onClick={() => {
-                    setTitle(thread.title)
-                    setRenaming(true)
-                  }}
-                >
-                  <PencilIcon /> Rename thread
-                </MenuItem>
-                <MenuItem onClick={() => updateThread(threadId, { pinned: !thread.pinned })}>
-                  {thread.pinned ? <PinFilledIcon /> : <PinIcon />}
-                  {thread.pinned ? "Unpin" : "Pin"}
-                </MenuItem>
-              </MenuGroup>
-              {!thread.coordinator_project_id && (
+              {thread.subagent && (
+                <>
+                  <MenuSeparator />
+                  <MenuGroup>
+                    <MenuItem onClick={() => void openParentOf(thread)}>
+                      <BackToParentIcon /> Open parent
+                      <MenuShortcut>{mod}↑</MenuShortcut>
+                    </MenuItem>
+                    {subagentPhase(thread.subagent.status) === "working" && thread.subagent.capabilities?.stop !== false && (
+                      <MenuItem onClick={() => void stopOneSubagent(thread)}>
+                        <StopIcon /> Stop
+                      </MenuItem>
+                    )}
+                  </MenuGroup>
+                </>
+              )}
+              {/* A subagent thread is read-only: it cannot be renamed, pinned or archived. */}
+              {!thread.subagent && (
+                <>
+                  <MenuSeparator />
+                  <MenuGroup>
+                    <MenuItem
+                      onClick={() => {
+                        setTitle(thread.title)
+                        setRenaming(true)
+                      }}
+                    >
+                      <PencilIcon /> Rename thread
+                    </MenuItem>
+                    <MenuItem onClick={() => updateThread(threadId, { pinned: !thread.pinned })}>
+                      {thread.pinned ? <PinFilledIcon /> : <PinIcon />}
+                      {thread.pinned ? "Unpin" : "Pin"}
+                    </MenuItem>
+                  </MenuGroup>
+                </>
+              )}
+              {!thread.coordinator_project_id && !thread.subagent && (
                 <>
                   <MenuSeparator />
                   <MenuGroup>
@@ -909,6 +955,9 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
         </>
       }
     >
+      {thread.subagent ? (
+        <SubagentBreadcrumb thread={thread} ancestors={ancestors} />
+      ) : (
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 items-center gap-2">
           {mainThread && (
@@ -959,6 +1008,7 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
           </div>
         </div>
       </div>
+      )}
     </SurfaceHeader>
   )
 }

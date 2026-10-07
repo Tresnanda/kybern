@@ -39,7 +39,7 @@ export function UsagePage() {
   const key = `${scope}:${revision}`
   // A finished turn adds to the totals: reload them quietly, keeping the
   // current figures on screen and any error to an explicit refresh.
-  const running = useStore((s) => Object.values(s.threads).reduce((n, thread) => n + (thread.status === "running" ? 1 : 0), 0))
+  const running = useStore((s) => Object.values(s.threads).reduce((n, thread) => n + (thread.status === "running" && !thread.subagent ? 1 : 0), 0))
   const [settled, setSettled] = useState(0)
   const lastRunning = useRef(running)
   useEffect(() => {

@@ -37,6 +37,8 @@ export function collaborationPreview(text: string): { purpose: string; senderId:
 /** Collapsed branches never reappear as orphan roots; cycles remain reachable. */
 export function collaborationThreadRows<T extends { id: string; parent_thread_id?: string | null }>(
   threads: readonly T[], expanded: Readonly<Record<string, boolean>>, activeId?: string,
+  /** Rows that start open when the reader has not chosen (a parent with working subagents). */
+  defaultOpen?: (thread: T) => boolean,
 ): { thread: T; depth: number; childCount: number; open: boolean }[] {
   const byId = new Map(threads.map(thread => [thread.id, thread]));
   const children = new Map<string, T[]>();
@@ -58,7 +60,7 @@ export function collaborationThreadRows<T extends { id: string; parent_thread_id
     if (visited.has(thread.id)) return;
     visited.add(thread.id);
     const nested = children.get(thread.id) ?? [];
-    const open = expanded[thread.id] ?? ancestors.has(thread.id);
+    const open = expanded[thread.id] ?? (ancestors.has(thread.id) || defaultOpen?.(thread) === true);
     if (visible) rows.push({ thread, depth, childCount: nested.length, open });
     for (const child of nested) append(child, depth + 1, visible && open);
   };

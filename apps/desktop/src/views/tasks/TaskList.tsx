@@ -4,13 +4,13 @@
 import { DndContext, DragOverlay, useDroppable } from "@dnd-kit/core"
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { memo, useMemo, useState, type CSSProperties } from "react"
+import { memo, useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react"
 import { useReducedMotion } from "motion/react"
 
 import { relativeTime } from "@/lib/format"
 import { AddPlusIcon, ChevronRightIcon } from "@/lib/kit/icons"
 import type { ProjectId, TaskItem, TaskItemId, TaskStatus } from "@/protocol"
-import { openTask, setFocusedTask, setGroupCollapsed, startQuickAdd, useTasks } from "@/state/tasks"
+import { openTask, selectRangeTo, setFocusedTask, setGroupCollapsed, setRenderedTasks, startQuickAdd, toggleSelected, useTasks } from "@/state/tasks"
 import { isGroupCollapsed, isOpenStatus, LIST_STATUS_ORDER, latestRun, runChanges, runDuration, runOutcome, shortDuration, STATUS_LABEL, type TaskGroup } from "@/state/tasksModel"
 import { useStore } from "@/state/store"
 import { ProjectDot } from "@/lib/kit/projectDot"
@@ -18,6 +18,8 @@ import { CreatedByThread } from "./CreatedBy"
 import { AgentMark, PriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs"
 import { QuickAddRow } from "./QuickAdd"
 import { projectForNewTask } from "./taskActions"
+import { pickTask, pressProps } from "./checkActions"
+import { TaskCheckBox } from "./TaskCheck"
 import { TaskProjectChip } from "./TaskMenus"
 import { containerId, useTaskDnd } from "./useTaskDnd"
 
@@ -28,6 +30,7 @@ export function TaskList({ groups, tasks, now }: { groups: TaskGroup[]; tasks: R
   const prefs = useTasks((s) => s.prefs)
   const quickAdd = useTasks((s) => s.quickAdd)
   const focusedId = useTasks((s) => s.focusedId)
+  const selecting = useTasks((s) => s.selected.size > 0)
   const projects = useStore((s) => s.projects)
   const reducedMotion = useReducedMotion()
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -52,10 +55,24 @@ export function TaskList({ groups, tasks, now }: { groups: TaskGroup[]; tasks: R
   const dnd = useTaskDnd(containers, tasks, prefs.ordering === "manual")
   const active = dnd.activeId ? tasks[dnd.activeId] : undefined
 
+  // What ⌘A and ⇧-click walk: the rows on screen, in order.
+  const rendered = useMemo(
+    () =>
+      shown.flatMap((group) => {
+        if (isGroupCollapsed(prefs, group) && quickAdd?.groupKey !== group.key) return []
+        const container = group.status && draggable ? containerId(group.status) : null
+        const ids = container ? dnd.items[container] ?? [] : group.tasks.map((task) => task.id)
+        const limit = group.status && !isOpenStatus(group.status) && !expanded[group.key] ? CLOSED_ROW_LIMIT : Infinity
+        return ids.slice(0, limit).filter((id) => tasks[id])
+      }),
+    [shown, prefs, quickAdd, draggable, dnd.items, expanded, tasks],
+  )
+  useEffect(() => setRenderedTasks(rendered), [rendered])
+
   const projectName = (id: ProjectId | null | undefined) => (id ? projects[id]?.name ?? "Project" : "Global")
 
   const body = (
-    <div className="tk-list" role="list" aria-label="Tasks">
+    <div className="tk-list" role="list" aria-label="Tasks" data-selecting={selecting || undefined}>
       {shown.map((group) => {
         const collapsed = isGroupCollapsed(prefs, group) && quickAdd?.groupKey !== group.key
         const container = group.status && draggable ? containerId(group.status) : null
@@ -169,7 +186,14 @@ function GroupHeader({ group, count, collapsed }: { group: TaskGroup; count: num
 
 const TaskRow = memo(function TaskRow({ task, now, focused, projectName, sortable }: { task: TaskItem; now: number; focused: boolean; projectName: string; sortable: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, disabled: !sortable })
+  const selected = useTasks((s) => s.selected.has(task.id))
   const style: CSSProperties | undefined = sortable ? { transform: CSS.Translate.toString(transform), transition } : undefined
+  // ⌘-click picks, ⇧-click picks a range, a plain click opens.
+  const click = (event: MouseEvent) => {
+    if (event.metaKey || event.ctrlKey) toggleSelected(task.id)
+    else if (event.shiftKey) selectRangeTo(task.id)
+    else openTask(task.id)
+  }
   return (
     <div
       ref={setNodeRef}
@@ -180,19 +204,21 @@ const TaskRow = memo(function TaskRow({ task, now, focused, projectName, sortabl
       tabIndex={focused ? 0 : -1}
       data-task-row={task.id}
       data-focused={focused || undefined}
+      data-selected={selected || undefined}
       data-closed={!isOpenStatus(task.status) || undefined}
       data-dragging={isDragging || undefined}
       className="tk-row"
-      aria-label={`${task.key} ${task.title || "Untitled"}, ${STATUS_LABEL[task.status]}`}
+      aria-selected={selected || undefined}
+      aria-label={`${task.key} ${task.title || "Untitled"}, ${STATUS_LABEL[task.status]}${selected ? ", selected" : ""}`}
       onFocus={() => setFocusedTask(task.id)}
-      onClick={() => openTask(task.id)}
+      onClick={click}
     >
-      <RowCells task={task} now={now} projectName={projectName} />
+      <RowCells task={task} now={now} projectName={projectName} selected={selected} />
     </div>
   )
 })
 
-function RowCells({ task, now, projectName, overlay }: { task: TaskItem; now: number; projectName: string; overlay?: boolean }) {
+function RowCells({ task, now, projectName, overlay, selected = false }: { task: TaskItem; now: number; projectName: string; overlay?: boolean; selected?: boolean }) {
   const run = latestRun(task)
   const changes = run ? runChanges(run) : null
   let detail: React.ReactNode = null
@@ -233,8 +259,10 @@ function RowCells({ task, now, projectName, overlay }: { task: TaskItem; now: nu
         <PriorityGlyph priority={task.priority} />
       </span>
       <span className="key">{task.key}</span>
-      <span className="st">
+      {/* The cell is the hit target: the glyph gives way to the checkbox on hover. */}
+      <span className="st" onClick={overlay ? undefined : (event) => pickTask(event, task.id, true)} {...(overlay ? {} : pressProps)}>
         <TaskStatusGlyph status={task.status} animated />
+        {!overlay && <TaskCheckBox taskKey={task.key} selected={selected} />}
       </span>
       <span className="t">{task.title || "Untitled"}</span>
       {task.created_by_thread && (

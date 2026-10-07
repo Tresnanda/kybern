@@ -237,6 +237,15 @@ pub struct ThreadsListParams {
     pub project_id: Option<ProjectId>,
     #[serde(default)]
     pub include_archived: bool,
+    /// Also return read-only subagent threads (`Thread::subagent`). They are
+    /// left out by default so clients that predate them never show one as a
+    /// normal thread.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_subagents: bool,
+    /// Return only the direct subagent children of this thread. Implies
+    /// `include_subagents`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsListResult {
@@ -964,9 +973,14 @@ pub struct TasksListResult {
 }
 method!(TasksList, "tasks.list", Some(Scope::OrchestrationRead), TasksListParams, TasksListResult);
 
+/// Stop or background one provider-owned task. `thread_id` may also be a
+/// subagent thread (`Thread::subagent`): the daemon then acts on that
+/// subagent's own task through its root session and ignores `task_id`, so
+/// clients can pass an empty string.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskControlParams {
     pub thread_id: ThreadId,
+    #[serde(default)]
     pub task_id: String,
 }
 method!(TaskStop, "tasks.stop", Some(Scope::OrchestrationOperate), TaskControlParams, RuntimeTask);
@@ -2323,6 +2337,83 @@ pub struct TaskItemsSendResult {
 }
 method!(TaskItemsSend, "tasks.items.send", Some(Scope::OrchestrationOperate), TaskItemsSendParams, TaskItemsSendResult);
 
+/// How `tasks.items.send_batch` turns several tasks into agent threads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskBatchMode {
+    /// One thread per task, started in parallel. Each message carries its own task.
+    #[default]
+    Separate,
+    /// One thread for every task. Each task records a run that points at it, they
+    /// all move to Running and Needs review together, and a follow-up from any of
+    /// them goes to the shared thread.
+    Combined,
+}
+
+/// Send several tasks to an agent at once. Mirrors [`TaskItemsSendParams`], with
+/// `ids` instead of `id`. The same message and agent settings apply to every task.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsSendBatchParams {
+    /// The tasks to send, in order. Repeats are ignored. At most 200.
+    pub ids: Vec<TaskItemId>,
+    #[serde(default)]
+    pub mode: TaskBatchMode,
+    pub provider: ProviderInstance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_worktree: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// The project to run global tasks in. Required when any task is global; tasks
+    /// of a project always run in their own project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    /// The prompt text. Exactly one of `prompt` or `message` is required. The
+    /// daemon adds a `kybern://task/<id>` mention for each task at the start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// The full first message, as for `tasks.items.send`. Each task's mention is
+    /// added at the start when the message has none for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<UserMessage>,
+    /// Notes attached as `kybern://note/<id>` mentions to every run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_ids: Option<Vec<NoteId>>,
+}
+
+/// A task that started a run, and the thread it runs in. A combined run lists
+/// every task with the same thread.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskBatchStarted {
+    pub task: TaskItem,
+    pub thread_id: ThreadId,
+}
+
+/// A task that did not start, and why in words for the user ("Already running").
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskBatchSkipped {
+    pub id: TaskItemId,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskItemsSendBatchResult {
+    pub started: Vec<TaskBatchStarted>,
+    pub skipped: Vec<TaskBatchSkipped>,
+}
+method!(
+    TaskItemsSendBatch,
+    "tasks.items.send_batch",
+    Some(Scope::OrchestrationOperate),
+    TaskItemsSendBatchParams,
+    TaskItemsSendBatchResult
+);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsFollowupParams {
     pub id: TaskItemId,
@@ -2422,6 +2513,7 @@ registry!(
     TaskItemsDelete,
     TaskItemsRestore,
     TaskItemsSend,
+    TaskItemsSendBatch,
     TaskItemsFollowup,
     QueueAdd,
     QueueUpdate,

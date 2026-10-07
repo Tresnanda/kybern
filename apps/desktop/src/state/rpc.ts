@@ -65,6 +65,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const fileDiffLoads = new Map<string, Promise<Diff>>()
   const gitStatusLoads = new Map<ThreadId, Promise<GitStatus | null>>()
   const threadLoads = new Map<ThreadId, Promise<void>>()
+  const subagentLoads = new Map<ThreadId, Promise<void>>()
   const historyLoads = new Map<ThreadId, { promise: Promise<void>; buffer: ReturnType<typeof createSnapshotReplay> }>()
   const providerLoads = new Map<string, Promise<ProviderStatus[]>>()
   const snapshots = new Map<ThreadId, ReturnType<typeof createSnapshotReplay>>()
@@ -307,6 +308,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       const activeThreadIds = Object.values(useStore.getState().threads)
         .filter((thread) => thread.status !== "archived")
         .map((thread) => thread.id)
+      // Subagent threads are left out of `threads.list`; the ones still working feed the sidebar.
+      for (const summary of threads.activity ?? []) if (summary.active_agents > 0) void loadSubagents(summary.thread_id)
       useStore.getState().reconcileSplitThreads(activeThreadIds)
 
       const hydrated = useStore.getState()
@@ -327,8 +330,11 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
       if (visibleThreadIds.size === 0 && next.selected.kind === "none") {
         const first = projects.projects[0]
-        if (first) useStore.getState().selectDraft(first.id)
-        else useStore.getState().selectFreeDraft()
+        // Boot picks the first view for you; it is not a step to come back to.
+        useStore.getState().replaceNavigation(() => {
+          if (first) useStore.getState().selectDraft(first.id)
+          else useStore.getState().selectFreeDraft()
+        })
       }
     } catch (e) {
       if (isCurrentHydration(generation)) {
@@ -350,8 +356,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     state.set({ selected: { kind: "none" } })
     if (collectSplitThreadIds(useStore.getState().splitView).length > 0) return
     const first = incoming[0]
-    if (first) useStore.getState().selectDraft(first.id)
-    else useStore.getState().selectFreeDraft()
+    useStore.getState().replaceNavigation(() => {
+      if (first) useStore.getState().selectDraft(first.id)
+      else useStore.getState().selectFreeDraft()
+    })
   }
 
   function isCurrentHydration(generation: number): boolean {
@@ -430,6 +438,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
           return isThreadVisible(useStore.getState(), id) ? next : compactThreadState(next)
         })
         trackThreadOutputs(id)
+        void loadSubagents(id)
         const cached = useStore.getState().transcripts
         for (const cachedId of reusableSnapshots)
           if (!cached[cachedId]?.loaded) reusableSnapshots.delete(cachedId)
@@ -460,6 +469,40 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       if (threadLoads.get(id) === request) { threadLoads.delete(id); snapshots.delete(id) }
     })
     return request
+  }
+
+  /** Fetch a thread's direct subagent threads, which `threads.list` leaves out. Live ones arrive as events. */
+  function loadSubagents(parentId: ThreadId): Promise<void> {
+    const pending = subagentLoads.get(parentId)
+    if (pending) return pending
+    const generation = hydrationGeneration
+    const request = (async () => {
+      try {
+        const result = await rpc().call("threads.list", { parent_thread_id: parentId })
+        if (!isCurrentHydration(generation) || result.threads.length === 0) return
+        useStore.getState().set((state) => ({
+          threads: mergeSequencedSnapshot(state.threads, result.threads, state.transcripts),
+        }))
+      } catch {
+        // The launch rows fall back to their runtime task until the next load.
+      }
+    })()
+    subagentLoads.set(parentId, request)
+    void request.finally(() => {
+      if (subagentLoads.get(parentId) === request) subagentLoads.delete(parentId)
+    })
+    return request
+  }
+
+  /** Stop a subagent from its own thread id; the daemon resolves its task. */
+  async function stopSubagent(threadId: ThreadId): Promise<void> {
+    const task = await rpc().call("tasks.stop", { thread_id: threadId })
+    storeRuntimeTask(task)
+  }
+
+  async function backgroundSubagent(threadId: ThreadId): Promise<void> {
+    const task = await rpc().call("tasks.background", { thread_id: threadId })
+    storeRuntimeTask(task)
   }
 
   function loadEarlier(id: ThreadId): Promise<void> {
@@ -752,7 +795,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const s = useStore.getState()
     s.set((st) => ({ threads: { ...st.threads, [t.id]: t } }))
     if (opts.paneId) s.focusSplitPane(opts.paneId)
-    s.selectThread(t.id)
+    s.selectCreatedThread(t.id)
     void loadThread(t.id)
     return t.id
   }
@@ -1056,6 +1099,9 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     disconnect,
     rpc,
     loadThread,
+    loadSubagents,
+    stopSubagent,
+    backgroundSubagent,
     loadEarlier,
     hydrateToolOutput,
     retainToolOutput,
@@ -1110,6 +1156,9 @@ export function loadOpenThreads(): void {
 export const rpc: EnvironmentRuntime["rpc"] = (...args) =>
   activeRuntime().rpc(...args)
 export const loadEarlier: EnvironmentRuntime["loadEarlier"] = (...args) => activeRuntime().loadEarlier(...args)
+export const loadSubagents: EnvironmentRuntime["loadSubagents"] = (...args) => activeRuntime().loadSubagents(...args)
+export const stopSubagent: EnvironmentRuntime["stopSubagent"] = (...args) => activeRuntime().stopSubagent(...args)
+export const backgroundSubagent: EnvironmentRuntime["backgroundSubagent"] = (...args) => activeRuntime().backgroundSubagent(...args)
 export const loadThread: EnvironmentRuntime["loadThread"] = (...args) =>
   activeRuntime().loadThread(...args)
 export const hydrateToolOutput: EnvironmentRuntime["hydrateToolOutput"] = (...args) =>

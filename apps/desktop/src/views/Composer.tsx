@@ -74,6 +74,7 @@ import {
   type MentionFilter,
   type MentionKind,
 } from "./composerMentions"
+import { SendCancelled } from "./sendCancelled"
 import { findModel, modelQualifier } from "../../../../packages/kybern-client/src/models"
 import { ModelPicker } from "@/components/kybern/ModelPicker"
 
@@ -178,6 +179,13 @@ export interface ComposerProps {
   surfaceMode?: "single" | "split"
   /** 1..4 typed into an empty composer. Return true when handled. */
   onDigit?: (n: number) => boolean
+  /**
+   * Words for the send button when the arrow cannot say enough ("Start 3 runs"). The
+   * button becomes a labeled pill; the label is also its accessible name.
+   */
+  sendLabel?: string
+  /** The note and task chips in the text, called when they change (and once on mount). */
+  onMentionsChange?: (mentions: MentionPart[]) => void
 }
 
 const MODES: { mode: PermissionMode; label: string; description: string; icon: React.ReactNode }[] = [
@@ -279,6 +287,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     className,
     surfaceMode = "single",
     onDigit,
+    sendLabel,
+    onMentionsChange,
   } = props
   const [ownerStore] = useState(() => useStore)
   const [savedDraft] = useState(() => props.draftKey ? ownerStore.getState().composerDrafts[props.draftKey] : undefined)
@@ -475,7 +485,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const threadHits = useMemo(
     () => term === ""
       ? Object.values(threads)
-          .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived")
+          .filter((thread) => thread.id !== currentThreadId && thread.status !== "archived" && !thread.subagent)
           .sort((left, right) => Number(right.project_id === projectId) - Number(left.project_id === projectId) || Date.parse(right.updated_at) - Date.parse(left.updated_at))
           .slice(0, 12)
           .map((thread) => ({ thread }))
@@ -701,11 +711,24 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       syncTokenSources()
       editor.current?.focus()
     } catch (e) {
-      toast.error("Unable to send", { description: errorText(e) })
+      if (!(e instanceof SendCancelled)) toast.error("Unable to send", { description: errorText(e) })
     } finally {
       setSending(false)
     }
   }
+
+  // Tell the parent which chips the text still holds, as they are added and removed.
+  const reportMentions = useRef(onMentionsChange)
+  useEffect(() => {
+    reportMentions.current = onMentionsChange
+  })
+  const shownMentions = tokenSources.mentionReferences.filter((item) => hasToken(text, item.token)).map((item) => item.part)
+  const shownMentionKey = shownMentions.map((part) => part.path).join("\n")
+  useEffect(() => {
+    reportMentions.current?.(shownMentions)
+    // `shownMentionKey` stands for `shownMentions`: a new array with the same chips is not news.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownMentionKey])
 
   useImperativeHandle(ref, () => ({
     focus: () => editor.current?.focus(),
@@ -1355,23 +1378,27 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           type="button"
                           variant="prominent"
                           size="icon-xs"
-                          className={cn(COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME, surfaceMode === "split" && "!size-7 sm:!size-7")}
-                          aria-label={sending ? "Sending" : "Send message"}
+                          className={cn(COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME, surfaceMode === "split" && "!size-7 sm:!size-7", sendLabel && "tk-send-pill")}
+                          aria-label={sending ? "Sending" : sendLabel ?? "Send message"}
                           disabled={!canSend}
                           onClick={() => void submit()}
                         />
                       }
                     >
-                      <IconSwap
-                        className="size-full"
-                        active={sending ? "b" : "a"}
-                        a={<ComposerSendArrowIcon className={COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME} />}
-                        b={
-                          <svg width={12} height={12} viewBox="0 0 14 14" className="animate-spin" aria-hidden>
-                            <circle cx={7} cy={7} r={5.5} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="20 12" fill="none" />
-                          </svg>
-                        }
-                      />
+                      {sendLabel ? (
+                        <span className="whitespace-nowrap">{sendLabel}</span>
+                      ) : (
+                        <IconSwap
+                          className="size-full"
+                          active={sending ? "b" : "a"}
+                          a={<ComposerSendArrowIcon className={COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME} />}
+                          b={
+                            <svg width={12} height={12} viewBox="0 0 14 14" className="animate-spin" aria-hidden>
+                              <circle cx={7} cy={7} r={5.5} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="20 12" fill="none" />
+                            </svg>
+                          }
+                        />
+                      )}
                     </TooltipTrigger>
                     <TooltipPopup side="top">
                       {disabled && disabledReason ? (

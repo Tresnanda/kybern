@@ -47,6 +47,7 @@ expression: names
 - tasks.items.delete
 - tasks.items.restore
 - tasks.items.send
+- tasks.items.send_batch
 - tasks.items.followup
 - queue.add
 - queue.update

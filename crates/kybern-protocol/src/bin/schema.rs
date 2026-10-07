@@ -107,6 +107,7 @@ fn main() {
     method::<TaskItemsDelete>(&mut methods);
     method::<TaskItemsRestore>(&mut methods);
     method::<TaskItemsSend>(&mut methods);
+    method::<TaskItemsSendBatch>(&mut methods);
     method::<TaskItemsFollowup>(&mut methods);
     method::<QueueAdd>(&mut methods);
     method::<QueueUpdate>(&mut methods);
