@@ -15,7 +15,7 @@ const COMPUTER_TOOL_TIMEOUT_MS = 70 * 1000;
 const CONTENT_KEY = "_kybern_content";
 const COORDINATOR_BOOTSTRAP_TYPE = "kybern-coordinator-bootstrap-v1";
 const MAX_EXACT_CALL_GRANTS = 256;
-const MAX_APP_ARGUMENT_BYTES = 64 * 1024;
+const MAX_APP_ARGUMENT_BYTES = 768 * 1024;
 const MAX_PERMISSION_INPUT_BYTES = 192 * 1024;
 
 const ALLOW_ONCE = "Allow once";

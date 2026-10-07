@@ -31,6 +31,7 @@ mod terminal;
 mod thread_projection;
 mod thumbnail;
 mod usage;
+mod visuals;
 mod ws;
 
 use std::fs::OpenOptions;

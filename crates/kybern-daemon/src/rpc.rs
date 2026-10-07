@@ -679,6 +679,30 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::files::read_thread_file(std::path::Path::new(&thread.cwd), &p.path, p.max_bytes).await.map_err(bad)?)
         }
+        HtmlPublish::NAME => {
+            let p: HtmlPublishParams = parse(params)?;
+            let turn = state
+                .store
+                .visual_latest_turn(p.thread_id)
+                .map_err(internal)?
+                .ok_or_else(|| RpcError::invalid_params("Send a message in this thread before publishing a visual."))?;
+            let event = crate::visuals::publish(&state.store, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
+            let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
+            let result = HtmlPublishResult { visual: visual.clone() };
+            let _ = state.events.send(event);
+            ok(result)
+        }
+        HtmlPreview::NAME => {
+            let p: HtmlPreviewParams = parse(params)?;
+            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::visuals::preview(&state.paths, p).await.map_err(bad)?)
+        }
+        HtmlRead::NAME => ok(crate::visuals::read(&state.store, parse(params)?).map_err(bad)?),
+        HtmlFrame::NAME => ok(crate::visuals::issue(&state.store, parse(params)?).map_err(bad)?),
+        HtmlRevoke::NAME => {
+            crate::visuals::revoke(parse(params)?);
+            ok(Empty {})
+        }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
             let _thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;

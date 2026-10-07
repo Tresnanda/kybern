@@ -73,6 +73,42 @@ enum ArtifactsCmd {
 }
 
 #[derive(Subcommand)]
+enum VisualsCmd {
+    /// Publish self-contained HTML from a file as a durable inline reply.
+    Publish {
+        thread: String,
+        path: std::path::PathBuf,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value_t = 480)]
+        height: u32,
+    },
+    /// Render a screenshot and diagnostics using Kybern's own preview browser.
+    Preview {
+        thread: String,
+        path: std::path::PathBuf,
+        #[arg(long, default_value_t = 728)]
+        width: u32,
+        #[arg(long, default_value = "dark", value_parser = ["dark", "light"])]
+        appearance: String,
+        #[arg(long)]
+        screenshot: std::path::PathBuf,
+    },
+    Read {
+        thread: String,
+        visual: uuid::Uuid,
+    },
+    Frame {
+        thread: String,
+        visual: uuid::Uuid,
+    },
+    Revoke {
+        thread: String,
+        ticket: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Install or sign in to the official Cursor SDK on this machine.
     Cursor {
@@ -328,6 +364,11 @@ enum Cmd {
     Integrations {
         #[command(subcommand)]
         cmd: IntegrationsCmd,
+    },
+    /// Preview and publish durable inline interactive HTML replies.
+    Visuals {
+        #[command(subcommand)]
+        cmd: VisualsCmd,
     },
     /// Inspect native Claude artifact receipts and local source files.
     Artifacts {
@@ -1355,6 +1396,41 @@ pub async fn run() -> Result<()> {
             IntegrationsCmd::Login { thread, name } => {
                 let result = client.call::<IntegrationLogin>(IntegrationLoginParams { thread_id: thread.parse()?, name }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+        },
+        Cmd::Visuals { cmd } => match cmd {
+            VisualsCmd::Publish { thread, path, title, height } => {
+                let html = tokio::fs::read_to_string(path).await?;
+                print_json(&client.call::<HtmlPublish>(HtmlPublishParams { thread_id: thread.parse()?, html, title, height }).await?)?;
+            }
+            VisualsCmd::Preview { thread, path, width, appearance, screenshot } => {
+                let html = tokio::fs::read_to_string(path).await?;
+                let mut result = client
+                    .call::<HtmlPreview>(HtmlPreviewParams {
+                        thread_id: thread.parse()?,
+                        html,
+                        width: Some(width),
+                        appearance: Some(appearance),
+                    })
+                    .await?;
+                use base64::Engine;
+                tokio::fs::write(&screenshot, base64::engine::general_purpose::STANDARD.decode(&result.screenshot)?).await?;
+                result.screenshot.clear();
+                print_json(&result)?;
+            }
+            VisualsCmd::Read { thread, visual } => {
+                let result = client.call::<HtmlRead>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual }).await?;
+                if json {
+                    print_json(&result)?;
+                } else {
+                    print!("{}", result.html);
+                }
+            }
+            VisualsCmd::Frame { thread, visual } => {
+                print_json(&client.call::<HtmlFrame>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual }).await?)?;
+            }
+            VisualsCmd::Revoke { thread, ticket } => {
+                client.call::<HtmlRevoke>(HtmlRevokeParams { thread_id: thread.parse()?, ticket }).await?;
             }
         },
         Cmd::Artifacts { cmd } => match cmd {

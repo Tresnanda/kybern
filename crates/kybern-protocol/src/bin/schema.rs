@@ -185,6 +185,11 @@ fn main() {
     method::<ThreadFileRead>(&mut methods);
     method::<SkillsList>(&mut methods);
     method::<IntegrationsList>(&mut methods);
+    method::<HtmlPublish>(&mut methods);
+    method::<HtmlPreview>(&mut methods);
+    method::<HtmlRead>(&mut methods);
+    method::<HtmlFrame>(&mut methods);
+    method::<HtmlRevoke>(&mut methods);
     method::<ArtifactsList>(&mut methods);
     method::<ArtifactRead>(&mut methods);
     method::<ArtifactPreview>(&mut methods);

@@ -30,10 +30,10 @@ reqwest = { workspace = true, features = ["rustls"] }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tokio-tungstenite.workspace = true
 async-trait.workspace = true

@@ -2146,6 +2146,30 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed)
                 .map(|turn| turn.id)
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
+            if matches!(name, "kybern_html_preview" | "kybern_html_publish") {
+                anyhow::ensure!(serde_json::to_vec(&arguments)?.len() <= 768 * 1024, "HTML tool arguments exceed 768 KiB.");
+                if name == "kybern_html_preview" {
+                    let mut object = arguments.as_object().cloned().ok_or_else(|| anyhow!("HTML arguments must be an object"))?;
+                    anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
+                    object.insert("thread_id".into(), serde_json::json!(thread_id));
+                    let params = crate::app_tools::parse(serde_json::Value::Object(object))?;
+                    let result = crate::visuals::preview(&self.inner.paths, params).await?;
+                    let metadata = serde_json::json!({"width": result.width, "contentHeight":result.content_height,"capturedHeight":result.captured_height,"consoleMessages":result.console_messages,"missingImages":result.missing_images});
+                    return Ok(
+                        serde_json::json!({"_kybern_content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":result.screenshot}]}),
+                    );
+                }
+                let mut object = arguments.as_object().cloned().ok_or_else(|| anyhow!("HTML arguments must be an object"))?;
+                anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
+                object.insert("thread_id".into(), serde_json::json!(thread_id));
+                let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
+                let event =
+                    crate::visuals::publish(&self.inner.store, thread_id, turn_id, &params.html, &params.title, params.height).await?;
+                let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
+                let result = serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."});
+                let _ = self.inner.events.send(event);
+                return Ok(result);
+            }
             if crate::computer::ComputerUse::is_tool(name) {
                 let consent = ComputerConsent { orchestrator: self, thread_id, turn_id, live: live.clone() };
                 let ctx = crate::computer::CallContext {
@@ -5551,8 +5575,8 @@ impl Orchestrator {
             reject_app_tool_request(live, request_id, "invalid app tool name");
             return;
         }
-        if serde_json::to_vec(&arguments).map_or(true, |encoded| encoded.len() > crate::app_tools::MAX_ARGUMENT_BYTES) {
-            reject_app_tool_request(live, request_id, "app tool arguments exceed the 64 KiB limit");
+        if serde_json::to_vec(&arguments).map_or(true, |encoded| encoded.len() > crate::app_tools::argument_limit(&name)) {
+            reject_app_tool_request(live, request_id, "tool arguments exceed the size limit for this tool");
             return;
         }
         let Some(turn_id) = self.owns_app_tool_turn(thread_id, &live, None).await else {
@@ -5584,6 +5608,7 @@ impl Orchestrator {
                 let timeout = if name == "kybern_collaboration_wait"
                     || delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
+                    || matches!(name.as_str(), "kybern_html_preview" | "kybern_html_publish")
                     || crate::computer::ComputerUse::is_tool(&name)
                     || agent_items::WRITE_TOOLS.contains(&name.as_str())
                 {
@@ -5842,7 +5867,7 @@ impl Orchestrator {
                     turn_id,
                     EventPayload::ToolCallCompleted {
                         tool_call_id: tool_call_id.clone(),
-                        output: output.clone(),
+                        output: crate::visuals::persisted_output(output.clone()),
                         output_omitted: false,
                         stream_recoverable: false,
                         is_error,

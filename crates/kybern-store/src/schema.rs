@@ -413,6 +413,14 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX thread_messages_from ON thread_messages(from_thread_id);
     CREATE INDEX thread_messages_reply ON thread_messages(reply_to);
     ",
+    // v19: durable inline visual source, independent of a thread's workspace.
+    "CREATE TABLE html_visuals (
+       id TEXT PRIMARY KEY,
+       thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+       title TEXT NOT NULL,
+       height INTEGER NOT NULL,
+       html TEXT NOT NULL
+     ); CREATE INDEX html_visuals_thread ON html_visuals(thread_id);",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

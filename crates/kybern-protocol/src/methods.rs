@@ -1883,6 +1883,62 @@ pub struct IntegrationLoginParams {
 }
 method!(IntegrationLogin, "integrations.login", Some(Scope::TerminalOperate), IntegrationLoginParams, TerminalInfo);
 
+// ---- inline HTML visual replies ----
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPublishParams {
+    pub thread_id: ThreadId,
+    pub html: String,
+    pub title: String,
+    pub height: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPublishResult {
+    pub visual: HtmlVisual,
+}
+method!(HtmlPublish, "threads.visuals.publish", Some(Scope::OrchestrationOperate), HtmlPublishParams, HtmlPublishResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPreviewParams {
+    pub thread_id: ThreadId,
+    pub html: String,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub appearance: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlConsoleMessage {
+    pub level: String,
+    pub text: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPreviewResult {
+    pub width: u32,
+    pub content_height: u32,
+    pub captured_height: u32,
+    pub console_messages: Vec<HtmlConsoleMessage>,
+    pub missing_images: Vec<String>,
+    /// PNG screenshot, transient: never stored in the transcript event log.
+    pub screenshot: String,
+}
+method!(HtmlPreview, "threads.visuals.preview", Some(Scope::OrchestrationRead), HtmlPreviewParams, HtmlPreviewResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlReadParams {
+    pub thread_id: ThreadId,
+    pub visual_id: uuid::Uuid,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlReadResult {
+    pub html: String,
+}
+method!(HtmlRead, "threads.visuals.read", Some(Scope::OrchestrationRead), HtmlReadParams, HtmlReadResult);
+method!(HtmlFrame, "threads.visuals.frame", Some(Scope::OrchestrationRead), HtmlReadParams, ArtifactPreviewResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlRevokeParams {
+    pub thread_id: ThreadId,
+    pub ticket: String,
+}
+method!(HtmlRevoke, "threads.visuals.revoke", Some(Scope::OrchestrationRead), HtmlRevokeParams, Empty);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactsListParams {
     pub thread_id: ThreadId,
@@ -2632,6 +2688,11 @@ registry!(
     ThreadFileRead,
     SkillsList,
     IntegrationsList,
+    HtmlPublish,
+    HtmlPreview,
+    HtmlRead,
+    HtmlFrame,
+    HtmlRevoke,
     ArtifactsList,
     ArtifactRead,
     ArtifactPreview,

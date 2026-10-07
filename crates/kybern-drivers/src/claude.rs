@@ -156,7 +156,10 @@ impl AgentDriver for ClaudeDriver {
             // and task writes, itself, so a second harness prompt for the same
             // call would only add noise. Note and task reads are harmless.
             for tool in bridge.tools().filter(|tool| {
-                tool.name.starts_with("kybern_computer_") || tool.name.starts_with("kybern_note") || tool.name.starts_with("kybern_task")
+                tool.name.starts_with("kybern_html_")
+                    || tool.name.starts_with("kybern_computer_")
+                    || tool.name.starts_with("kybern_note")
+                    || tool.name.starts_with("kybern_task")
             }) {
                 cmd.args(["--allowedTools", &claude_tool_name(bridge, &tool.name)]);
             }

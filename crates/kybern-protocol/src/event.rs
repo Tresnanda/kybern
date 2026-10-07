@@ -135,6 +135,9 @@ pub enum EventPayload {
         text: String,
         thinking: Option<String>,
     },
+    HtmlPublished {
+        visual: HtmlVisual,
+    },
     ToolCallStarted {
         call: ToolCall,
         #[serde(default)]
@@ -257,6 +260,7 @@ impl EventPayload {
             Self::AssistantThinkingDelta { .. } => "assistant_thinking_delta",
             Self::AssistantThinkingCompleted { .. } => "assistant_thinking_completed",
             Self::AssistantMessageCompleted { .. } => "assistant_message_completed",
+            Self::HtmlPublished { .. } => "html_published",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallOutputDelta { .. } => "tool_call_output_delta",
             Self::ToolCallCompleted { .. } => "tool_call_completed",

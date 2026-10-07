@@ -1289,10 +1289,25 @@ pub enum StopReason {
     Error,
 }
 
+/// A durable, sandboxed HTML reply. Source bytes are stored separately from events.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct HtmlVisual {
+    pub id: uuid::Uuid,
+    pub title: String,
+    /// Agent-requested height cap in CSS pixels.
+    pub height: u32,
+}
+
 /// Rendered transcript entries, projected from events by the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum TranscriptEntry {
+    Visual {
+        turn_id: TurnId,
+        seq: EventSeq,
+        at: DateTime<Utc>,
+        visual: HtmlVisual,
+    },
     Image {
         id: String,
         turn_id: TurnId,

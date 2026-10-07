@@ -9,6 +9,7 @@ mod schema;
 mod tasks;
 mod thread_history;
 mod transcript_page;
+mod visuals;
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,

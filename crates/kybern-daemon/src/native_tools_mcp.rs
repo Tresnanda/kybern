@@ -28,7 +28,7 @@ const CURRENT_VERSION: &str = "2026-07-28";
 const LEGACY_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 const SUPPORTED_VERSIONS: &[&str] = &[CURRENT_VERSION, "2025-11-25", "2025-06-18", "2025-03-26"];
 const MAX_SESSIONS: usize = 1024;
-const MAX_REQUEST_BYTES: usize = 128 * 1024;
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Room for one computer-use screenshot; text results stay under MAX_TEXT_BYTES.
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 256 * 1024;

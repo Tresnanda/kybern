@@ -473,6 +473,10 @@ fn apply_transcript_event(
                     }
                 }
             }
+            EventPayload::HtmlPublished { visual } => {
+                let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
+                out.push(TranscriptEntry::Visual { turn_id, seq: ev.seq, at: ev.at, visual: visual.clone() });
+            }
             EventPayload::ToolCallStarted { call, origin } => {
                 let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
                 out.push(TranscriptEntry::ToolCall {

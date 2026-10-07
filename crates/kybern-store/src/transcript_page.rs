@@ -3,7 +3,8 @@ use std::borrow::Borrow;
 
 fn seq(entry: &TranscriptEntry) -> EventSeq {
     match entry {
-        TranscriptEntry::Image { seq, .. }
+        TranscriptEntry::Visual { seq, .. }
+        | TranscriptEntry::Image { seq, .. }
         | TranscriptEntry::User { seq, .. }
         | TranscriptEntry::Assistant { seq, .. }
         | TranscriptEntry::ToolCall { seq, .. }
