@@ -88,6 +88,14 @@ impl Orchestrator {
         crate::provider_accounts::environment(&provider, thread.provider.kind, &thread.provider.instance)
     }
 
+    pub(super) async fn native_runtime_task(&self, live: &LiveSession, task: &RuntimeTask) -> RuntimeTask {
+        let mut native = task.clone();
+        if let Some(raw) = live.task_aliases.lock().await.iter().find_map(|(raw, public)| (public == &task.id).then_some(raw.clone())) {
+            native.id = raw;
+        }
+        native
+    }
+
     pub(super) async fn task_session(&self, thread_id: ThreadId, task_id: &str) -> Result<Arc<LiveSession>> {
         let current = self.inner.sessions.lock().await.get(&thread_id).cloned();
         if let Some(live) = current

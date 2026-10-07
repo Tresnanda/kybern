@@ -192,8 +192,8 @@ async fn outgoing_background_service_keeps_original_native_owner_and_suppresses_
         usage: None,
         stats: RuntimeTaskStats::default(),
         capabilities: RuntimeTaskCapabilities { stop: true, background: false },
-        started_at: Utc::now(),
-        updated_at: Utc::now(),
+        started_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
         completed_at: None,
     };
     live.tasks.lock().await.insert(task.id.clone(), task.clone());
@@ -257,4 +257,38 @@ async fn rejected_native_permissions_do_not_persist_or_display_requested_authori
     let state = fixture.orchestrator.thread_target(thread.id).unwrap();
     assert_eq!(state.effective_permission_mode, PermissionMode::Supervised);
     assert!(state.pending_permission_mode.is_none());
+}
+
+#[tokio::test]
+async fn repeated_native_task_ids_keep_both_owners_and_translate_targeted_controls() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Idle);
+    let turn_id = Uuid::now_v7();
+    let (outgoing, _) = fixture.park(&thread, Instant::now()).await;
+    let mut native = agent_task("reused-native-id", None, None);
+    native.kind = RuntimeTaskKind::Process;
+    native.backgrounded = true;
+    native.capabilities = RuntimeTaskCapabilities { stop: true, background: false };
+    let old = fixture.orchestrator.persist_runtime_task_start(thread.id, &outgoing, Some(turn_id), native.clone()).await.unwrap();
+    fixture.store.meta_set(&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider).unwrap()).unwrap();
+    fixture.orchestrator.retire_or_close_session(thread.id, outgoing.clone(), "old-config".into()).await.unwrap();
+    let (incoming, _) = fixture.park(&thread, Instant::now()).await;
+    let new = fixture.orchestrator.persist_runtime_task_start(thread.id, &incoming, Some(Uuid::now_v7()), native).await.unwrap();
+    assert_ne!(old.id, new.id);
+    assert!(Arc::ptr_eq(&fixture.orchestrator.task_session(thread.id, &old.id).await.unwrap(), &outgoing));
+    assert!(Arc::ptr_eq(&fixture.orchestrator.task_session(thread.id, &new.id).await.unwrap(), &incoming));
+    assert_eq!(fixture.orchestrator.native_runtime_task(&incoming, &new).await.id, old.id);
+    fixture
+        .orchestrator
+        .apply_runtime_task_update(
+            thread.id,
+            &incoming,
+            DriverRuntimeTaskUpdate::status(old.id.clone(), RuntimeTaskStatus::Completed),
+            RuntimeTaskUpdateKind::Complete,
+        )
+        .await
+        .unwrap();
+    assert!(outgoing.tasks.lock().await[&old.id].status.is_active());
+    assert_eq!(incoming.tasks.lock().await[&new.id].status, RuntimeTaskStatus::Completed);
+    assert_eq!(fixture.store.runtime_tasks_for_thread(thread.id).unwrap().len(), 2);
 }

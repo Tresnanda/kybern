@@ -2782,6 +2782,9 @@ struct LiveSession {
     last_turn_id: Mutex<Option<TurnId>>,
     /// Latest provider-owned task state for targeted controls and checkpointing.
     tasks: Mutex<HashMap<String, RuntimeTask>>,
+    /// Raw harness ids may repeat across accounts/processes. Only colliding ids
+    /// acquire a public namespace; native controls translate back to their owner.
+    task_aliases: Mutex<HashMap<String, String>>,
     /// Parent turns whose after-checkpoint waits for launched work to settle.
     deferred_checkpoints: Mutex<HashSet<TurnId>>,
     /// Approval id -> provider request id, for pending permission requests.
@@ -4483,7 +4486,7 @@ impl Orchestrator {
             return Err(anyhow!("{} does not expose a targeted stop control for this task", self.provider_name(thread_id)?));
         }
         live.touch();
-        live.session.stop_runtime_task(&task).await?;
+        live.session.stop_runtime_task(&self.native_runtime_task(&live, &task).await).await?;
         self.apply_runtime_task_update(
             thread_id,
             &live,
@@ -4512,7 +4515,7 @@ impl Orchestrator {
             return Err(anyhow!("{} cannot move this task to the background", self.provider_name(thread_id)?));
         }
         live.touch();
-        live.session.background_runtime_task(&task).await?;
+        live.session.background_runtime_task(&self.native_runtime_task(&live, &task).await).await?;
         self.apply_runtime_task_update(
             thread_id,
             &live,
@@ -5211,6 +5214,7 @@ impl Orchestrator {
             turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(None),
             tasks: Mutex::new(HashMap::new()),
+            task_aliases: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             daemon_approvals: Mutex::new(HashMap::new()),
@@ -5327,8 +5331,23 @@ impl Orchestrator {
         thread_id: ThreadId,
         live: &Arc<LiveSession>,
         turn_id: Option<TurnId>,
-        incoming: DriverRuntimeTask,
+        mut incoming: DriverRuntimeTask,
     ) -> Result<RuntimeTask> {
+        let raw_id = incoming.id.clone();
+        let alias = live.task_aliases.lock().await.get(&raw_id).cloned();
+        if let Some(alias) = alias {
+            incoming.id = alias;
+        } else if !live.tasks.lock().await.contains_key(&raw_id)
+            && self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.id == raw_id)
+        {
+            incoming.id = format!("native:{}:{raw_id}", live.session_instance_id);
+            live.task_aliases.lock().await.insert(raw_id, incoming.id.clone());
+        }
+        if let Some(parent) = incoming.parent_id.as_mut()
+            && let Some(alias) = live.task_aliases.lock().await.get(parent).cloned()
+        {
+            *parent = alias;
+        }
         let origin_turn_id = match turn_id.or(*live.last_turn_id.lock().await) {
             Some(turn_id) => turn_id,
             None => self
@@ -5429,9 +5448,12 @@ impl Orchestrator {
         &self,
         thread_id: ThreadId,
         live: &Arc<LiveSession>,
-        update: DriverRuntimeTaskUpdate,
+        mut update: DriverRuntimeTaskUpdate,
         kind: RuntimeTaskUpdateKind,
     ) -> Result<Option<RuntimeTask>> {
+        if let Some(alias) = live.task_aliases.lock().await.get(&update.id).cloned() {
+            update.id = alias;
+        }
         let mut tasks = live.tasks.lock().await;
         let Some(task) = tasks.get_mut(&update.id) else {
             tracing::debug!(thread_id = %thread_id, task_id = %update.id, "provider updated an unknown runtime task");
@@ -5538,8 +5560,13 @@ impl Orchestrator {
     /// current handle's task map. Include it in the same terminal projection.
     async fn restore_active_runtime_tasks(&self, thread_id: ThreadId, live: &Arc<LiveSession>) -> Result<()> {
         let stored = self.inner.store.runtime_tasks_for_thread(thread_id)?;
+        let owners = self.inner.retained_sessions.lock().await.values().map(|(_, owner)| owner.clone()).collect::<Vec<_>>();
+        let mut retained_ids = HashSet::new();
+        for owner in owners {
+            retained_ids.extend(owner.tasks.lock().await.keys().cloned());
+        }
         let mut tasks = live.tasks.lock().await;
-        for task in stored.into_iter().filter(|task| task.status.is_active()) {
+        for task in stored.into_iter().filter(|task| task.status.is_active() && !retained_ids.contains(&task.id)) {
             tasks.entry(task.id.clone()).or_insert(task);
         }
         Ok(())
@@ -6794,6 +6821,7 @@ mod tests {
             turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(Some(turn_id)),
             tasks: Mutex::new(HashMap::from([(task.id.clone(), task)])),
+            task_aliases: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             daemon_approvals: Mutex::new(HashMap::new()),
@@ -7142,6 +7170,7 @@ mod tests {
                 turn_ready: tokio::sync::Notify::new(),
                 last_turn_id: Mutex::new(None),
                 tasks: Mutex::new(HashMap::new()),
+                task_aliases: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
                 pending: Mutex::new(HashMap::new()),
                 daemon_approvals: Mutex::new(HashMap::new()),
@@ -7167,6 +7196,7 @@ mod tests {
                 turn_ready: tokio::sync::Notify::new(),
                 last_turn_id: Mutex::new(None),
                 tasks: Mutex::new(HashMap::new()),
+                task_aliases: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
                 pending: Mutex::new(HashMap::new()),
                 daemon_approvals: Mutex::new(HashMap::new()),
@@ -10246,6 +10276,7 @@ for line in sys.stdin:
             turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(None),
             tasks: Mutex::new(HashMap::new()),
+            task_aliases: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             daemon_approvals: Mutex::new(HashMap::new()),
