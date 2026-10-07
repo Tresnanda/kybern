@@ -501,7 +501,9 @@ impl Orchestrator {
             }
         }
         thread.permission_mode = mode;
-        self.inner.store.meta_set(&format!("pending_permission:{}", thread_id), "")?;
+        if self.pending_permission_for(&thread, &thread.provider)? == Some(mode) {
+            self.inner.store.meta_set(&format!("pending_permission:{}", thread_id), "")?;
+        }
         self.update_thread(thread)
     }
 
@@ -510,6 +512,10 @@ impl Orchestrator {
             self.ensure_not_subagent(thread_id)?;
             let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
             let Some(mode) = self.pending_permission_for(&thread, &thread.provider)? else { return Ok(thread) };
+            let selected = self.thread_target(thread_id)?.target;
+            if !stop_now && (selected.provider != thread.provider || selected.model != thread.model || selected.effort != thread.effort) {
+                return Ok(thread);
+            }
             // Receiving-target choices launch with that target's next message;
             // the outgoing native process must never receive its permissions.
             if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {

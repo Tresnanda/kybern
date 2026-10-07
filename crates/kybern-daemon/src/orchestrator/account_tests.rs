@@ -558,3 +558,48 @@ async fn retained_child_output_keeps_its_owner_when_native_child_keys_are_reused
     assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().len(), root_count);
     assert_eq!(fixture.store.events_for_thread(new_child.id).unwrap().len(), incoming_count);
 }
+
+#[tokio::test]
+async fn handoff_steering_freezes_target_and_permissions_and_retries_after_admission() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Codex);
+    let (live, _, messages) = fixture.park_recording(&thread, Instant::now()).await;
+    fixture.orchestrator.send(thread.id, UserMessage::text("initial work")).await.unwrap();
+    live.turn_ready.notified().await;
+    let target = SessionTarget { provider: thread.provider.clone(), model: Some("reviewed-model".into()), effort: None };
+    fixture.store.meta_set(&format!("target:{}", thread.id), &serde_json::to_string(&target).unwrap()).unwrap();
+    fixture.store.meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&PermissionMode::FullAccess).unwrap()).unwrap();
+    let workspace = fixture.orchestrator.inner.workspace_ops.lock().await;
+    let prompt = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("continue with the selected model") };
+    let actor = fixture.orchestrator.clone();
+    let admitted = prompt.clone();
+    let steering = tokio::spawn(async move { actor.steer(admitted).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while fixture.store.meta_get(&format!("steer_target:{}", prompt.id)).unwrap().is_none() {
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    // A later picker/permission change cannot retarget already admitted input.
+    fixture.store.meta_set(&format!("target:{}", thread.id), &serde_json::to_string(&SessionTarget { model: Some("later-model".into()), ..target.clone() }).unwrap()).unwrap();
+    fixture.store.meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&PermissionMode::Supervised).unwrap()).unwrap();
+    fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Interrupted)).await.unwrap();
+    drop(workspace);
+    let first = steering.await.unwrap().unwrap();
+    live.turn_ready.notified().await;
+    let saved = fixture.store.thread_get(thread.id).unwrap().unwrap();
+    assert_eq!(saved.model.as_deref(), Some("reviewed-model"));
+    assert_eq!(saved.permission_mode, PermissionMode::FullAccess);
+    assert_eq!(fixture.orchestrator.pending_permission_for(&saved, &saved.provider).unwrap(), Some(PermissionMode::Supervised));
+    let retry = fixture.orchestrator.steer(prompt.clone()).await.unwrap();
+    assert_eq!(retry.turn_id, first.turn_id);
+    assert_eq!(retry.message_id, prompt.id);
+    assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. })).count(), 2);
+    assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::MessageSteered { .. })).count(), 0);
+    assert!(fixture.orchestrator.steer(methods::QueuedMessage { message: UserMessage::text("different"), ..prompt }).await.is_err());
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while messages.lock().await.len() < 2 { tokio::task::yield_now().await; }
+    }).await.unwrap();
+    let delivered = messages.lock().await;
+    assert_eq!(delivered.len(), 2);
+    assert_eq!(delivered[1].plain_text(), "continue with the selected model");
+}

@@ -3971,13 +3971,25 @@ impl Orchestrator {
             self.inner
                 .store
                 .meta_get(&format!("quota_target:{message_id}"))?
+                .or(self.inner.store.meta_get(&format!("steer_target:{message_id}"))?)
                 .map(|saved| serde_json::from_str(&saved))
                 .transpose()?
                 .unwrap_or(self.thread_target(thread_id)?.target)
         };
+        let selected_mode = if queued {
+            self.inner.store.meta_get(&format!("queue_permission:{message_id}"))?.map(|saved| serde_json::from_str(&saved)).transpose()?
+        } else {
+            self.inner
+                .store
+                .meta_get(&format!("steer_permission:{message_id}"))?
+                .map(|saved| serde_json::from_str(&saved))
+                .transpose()?
+                .or(self.pending_permission_for(&current, &selected_target.provider)?)
+        };
         if selected_target.provider == current.provider
             && !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
-            && let Some(mode) = self.pending_permission_for(&current, &current.provider)?
+            && let Some(mode) = selected_mode
+            && mode != current.permission_mode
         {
             self.apply_permission_admitted(thread_id, mode).await?;
         }
@@ -4043,11 +4055,6 @@ impl Orchestrator {
                 return Err(anyhow!("Wait for agents and background tasks to finish before compacting."));
             }
         }
-        let selected_mode = if queued {
-            self.inner.store.meta_get(&format!("queue_permission:{message_id}"))?.map(|saved| serde_json::from_str(&saved)).transpose()?
-        } else {
-            self.pending_permission_for(&thread, &selected_target.provider)?
-        };
         if let Some(mode) = selected_mode {
             thread.permission_mode = mode;
         }
@@ -4138,7 +4145,11 @@ impl Orchestrator {
         let redirect_summary = title_from_message(&params.message);
         self.resolve_attachments(&mut params.message);
         let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
-            let Some((thread, turn_id, message)) = self.inner.store.steering_receipt(params.id)? else { return Ok(None) };
+            let Some((thread, turn_id, message)) =
+                self.inner.store.steering_receipt(params.id)?.or(self.inner.store.turn_started_receipt(params.id)?)
+            else {
+                return Ok(None);
+            };
             if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(&params.message)? {
                 return Err(anyhow!("Message id already belongs to another request."));
             }
@@ -4148,9 +4159,43 @@ impl Orchestrator {
             return Ok(result);
         }
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-        let target = self.thread_target(thread.id)?.target;
+        let target = {
+            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+            let saved = self.inner.store.meta_get(&format!("steer_request:{}", params.id))?;
+            if let Some(saved) = saved {
+                let original: methods::QueuedMessage = serde_json::from_str(&saved)?;
+                anyhow::ensure!(
+                    serde_json::to_value(&original)? == serde_json::to_value(&params)?,
+                    "Message id already belongs to another steering request."
+                );
+                serde_json::from_str(
+                    &self
+                        .inner
+                        .store
+                        .meta_get(&format!("steer_target:{}", params.id))?
+                        .ok_or_else(|| anyhow!("The admitted steering target is missing. Send a new message."))?,
+                )?
+            } else {
+                let target = self.thread_target(thread.id)?.target;
+                if target.provider != thread.provider || target.model != thread.model || target.effort != thread.effort {
+                    let mode = self.pending_permission_for(&thread, &target.provider)?.unwrap_or(thread.permission_mode);
+                    let mut receiving = thread.clone();
+                    receiving.provider_session_id = self.compatible_native_session(&thread, &target.provider)?;
+                    receiving.provider = target.provider.clone();
+                    accounts::validate_permission(&receiving, mode)?;
+                    self.inner.store.meta_set_many(&[
+                        (&format!("steer_request:{}", params.id), &serde_json::to_string(&params)?),
+                        (&format!("steer_target:{}", params.id), &serde_json::to_string(&target)?),
+                        (&format!("steer_permission:{}", params.id), &serde_json::to_string(&mode)?),
+                    ])?;
+                }
+                target
+            }
+        };
         if target.provider != thread.provider || target.model != thread.model || target.effort != thread.effort {
-            self.interrupt(thread.id).await?;
+            if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+                self.interrupt(thread.id).await?;
+            }
             for _ in 0..100 {
                 if self
                     .inner

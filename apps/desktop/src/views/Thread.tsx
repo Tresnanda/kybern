@@ -328,7 +328,8 @@ export function ThreadView({
     await sendMessage(threadId, message)
   }
 
-  const onSteer = ["claude-code", "codex", "pi", "omp"].includes(thread.provider.kind) ? async (message: UserMessage) => {
+  const handoffSelected = !!target && (targetChanged || (target.model ?? null) !== (thread.model ?? null) || (target.effort ?? null) !== (thread.effort ?? null))
+  const onSteer = handoffSelected || ["claude-code", "codex", "pi", "omp"].includes(thread.provider.kind) ? async (message: UserMessage) => {
     const signature = JSON.stringify([threadId, message])
     if (steeringAttempt.current?.signature !== signature) steeringAttempt.current = { signature, id: crypto.randomUUID() }
     await rpc().call("threads.steer", { thread_id: threadId, id: steeringAttempt.current.id, message })
