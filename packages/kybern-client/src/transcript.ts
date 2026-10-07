@@ -480,7 +480,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "provider_commands_updated":
       return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
     case "session_transitioned":
-      return { ...state, providerUsage: undefined, providerCommands: [], blocks: [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: "info", text: ev.text }], lastSeq: ev.seq }
+      return { ...state, providerUsage: undefined, providerCommands: [], blocks: [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId: ev.turn_id ?? latestConversationTurnId(blocks), at, seq: ev.seq, level: "info", text: ev.text }], lastSeq: ev.seq }
     case "provider_usage_updated":
       return { ...state, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
     case "session_imported":
@@ -535,6 +535,16 @@ function latestTurnId(blocks: readonly Block[]): TurnId {
     if (turnId) return turnId
   }
   return ""
+}
+
+function latestConversationTurnId(blocks: readonly Block[]): TurnId {
+  // Late background updates and historical corrections keep their old turn.
+  // Between-turn notices belong to the last conversation start/settlement.
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]
+    if (block?.turnId && (block.kind === "user" || block.kind === "turn_end")) return block.turnId
+  }
+  return latestTurnId(blocks)
 }
 
 /**

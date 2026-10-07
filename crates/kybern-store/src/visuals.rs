@@ -19,7 +19,7 @@ impl Store {
     pub fn visual_latest_turn(&self, thread_id: ThreadId) -> Result<Option<TurnId>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT turn_id FROM events WHERE thread_id=?1 AND turn_id IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                "SELECT turn_id FROM events WHERE thread_id=?1 AND kind='turn_started' AND turn_id IS NOT NULL ORDER BY seq DESC LIMIT 1",
                 [thread_id.to_string()],
                 |r| r.get::<_, String>(0),
             )
@@ -57,6 +57,13 @@ mod tests {
     fn source_receipt_and_projection_are_durable_and_thread_owned() {
         let (store, project, thread) = fixture();
         let turn = Uuid::now_v7();
+        store
+            .event_append(
+                thread,
+                Some(turn),
+                EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("Show a chart") },
+            )
+            .unwrap();
         let visual = HtmlVisual { id: Uuid::now_v7(), title: "Usage chart".into(), height: 420 };
         let source = "<button onclick='this.textContent=2'>1</button>";
         let event = store.visual_publish(thread, turn, &visual, source).unwrap();
@@ -74,5 +81,54 @@ mod tests {
         let visual = HtmlVisual { id: Uuid::now_v7(), title: "Chart".into(), height: 300 };
         assert!(store.visual_publish(Uuid::now_v7(), Uuid::now_v7(), &visual, "<p>orphan</p>").is_err());
         assert!(store.visual_read(thread, visual.id).unwrap().is_none());
+    }
+    #[test]
+    fn publication_uses_latest_conversation_start_after_old_turn_updates() {
+        let (store, _, thread) = fixture();
+        let older = Uuid::now_v7();
+        let newer = Uuid::now_v7();
+        let message = Uuid::now_v7();
+        for turn in [older, newer] {
+            store
+                .event_append(
+                    thread,
+                    Some(turn),
+                    EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("A request") },
+                )
+                .unwrap();
+        }
+        store
+            .event_append(
+                thread,
+                Some(older),
+                EventPayload::AssistantMessageBlocksRecovered {
+                    message_id: message,
+                    session_id: "retained-omp".into(),
+                    native_entry_id: "old-entry".into(),
+                    blocks: vec![RecoveredAssistantBlock {
+                        message_id: message,
+                        content_index: 0,
+                        text: "Old final".into(),
+                        thinking: None,
+                        before_tool_call_id: None,
+                        seq: 1,
+                        at: chrono::Utc::now(),
+                    }],
+                    terminal_message_id: message,
+                },
+            )
+            .unwrap();
+        store
+            .event_append(
+                thread,
+                Some(older),
+                EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "Old background task finished".into(), data: None },
+            )
+            .unwrap();
+        assert_eq!(store.visual_latest_turn(thread).unwrap(), Some(newer));
+        let visual = HtmlVisual { id: Uuid::now_v7(), title: "New visual".into(), height: 300 };
+        let event =
+            store.visual_publish(thread, store.visual_latest_turn(thread).unwrap().unwrap(), &visual, "<p>New turn chart</p>").unwrap();
+        assert_eq!(event.turn_id, Some(newer));
     }
 }

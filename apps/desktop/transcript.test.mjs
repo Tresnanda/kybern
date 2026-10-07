@@ -820,3 +820,33 @@ test("historical OMP correction leaves a newer loaded turn's objects intact", ()
   assert.ok(corrected.blocks.every((block, i) => block === newer.blocks[i]))
   assert.equal(groupTurns(corrected.blocks)[0].answer.text, "Newer exact answer")
 })
+
+test("account transitions stay on the latest conversation turn after old-turn recovery and background updates", async () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const group = createTurnGrouper()
+  let state = emptyThreadState()
+  for (const event of fixture.slice(0, -1)) state = applyEvent(state, event)
+  let seq = state.lastSeq
+  const newerTurn = "newer-turn"
+  for (const payload of [
+    { ...start, message_id: "newer-user" },
+    { kind: "assistant_message_completed", message_id: "newer-answer", origin: ROOT, text: "Newer exact answer", thinking: null },
+    { ...done, terminal_message_id: "newer-answer" },
+  ]) state = applyEvent(state, { ...payload, seq: ++seq, turn_id: newerTurn, at: AT })
+  state = applyEvent(state, { ...fixture.at(-1), seq: ++seq })
+  state = applyEvent(state, { kind: "provider_notice", seq: ++seq, turn_id: fixture[0].turn_id, at: AT, level: "info", text: "Old background work settled" })
+  const before = group(state.blocks)
+  const oldBlocks = state.blocks.slice()
+  const transition = { kind: "session_transitioned", seq: ++seq, turn_id: null, at: AT, from: { kind: "omp", instance: "default" }, to: { kind: "omp", instance: "other" }, native_resume: false, text: "Using the receiving account" }
+  state = applyEvent(state, transition)
+  assert.equal(state.blocks.at(-1).turnId, newerTurn)
+  assert.ok(oldBlocks.every((block, index) => state.blocks[index] === block), "existing transcript rows retain their objects")
+  const after = group(state.blocks)
+  assert.deepEqual(after.map(turn => turn.turnId), before.map(turn => turn.turnId), "no anonymous turn is created")
+  assert.equal(after[0], before[0], "the unaffected historical turn stays referentially stable")
+  assert.equal(after.find(turn => turn.turnId === newerTurn).answer.text, "Newer exact answer")
+  const projectedNotice = seedFromGet({ thread: { id: "thread", last_seq: seq }, transcript: [{ role: "notice", turn_id: newerTurn, seq, at: AT, level: "info", text: transition.text }], pending_approvals: [] }).blocks[0]
+  assert.deepEqual(state.blocks.at(-1), projectedNotice, "live notice matches the daemon's reloaded turn attribution")
+  const mobile = await import("../mobile/src/state/transcript.ts")
+  assert.equal(mobile.applyEvent({ ...state, blocks: oldBlocks, lastSeq: seq - 1 }, transition).blocks.at(-1).turnId, newerTurn)
+})
