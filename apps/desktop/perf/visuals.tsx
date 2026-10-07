@@ -20,9 +20,11 @@ function appearance(variant: "dark" | "light") {
 }
 function report(value: unknown) { (window as unknown as {webkit:{messageHandlers:{bench:{postMessage:(text:string)=>void}}}}).webkit.messageHandlers.bench.postMessage(JSON.stringify(value)) }
 async function run() {
-  await connectFixture(); appearance("dark")
+  report({stage:"visual-visibility",hidden:document.hidden})
+  await waitFor(()=>!document.hidden,"Native visual fixture needs a visible window: unlock macOS and set KYBERN_PERF_FOREGROUND=1")
+  report({stage:"visual-connecting"}); await connectFixture(); report({stage:"visual-connected"}); appearance("dark")
   flushSync(()=>root.render(<main id="pane" className="mx-auto min-w-0 max-w-[728px] bg-background px-4 py-6 text-foreground"><VisualReply threadId={fixture.thread_id} visual={fixture.visual} /></main>))
-  await waitFor(()=>!!document.querySelector("iframe"),"Inline visual loads")
+  report({stage:"visual-rendered"}); await waitFor(()=>!!document.querySelector("iframe"),"Inline visual loads"); report({stage:"visual-frame-mounted"})
   const inline = document.querySelector<HTMLIFrameElement>("iframe")!; const dark = await snapshot(inline)
   check(dark.isolated && dark.image && dark.table===3 && dark.bars===3,"Script, formatted SVG/table, opaque origin and deleted local image render")
   await waitFor(()=>Number.parseFloat(inline.style.height)<fixture.visual.height,"Content height fits inline frame")
