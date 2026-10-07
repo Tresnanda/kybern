@@ -114,6 +114,7 @@ pub async fn sweep(state: &AppState, policy: &BackgroundSettings, allow_idle_exi
         tracing::debug!(count = terminals.len(), "closed idle terminals");
     }
     state.terminals.purge_exited(EXITED_RETENTION);
+    state.orchestrator.cleanup_eligible_worktrees().await;
 
     let activity = activity(state).await?;
     let updating = state.harness_updates.list().iter().any(|record| matches!(record.status, HarnessUpdateStatus::Updating));

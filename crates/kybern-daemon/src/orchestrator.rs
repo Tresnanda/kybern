@@ -29,6 +29,7 @@ mod messaging;
 mod notes;
 mod subagents;
 mod tasks;
+mod worktrees;
 
 #[derive(Clone)]
 pub struct Orchestrator {
@@ -2701,6 +2702,7 @@ async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<Stri
 }
 
 struct Inner {
+    workspace_ops: Mutex<()>,
     commands: std::sync::Mutex<()>,
     collaboration_writes: std::sync::Mutex<()>,
     question_answers: Mutex<()>,
@@ -2994,6 +2996,7 @@ impl Orchestrator {
                 app_tools,
                 native_tools: None,
                 computer,
+                workspace_ops: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
                 releasing: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
@@ -3844,6 +3847,7 @@ impl Orchestrator {
         for id in descendants.iter().map(|descendant| descendant.id).chain([thread_id]) {
             self.delegation_cleanup_on_archive(id).await;
         }
+        self.cleanup_eligible_worktrees().await;
         Ok(())
     }
 
@@ -3901,7 +3905,9 @@ impl Orchestrator {
         queued: bool,
         retryable: bool,
     ) -> Result<(TurnId, MessageId, bool)> {
+        let _workspace = self.inner.workspace_ops.lock().await;
         let target = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        self.restore_worktree_if_cleaned(&target).await?;
         if target.subagent.is_some() {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
         }

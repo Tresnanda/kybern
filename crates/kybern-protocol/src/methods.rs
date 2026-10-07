@@ -1735,6 +1735,141 @@ pub struct PrListResult {
 }
 method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, PrListResult);
 
+// Native pull request review. Pages keep large repositories bounded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrDetailParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrCheck {
+    pub name: String,
+    pub status: String,
+    pub conclusion: String,
+    pub url: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrDetailResult {
+    pub pull_request: PullRequest,
+    pub body: String,
+    pub head_sha: String,
+    pub reviewers: Vec<String>,
+    pub checks: Vec<PrCheck>,
+    pub changed_files: u32,
+}
+method!(PrDetail, "github.pr.detail", Some(Scope::OrchestrationRead), PrDetailParams, PrDetailResult);
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrPageKind {
+    Files,
+    Comments,
+    Reviews,
+    ReviewComments,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrPageParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+    pub kind: PrPageKind,
+    #[serde(default = "default_pr_page")]
+    pub page: u32,
+}
+fn default_pr_page() -> u32 {
+    1
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrFile {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub patch: String,
+    pub patch_truncated: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrReviewEntry {
+    pub id: u64,
+    pub author: String,
+    pub body: String,
+    pub state: String,
+    pub path: Option<String>,
+    pub line: Option<u32>,
+    pub side: Option<String>,
+    pub url: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrPageResult {
+    pub files: Vec<PrFile>,
+    pub entries: Vec<PrReviewEntry>,
+    pub page: u32,
+    pub has_more: bool,
+}
+method!(PrPage, "github.pr.page", Some(Scope::OrchestrationRead), PrPageParams, PrPageResult);
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrActionKind {
+    Comment,
+    Approve,
+    RequestChanges,
+    Checkout,
+    Merge,
+    Close,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrInlineComment {
+    pub path: String,
+    pub line: u32,
+    /// RIGHT for the new version, LEFT for a removed line.
+    pub side: String,
+    pub body: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrActionParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+    pub action: PrActionKind,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub inline_comments: Vec<PrInlineComment>,
+    /// Required for reviews and merge: reject a changed PR head.
+    #[serde(default)]
+    pub head_sha: String,
+    /// Checkout is allowed only into this inactive thread's managed worktree.
+    #[serde(default)]
+    pub thread_id: Option<ThreadId>,
+}
+method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeInspectParams {
+    pub thread_id: ThreadId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeInspectResult {
+    pub path: String,
+    pub branch: String,
+    pub exists: bool,
+    pub clean: bool,
+    pub merged: bool,
+    pub ignored_files: u32,
+    pub blockers: Vec<String>,
+    pub eligible: bool,
+}
+method!(WorktreeInspect, "threads.worktree.inspect", Some(Scope::OrchestrationRead), WorktreeInspectParams, WorktreeInspectResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeRemoveParams {
+    pub thread_id: ThreadId,
+    /// Explicit confirmation for dirty or unmerged work. Dirty source is retained in a recovery ref.
+    #[serde(default)]
+    pub force: bool,
+    /// Only merged branches can be deleted. The default keeps the branch.
+    #[serde(default)]
+    pub delete_branch: bool,
+}
+method!(WorktreeRemove, "threads.worktree.remove", Some(Scope::OrchestrationOperate), WorktreeRemoveParams, WorktreeInspectResult);
+
 // ---- files ----
 
 /// Find files in a project by fuzzy path match, for @mentions in the composer.
@@ -2746,6 +2881,11 @@ registry!(
     GitCommit,
     PrCreate,
     PrList,
+    PrDetail,
+    PrPage,
+    PrAction,
+    WorktreeInspect,
+    WorktreeRemove,
     FilesSearch,
     FilesList,
     FilesRead,

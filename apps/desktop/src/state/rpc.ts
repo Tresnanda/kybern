@@ -1063,6 +1063,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       return { threads }
     })
     useStore.getState().removeThreadFromSplit(threadId)
+    const archived = useStore.getState().threads[threadId]
+    if (archived?.worktree && !archived.delegation && !archived.subagent) {
+      void rpc().call("threads.worktree.inspect", { thread_id: threadId }).then((inspection) => {
+        if (inspection.exists) useStore.getState().set({ worktreeCleanupThread: threadId })
+      }).catch(() => { /* Manual cleanup remains available in the thread menu. */ })
+    }
   }
 
   async function revertTo(threadId: ThreadId, turnId: TurnId) {

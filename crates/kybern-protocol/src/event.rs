@@ -31,6 +31,14 @@ pub enum EventPayload {
         thread: Thread,
     },
     ThreadArchived,
+    /// Worktree metadata stays on the thread; this ref retains the recoverable source.
+    WorktreeCleaned {
+        branch: String,
+        recovery_commit: String,
+    },
+    WorktreeRestored {
+        branch: String,
+    },
     /// A saved native conversation was adopted without replaying its tools.
     SessionImported {
         provider: ProviderKind,
@@ -236,6 +244,8 @@ impl EventPayload {
             Self::ThreadCreated { .. } => "thread_created",
             Self::ThreadUpdated { .. } => "thread_updated",
             Self::ThreadArchived => "thread_archived",
+            Self::WorktreeCleaned { .. } => "worktree_cleaned",
+            Self::WorktreeRestored { .. } => "worktree_restored",
             Self::SessionImported { .. } => "session_imported",
             Self::MessageQueued { .. } => "message_queued",
             Self::MessageRemoved { .. } => "message_removed",

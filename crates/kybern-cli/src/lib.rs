@@ -330,6 +330,16 @@ enum Cmd {
     },
     /// Archive a thread.
     Archive { thread: String },
+    /// Inspect or remove an ordinary conversation’s managed worktree.
+    Worktree {
+        thread: String,
+        #[arg(long)]
+        remove: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        delete_branch: bool,
+    },
     /// List git checkpoints for a thread.
     Checkpoints { thread: String },
     /// Show the diff for a thread (whole thread) or one turn.
@@ -695,6 +705,19 @@ enum TokensCmd {
 
 #[derive(Subcommand)]
 enum PrCmd {
+    /// Read pull request description, checks and requested reviewers.
+    View { project: String, number: u64 },
+    /// Read one bounded page of files, comments, reviews or review_comments.
+    Page {
+        project: String,
+        number: u64,
+        kind: String,
+        #[arg(long, default_value = "1")]
+        page: u32,
+    },
+    /// Explicitly comment, approve, request_changes, checkout, merge or close.
+    /// Read structured PrActionParams from a JSON file (or stdin with -).
+    Action { file: String },
     /// Create a pull request from a thread's branch (commits and pushes first).
     Create {
         thread: String,
@@ -1366,6 +1389,15 @@ pub async fn run() -> Result<()> {
                 println!("denied");
             }
         },
+        Cmd::Worktree { thread, remove, force, delete_branch } => {
+            let thread_id = thread.parse()?;
+            let result = if remove {
+                client.call::<WorktreeRemove>(WorktreeRemoveParams { thread_id, force, delete_branch }).await?
+            } else {
+                client.call::<WorktreeInspect>(WorktreeInspectParams { thread_id }).await?
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         Cmd::Archive { thread } => {
             client.call::<ThreadsArchive>(ThreadsArchiveParams { thread_id: thread.parse()? }).await?;
             println!("archived");
@@ -1701,6 +1733,28 @@ pub async fn run() -> Result<()> {
             println!("{}  {}", &r.commit[..10], r.message.lines().next().unwrap_or(""));
         }
         Cmd::Pr { cmd } => match cmd {
+            PrCmd::View { project, number } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client.call::<PrDetail>(PrDetailParams { project_id, number }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            PrCmd::Page { project, number, kind, page } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let kind = serde_json::from_value(serde_json::Value::String(kind))?;
+                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            PrCmd::Action { file } => {
+                let source = if file == "-" {
+                    use std::io::Read;
+                    let mut source = String::new();
+                    std::io::stdin().read_to_string(&mut source)?;
+                    source
+                } else {
+                    std::fs::read_to_string(file)?
+                };
+                client.call::<PrAction>(serde_json::from_str(&source)?).await?;
+            }
             PrCmd::Create { thread, title, body, base, draft } => {
                 let r = client
                     .call::<PrCreate>(PrCreateParams { thread_id: thread.parse()?, title, body, base, draft, commit_first: true })

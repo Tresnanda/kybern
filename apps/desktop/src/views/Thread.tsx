@@ -1,5 +1,6 @@
 import { AccountPicker } from "@/components/kybern/AccountPicker"
 import type { ThreadTargetState, SessionTarget, ProviderStatus } from "@/protocol"
+import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
 import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
@@ -1028,6 +1029,7 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
                     <MenuItem variant="destructive" onClick={() => thread.coordinator_project_id ? setDeleting(true) : void archiveThread(threadId).catch((error) => toast.error(errorText(error)))}>
                       <ArchiveIcon /> {thread.coordinator_project_id ? "Delete coordinator" : "Archive"}
                     </MenuItem>
+                    {thread.worktree && !thread.delegation && !thread.subagent && <MenuItem onClick={() => offerWorktreeCleanup(threadId)}>Remove worktree…</MenuItem>}
                   </MenuGroup>
                 </>
               )}

@@ -826,6 +826,34 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 pull_requests: crate::github::pr_list(std::path::Path::new(&project.path), &p.state, p.limit).await.map_err(bad)?,
             })
         }
+        PrDetail::NAME => {
+            let p: PrDetailParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(crate::github_review::detail(std::path::Path::new(&project.path), p.number).await.map_err(bad)?)
+        }
+        PrPage::NAME => {
+            let p: PrPageParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(crate::github_review::page(std::path::Path::new(&project.path), &p).await.map_err(bad)?)
+        }
+        PrAction::NAME => {
+            let p: PrActionParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            if matches!(p.action, PrActionKind::Checkout) {
+                state.orchestrator.pr_checkout(&p).await.map_err(bad)?;
+            } else {
+                crate::github_review::action(std::path::Path::new(&project.path), &p).await.map_err(bad)?;
+            }
+            ok(Empty {})
+        }
+        WorktreeInspect::NAME => {
+            let p: WorktreeInspectParams = parse(params)?;
+            ok(state.orchestrator.worktree_inspect(p.thread_id).await.map_err(bad)?)
+        }
+        WorktreeRemove::NAME => {
+            let p: WorktreeRemoveParams = parse(params)?;
+            ok(state.orchestrator.worktree_remove(p).await.map_err(bad)?)
+        }
         ApprovalsRespond::NAME => {
             let p: ApprovalsRespondParams = parse(params)?;
             state.orchestrator.respond_approval(p.approval_id, p.decision).await.map_err(bad)?;

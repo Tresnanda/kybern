@@ -331,6 +331,11 @@ impl Repo {
         self.git(&args).await.map(|_| ())
     }
 
+    /// Restore a managed worktree on its retained branch.
+    pub async fn worktree_add_existing(&self, path: &Path, branch: &str) -> Result<()> {
+        self.git(&["worktree", "add", &path.to_string_lossy(), branch]).await.map(|_| ())
+    }
+
     /// Forget worktrees whose directory no longer exists (`git worktree prune`).
     pub async fn worktree_prune(&self) -> Result<()> {
         self.git(&["worktree", "prune"]).await.map(|_| ())

@@ -5,14 +5,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use kybern_git::Repo;
-use kybern_protocol::methods::{BranchInfo, GitBranchesResult, GitStatus, PullRequest};
+use kybern_protocol::methods::*;
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::OnceCell;
 
 static GH_AVAILABLE: OnceCell<bool> = OnceCell::const_new();
 
-async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<String> {
+pub(crate) async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(program)
         .current_dir(cwd)
         .args(args)
@@ -94,7 +94,7 @@ pub async fn status(cwd: &Path) -> Result<GitStatus> {
     Ok(GitStatus { is_git: true, branch, dirty_files, ahead, behind, upstream, remote_url, pull_request })
 }
 
-fn parse_pr(v: &Value) -> Option<PullRequest> {
+pub(crate) fn parse_pr(v: &Value) -> Option<PullRequest> {
     Some(PullRequest {
         number: v.get("number")?.as_u64()?,
         title: v.get("title")?.as_str()?.to_string(),

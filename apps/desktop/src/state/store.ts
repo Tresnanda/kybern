@@ -81,7 +81,7 @@ export type Connection =
   | { state: "reconnecting"; detail?: string }
   | { state: "failed"; detail: string }
 
-export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks"
+export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review"
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {
@@ -133,6 +133,8 @@ export interface AppState {
   /** `threadId:turnId` → diff, filled lazily for "Edited N files" cards and the changes panel. */
   diffs: Record<string, Diff>
   /** Shared git status snapshots so the dock and Environment panel do not duplicate `git`/`gh` work. */
+  prSelection: { projectId: ProjectId; number: number } | null
+  worktreeCleanupThread: ThreadId | null
   gitStatuses: Record<ThreadId, GitStatus>
   selected:
     | { kind: "thread"; id: ThreadId }
@@ -356,6 +358,8 @@ export function createEnvironmentStore(
     notificationDismissals: notificationState.dismissals,
     diffs: {},
     gitStatuses: {},
+    prSelection: null,
+    worktreeCleanupThread: null,
     selected: { kind: "none" },
     navHistory: EMPTY_NAV_HISTORY,
     homeSelection: null,

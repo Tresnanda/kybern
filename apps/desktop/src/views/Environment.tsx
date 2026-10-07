@@ -334,7 +334,7 @@ export function EnvironmentPanel({ threadId, open: openOverride }: { threadId: T
                   <EnvironmentRow
                     icon={<GitPullRequestIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
                     label={`#${git.pull_request.number} ${git.pull_request.title}`}
-                    onClick={() => void openExternal(git.pull_request!.url)}
+                    onClick={() => useStore.getState().set({ rightOpen: true, rightTab: "review" })}
                     trailing={
                       <>
                         {git.pull_request.is_draft && <span className="shrink-0 rounded-full bg-[var(--color-background-elevated-secondary)] px-1.5 py-px text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground">Draft</span>}

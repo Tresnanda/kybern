@@ -292,6 +292,11 @@ function General() {
           <Switch aria-label="Use a worktree for new threads" checked={settings.worktrees_default} onCheckedChange={(v) => update({ worktrees_default: v })} />
         </Row>
       </Section>
+      <Section title="Worktrees">
+        <Row title="Remove eligible archived worktrees" description="Automatically remove clean, merged worktrees after archiving. Keeps branches and conversation history; continuing restores the folder.">
+          <Switch aria-label="Remove eligible archived worktrees" checked={settings.automatic_worktree_cleanup ?? false} onCheckedChange={(v) => update({ automatic_worktree_cleanup: v })} />
+        </Row>
+      </Section>
       <Section title="Threads">
         <Row title="Generate thread titles" description="Names the thread from its first message using the agent.">
           <Switch aria-label="Generate thread titles" checked={settings.generate_titles} onCheckedChange={(v) => update({ generate_titles: v })} />

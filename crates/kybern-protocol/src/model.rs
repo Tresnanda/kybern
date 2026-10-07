@@ -1468,6 +1468,8 @@ pub struct Settings {
     pub default_permission_mode: PermissionMode,
     /// Global default for new threads; projects can override.
     pub worktrees_default: bool,
+    /// Remove clean, merged, inactive managed worktrees when their thread is archived.
+    pub automatic_worktree_cleanup: bool,
     /// Generate thread titles with a model after the first turn.
     pub generate_titles: bool,
     /// Provider used for titles; falls back to the thread's own provider.
@@ -1555,6 +1557,7 @@ impl Default for Settings {
             default_provider: ProviderKind::ClaudeCode,
             default_permission_mode: PermissionMode::Supervised,
             worktrees_default: false,
+            automatic_worktree_cleanup: false,
             generate_titles: true,
             title_provider: None,
             providers: Default::default(),

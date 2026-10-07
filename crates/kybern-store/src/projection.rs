@@ -609,6 +609,8 @@ fn apply_transcript_event(
             | EventPayload::ThreadMessageResolved { .. }
             | EventPayload::ThreadMessageUpdated { .. }
             | EventPayload::MessageRemoved { .. }
+            | EventPayload::WorktreeCleaned { .. }
+            | EventPayload::WorktreeRestored { .. }
             | EventPayload::ThreadArchived
             | EventPayload::ToolCallOutputDelta { .. }
             | EventPayload::CheckpointUpdated { .. } => {}

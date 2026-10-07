@@ -98,6 +98,10 @@ pub(crate) struct AppTools {
 }
 
 impl AppTools {
+    pub(crate) fn terminals(&self) -> Vec<kybern_protocol::methods::TerminalInfo> {
+        self.terminals.list(None)
+    }
+
     pub(crate) fn new(store: Store, terminals: TerminalManager) -> Self {
         Self { store, terminals }
     }

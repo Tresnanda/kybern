@@ -821,6 +821,8 @@ export type EventPayload =
   | { kind: "thread_created"; thread: Thread }
   | { kind: "thread_updated"; thread: Thread }
   | { kind: "thread_archived" }
+  | { kind: "worktree_cleaned"; branch: string; recovery_commit: string }
+  | { kind: "worktree_restored"; branch: string }
   | { kind: "project_coordinator_deleted"; project_id: ProjectId; coordinator_thread_id: ThreadId }
   | { kind: "message_queued"; message: QueuedMessage }
   | { kind: "message_removed"; message_id: MessageId }
@@ -1584,6 +1586,7 @@ export interface Settings {
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
   worktrees_default: boolean;
+  automatic_worktree_cleanup?: boolean;
   generate_titles: boolean;
   title_provider?: ProviderKind | null;
   providers: Partial<Record<ProviderKind, ProviderSettings>>;
@@ -1851,6 +1854,21 @@ export interface PrListParams {
 export interface PrListResult {
   pull_requests: PullRequest[];
 }
+
+export interface PrDetailParams { project_id: ProjectId; number: number }
+export interface PrCheck { name: string; status: string; conclusion: string; url: string }
+export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number }
+export type PrPageKind = "files" | "comments" | "reviews" | "review_comments";
+export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number }
+export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
+export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string }
+export interface PrPageResult { files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
+export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
+export interface PrInlineComment { path: string; line: number; side: string; body: string }
+export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId }
+export interface WorktreeInspectParams { thread_id: ThreadId }
+export interface WorktreeInspectResult { path: string; branch: string; exists: boolean; clean: boolean; merged: boolean; ignored_files: number; blockers: string[]; eligible: boolean }
+export interface WorktreeRemoveParams { thread_id: ThreadId; force?: boolean; delete_branch?: boolean }
 
 export interface ProvidersListParams {
   project_id?: ProjectId;
@@ -2120,6 +2138,11 @@ export interface Methods {
   "git.commit": [GitCommitParams, GitCommitResult];
   "github.pr.create": [PrCreateParams, PullRequest];
   "github.pr.list": [PrListParams, PrListResult];
+  "github.pr.detail": [PrDetailParams, PrDetailResult];
+  "github.pr.page": [PrPageParams, PrPageResult];
+  "github.pr.action": [PrActionParams, Empty];
+  "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
+  "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
 }
 
 export type MethodName = keyof Methods;

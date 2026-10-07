@@ -188,6 +188,11 @@ fn main() {
     method::<GitCommit>(&mut methods);
     method::<PrCreate>(&mut methods);
     method::<PrList>(&mut methods);
+    method::<PrDetail>(&mut methods);
+    method::<PrPage>(&mut methods);
+    method::<PrAction>(&mut methods);
+    method::<WorktreeInspect>(&mut methods);
+    method::<WorktreeRemove>(&mut methods);
     method::<FilesSearch>(&mut methods);
     method::<FilesList>(&mut methods);
     method::<FilesRead>(&mut methods);
