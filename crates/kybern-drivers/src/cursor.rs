@@ -9,7 +9,9 @@ mod stream;
 pub mod usage;
 
 pub(crate) use runtime::Connection;
-pub use runtime::{SDK_VERSION, install, setup_command};
+pub use runtime::{
+    SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, setup_command, setup_error, sign_out,
+};
 
 use std::path::PathBuf;
 
@@ -21,6 +23,14 @@ use tokio::sync::Mutex;
 use crate::{AgentDriver, AgentSession, DriverError, DriverEvent, NativeToolBridge, ProbeContext, Result, SessionConfig, SpawnedSession};
 
 pub const SDK_SESSION_PREFIX: &str = "cursor-sdk:";
+
+/// A setup error as a sentence for people, without the error-kind prefix.
+pub fn reason(error: DriverError) -> String {
+    match error {
+        DriverError::BinaryNotFound(text) | DriverError::Protocol(text) | DriverError::Unsupported(text) => text,
+        error => error.to_string(),
+    }
+}
 pub struct CursorDriver;
 
 pub(crate) fn sdk_id(id: &str) -> Result<&str> {
@@ -92,7 +102,7 @@ impl AgentDriver for CursorDriver {
                 status.version = Some(format!("SDK {}", value["version"].as_str().unwrap_or(SDK_VERSION)));
                 status.models = serde_json::from_value(value["models"].clone()).unwrap_or_default();
             }
-            Err(error) => status.unavailable_reason = Some(error.to_string()),
+            Err(error) => status.unavailable_reason = Some(reason(error)),
         }
         status
     }

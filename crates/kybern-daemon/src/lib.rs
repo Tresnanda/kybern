@@ -8,6 +8,7 @@ mod bounded_broadcast;
 mod collaboration_tests;
 mod computer;
 mod config;
+mod cursor_setup;
 mod discovery;
 mod exposure;
 mod files;

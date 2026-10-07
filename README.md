@@ -47,8 +47,20 @@ thread-scoped app tools, see the [Pi integration guide](crates/kybern-drivers/PI
 
 ### Desktop app
 
-Every desktop package bundles `kybernd`; you do not need to install the daemon
-or CLI separately on a desktop.
+Every desktop package bundles `kybernd` and the `kybern` CLI; you do not need
+to install either separately on a desktop. To use the CLI from a terminal,
+choose **Settings → About → Terminal command → Install**. The command stays
+inside the app, so every app update also updates it:
+
+| Platform | What Install does |
+| --- | --- |
+| macOS | Links `kybern` into `~/.local/bin` when that is on your PATH, otherwise into `/usr/local/bin` after an administrator prompt. |
+| Linux `.deb` | Nothing to do: the package installs `/usr/bin/kybern`. |
+| Linux AppImage | Copies `kybern` into `~/.local/bin` and refreshes the copy when the app updates. |
+| Windows | Adds Kybern’s install folder to your user Path. Open a new terminal afterwards. |
+
+If an older `kybern` (for example one from `cargo install` in `~/.cargo/bin`)
+comes first on your PATH, the same row shows it and offers to remove it.
 
 **macOS**, two ways. The quickest is one command, which installs the app into
 Applications and opens it with no prompt:
@@ -428,7 +440,11 @@ process and retry. Saved sessions remain native to their original harness.
 ### Cursor SDK
 
 New Cursor chats use exact-pinned `@cursor/sdk` 1.0.35 in an isolated Node helper.
-Node.js 22.13 or newer and npm must be installed on the daemon’s machine:
+Node.js 22.13 or newer and npm must be installed on the daemon’s machine.
+Set it up in **Settings → Agent providers → Cursor** (**Install SDK**, then
+**Sign in…**), or choose the dimmed Cursor icon in the model picker to go
+there. The daemon does the work, so this also sets up a remote machine; the
+sign-in page opens on the computer you are using. From a terminal:
 
 ```sh
 kybern cursor install
@@ -436,8 +452,8 @@ kybern cursor login
 kybern cursor status
 ```
 
-Browser login uses Cursor’s official SDK authentication flow, separate from CLI
-sign-in. Alternatively set `CURSOR_API_KEY` in the Cursor provider’s environment.
+Browser login uses Cursor’s official SDK authentication flow, separate from the
+Cursor app and CLI sign-in. Alternatively set `CURSOR_API_KEY` in the Cursor provider’s environment.
 `kybern cursor logout` clears the SDK login; an environment key still takes
 precedence. Discovery never downloads packages or starts a login flow.
 

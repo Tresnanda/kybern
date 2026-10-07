@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the desktop app with its bundled kybernd sidecar, preserve its signing identity,
+# Build the desktop app with its bundled kybernd and kybern sidecars, preserve its signing identity,
 # and write a DMG.
 #
 # Usage: scripts/bundle-macos.sh
@@ -58,7 +58,7 @@ done
 
 # 1. Build ---------------------------------------------------------------------
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  echo "==> pnpm tauri build with kybernd sidecar (apps/desktop)"
+  echo "==> pnpm tauri build with kybernd and kybern sidecars (apps/desktop)"
   (cd apps/desktop && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$TARGET_DIR" pnpm tauri "${TAURI_ARGS[@]}")
 fi
 SRC_APP="$(ls -d "$BUNDLE_DIR"/*.app 2>/dev/null | head -n1 || true)"
@@ -66,10 +66,12 @@ if [[ -z "$SRC_APP" ]]; then
   echo "no .app under $BUNDLE_DIR; run pnpm tauri build first" >&2
   exit 1
 fi
-if [[ ! -x "$SRC_APP/Contents/MacOS/kybernd" ]]; then
-  echo "Tauri app does not contain the kybernd sidecar" >&2
-  exit 1
-fi
+for sidecar in kybernd kybern; do
+  if [[ ! -x "$SRC_APP/Contents/MacOS/$sidecar" ]]; then
+    echo "Tauri app does not contain the $sidecar sidecar" >&2
+    exit 1
+  fi
+done
 
 # Never label host binaries as an Intel release during cross compilation.
 MACH_ARCH="$ARCH"
@@ -77,6 +79,7 @@ if [[ "$MACH_ARCH" == "aarch64" ]]; then MACH_ARCH=arm64; fi
 APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$SRC_APP/Contents/Info.plist")
 lipo "$SRC_APP/Contents/MacOS/$APP_EXECUTABLE" -verify_arch "$MACH_ARCH"
 lipo "$SRC_APP/Contents/MacOS/kybernd" -verify_arch "$MACH_ARCH"
+lipo "$SRC_APP/Contents/MacOS/kybern" -verify_arch "$MACH_ARCH"
 
 # 2. Assemble ----------------------------------------------------------------------
 APP="$DIST/kybern.app"

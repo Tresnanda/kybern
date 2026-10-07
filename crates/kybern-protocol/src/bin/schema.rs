@@ -158,6 +158,8 @@ fn main() {
     method::<SettingsUpdate>(&mut methods);
     method::<ComputerStatusGet>(&mut methods);
     method::<ComputerSetup>(&mut methods);
+    method::<CursorStatusGet>(&mut methods);
+    method::<CursorSetup>(&mut methods);
     method::<ComputerFrameGet>(&mut methods);
     method::<ComputerNotesList>(&mut methods);
     method::<ComputerNoteSet>(&mut methods);

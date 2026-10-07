@@ -13,6 +13,8 @@ const tauriCli = join(
   "tauri.js"
 )
 const sidecarConfig = "src-tauri/tauri.sidecar.conf.json"
+// The daemon the app starts, and the CLI it can put on the user's PATH.
+const sidecars = ["kybernd", "kybern"]
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -50,7 +52,7 @@ function targetArgument(args) {
   return undefined
 }
 
-function stageDaemon(tauriCommand, tauriArgs, childEnv) {
+function stageSidecars(tauriCommand, tauriArgs, childEnv) {
   const cliTarget = targetArgument(tauriArgs)
   const configuredTarget = process.env.CARGO_BUILD_TARGET?.trim()
   const targetTriple =
@@ -69,7 +71,12 @@ function stageDaemon(tauriCommand, tauriArgs, childEnv) {
       ? tauriArgs.includes("--release")
       : !tauriArgs.includes("--debug")
   const profile = release ? "release" : "debug"
-  const cargoArgs = ["build", "--package", "kybern", "--bin", "kybernd"]
+  const cargoArgs = [
+    "build",
+    "--package",
+    "kybern",
+    ...sidecars.flatMap((name) => ["--bin", name]),
+  ]
   if (release) {
     cargoArgs.push("--release")
   }
@@ -78,31 +85,32 @@ function stageDaemon(tauriCommand, tauriArgs, childEnv) {
   }
 
   console.log(
-    `Building kybernd sidecar (${profile}, ${targetTriple}) before Tauri ${tauriCommand}…`
+    `Building ${sidecars.join(" and ")} sidecars (${profile}, ${targetTriple}) before Tauri ${tauriCommand}…`
   )
   run("cargo", cargoArgs, { env: childEnv })
 
   const targetDir = childEnv.CARGO_TARGET_DIR
   const usesTargetSubdirectory = Boolean(cliTarget || configuredTarget)
   const extension = targetTriple.includes("windows") ? ".exe" : ""
-  const source = join(
-    targetDir,
-    ...(usesTargetSubdirectory ? [targetTriple] : []),
-    profile,
-    `kybernd${extension}`
-  )
-  if (!existsSync(source)) {
-    throw new Error(`cargo did not produce the daemon at ${source}`)
-  }
-
   const binariesDir = join(desktopDir, "src-tauri", "binaries")
-  const destination = join(binariesDir, `kybernd-${targetTriple}${extension}`)
   mkdirSync(binariesDir, { recursive: true })
-  copyFileSync(source, destination)
-  if (!targetTriple.includes("windows")) {
-    chmodSync(destination, 0o755)
+  for (const name of sidecars) {
+    const source = join(
+      targetDir,
+      ...(usesTargetSubdirectory ? [targetTriple] : []),
+      profile,
+      `${name}${extension}`
+    )
+    if (!existsSync(source)) {
+      throw new Error(`cargo did not produce ${name} at ${source}`)
+    }
+    const destination = join(binariesDir, `${name}-${targetTriple}${extension}`)
+    copyFileSync(source, destination)
+    if (!targetTriple.includes("windows")) {
+      chmodSync(destination, 0o755)
+    }
+    console.log(`Staged ${destination}`)
   }
-  console.log(`Staged ${destination}`)
 }
 
 try {
@@ -124,7 +132,7 @@ try {
   const childEnv = { ...process.env, CARGO_TARGET_DIR: targetDir }
 
   if (preparesSidecar) {
-    stageDaemon(tauriCommand, tauriArgs.slice(1), childEnv)
+    stageSidecars(tauriCommand, tauriArgs.slice(1), childEnv)
     tauriArgs.splice(1, 0, "--config", sidecarConfig)
   }
 

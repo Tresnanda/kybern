@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
 
+mod cli;
 mod environments;
 mod notifications;
 mod remote;
@@ -521,6 +522,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             notifications::setup();
+            let handle = app.handle().clone();
+            std::thread::spawn(move || cli::refresh(&handle));
             if cfg!(debug_assertions) {
                 app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
             }
@@ -553,6 +556,10 @@ pub fn run() {
             remote::remote_ssh_hosts,
             pairing_qr,
             window_surface::window_surface,
+            cli::cli_status,
+            cli::cli_install,
+            cli::cli_uninstall,
+            cli::cli_remove_other,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

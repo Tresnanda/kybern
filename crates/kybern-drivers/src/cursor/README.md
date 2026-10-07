@@ -58,6 +58,14 @@ from the embedded manifest/lockfile, then atomically renames it into the version
 cache. No installs occur during discovery. `login`, `status`, and `logout` work
 without a running daemon and use `FileCredentialStore` and `Cursor.auth`.
 
+The daemon offers the same setup to clients as `cursor.status` and
+`cursor.setup` (`kybern-daemon/src/cursor_setup.rs`, `access:write`). Install
+runs in the background. Sign-in starts the host with
+`KYBERN_CURSOR_LOGIN_EVENTS=1`: the SDK opens no browser on the daemon machine
+and the host prints `{"status":"login-url"}` instead, which the client opens.
+The SDK polls Cursor until the browser finishes, so this works for remote
+daemons. Both refresh the provider catalog when they finish.
+
 Node 22.13+ and npm are runtime prerequisites. The default SDK cache is
 `~/.kybern/cache/cursor-sdk/1.0.35`. Debug builds can reuse `sdk/node_modules`.
 `KYBERN_CURSOR_SDK_DIR`, `KYBERN_CURSOR_NODE`, `KYBERN_CURSOR_AUTH_FILE`, and
