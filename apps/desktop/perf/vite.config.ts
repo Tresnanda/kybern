@@ -27,7 +27,15 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "visuals" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "accounts" ? [{
+    name: "accounts-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/SettingsScreen.tsx")) return
+      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "accounts-rpc.ts")))
+        .replace('"./Terminal"', JSON.stringify(path.resolve(import.meta.dirname, "accounts-terminal.tsx")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "visuals" ? [{
     name: "visuals-fixture-transport",
     enforce: "pre",
     transform(code, id) {
