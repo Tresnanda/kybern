@@ -50,6 +50,46 @@ jobs:
           -- -D warnings
       - name: test
         run: cargo test --workspace
+      - name: Build visual fixture binaries with the tested Rust target
+        if: runner.os == 'macOS'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: cargo build -p kybern
+      - uses: actions/setup-node@v4
+        if: runner.os == 'macOS'
+        with:
+          node-version: 22
+      - name: Enable Corepack for the visual fixture
+        if: runner.os == 'macOS'
+        run: corepack enable
+      - name: Install visual fixture dependencies
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+      - name: Native WebKit durable interactive visuals
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          KYBERN_PERF_FOREGROUND: '1'
+          KYBERN_PERF_KEEP_ACTIVE: '1'
+          KYBERN_PERF_WIDTH: '1100'
+          KYBERN_PERF_DAEMON_BINARY: ${{ github.workspace }}/target/debug/kybernd
+          KYBERN_PERF_CLI_BINARY: ${{ github.workspace }}/target/debug/kybern
+          KYBERN_PERF_SHOTS_DIR: ${{ runner.temp }}/native-visuals/screenshots
+        run: |
+          mkdir -p "$KYBERN_PERF_SHOTS_DIR"
+          # The fixture requires document.hidden=false and reports a failure
+          # when the runner cannot provide a visible foreground WebKit window.
+          node scripts/check-rendering.mjs visuals | tee "$RUNNER_TEMP/native-visuals/visuals.log"
+      - name: Upload native visual diagnostics
+        if: runner.os == 'macOS' && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-visuals-${{ matrix.os }}
+          path: ${{ runner.temp }}/native-visuals
+          if-no-files-found: ignore
 
   desktop:
     name: desktop (typecheck + lint + build, ${{ matrix.os }})
@@ -84,6 +124,51 @@ jobs:
         id: frontend-build
         working-directory: apps/desktop
         run: pnpm build
+      - name: Native WebKit accounts, native subagents, and pull request review
+        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        timeout-minutes: 30
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          KYBERN_PERF_FOREGROUND: '1'
+          KYBERN_PERF_KEEP_ACTIVE: '1'
+          KYBERN_PERF_SHOTS_DIR: ${{ runner.temp }}/native-feature-ui/screenshots
+        run: |
+          mkdir -p "$KYBERN_PERF_SHOTS_DIR"
+          for fixture in accounts native-subagents pr-review; do
+            for theme in light dark; do
+              for width in 1100 480; do
+                log="$RUNNER_TEMP/native-feature-ui/$fixture-$theme-$width.log"
+                echo "::group::Native WebKit $fixture ($theme, ${width}px)"
+                KYBERN_COLLAB_THEME="$theme" KYBERN_ORCH_THEME="$theme" KYBERN_PERF_WIDTH="$width" \
+                  node scripts/check-rendering.mjs "$fixture" | tee "$log"
+                node --input-type=module - "$fixture" "$theme" "$width" "$log" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const [fixture, theme, width, log] = process.argv.slice(2);
+          const reports = readFileSync(log, 'utf8').split('\n').flatMap(line => {
+            try { return [JSON.parse(line)]; } catch { return []; }
+          });
+          const result = reports.findLast(report => typeof report.pass === 'boolean');
+          if (!result?.pass || result.theme !== theme || (result.width !== undefined && result.width !== Number(width))) {
+            throw new Error(`Native acceptance failed or did not report the requested ${fixture}/${theme}/${width} matrix: ${JSON.stringify(result)}`);
+          }
+          // The accounts fixture permits an assisted hidden-window diagnostic
+          // locally. It is not visible UI acceptance and must fail this CI job.
+          if (fixture === 'accounts' && (result.keyboardFocusAssisted !== false || result.limits?.length)) {
+            throw new Error(`Native foreground acceptance unavailable: ${JSON.stringify(result)}`);
+          }
+          NODE
+                echo "::endgroup::"
+              done
+            done
+          done
+      - name: Upload native feature UI diagnostics
+        if: runner.os == 'macOS' && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-feature-ui-${{ matrix.os }}
+          path: ${{ runner.temp }}/native-feature-ui
+          if-no-files-found: ignore
       - name: Native WebKit theme provider lifecycle
         if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
         working-directory: apps/desktop
