@@ -310,6 +310,7 @@ impl Orchestrator {
 /// Detect processes beyond Kybern’s own terminals/tasks as well. Failure to
 /// inspect the OS is an error; it must not imply a worktree is unused.
 async fn processes_use_path(path: &Path) -> Result<bool> {
+    let path = std::fs::canonicalize(path)?;
     #[cfg(target_os = "macos")]
     {
         let output = tokio::process::Command::new("/usr/sbin/lsof").args(["-d", "cwd", "-Fn"]).output().await?;
@@ -317,7 +318,7 @@ async fn processes_use_path(path: &Path) -> Result<bool> {
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter_map(|line| line.strip_prefix("n"))
-            .any(|cwd| Path::new(cwd).starts_with(path)))
+            .any(|cwd| std::fs::canonicalize(cwd).is_ok_and(|cwd| cwd.starts_with(&path))))
     }
     #[cfg(target_os = "linux")]
     {
@@ -325,7 +326,7 @@ async fn processes_use_path(path: &Path) -> Result<bool> {
             let entry = entry?;
             if entry.file_name().to_string_lossy().parse::<u32>().is_ok()
                 && let Ok(cwd) = std::fs::read_link(entry.path().join("cwd"))
-                && cwd.starts_with(path)
+                && cwd.starts_with(&path)
             {
                 return Ok(true);
             }

@@ -284,7 +284,7 @@ async fn repeated_native_task_ids_keep_both_owners_and_translate_targeted_contro
             thread.id,
             &incoming,
             DriverRuntimeTaskUpdate::status(old.id.clone(), RuntimeTaskStatus::Completed),
-            RuntimeTaskUpdateKind::Complete,
+            super::RuntimeTaskUpdateKind::Complete,
         )
         .await
         .unwrap();
