@@ -110,7 +110,7 @@ pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<Provider
     let mut settings = state.settings.get();
     let provider = settings.providers.entry(params.kind).or_default();
     ensure!(
-        !provider.accounts.values().any(|account| PathBuf::from(&account.directory) == directory),
+        !provider.accounts.values().any(|account| std::path::Path::new(&account.directory) == directory),
         "This directory is already registered. Choose its existing account."
     );
     let created = !directory.exists();
@@ -223,8 +223,7 @@ mod tests {
     use super::*;
     #[test]
     fn precedence_and_default_isolation() {
-        let mut p = ProviderSettings::default();
-        p.default_account = Some("work".into());
+        let mut p = ProviderSettings { default_account: Some("work".into()), ..Default::default() };
         p.project_accounts.insert("/project".into(), "project".into());
         assert_eq!(resolve(&p, Some("/project"), Some("thread")), "thread");
         assert_eq!(resolve(&p, Some("/project"), None), "project");

@@ -17,15 +17,15 @@ impl Orchestrator {
             "Stop the active turn before recovering historical OMP output."
         );
         let events = self.inner.store.omp_recovery_events(thread.id, params.turn_id)?;
-        if let Some(event) = events.iter().find(|event| matches!(event.payload, EventPayload::AssistantMessageBlocksRecovered { .. })) {
-            if let EventPayload::AssistantMessageBlocksRecovered { native_entry_id, blocks, .. } = &event.payload {
-                return Ok(methods::ThreadsRecoverOmpAnswerResult {
-                    recovered: false,
-                    native_entry_id: native_entry_id.clone(),
-                    block_count: blocks.len() as u32,
-                    correction_seq: event.seq,
-                });
-            }
+        if let Some(event) = events.iter().find(|event| matches!(event.payload, EventPayload::AssistantMessageBlocksRecovered { .. }))
+            && let EventPayload::AssistantMessageBlocksRecovered { native_entry_id, blocks, .. } = &event.payload
+        {
+            return Ok(methods::ThreadsRecoverOmpAnswerResult {
+                recovered: false,
+                native_entry_id: native_entry_id.clone(),
+                block_count: blocks.len() as u32,
+                correction_seq: event.seq,
+            });
         }
         let completion = events
             .iter()

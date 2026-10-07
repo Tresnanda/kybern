@@ -81,15 +81,15 @@ impl Orchestrator {
             }
         }
         live.touch();
-        if let Err(error) = live.session.send_subagent_message(&record.native_task_id, &record.id.to_string(), &native_message).await {
-            if let Some(failed) = self.inner.store.subagent_message_settle(
+        if let Err(error) = live.session.send_subagent_message(&record.native_task_id, &record.id.to_string(), &native_message).await
+            && let Some(failed) = self.inner.store.subagent_message_settle(
                 record.id,
                 record.session_instance_id,
                 SubagentMessageStatus::Failed,
                 Some(format!("Not delivered — {error}")),
-            )? {
-                self.emit_subagent_message(&failed)?;
-            }
+            )?
+        {
+            self.emit_subagent_message(&failed)?;
         }
         Ok(self.inner.store.subagent_message_get(record.id)?.unwrap_or(record))
     }

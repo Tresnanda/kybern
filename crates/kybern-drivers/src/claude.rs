@@ -906,8 +906,10 @@ mod child_message_tests {
             let frame = tokio::time::timeout(std::time::Duration::from_secs(1), child.lines.lock().await.recv()).await.unwrap().unwrap();
             assert_eq!(frame["type"], "control_response");
             let context = frame.pointer("/response/response/hookSpecificOutput/additionalContext").and_then(Value::as_str);
-            if agent == Some("child-a") && context.is_some() {
-                assert!(context.unwrap().contains("Read the whole file."));
+            if agent == Some("child-a")
+                && let Some(context) = context
+            {
+                assert!(context.contains("Read the whole file."));
                 assert!(
                     matches!(rx.try_recv(), Ok(DriverEvent::SubagentMessageDelivered {task_id, message_id}) if task_id == "child-a" && message_id == "message-a")
                 );

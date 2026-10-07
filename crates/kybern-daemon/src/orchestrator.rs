@@ -2724,6 +2724,8 @@ async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<Stri
     Ok(oid)
 }
 
+type RetainedSessions = HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveSession>)>;
+
 struct Inner {
     commands: std::sync::Mutex<()>,
     session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
@@ -2742,7 +2744,7 @@ struct Inner {
     native_tools: Option<crate::native_tools_mcp::NativeToolsGateway>,
     computer: crate::computer::ComputerUse,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
-    retained_sessions: Mutex<HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveSession>)>>,
+    retained_sessions: Mutex<RetainedSessions>,
     releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
     /// Threads whose next session must fork the provider conversation at this point.
