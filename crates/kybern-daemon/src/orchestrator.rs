@@ -2702,7 +2702,6 @@ async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<Stri
 }
 
 struct Inner {
-    workspace_ops: Mutex<()>,
     commands: std::sync::Mutex<()>,
     session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
     workspace_ops: Mutex<()>,
@@ -3003,7 +3002,6 @@ impl Orchestrator {
                 app_tools,
                 native_tools: None,
                 computer,
-                workspace_ops: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
                 retained_sessions: Mutex::new(HashMap::new()),
                 releasing: Mutex::new(HashMap::new()),
