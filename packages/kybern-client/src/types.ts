@@ -133,6 +133,7 @@ export interface ThreadTargetState {
   account_override: boolean;
   effective_permission_mode: PermissionMode;
   pending_permission_mode?: PermissionMode | null;
+  quota_limited?: boolean;
 }
 
 export interface ProviderModel {

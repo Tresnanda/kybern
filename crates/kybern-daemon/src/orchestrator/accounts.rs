@@ -91,6 +91,7 @@ impl Orchestrator {
             account_override: override_id.is_some(),
             effective_permission_mode: thread.permission_mode,
             pending_permission_mode,
+            quota_limited: quota_limited_turn(thread.status, &self.inner.store.events_for_thread(thread.id)?, Utc::now().timestamp()),
         })
     }
 
@@ -493,9 +494,7 @@ impl Orchestrator {
                 self.revoke_native_session(&live);
                 live.session.close().await?;
                 self.inner.sessions.lock().await.remove(&thread_id);
-                if let Err(error) = self.spawn_session(&desired, None).await {
-                    return Err(error);
-                }
+                self.spawn_session(&desired, None).await?;
             } else {
                 live.session.set_permission_mode(mode).await?;
             }
@@ -563,32 +562,9 @@ impl Orchestrator {
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
         ensure!(thread.status != ThreadStatus::Archived, "Unarchive this conversation before continuing.");
         let events = self.inner.store.events_for_thread(thread.id)?;
-        let latest_turn = events
-            .iter()
-            .rev()
-            .find(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
-            .and_then(|event| event.turn_id)
-            .ok_or_else(|| anyhow!("No interrupted task to continue."))?;
-        let current = events.iter().filter(|event| event.turn_id == Some(latest_turn)).collect::<Vec<_>>();
-        let quota_report = current
-            .iter()
-            .rev()
-            .find_map(|event| match &event.payload {
-                EventPayload::ProviderUsageUpdated { usage } => usage.limits.as_ref(),
-                _ => None,
-            })
-            .is_some_and(|limits| limits.iter().any(confirmed_quota));
-        let quota_error = current
-            .iter()
-            .rev()
-            .find_map(|event| match &event.payload {
-                EventPayload::TurnFailed { error } => Some(error.as_str()),
-                _ => None,
-            })
-            .is_some_and(quota_failure);
         ensure!(
-            quota_report || (thread.status == ThreadStatus::Failed && quota_error),
-            "This turn has no confirmed 5-hour or weekly account limit. Retry your prompt normally."
+            quota_limited_turn(thread.status, &events, Utc::now().timestamp()),
+            "The latest turn was not interrupted by a confirmed 5-hour or weekly account limit. Retry your prompt normally."
         );
         ensure!(
             params.provider.kind == thread.provider.kind && params.provider != thread.provider,
@@ -671,10 +647,42 @@ pub(super) fn validate_permission(thread: &Thread, mode: PermissionMode) -> Resu
     Ok(())
 }
 
-fn confirmed_quota(limit: &UsageLimit) -> bool {
-    limit.used_percent >= 100.0
-        && matches!(limit.window_minutes, Some(300 | 10080))
-        && limit.resets_at.is_none_or(|reset| reset > chrono::Utc::now().timestamp())
+fn confirmed_quota(limit: &UsageLimit, now: i64) -> bool {
+    limit.used_percent >= 100.0 && matches!(limit.window_minutes, Some(300 | 10080)) && limit.resets_at.is_none_or(|reset| reset > now)
+}
+
+/// Recovery is attributed to the latest turn, never to cached account-wide limits.
+pub(super) fn quota_limited_turn(status: ThreadStatus, events: &[ThreadEvent], now: i64) -> bool {
+    if !matches!(status, ThreadStatus::Failed | ThreadStatus::Idle) {
+        return false;
+    }
+    let Some(start) = events.iter().rposition(|event| matches!(event.payload, EventPayload::TurnStarted { .. })) else {
+        return false;
+    };
+    let Some(turn_id) = events[start].turn_id else { return false };
+    // A binding transition invalidates the outgoing account's recovery state.
+    if events[start + 1..].iter().any(|event| matches!(event.payload, EventPayload::SessionTransitioned { .. })) {
+        return false;
+    }
+    let current = events[start..].iter().filter(|event| event.turn_id == Some(turn_id)).collect::<Vec<_>>();
+    let reported = current
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::ProviderUsageUpdated { usage } => usage.limits.as_ref(),
+            _ => None,
+        })
+        .is_some_and(|limits| limits.iter().any(|limit| confirmed_quota(limit, now)));
+    current
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::TurnFailed { error } => Some(reported || quota_failure(error)),
+            EventPayload::TurnCompleted { stop_reason, .. } => Some(*stop_reason == StopReason::Interrupted && reported),
+            EventPayload::TurnResumed => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
 pub(super) fn quota_failure(error: &str) -> bool {

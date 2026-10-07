@@ -183,6 +183,9 @@ pub struct ThreadTargetState {
     pub effective_permission_mode: PermissionMode,
     #[serde(default)]
     pub pending_permission_mode: Option<PermissionMode>,
+    /// The latest settled turn was interrupted by a confirmed account limit.
+    #[serde(default)]
+    pub quota_limited: bool,
 }
 method!(ThreadsTargetGet, "threads.target.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadTargetState);
 method!(ThreadsTargetSet, "threads.target.set", Some(Scope::OrchestrationOperate), ThreadTargetParams, ThreadTargetState);

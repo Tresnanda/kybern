@@ -850,3 +850,23 @@ test("account transitions stay on the latest conversation turn after old-turn re
   const mobile = await import("../mobile/src/state/transcript.ts")
   assert.equal(mobile.applyEvent({ ...state, blocks: oldBlocks, lastSeq: seq - 1 }, transition).blocks.at(-1).turnId, newerTurn)
 })
+
+test("an account transition clears the old account's limits until the new owner reports them", () => {
+  let state = applyEvent(emptyThreadState(), {
+    kind: "provider_usage_updated", seq: 1, thread_id: "thread", turn_id: T, at: AT,
+    usage: { context: { used_tokens: 100, window_tokens: 1000 }, limits: [{ name: "Weekly", used_percent: 100, window_minutes: 10080, resets_at: 1900000000 }] },
+  })
+  assert.equal(state.providerUsage.limits[0].used_percent, 100)
+  state = applyEvent(state, {
+    kind: "session_transitioned", seq: 2, thread_id: "thread", turn_id: null, at: AT,
+    from: { kind: "codex", instance: "default" }, to: { kind: "codex", instance: "work" }, native_resume: false, text: "Using work",
+  })
+  assert.equal(state.providerUsage, undefined)
+  state = applyEvent(state, { ...start, seq: 3, thread_id: "thread", turn_id: "new-account-turn", at: AT })
+  state = applyEvent(state, {
+    kind: "provider_usage_updated", seq: 4, thread_id: "thread", turn_id: "new-account-turn", at: AT,
+    usage: { context: { used_tokens: 200, window_tokens: 1000 } },
+  })
+  assert.equal(state.providerUsage.context.used_tokens, 200)
+  assert.deepEqual(state.providerUsage.limits, [], "unknown account usage has no inherited quota windows after sparse context updates")
+})

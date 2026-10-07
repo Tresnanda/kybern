@@ -8,6 +8,128 @@ fn add_test_account(fixture: &Fixture, kind: ProviderKind, id: &str) {
     fixture.orchestrator.inner.settings.set(settings).unwrap();
 }
 
+#[test]
+fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
+    let now = 1_800_000_000;
+    let turn = Uuid::now_v7();
+    let start = EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("task") };
+    let report = EventPayload::ProviderUsageUpdated {
+        usage: ProviderUsage {
+            context: None,
+            limits: Some(vec![UsageLimit {
+                name: "Weekly".into(),
+                used_percent: 100.0,
+                window_minutes: Some(10080),
+                resets_at: Some(now + 60),
+            }]),
+        },
+    };
+    let failed = EventPayload::TurnFailed { error: "Request could not complete".into() };
+    let completed = |stop_reason| EventPayload::TurnCompleted {
+        stop_reason,
+        usage: Usage::default(),
+        cost_usd: None,
+        duration_ms: 0,
+        terminal_message_id: None,
+    };
+    let events = |payloads: Vec<EventPayload>| {
+        payloads
+            .into_iter()
+            .enumerate()
+            .map(|(index, payload)| ThreadEvent {
+                seq: index as u64 + 1,
+                thread_id: Uuid::nil(),
+                turn_id: Some(turn),
+                at: Utc::now(),
+                payload,
+            })
+            .collect::<Vec<_>>()
+    };
+    let reported_failure = events(vec![start.clone(), report.clone(), failed.clone()]);
+    assert!(accounts::quota_limited_turn(ThreadStatus::Failed, &reported_failure, now));
+    assert!(!accounts::quota_limited_turn(ThreadStatus::Running, &reported_failure, now));
+    assert!(!accounts::quota_limited_turn(ThreadStatus::AwaitingApproval, &reported_failure, now));
+    assert!(!accounts::quota_limited_turn(ThreadStatus::Failed, &reported_failure, now + 60));
+    assert!(!accounts::quota_limited_turn(
+        ThreadStatus::Idle,
+        &events(vec![start.clone(), report.clone(), completed(StopReason::Completed)]),
+        now
+    ));
+    assert!(accounts::quota_limited_turn(
+        ThreadStatus::Idle,
+        &events(vec![start.clone(), report.clone(), completed(StopReason::Interrupted)]),
+        now
+    ));
+    assert!(!accounts::quota_limited_turn(ThreadStatus::Failed, &events(vec![start.clone(), failed.clone()]), now));
+    assert!(accounts::quota_limited_turn(
+        ThreadStatus::Failed,
+        &events(vec![start.clone(), EventPayload::TurnFailed { error: "5-hour usage limit reached".into() }]),
+        now
+    ));
+    assert!(!accounts::quota_limited_turn(
+        ThreadStatus::Failed,
+        &events(vec![start.clone(), EventPayload::TurnFailed { error: "Connection rate limit exceeded".into() }]),
+        now
+    ));
+
+    let mut newer = reported_failure.clone();
+    let next_turn = Uuid::now_v7();
+    for payload in [start.clone(), failed] {
+        newer.push(ThreadEvent { seq: newer.len() as u64 + 1, thread_id: Uuid::nil(), turn_id: Some(next_turn), at: Utc::now(), payload });
+    }
+    assert!(!accounts::quota_limited_turn(ThreadStatus::Failed, &newer, now));
+    let mut resumed = reported_failure.clone();
+    resumed.extend(events(vec![EventPayload::TurnResumed]));
+    assert!(!accounts::quota_limited_turn(ThreadStatus::Idle, &resumed, now));
+    let mut switched = reported_failure;
+    switched.extend(events(vec![EventPayload::SessionTransitioned {
+        from: ProviderInstance::default_for(ProviderKind::Codex),
+        to: ProviderInstance { kind: ProviderKind::Codex, instance: "work".into() },
+        native_resume: false,
+        text: "Switched account".into(),
+    }]));
+    assert!(!accounts::quota_limited_turn(ThreadStatus::Failed, &switched, now));
+}
+
+#[tokio::test]
+async fn successful_quota_report_does_not_authorize_switch_continue() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Idle);
+    add_test_account(&fixture, thread.provider.kind, "work");
+    let turn = Uuid::now_v7();
+    for payload in [
+        EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("finished task") },
+        EventPayload::ProviderUsageUpdated {
+            usage: ProviderUsage {
+                context: None,
+                limits: Some(vec![UsageLimit { name: "5 hours".into(), used_percent: 100.0, window_minutes: Some(300), resets_at: None }]),
+            },
+        },
+        EventPayload::TurnCompleted {
+            stop_reason: StopReason::Completed,
+            usage: Usage::default(),
+            cost_usd: None,
+            duration_ms: 0,
+            terminal_message_id: None,
+        },
+    ] {
+        fixture.orchestrator.emit(thread.id, Some(turn), payload).unwrap();
+    }
+    assert!(!fixture.orchestrator.thread_target(thread.id).unwrap().quota_limited);
+    assert!(
+        fixture
+            .orchestrator
+            .switch_continue(methods::ThreadsSwitchContinueParams {
+                thread_id: thread.id,
+                provider: ProviderInstance { kind: thread.provider.kind, instance: "work".into() },
+                message_id: Uuid::now_v7(),
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().target.provider, thread.provider);
+}
+
 #[tokio::test]
 async fn account_selection_does_not_mutate_running_session_and_invalid_selection_is_atomic() {
     let fixture = Fixture::new();
@@ -568,9 +690,13 @@ async fn handoff_steering_freezes_target_and_permissions_and_retries_after_admis
     live.turn_ready.notified().await;
     let target = SessionTarget { provider: thread.provider.clone(), model: Some("reviewed-model".into()), effort: None };
     fixture.store.meta_set(&format!("target:{}", thread.id), &serde_json::to_string(&target).unwrap()).unwrap();
-    fixture.store.meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&PermissionMode::FullAccess).unwrap()).unwrap();
+    fixture
+        .store
+        .meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&PermissionMode::FullAccess).unwrap())
+        .unwrap();
     let workspace = fixture.orchestrator.inner.workspace_ops.lock().await;
-    let prompt = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("continue with the selected model") };
+    let prompt =
+        methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("continue with the selected model") };
     let actor = fixture.orchestrator.clone();
     let admitted = prompt.clone();
     let steering = tokio::spawn(async move { actor.steer(admitted).await });
@@ -578,10 +704,21 @@ async fn handoff_steering_freezes_target_and_permissions_and_retries_after_admis
         while fixture.store.meta_get(&format!("steer_target:{}", prompt.id)).unwrap().is_none() {
             tokio::task::yield_now().await;
         }
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     // A later picker/permission change cannot retarget already admitted input.
-    fixture.store.meta_set(&format!("target:{}", thread.id), &serde_json::to_string(&SessionTarget { model: Some("later-model".into()), ..target.clone() }).unwrap()).unwrap();
-    fixture.store.meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&PermissionMode::Supervised).unwrap()).unwrap();
+    fixture
+        .store
+        .meta_set(
+            &format!("target:{}", thread.id),
+            &serde_json::to_string(&SessionTarget { model: Some("later-model".into()), ..target.clone() }).unwrap(),
+        )
+        .unwrap();
+    fixture
+        .store
+        .meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&PermissionMode::Supervised).unwrap())
+        .unwrap();
     fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Interrupted)).await.unwrap();
     drop(workspace);
     let first = steering.await.unwrap().unwrap();
@@ -593,12 +730,34 @@ async fn handoff_steering_freezes_target_and_permissions_and_retries_after_admis
     let retry = fixture.orchestrator.steer(prompt.clone()).await.unwrap();
     assert_eq!(retry.turn_id, first.turn_id);
     assert_eq!(retry.message_id, prompt.id);
-    assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. })).count(), 2);
-    assert_eq!(fixture.store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::MessageSteered { .. })).count(), 0);
+    assert_eq!(
+        fixture
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        fixture
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::MessageSteered { .. }))
+            .count(),
+        0
+    );
     assert!(fixture.orchestrator.steer(methods::QueuedMessage { message: UserMessage::text("different"), ..prompt }).await.is_err());
     tokio::time::timeout(Duration::from_secs(2), async {
-        while messages.lock().await.len() < 2 { tokio::task::yield_now().await; }
-    }).await.unwrap();
+        while messages.lock().await.len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     let delivered = messages.lock().await;
     assert_eq!(delivered.len(), 2);
     assert_eq!(delivered[1].plain_text(), "continue with the selected model");
