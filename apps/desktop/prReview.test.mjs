@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { afterReviewSubmission, bindReviewDraft, clearReviewDraft, emptyReviewDraft, readReviewDraft, repairReviewPrompt, reuseReviewDraftText, reviewDraftIsStale, selectedReviewFindings, submitReviewDraft, toggleReviewFinding } from "./src/state/prReviewModel.ts"
+import { reviewOverviewCache, reviewWorkspaceKind, afterReviewSubmission, bindReviewDraft, clearReviewDraft, emptyReviewDraft, readReviewDraft, repairReviewPrompt, reuseReviewDraftText, reviewDraftIsStale, selectedReviewFindings, submitReviewDraft, toggleReviewFinding } from "./src/state/prReviewModel.ts"
 
 const inline = { path: "src/a.rs", line: 7, side: "RIGHT", body: "Keep this check" }
 const finding = { id: 13, author: "reviewer", body: "Handle this error", state: "CHANGES_REQUESTED", path: "src/a.rs", line: 7, side: "RIGHT", url: "https://github.com/example/repo/pull/1", updated_at: "2026-10-07" }
@@ -192,4 +192,26 @@ test("legacy stored text cannot acquire a current head merely by being loaded or
   )
   assert.equal(edited.sourceHead, null)
   assert.equal(reviewDraftIsStale(edited, "head-B"), true)
+})
+
+
+test("overview refresh retains same-head pages and invalidates changed-head line anchors without changing drafts", () => {
+  const page = { files: [{ path: "src/reviews/submission.ts" }], entries: [], checks: [], page: 2, has_more: true }
+  const draft = bindReviewDraft(emptyReviewDraft(), { body: "Keep review of A", inline: [inline] }, "head-A")
+  const original = structuredClone(draft)
+  const unchanged = reviewOverviewCache("head-A", "head-A", page, page.files[0].path)
+  assert.equal(unchanged.page, page, "same-head reading page stays stable")
+  assert.equal(unchanged.page.page, 2)
+  assert.deepEqual(reviewOverviewCache("head-A", "head-B", page, page.files[0].path), { page: null, file: null }, "new head requires a freshly fetched file page")
+  assert.deepEqual(reviewOverviewCache(null, "head-B", page, page.files[0].path), { page: null, file: null }, "an evicted detail cannot prove page ownership")
+  assert.deepEqual(draft, original)
+  assert.equal(reviewDraftIsStale(draft, "head-B"), true)
+})
+
+test("workspace navigation keeps paged conversation sources separate and directs Changes to files", () => {
+  assert.equal(reviewWorkspaceKind("overview", "review_comments"), "review_comments", "overview does not reset a conversation page's source")
+  assert.equal(reviewWorkspaceKind("changes", "checks"), "files")
+  assert.equal(reviewWorkspaceKind("conversation", "files"), "comments")
+  assert.equal(reviewWorkspaceKind("conversation", "reviews"), "reviews", "returning preserves the chosen review stream")
+  assert.equal(reviewWorkspaceKind("conversation", "review_comments"), "review_comments")
 })

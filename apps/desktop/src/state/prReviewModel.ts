@@ -1,7 +1,32 @@
 import type {
+  PrPageKind,
+  PrPageResult,
   PrInlineComment,
   PrReviewEntry,
 } from "../../../../packages/kybern-client/src/types.ts"
+
+export type ReviewWorkspace = "overview" | "changes" | "conversation"
+export function reviewWorkspaceKind(
+  workspace: ReviewWorkspace,
+  current: PrPageKind
+): PrPageKind {
+  if (workspace === "changes") return "files"
+  if (workspace === "conversation")
+    return ["comments", "reviews", "review_comments"].includes(current)
+      ? current
+      : "comments"
+  return current
+}
+export function reviewOverviewCache(
+  previousHead: string | null,
+  currentHead: string,
+  page: PrPageResult | null,
+  file: string | null
+) {
+  return previousHead === currentHead
+    ? { page, file }
+    : { page: null, file: null }
+}
 
 export interface ReviewDraft {
   /** Commit whose visible diff supplied this review text and inline anchors. */

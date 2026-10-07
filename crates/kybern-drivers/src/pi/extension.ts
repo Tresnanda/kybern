@@ -32,6 +32,8 @@ const APP_TOOL_NAMES = new Set([
   "kybern_runtime_tasks",
   "kybern_list_terminals",
   "kybern_read_terminal",
+  "kybern_html_preview",
+  "kybern_html_publish",
   "kybern_threads_search",
   "kybern_thread_read",
   "kybern_thread_send",
@@ -66,8 +68,15 @@ const APP_TOOL_NAMES = new Set([
   "kybern_task_claim",
 ]);
 // Delegation can wait on a child agent (up to 60 s) and send/wait tools can
-// block on a reply, so they get the same 70 s budget as computer use.
-const LONG_TOOL_NAMES = new Set(["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send"]);
+// block on a reply. HTML preparation and preview rendering can also outlast
+// the default 30 s, so these tools get the same 70 s budget as computer use.
+const LONG_TOOL_NAMES = new Set([
+  "kybern_agent_delegate",
+  "kybern_agent_wait",
+  "kybern_thread_send",
+  "kybern_html_preview",
+  "kybern_html_publish",
+]);
 // Note and task writes may wait for the user's approval in Kybern.
 const APPROVAL_TOOL_NAMES = new Set([
   "kybern_note_create",

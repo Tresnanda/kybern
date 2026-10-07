@@ -181,7 +181,7 @@ function MemberButton({
         </span>
       )}
       {variant === "member" && (member.thread ? <SubagentGlyph thread={member.thread} /> : <FallbackGlyph phase={member.phase} />)}
-      <span className={cn("shrink-0 text-foreground/90", variant === "single" ? "max-w-[55%] truncate text-foreground/88" : "")} style={variant === "member" ? { fontSize: 13 } : CHAT_FONT}>
+      <span title={member.title} className={cn("min-w-0 max-w-[55%] truncate text-foreground/90", variant === "single" && "text-foreground/88")} style={variant === "member" ? { fontSize: 13 } : CHAT_FONT}>
         {member.title}
       </span>
       <span
@@ -190,7 +190,7 @@ function MemberButton({
       >
         {variant === "member" ? [detail?.failed ? null : type, detail?.text].filter(Boolean).join(" · ") || type : meta}
       </span>
-      {span && <ElapsedText startedAt={span.startedAt} endedAt={span.endedAt} className="shrink-0 text-xs text-foreground/48" />}
+      {span && <ElapsedText startedAt={span.startedAt} endedAt={span.endedAt} className="shrink-0 whitespace-nowrap text-xs text-foreground/48" />}
       {variant === "single" && (member.thread ? <SubagentGlyph thread={member.thread} /> : <FallbackGlyph phase={member.phase} />)}
       <ChevronRightIcon className="size-3.5 shrink-0 text-foreground/40 transition-colors group-hover/sa-m:text-foreground" />
     </button>
@@ -301,7 +301,7 @@ export const SubagentGroupRow = memo(function SubagentGroupRow({
             ))}
           </span>
         </span>
-        {span && <ElapsedText startedAt={span.startedAt} endedAt={span.endedAt} className="shrink-0 text-xs text-foreground/48" />}
+        {span && <ElapsedText startedAt={span.startedAt} endedAt={span.endedAt} className="shrink-0 whitespace-nowrap text-xs text-foreground/48" />}
         <DisclosureChevron open={expanded} className="size-3 text-foreground/55" />
       </button>
       <DisclosureRegion open={expanded}>

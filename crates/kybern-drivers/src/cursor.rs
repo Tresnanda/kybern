@@ -159,11 +159,10 @@ impl AgentDriver for CursorDriver {
                 description: "Compact the Cursor conversation".into(),
             }]))
             .await;
-        // A brand-new conversation has never seen the guide; a resumed one already
-        // carries it in its history. The SDK has no system channel, so the guide
-        // rides on the first prompt.
-        let guide =
-            if config.resume_session_id.is_none() { config.native_tool_bridge.as_ref().and_then(|bridge| bridge.guide()) } else { None };
+        // The SDK has no system channel. Refresh the current guide on this
+        // runner's first ordinary prompt, including resumed conversations whose
+        // saved history may contain an older guide or none at all.
+        let guide = config.native_tool_bridge.as_ref().and_then(|bridge| bridge.guide());
         Ok(SpawnedSession {
             session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide.map(str::to_owned)) }),
             events,
@@ -286,6 +285,92 @@ mod tests {
         assert_eq!(without_guide(&prompt), "Fix the bug");
         assert_eq!(without_guide("plain request"), "plain request");
         assert_eq!(without_guide("<kybern_instructions>unclosed"), "<kybern_instructions>unclosed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fresh_and_resumed_runners_send_the_current_guide_once_and_retry_it_after_rejection() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for (resume, enabled) in [(None, true), (Some("cursor-sdk:restored"), true), (Some("cursor-sdk:restored"), false)] {
+            let root = tempfile::tempdir().unwrap();
+            let host = root.path().join("node-fixture");
+            let log = root.path().join("requests.jsonl");
+            std::fs::write(
+                &host,
+                r#"#!/usr/bin/env python3
+import json, sys
+rejected = False
+for line in sys.stdin:
+    request = json.loads(line)
+    with open('requests.jsonl', 'a') as log:
+        log.write(json.dumps(request) + '\n')
+    response = {'id': request['id'], 'result': {'agentId': 'restored'}}
+    if request['type'] == 'send' and request['messageId'] == 'rejected' and not rejected:
+        response = {'id': request['id'], 'error': 'fixture rejected admission'}
+        rejected = True
+    print(json.dumps(response), flush=True)
+    if request['type'] == 'close': break
+"#,
+            )
+            .unwrap();
+            std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let config = SessionConfig {
+                cwd: root.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: PermissionMode::FullAccess,
+                native_tool_bridge: Some(NativeToolBridge {
+                    server_name: "kybern".into(),
+                    endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
+                    authorization: Some("fixture-session-capability".into()),
+                    coordinator_instructions: None,
+                    guide: enabled.then(|| "CURRENT GUIDE: use kybern_html_preview when helpful".into()),
+                    tools: vec![],
+                    restrictions: Default::default(),
+                }),
+                resume_session_id: resume.map(str::to_owned),
+                fork: false,
+                rewind: None,
+                binary: None,
+                env: std::collections::HashMap::from([
+                    ("KYBERN_CURSOR_NODE".into(), host.display().to_string()),
+                    ("KYBERN_CURSOR_SDK_DIR".into(), root.path().display().to_string()),
+                ]),
+            };
+            // Other concurrently forked tests can briefly inherit an open script
+            // descriptor on Linux, producing ETXTBSY until their child execs.
+            let mut attempts = 0;
+            let spawned = loop {
+                match CursorDriver.spawn(config.clone()).await {
+                    Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                        attempts += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    result => break result.unwrap(),
+                }
+            };
+            spawned.session.send_message("slash", &UserMessage::text("/compress")).await.unwrap();
+            assert!(spawned.session.send_message("rejected", &UserMessage::text("Explain the results")).await.is_err());
+            spawned.session.send_message("retry", &UserMessage::text("Explain the results")).await.unwrap();
+            spawned.session.send_message("next", &UserMessage::text("Follow up")).await.unwrap();
+            spawned.session.close().await.unwrap();
+            let requests: Vec<Value> =
+                std::fs::read_to_string(log).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+            assert_eq!(requests[0]["agentId"], resume.map(|_| json!("restored")).unwrap_or(Value::Null));
+            let sends: Vec<_> = requests.iter().filter(|request| request["type"] == "send").collect();
+            assert_eq!(sends.len(), 4);
+            assert_eq!(sends[0]["message"]["text"], "/compress");
+            let expected = if enabled {
+                with_guide("CURRENT GUIDE: use kybern_html_preview when helpful", "Explain the results")
+            } else {
+                "Explain the results".into()
+            };
+            assert_eq!(sends[1]["message"]["text"], expected);
+            assert_eq!(sends[2]["message"]["text"], expected);
+            assert_eq!(without_guide(sends[2]["message"]["text"].as_str().unwrap()), "Explain the results");
+            assert_eq!(sends[3]["message"]["text"], "Follow up");
+        }
     }
 
     #[test]

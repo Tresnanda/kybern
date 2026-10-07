@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+<!-- kybern-release-title: A clearer pull request workspace -->
+<!-- kybern-release-summary: Keep the PR list beside your review, read changes and discussion separately, and keep agent timers readable. -->
+
+- Keep the pull request list beside the selected review in wide windows, with Overview, Changes and Conversation tabs. Description, checks and reviewers appear in the overview; changed files have their own rail. Narrow windows keep the back action, search and selected-row focus. Review drafts and verified checkout before agent repairs are preserved.
+- Keep subagent elapsed times on one line, including long-running tasks. Long titles leave room for status and controls; background status moves to its own line when larger text or a narrow pane needs more space.
+- Make inline HTML preview and publication available to Pi, Oh My Pi and dedicated project coordinators. Agents can choose visual replies when they help, without a special prompt.
+- Refresh Kybern's guidance when resuming or importing a Cursor conversation, so it describes the currently available tools.
+
 ## 0.7.0
 
 <!-- kybern-release-title: Keep working across accounts and agents -->

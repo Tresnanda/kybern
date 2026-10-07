@@ -49,5 +49,5 @@ export function ProviderAvatarStack({ kinds, className }: { kinds: readonly Prov
 export function SubagentElapsed({ thread, className }: { thread: Pick<Thread, "subagent">; className?: string }) {
   const span = subagentSpan(thread)
   if (!span) return null
-  return <ElapsedText startedAt={span.startedAt} endedAt={span.endedAt} className={className} />
+  return <ElapsedText startedAt={span.startedAt} endedAt={span.endedAt} className={cn("shrink-0 whitespace-nowrap", className)} />
 }

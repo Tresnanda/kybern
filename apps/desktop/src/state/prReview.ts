@@ -13,6 +13,7 @@ export interface ReviewState {
   detail: PrDetailResult | null
   page: PrPageResult | null
   kind: PrPageKind
+  workspace: ReviewWorkspace
   file: string | null
   loading: boolean
   error: string | null
@@ -24,13 +25,16 @@ import {
   bindReviewDraft,
   emptyReviewDraft,
   readReviewDraft,
+  reviewOverviewCache,
   type ReviewDraft,
+  type ReviewWorkspace,
 } from "./prReviewModel"
 export { emptyReviewDraft } from "./prReviewModel"
 const empty = (): ReviewState => ({
   detail: null,
   page: null,
   kind: "files",
+  workspace: "overview",
   file: null,
   loading: false,
   error: null,
@@ -85,7 +89,8 @@ export async function loadReview(
   projectId: ProjectId,
   number: number,
   kind?: PrPageKind,
-  page = 1
+  page = 1,
+  overviewOnly = false
 ) {
   const key = reviewKey(projectId, number)
   ensureReview(key)
@@ -96,20 +101,30 @@ export async function loadReview(
   try {
     const [detail, result] = await Promise.all([
       rpc().call("github.pr.detail", { project_id: projectId, number }),
-      rpc().call("github.pr.page", {
-        project_id: projectId,
-        number,
-        kind: selectedKind,
-        page,
-      }),
+      overviewOnly
+        ? Promise.resolve(previous.page)
+        : rpc().call("github.pr.page", {
+            project_id: projectId,
+            number,
+            kind: selectedKind,
+            page,
+          }),
     ])
     if (useReviews.getState().entries[key]?.version !== version) return
+    const retained = reviewOverviewCache(
+      previous.detail?.head_sha ?? null,
+      detail.head_sha,
+      previous.page,
+      previous.file
+    )
     updateReview(key, {
       detail,
-      page: result,
-      file: result.files.some((f) => f.path === previous.file)
-        ? previous.file
-        : (result.files[0]?.path ?? null),
+      page: overviewOnly ? retained.page : result,
+      file: overviewOnly
+        ? retained.file
+        : result?.files.some((f) => f.path === previous.file)
+          ? previous.file
+          : (result?.files[0]?.path ?? null),
       loading: false,
     })
     // Keep at most eight loaded PRs. Drafts remain durable and are never evicted.

@@ -1,6 +1,9 @@
 import type { SubagentMessage, UserMessage } from "../src/protocol"
 export * from "../src/state/rpc"
-export const childFixture = { calls: [] as string[], messages: [] as SubagentMessage[] }
+export const childFixture = { calls: [] as string[], controls: [] as { method: string; threadId: string }[], messages: [] as SubagentMessage[] }
+export async function loadThread(threadId: string) { childFixture.controls.push({method:"threads.get",threadId}) }
+export async function stopSubagent(threadId: string) { childFixture.controls.push({method:"tasks.stop",threadId}) }
+export async function backgroundSubagent(threadId: string) { childFixture.controls.push({method:"tasks.background",threadId}) }
 const connection = {
   async call(method: string, params: { thread_id: string; id?: string; message?: UserMessage; message_id?: string }) {
     childFixture.calls.push(method)

@@ -119,7 +119,7 @@ function SubagentCardBody({ thread }: { thread: Thread }) {
       <div className="mt-0.5 flex items-center gap-1.5 text-[var(--color-text-foreground-secondary)]">
         <ProviderMark kind={thread.provider.kind} size={12} className="size-3 shrink-0" />
         <span className="min-w-0 truncate">{[type, model, effort].filter(Boolean).join(" · ") || "Subagent"}</span>
-        <span className="ml-auto shrink-0 tabular-nums">
+        <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
           {state}
           {phase !== "working" || info.started_at ? " · " : ""}
           <SubagentElapsed thread={thread} />

@@ -118,6 +118,45 @@ test("configured bridge rejects names that the daemon bridge cannot serve", () =
   assert.deepEqual([...harness.tools.keys()], ["kybern_thread_read"]);
 });
 
+test("configured HTML tools retain schemas, route requests, and allow rendering time", async () => {
+  const definitions = ["kybern_html_preview", "kybern_html_publish"].map((name) => ({
+    name,
+    description: `HTML tool ${name}`,
+    parameters: { type: "object", properties: { html: { type: "string" } }, required: ["html"] },
+  }));
+  const harness = fakePi("supervised", definitions, { coordinatorOnly: true });
+  assert.deepEqual([...harness.tools.keys()], definitions.map((definition) => definition.name));
+  for (const definition of definitions) {
+    const tool = harness.tools.get(definition.name);
+    assert.deepEqual(tool.parameters, definition.parameters);
+    const args = { html: "<button>Chart</button>" };
+    const content = definition.name === "kybern_html_preview"
+      ? [{ type: "text", text: "Preview ready" }, { type: "image", mimeType: "image/png", data: "preview-image" }]
+      : [{ type: "text", text: "Published inline" }];
+    const result = await tool.execute("html-call", args, undefined, undefined, {
+      mode: "rpc",
+      hasUI: true,
+      ui: {
+        input: async (title, _prompt, options) => {
+          assert.equal(options.timeout, 70_000);
+          assert.match(title, /^kybern_app_tool_request:/);
+          const request = JSON.parse(Buffer.from(title.split(":")[1], "base64url").toString());
+          assert.equal(request.name, definition.name);
+          assert.equal(request.toolCallId, "html-call");
+          assert.deepEqual(request.arguments, args);
+          return Buffer.from(JSON.stringify({ version: 1, success: true, data: { _kybern_content: content } })).toString("base64url");
+        },
+      },
+    });
+    assert.deepEqual(result.content, content);
+    assert.equal(await harness.handlers.get("tool_call")({ toolName: definition.name, input: args }, context()), undefined);
+  }
+  for (const toolName of ["edit", "write", "bash"]) {
+    const denied = await harness.handlers.get("tool_call")({ toolName, input: {} }, context());
+    assert.equal(denied.block, true, `${toolName} remains unavailable to coordinators`);
+  }
+});
+
 test("ordinary tool registration does not install coordinator guidance", async () => {
   const withoutBridge = fakePi();
   const hook = withoutBridge.handlers.get("before_agent_start");
