@@ -144,6 +144,68 @@ pub struct ProvidersListResult {
 method!(ProvidersList, "providers.list", Some(Scope::OrchestrationRead), ProvidersListParams, ProvidersListResult);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsCreateParams {
+    pub kind: ProviderKind,
+    pub name: String,
+    /// Existing native account directory; omitted creates an isolated directory.
+    #[serde(default)]
+    pub directory: Option<String>,
+}
+method!(AccountsCreate, "providers.accounts.create", Some(Scope::OrchestrationOperate), AccountsCreateParams, ProviderInstance);
+method!(AccountsSignIn, "providers.accounts.sign_in", Some(Scope::OrchestrationOperate), ProviderInstance, TerminalInfo);
+method!(AccountsUsage, "providers.accounts.usage", Some(Scope::OrchestrationRead), ProviderInstance, ProviderUsage);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsCatalogParams {
+    pub provider: ProviderInstance,
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    #[serde(default)]
+    pub force_refresh: bool,
+}
+method!(AccountsCatalog, "providers.accounts.catalog", Some(Scope::OrchestrationRead), AccountsCatalogParams, ProviderStatus);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadTargetParams {
+    pub thread_id: ThreadId,
+    pub target: SessionTarget,
+    /// Clear the explicit override and follow project/global selection.
+    #[serde(default)]
+    pub inherit_account: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadTargetState {
+    pub target: SessionTarget,
+    /// Only the native session owned by this resolved account/configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
+    pub account_override: bool,
+    pub effective_permission_mode: PermissionMode,
+    #[serde(default)]
+    pub pending_permission_mode: Option<PermissionMode>,
+    /// The latest settled turn was interrupted by a confirmed account limit.
+    #[serde(default)]
+    pub quota_limited: bool,
+}
+method!(ThreadsTargetGet, "threads.target.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadTargetState);
+method!(ThreadsTargetSet, "threads.target.set", Some(Scope::OrchestrationOperate), ThreadTargetParams, ThreadTargetState);
+method!(ThreadsPermissionsApply, "threads.permissions.apply", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Thread);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsSwitchContinueParams {
+    pub thread_id: ThreadId,
+    pub provider: ProviderInstance,
+    /// Idempotent continuation request. Retrying cannot send a second prompt.
+    pub message_id: MessageId,
+}
+method!(
+    ThreadsSwitchContinue,
+    "threads.switch_continue",
+    Some(Scope::OrchestrationOperate),
+    ThreadsSwitchContinueParams,
+    ThreadsSendResult
+);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HarnessUpdatesResult {
     pub updates: Vec<HarnessUpdate>,
 }
@@ -411,6 +473,28 @@ pub struct ThreadsToolOutputResult {
 }
 method!(ThreadsToolOutput, "threads.tool_output", Some(Scope::OrchestrationRead), ThreadsToolOutputParams, ThreadsToolOutputResult);
 
+/// Restore exact historical OMP message boundaries from its retained native session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsRecoverOmpAnswerParams {
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsRecoverOmpAnswerResult {
+    pub recovered: bool,
+    pub native_entry_id: String,
+    pub block_count: u32,
+    pub correction_seq: EventSeq,
+}
+method!(
+    ThreadsRecoverOmpAnswer,
+    "threads.recover_omp_answer",
+    Some(Scope::OrchestrationOperate),
+    ThreadsRecoverOmpAnswerParams,
+    ThreadsRecoverOmpAnswerResult
+);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsUpdateParams {
     pub thread_id: ThreadId,
@@ -465,6 +549,14 @@ pub struct ThreadNotesSetParams {
 method!(ThreadNotesGet, "threads.notes.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadNotes);
 method!(ThreadNotesSet, "threads.notes.set", Some(Scope::OrchestrationOperate), ThreadNotesSetParams, ThreadNotes);
 method!(ThreadsSteer, "threads.steer", Some(Scope::OrchestrationOperate), QueuedMessage, ThreadsSendResult);
+method!(SubagentsSend, "subagents.send", Some(Scope::OrchestrationOperate), QueuedMessage, SubagentMessage);
+method!(SubagentsMessages, "subagents.messages", Some(Scope::OrchestrationRead), ThreadsInterruptParams, Vec<SubagentMessage>);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubagentMessageActionParams {
+    pub thread_id: ThreadId,
+    pub message_id: MessageId,
+}
+method!(SubagentsSendToParent, "subagents.send_to_parent", Some(Scope::OrchestrationOperate), SubagentMessageActionParams, SubagentMessage);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsInterruptParams {
@@ -1679,6 +1771,147 @@ pub struct PrListResult {
 }
 method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, PrListResult);
 
+// Native pull request review. Pages keep large repositories bounded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrDetailParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrCheck {
+    pub name: String,
+    pub status: String,
+    pub conclusion: String,
+    pub url: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrDetailResult {
+    pub pull_request: PullRequest,
+    pub body: String,
+    pub head_sha: String,
+    pub reviewers: Vec<String>,
+    pub checks: Vec<PrCheck>,
+    pub changed_files: u32,
+}
+method!(PrDetail, "github.pr.detail", Some(Scope::OrchestrationRead), PrDetailParams, PrDetailResult);
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrPageKind {
+    Files,
+    Comments,
+    Reviews,
+    ReviewComments,
+    Checks,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrPageParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+    pub kind: PrPageKind,
+    #[serde(default = "default_pr_page")]
+    pub page: u32,
+}
+fn default_pr_page() -> u32 {
+    1
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrFile {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub patch: String,
+    pub patch_truncated: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrReviewEntry {
+    pub id: u64,
+    pub author: String,
+    pub body: String,
+    pub state: String,
+    pub path: Option<String>,
+    pub line: Option<u32>,
+    pub side: Option<String>,
+    pub url: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrPageResult {
+    #[serde(default)]
+    pub checks: Vec<PrCheck>,
+    pub files: Vec<PrFile>,
+    pub entries: Vec<PrReviewEntry>,
+    pub page: u32,
+    pub has_more: bool,
+}
+method!(PrPage, "github.pr.page", Some(Scope::OrchestrationRead), PrPageParams, PrPageResult);
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrActionKind {
+    Comment,
+    Approve,
+    RequestChanges,
+    Checkout,
+    Merge,
+    Close,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrInlineComment {
+    pub path: String,
+    pub line: u32,
+    /// RIGHT for the new version, LEFT for a removed line.
+    pub side: String,
+    pub body: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrActionParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+    pub action: PrActionKind,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub inline_comments: Vec<PrInlineComment>,
+    /// Required for checkout, reviews and merge: reject a changed PR head.
+    #[serde(default)]
+    pub head_sha: String,
+    /// Checkout is allowed only into this inactive thread's managed worktree.
+    #[serde(default)]
+    pub thread_id: Option<ThreadId>,
+    /// Verified repair preparation may preserve local changes belonging to this PR.
+    #[serde(default)]
+    pub for_repair: bool,
+}
+method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeInspectParams {
+    pub thread_id: ThreadId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeInspectResult {
+    pub path: String,
+    pub branch: String,
+    pub exists: bool,
+    pub clean: bool,
+    pub merged: bool,
+    pub ignored_files: u32,
+    pub blockers: Vec<String>,
+    pub eligible: bool,
+}
+method!(WorktreeInspect, "threads.worktree.inspect", Some(Scope::OrchestrationRead), WorktreeInspectParams, WorktreeInspectResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeRemoveParams {
+    pub thread_id: ThreadId,
+    /// Explicit confirmation for dirty or unmerged work. Dirty source is retained in a recovery ref.
+    #[serde(default)]
+    pub force: bool,
+    /// Only merged branches can be deleted. The default keeps the branch.
+    #[serde(default)]
+    pub delete_branch: bool,
+}
+method!(WorktreeRemove, "threads.worktree.remove", Some(Scope::OrchestrationOperate), WorktreeRemoveParams, WorktreeInspectResult);
+
 // ---- files ----
 
 /// Find files in a project by fuzzy path match, for @mentions in the composer.
@@ -1882,6 +2115,67 @@ pub struct IntegrationLoginParams {
     pub name: String,
 }
 method!(IntegrationLogin, "integrations.login", Some(Scope::TerminalOperate), IntegrationLoginParams, TerminalInfo);
+
+// ---- inline HTML visual replies ----
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPublishParams {
+    pub thread_id: ThreadId,
+    pub html: String,
+    pub title: String,
+    pub height: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPublishResult {
+    pub visual: HtmlVisual,
+}
+method!(HtmlPublish, "threads.visuals.publish", Some(Scope::OrchestrationOperate), HtmlPublishParams, HtmlPublishResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPreviewParams {
+    pub thread_id: ThreadId,
+    pub html: String,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub appearance: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlConsoleMessage {
+    pub level: String,
+    pub text: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlPreviewResult {
+    pub width: u32,
+    pub content_height: u32,
+    pub captured_height: u32,
+    pub console_messages: Vec<HtmlConsoleMessage>,
+    pub missing_images: Vec<String>,
+    /// PNG screenshot, transient: never stored in the transcript event log.
+    pub screenshot: String,
+}
+method!(HtmlPreview, "threads.visuals.preview", Some(Scope::OrchestrationRead), HtmlPreviewParams, HtmlPreviewResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlReadParams {
+    pub thread_id: ThreadId,
+    pub visual_id: uuid::Uuid,
+    /// Optional source-preview byte budget. Full source remains the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u32>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlReadResult {
+    pub html: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+method!(HtmlRead, "threads.visuals.read", Some(Scope::OrchestrationRead), HtmlReadParams, HtmlReadResult);
+method!(HtmlFrame, "threads.visuals.frame", Some(Scope::OrchestrationRead), HtmlReadParams, ArtifactPreviewResult);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlRevokeParams {
+    pub thread_id: ThreadId,
+    pub ticket: String,
+}
+method!(HtmlRevoke, "threads.visuals.revoke", Some(Scope::OrchestrationRead), HtmlRevokeParams, Empty);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactsListParams {
@@ -2515,6 +2809,14 @@ registry!(
     SessionsList,
     SessionsResume,
     ProvidersList,
+    AccountsCreate,
+    AccountsSignIn,
+    AccountsUsage,
+    AccountsCatalog,
+    ThreadsTargetGet,
+    ThreadsTargetSet,
+    ThreadsPermissionsApply,
+    ThreadsSwitchContinue,
     HarnessUpdatesList,
     HarnessUpdatesRun,
     DaemonUpdateStatusMethod,
@@ -2531,10 +2833,14 @@ registry!(
     ThreadsCreate,
     ThreadsGet,
     ThreadsToolOutput,
+    ThreadsRecoverOmpAnswer,
     ThreadsUpdate,
     ThreadsArchive,
     ThreadsSend,
     ThreadsSteer,
+    SubagentsSend,
+    SubagentsMessages,
+    SubagentsSendToParent,
     ThreadNotesGet,
     ThreadNotesSet,
     NotesList,
@@ -2626,12 +2932,22 @@ registry!(
     GitCommit,
     PrCreate,
     PrList,
+    PrDetail,
+    PrPage,
+    PrAction,
+    WorktreeInspect,
+    WorktreeRemove,
     FilesSearch,
     FilesList,
     FilesRead,
     ThreadFileRead,
     SkillsList,
     IntegrationsList,
+    HtmlPublish,
+    HtmlPreview,
+    HtmlRead,
+    HtmlFrame,
+    HtmlRevoke,
     ArtifactsList,
     ArtifactRead,
     ArtifactPreview,

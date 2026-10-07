@@ -125,6 +125,17 @@ export interface ProviderInstance {
 export type PermissionMode =
   "supervised" | "accept-edits" | "auto" | "full-access";
 
+export interface ProviderAccount { name: string; directory: string }
+export interface SessionTarget { provider: ProviderInstance; model?: string | null; effort?: string | null }
+export interface ThreadTargetState {
+  target: SessionTarget;
+  native_session_id?: string | null;
+  account_override: boolean;
+  effective_permission_mode: PermissionMode;
+  pending_permission_mode?: PermissionMode | null;
+  quota_limited?: boolean;
+}
+
 export interface ProviderModel {
   /** Model selector accepted by the provider. */
   id: string;
@@ -680,7 +691,9 @@ export interface ToolCall {
 
 export type StopReason = "completed" | "interrupted" | "max_turns" | "error";
 
+export interface HtmlVisual { id: Uuid; title: string; height: number }
 export type TranscriptEntry =
+  | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual }
   | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }
   | {
       role: "user";
@@ -806,16 +819,31 @@ export type NoticeLevel = "info" | "warning" | "error";
 /** Why the daemon closed an agent process; the next message resumes the conversation. */
 export type SessionReleaseReason = "manual" | "idle" | "capacity" | "update" | "power";
 
+export interface RecoveredAssistantBlock {
+  message_id: MessageId;
+  content_index: number;
+  text: string;
+  thinking: string | null;
+  before_tool_call_id: string | null;
+  seq: EventSeq;
+  at: DateTime;
+}
+
 export type EventPayload =
+  | { kind: "assistant_message_blocks_recovered"; message_id: MessageId; session_id: string; native_entry_id: string; blocks: RecoveredAssistantBlock[]; terminal_message_id: MessageId }
+  | { kind: "html_published"; visual: HtmlVisual }
   | { kind: "async_questions_requested"; request: AsyncQuestionRequest }
   | { kind: "async_questions_answered"; request_id: string; answers: string[]; message_id: MessageId; message: UserMessage }
   | { kind: "thread_created"; thread: Thread }
   | { kind: "thread_updated"; thread: Thread }
   | { kind: "thread_archived" }
+  | { kind: "worktree_cleaned"; branch: string; recovery_commit: string }
+  | { kind: "worktree_restored"; branch: string }
   | { kind: "project_coordinator_deleted"; project_id: ProjectId; coordinator_thread_id: ThreadId }
   | { kind: "message_queued"; message: QueuedMessage }
   | { kind: "message_removed"; message_id: MessageId }
   | { kind: "message_queue_updated"; message: QueuedMessage }
+  | { kind: "subagent_message_updated"; message: SubagentMessage }
   | { kind: "message_steered"; message_id: MessageId; message: UserMessage }
   | { kind: "thread_notes_updated"; notes: ThreadNotes }
   | { kind: "thread_message_held"; message: ThreadMessageRecord }
@@ -829,6 +857,7 @@ export type EventPayload =
   | { kind: "collaboration_context_updated"; entry: ContextEntry }
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "turn_resumed" }
+  | { kind: "session_transitioned"; from: ProviderInstance; to: ProviderInstance; native_resume: boolean; text: string }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
   | { kind: "provider_session_released"; reason: SessionReleaseReason }
   | { kind: "image_received"; id: string; origin: EventOrigin; source: string }
@@ -1095,6 +1124,9 @@ export interface ThreadsGetParams {
   /** When true, completed output-delta streams are marked for exact lazy hydration. */
   defer_tool_stream?: boolean;
 }
+
+export interface ThreadsRecoverOmpAnswerParams { thread_id: ThreadId; turn_id: TurnId }
+export interface ThreadsRecoverOmpAnswerResult { recovered: boolean; native_entry_id: string; block_count: number; correction_seq: EventSeq }
 
 export interface ThreadsToolOutputParams {
   thread_id: ThreadId;
@@ -1546,6 +1578,9 @@ export interface EventsRangeResult {
 // ---- settings, usage, git, github ----
 
 export interface ProviderSettings {
+  accounts?: Record<string, ProviderAccount>;
+  default_account?: string | null;
+  project_accounts?: Record<string, string>;
   binary?: string | null;
   model?: string | null;
   env: Record<string, string>;
@@ -1572,6 +1607,7 @@ export interface Settings {
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
   worktrees_default: boolean;
+  automatic_worktree_cleanup?: boolean;
   generate_titles: boolean;
   title_provider?: ProviderKind | null;
   providers: Partial<Record<ProviderKind, ProviderSettings>>;
@@ -1840,6 +1876,21 @@ export interface PrListResult {
   pull_requests: PullRequest[];
 }
 
+export interface PrDetailParams { project_id: ProjectId; number: number }
+export interface PrCheck { name: string; status: string; conclusion: string; url: string }
+export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number }
+export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks";
+export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number }
+export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
+export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string }
+export interface PrPageResult { checks?: PrCheck[]; files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
+export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
+export interface PrInlineComment { path: string; line: number; side: string; body: string }
+export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId; for_repair?: boolean }
+export interface WorktreeInspectParams { thread_id: ThreadId }
+export interface WorktreeInspectResult { path: string; branch: string; exists: boolean; clean: boolean; merged: boolean; ignored_files: number; blockers: string[]; eligible: boolean }
+export interface WorktreeRemoveParams { thread_id: ThreadId; force?: boolean; delete_branch?: boolean }
+
 export interface ProvidersListParams {
   project_id?: ProjectId;
   /** Bypass the daemon's short-lived provider catalog cache. */
@@ -1966,6 +2017,9 @@ export interface QueuedMessage {
 export interface Methods {
   "queue.add": [QueuedMessage, Record<string, never>];
   "queue.update": [QueuedMessage, Record<string, never>];
+  "subagents.send": [QueuedMessage, SubagentMessage];
+  "subagents.messages": [ThreadsInterruptParams, SubagentMessage[]];
+  "subagents.send_to_parent": [SubagentMessageActionParams, SubagentMessage];
   "threads.steer": [QueuedMessage, ThreadsSendResult];
   "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
   "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
@@ -1997,6 +2051,14 @@ export interface Methods {
   "daemon.activity": [Empty, DaemonActivity];
   "sessions.list": [{ provider: ProviderKind; query?: string; project_id?: ProjectId | null; cursor?: string | null }, SessionsListResult];
   "sessions.resume": [{ provider: ProviderKind; session_id: string; project_id?: ProjectId | null }, Thread];
+  "providers.accounts.create": [{ kind: ProviderKind; name: string; directory?: string | null }, ProviderInstance];
+  "providers.accounts.sign_in": [ProviderInstance, TerminalInfo];
+  "providers.accounts.usage": [ProviderInstance, ProviderUsage];
+  "providers.accounts.catalog": [{ provider: ProviderInstance; project_id?: ProjectId | null; force_refresh?: boolean }, ProviderStatus];
+  "threads.target.get": [{ thread_id: ThreadId }, ThreadTargetState];
+  "threads.target.set": [{ thread_id: ThreadId; target: SessionTarget; inherit_account?: boolean }, ThreadTargetState];
+  "threads.permissions.apply": [{ thread_id: ThreadId }, Thread];
+  "threads.switch_continue": [{ thread_id: ThreadId; provider: ProviderInstance; message_id: MessageId }, ThreadsSendResult];
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];
@@ -2008,6 +2070,11 @@ export interface Methods {
   "files.read": [FilesReadParams, FilesReadResult];
   "threads.files.read": [ThreadFileReadParams, FilesReadResult];
   "skills.list": [SkillsListParams, SkillsListResult];
+  "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number }, { visual: HtmlVisual }];
+  "threads.visuals.preview": [{ thread_id: ThreadId; html: string; width?: number; appearance?: "dark" | "light" }, { width: number; content_height: number; captured_height: number; console_messages: {level: string; text: string}[]; missing_images: string[]; screenshot: string }];
+  "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { html: string; truncated?: boolean }];
+  "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { ticket: string }];
+  "threads.visuals.revoke": [{ thread_id: ThreadId; ticket: string }, Record<string, never>];
   "threads.artifacts.list": [{ thread_id: ThreadId; before_seq?: number | null; limit?: number }, { artifacts: ArtifactTool[]; next_before_seq: number | null }];
   "threads.artifacts.preview": [{ thread_id: ThreadId; path: string }, { ticket: string }];
   "threads.artifacts.read": [{ thread_id: ThreadId; path: string }, FilesReadResult];
@@ -2030,6 +2097,7 @@ export interface Methods {
   "threads.read": [{ thread_id: ThreadId; before_seq?: EventSeq | null; through_seq?: EventSeq | null; limit?: number; message_seq?: EventSeq | null; text_offset?: number | null }, ThreadsReadResult];
   "threads.create": [ThreadsCreateParams, Thread];
   "threads.get": [ThreadsGetParams, ThreadsGetResult];
+  "threads.recover_omp_answer": [ThreadsRecoverOmpAnswerParams, ThreadsRecoverOmpAnswerResult];
   "threads.tool_output": [ThreadsToolOutputParams, ThreadsToolOutputResult];
   "threads.update": [ThreadsUpdateParams, Thread];
   "threads.archive": [ThreadsArchiveParams, Empty];
@@ -2100,6 +2168,11 @@ export interface Methods {
   "git.commit": [GitCommitParams, GitCommitResult];
   "github.pr.create": [PrCreateParams, PullRequest];
   "github.pr.list": [PrListParams, PrListResult];
+  "github.pr.detail": [PrDetailParams, PrDetailResult];
+  "github.pr.page": [PrPageParams, PrPageResult];
+  "github.pr.action": [PrActionParams, Empty];
+  "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
+  "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
 }
 
 export type MethodName = keyof Methods;
@@ -2139,3 +2212,21 @@ export interface IntegrationsCatalog { items: Integration[]; warnings: string[] 
 export interface IntegrationChangeResult { message: string; connections: Integration[] }
 
 export interface ArtifactTool { seq: number; at: DateTime; call: ToolCall; output: JsonValue | null; is_error: boolean }
+
+export interface SubagentMessage {
+  id: MessageId;
+  thread_id: ThreadId;
+  root_thread_id: ThreadId;
+  task_id: string;
+  native_task_id: string;
+  session_instance_id: string;
+  turn_id: TurnId;
+  message: UserMessage;
+  status: "pending" | "delivered" | "failed";
+  error: string | null;
+  parent_message_id: MessageId | null;
+  parent_queued: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface SubagentMessageActionParams { thread_id: ThreadId; message_id: MessageId; }

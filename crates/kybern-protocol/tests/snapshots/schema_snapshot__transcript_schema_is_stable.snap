@@ -10,6 +10,37 @@ expression: schema_for!(TranscriptEntry)
     {
       "type": "object",
       "properties": {
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "visual": {
+          "$ref": "#/$defs/HtmlVisual"
+        },
+        "role": {
+          "type": "string",
+          "const": "visual"
+        }
+      },
+      "required": [
+        "role",
+        "turn_id",
+        "seq",
+        "at",
+        "visual"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
         "id": {
           "type": "string"
         },
@@ -396,6 +427,30 @@ expression: schema_for!(TranscriptEntry)
     }
   ],
   "$defs": {
+    "HtmlVisual": {
+      "description": "A durable, sandboxed HTML reply. Source bytes are stored separately from events.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "height": {
+          "description": "Agent-requested height cap in CSS pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "height"
+      ]
+    },
     "EventOrigin": {
       "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
       "oneOf": [

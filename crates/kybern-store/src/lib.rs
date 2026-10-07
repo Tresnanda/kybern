@@ -6,9 +6,11 @@
 mod notes;
 mod projection;
 mod schema;
+mod subagent_messages;
 mod tasks;
 mod thread_history;
 mod transcript_page;
+mod visuals;
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
@@ -1088,6 +1090,21 @@ impl Store {
         })
     }
 
+    /// Persist related session identities in one SQLite transaction.
+    pub fn meta_set_many(&self, values: &[(&str, &str)]) -> Result<()> {
+        self.with(|connection| {
+            let transaction = connection.unchecked_transaction()?;
+            for (key, value) in values {
+                transaction.execute(
+                    "INSERT INTO meta(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![key, value],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
     // ---- tokens ----
 
     pub fn token_insert(&self, id: Uuid, hash: &str, label: &str, scopes: &[Scope]) -> Result<()> {
@@ -2091,6 +2108,44 @@ impl Store {
         })
     }
 
+    /// Bounded recovery evidence for one turn. Never read large tool results or
+    /// streaming deltas just to restore explicit native message boundaries.
+    pub fn omp_recovery_events(&self, thread_id: ThreadId, turn_id: TurnId) -> Result<Vec<ThreadEvent>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT seq,thread_id,turn_id,at,payload FROM events
+                 WHERE thread_id=?1 AND turn_id=?2 AND kind IN
+                 ('turn_started','assistant_message_completed','tool_call_started','turn_completed',
+                  'provider_session_bound','assistant_message_blocks_recovered') ORDER BY seq LIMIT 10001",
+            )?;
+            let mut rows = statement.query(params![thread_id.to_string(), turn_id.to_string()])?;
+            let mut events = Vec::new();
+            let mut bytes = 0usize;
+            while let Some(row) = rows.next()? {
+                bytes = bytes.saturating_add(row.get_ref(4)?.as_str()?.len());
+                anyhow::ensure!(
+                    bytes <= 8 * 1024 * 1024 && events.len() < 10_000,
+                    "OMP recovery exceeds the 8 MB/10,000-event limit. Recover a shorter retained turn."
+                );
+                events.push(row_to_event(row)?);
+            }
+            Ok(events)
+        })
+    }
+
+    pub fn provider_session_before(&self, thread_id: ThreadId, through: EventSeq) -> Result<Option<ThreadEvent>> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT seq,thread_id,turn_id,at,payload FROM events
+                WHERE thread_id=?1 AND seq<=?2 AND kind='provider_session_bound' ORDER BY seq DESC LIMIT 1",
+                params![thread_id.to_string(), through],
+                row_to_event,
+            )
+            .optional()
+            .map_err(Into::into)
+        })
+    }
+
     /// Read only settled user/assistant messages, newest page first in SQL and
     /// returned in conversation order. This never hydrates a provider session.
     pub fn thread_message_events(
@@ -2102,14 +2157,15 @@ impl Store {
     ) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
             let before = before_seq.unwrap_or(i64::MAX).min(through_seq.saturating_add(1));
-            let mut st = c.prepare(
-                "SELECT seq,thread_id,turn_id,at,payload FROM (
-                   SELECT seq,thread_id,turn_id,at,payload FROM events
+            let assistant_text = thread_history::corrected_assistant_text_sql("e", "?2");
+            let mut st = c.prepare(&format!(
+                "SELECT seq,thread_id,turn_id,at,
+                   CASE WHEN kind='assistant_message_completed' THEN json_set(payload,'$.text',{assistant_text}) ELSE payload END
+                 FROM (SELECT seq,thread_id,turn_id,at,kind,payload FROM events
                    WHERE thread_id=?1 AND seq<=?2 AND seq<?3
                      AND kind IN ('turn_started','assistant_message_completed')
-                   ORDER BY seq DESC LIMIT ?4
-                 ) ORDER BY seq",
-            )?;
+                   ORDER BY seq DESC LIMIT ?4) e ORDER BY seq"
+            ))?;
             Ok(st
                 .query_map(params![thread_id.to_string(), through_seq, before, limit.clamp(1, 200) + 1], row_to_event)?
                 .collect::<Result<Vec<_>, _>>()?)
@@ -2928,6 +2984,7 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     parent_thread_id, coordinator_project_id, collaboration_group_id, subagent, delegation)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
                  ON CONFLICT(id) DO UPDATE SET
+                    provider_kind = excluded.provider_kind, provider_instance = excluded.provider_instance,
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
                     status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
                     cwd = excluded.cwd, provider_session_id = excluded.provider_session_id, pinned = excluded.pinned,
@@ -2968,6 +3025,23 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thread_updates_persist_the_admitted_harness_and_account() {
+        let (store, group) = collaboration_fixture();
+        let mut thread = store.thread_get(group.coordinator_thread_id).unwrap().unwrap();
+        let original = thread.provider.clone();
+        thread.provider = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+        thread.provider_session_id = Some("work-native".into());
+        store.thread_upsert(&thread).unwrap();
+        let saved = store.thread_get(thread.id).unwrap().unwrap();
+        assert_eq!(saved.provider, thread.provider);
+        assert_eq!(saved.provider_session_id, thread.provider_session_id);
+        thread.provider = original;
+        thread.provider_session_id = Some("original-native".into());
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().provider, thread.provider);
+    }
 
     fn collaboration_fixture() -> (Store, CollaborationGroup) {
         let store = Store::open_in_memory().unwrap();

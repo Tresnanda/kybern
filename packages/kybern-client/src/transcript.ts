@@ -23,6 +23,7 @@ import type {
 } from "./types.ts"
 
 export type Block =
+  | { kind: "visual"; id: string; turnId: TurnId; at: string; seq: number; visual: import("./types.ts").HtmlVisual }
   | { kind: "image"; id: string; turnId: TurnId; at: string; seq: number; source: string }
   | { kind: "user"; id: string; turnId: TurnId; at: string; seq: number; message: UserMessage }
   | {
@@ -85,6 +86,7 @@ export interface ThreadState {
   checkpoints: Checkpoint[]
   providerCommands?: import("./types.ts").ProviderCommand[]
   providerUsage?: ProviderUsage
+  subagentMessages?: import("./types.ts").SubagentMessage[]
   lastSeq: number
   loaded: boolean
   nextBeforeSeq?: number | null
@@ -105,6 +107,7 @@ export const emptyThreadState = (): ThreadState => ({
 export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadState {
   return {
     notes: res.notes,
+    subagentMessages: prev?.subagentMessages,
     providerCommands: res.provider_commands ?? [],
     providerUsage: res.provider_usage ?? {},
     thread: res.thread,
@@ -155,7 +158,8 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
     case "thread_notes_updated":
     case "approval_requested": case "user_input_requested": case "approval_resolved":
     case "async_questions_requested": case "async_questions_answered":
-    case "provider_commands_updated": case "provider_usage_updated":
+    case "provider_commands_updated": case "provider_usage_updated": case "session_transitioned":
+    case "subagent_message_updated":
       return compactThreadState(applyEvent(compact, event))
     default:
       return { ...compact, lastSeq: event.seq }
@@ -164,6 +168,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
 
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
+    case "visual": return { kind: "visual", id: e.visual.id, turnId: e.turn_id, at: e.at, seq: e.seq, visual: e.visual }
     case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null
     case "approval":
       return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null }
@@ -346,6 +351,24 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       }
       break
     }
+    case "assistant_message_blocks_recovered": {
+      if (!ev.turn_id) break
+      const recoveredIds = new Set(ev.blocks.map(block => block.message_id))
+      blocks = blocks.filter(block => !(block.kind === "assistant" && block.turnId === turnId && block.origin.kind === "root" &&
+        (block.messageId === ev.message_id || recoveredIds.has(block.messageId))))
+      for (const recovered of ev.blocks) {
+        const index = blocks.findIndex(block => block.turnId === turnId && (
+          block.kind === "tool" && block.origin.kind === "root" && block.call.id === recovered.before_tool_call_id ||
+          block.kind === "turn_end" && recovered.before_tool_call_id === null))
+        if (index < 0) continue // The original turn may be outside the loaded page.
+        const block: Block = { kind: "assistant", id: `${recovered.message_id}#0`, messageId: recovered.message_id,
+          segment: 0, turnId, seq: recovered.seq, at: recovered.at, origin: { kind: "root" },
+          text: recovered.text, thinking: recovered.thinking ?? "", thinkingComplete: true, complete: true }
+        blocks = [...blocks.slice(0, index), block, ...blocks.slice(index)]
+      }
+      blocks = blocks.map(block => block.kind === "turn_end" && block.turnId === turnId ? { ...block, terminalMessageId: ev.terminal_message_id } : block)
+      break
+    }
     case "tool_call_started":
       blocks = [
         ...blocks,
@@ -358,6 +381,10 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       // Once the exact stream is deferred, individual replay/live suffixes
       // would be incomplete. Keep the marker and recover the whole sequence.
       if (b && b.kind === "tool" && !b.streamOmitted) blocks = replaceAt(blocks, idx, { ...b, stream: b.stream + ev.delta })
+      break
+    }
+    case "html_published": {
+      if (ev.turn_id && !blocks.some(block => block.kind === "visual" && block.id === ev.visual.id)) blocks = [...blocks, { kind: "visual", id: ev.visual.id, turnId: ev.turn_id, at, seq: ev.seq, visual: ev.visual }]
       break
     }
     case "tool_call_completed": {
@@ -444,8 +471,16 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         },
       ]
       break
+    case "subagent_message_updated": {
+      const records = state.subagentMessages ?? []
+      const index = records.findIndex((record) => record.id === ev.message.id)
+      const subagentMessages = (index < 0 ? [...records, ev.message] : replaceAt(records, index, ev.message)).slice(-100)
+      return { ...state, subagentMessages, lastSeq: ev.seq }
+    }
     case "provider_commands_updated":
       return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
+    case "session_transitioned":
+      return { ...state, providerUsage: undefined, providerCommands: [], blocks: [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId: ev.turn_id ?? latestConversationTurnId(blocks), at, seq: ev.seq, level: "info", text: ev.text }], lastSeq: ev.seq }
     case "provider_usage_updated":
       return { ...state, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
     case "session_imported":
@@ -474,7 +509,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     default:
       break
   }
-  return { notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded, nextBeforeSeq: state.nextBeforeSeq, loadingEarlier: state.loadingEarlier }
+  return { subagentMessages: state.subagentMessages, notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded, nextBeforeSeq: state.nextBeforeSeq, loadingEarlier: state.loadingEarlier }
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {
@@ -500,6 +535,16 @@ function latestTurnId(blocks: readonly Block[]): TurnId {
     if (turnId) return turnId
   }
   return ""
+}
+
+function latestConversationTurnId(blocks: readonly Block[]): TurnId {
+  // Late background updates and historical corrections keep their old turn.
+  // Between-turn notices belong to the last conversation start/settlement.
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]
+    if (block?.turnId && (block.kind === "user" || block.kind === "turn_end")) return block.turnId
+  }
+  return latestTurnId(blocks)
 }
 
 /**
@@ -652,6 +697,7 @@ export interface TurnGroup {
   user: Extract<Block, { kind: "user" }> | null
   /** Tool calls, thinking, notices and intermediate assistant text, in order. */
   images: Extract<Block, { kind: "image" }>[]
+  visuals?: Extract<Block, { kind: "visual" }>[]
   work: Block[]
   /** Whole terminal root message. It is deliberately absent until settlement. */
   answer: Extract<Block, { kind: "assistant" }> | null
@@ -903,6 +949,9 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
       case "user":
         if (!g.user) g.user = b
         else g.work.push(b)
+        break
+      case "visual":
+        (g.visuals ??= []).push(b)
         break
       case "approval":
         g.approvals.push(b)

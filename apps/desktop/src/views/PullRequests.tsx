@@ -13,7 +13,8 @@ import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuTrigger } from "@/compon
 import { relativeTime } from "@/lib/format"
 import { mapWithConcurrency } from "@/lib/workload"
 import { CheckIcon, FilterIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestIcon, RefreshCwIcon } from "@/lib/kit/icons"
-import { openExternal } from "@/lib/tauri"
+import { openPullRequest } from "@/state/prReview"
+import { PrReview } from "./PrReview"
 import { cn } from "@/lib/utils"
 import type { Project, ProjectId, PullRequest } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"
@@ -40,6 +41,7 @@ interface Row {
 
 export function PullRequests() {
   const projects = useStore((s) => s.projects)
+  const selection = useStore((s) => s.prSelection)
   const [filter, setFilter] = useState<Filter>("open")
   const [projectId, setProjectId] = useState<ProjectId | null>(null)
   const [rows, setRows] = useState<Row[] | null>(null)
@@ -107,6 +109,8 @@ export function PullRequests() {
     for (const r of visible) m.set(r.project.id, [...(m.get(r.project.id) ?? []), r])
     return [...m.entries()]
   }, [visible])
+
+  if (selection) return <PrReview key={`${selection.projectId}:${selection.number}`} projectId={selection.projectId} number={selection.number} onBack={() => useStore.getState().set({ prSelection: null })} />
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
@@ -244,7 +248,7 @@ function PullRequestRow({ row }: { row: Row }) {
     <div className="group -mx-3 flex w-[calc(100%+1.5rem)] items-stretch rounded-lg text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]/70 focus-within:bg-[var(--color-background-elevated-secondary)]/70">
       <button
         type="button"
-        onClick={() => void openExternal(pr.url)}
+        onClick={() => openPullRequest(project.id, pr.number)}
         className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-lg py-1.5 pr-1 pl-3 text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
       >
         <span className="flex size-[1.125rem] shrink-0 items-center justify-center">{stateGlyph(pr)}</span>

@@ -27,8 +27,27 @@ export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id">>(
   return (
     catalog.find((model) => model.id === id) ??
     catalog.find((model) => model.resolved_id === id) ??
+    catalog.find((model) => sameCursorModel(model.id, id)) ??
     catalog.find((model) => !!model.resolved_id && withoutContext(model.resolved_id) === base)
   );
+}
+
+/** Older Cursor threads stored each effort as an opaque variant selector. */
+function cursorModelKey(selector: string): string | undefined {
+  if (!selector.startsWith("cursor-model:")) return undefined;
+  try {
+    const encoded = selector.slice(13).replaceAll("-", "+").replaceAll("_", "/");
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    const selection = JSON.parse(new TextDecoder().decode(bytes)) as {id: string; params: {id: string; value: string}[]};
+    if (typeof selection.id !== "string" || !Array.isArray(selection.params)) return undefined;
+    const params = selection.params.filter((param) => !["effort", "reason_effort", "reasoning_effort", "reasoningEffort"].includes(param.id));
+    return JSON.stringify([selection.id, params.sort((a, b) => a.id.localeCompare(b.id))]);
+  } catch { return undefined; }
+}
+
+function sameCursorModel(left: string, right: string): boolean {
+  const key = cursorModelKey(left);
+  return key !== undefined && key === cursorModelKey(right);
 }
 
 function withoutContext(id: string) {
@@ -191,17 +210,19 @@ export function rememberModel(recent: readonly string[], id: string, limit = 5):
 export interface FavoriteModel {
   kind: string;
   id: string;
+  /** Missing on legacy favorites means the regular CLI account. */
+  instance?: string;
 }
 
-export function isFavorite(favorites: readonly FavoriteModel[], kind: string, id: string): boolean {
-  return favorites.some((item) => item.kind === kind && item.id === id);
+export function isFavorite(favorites: readonly FavoriteModel[], kind: string, id: string, instance = "default"): boolean {
+  return favorites.some((item) => item.kind === kind && item.id === id && (item.instance ?? "default") === instance);
 }
 
 /** Adds or removes a favorite; new favorites go last so the list keeps the order they were starred in. */
-export function toggleFavorite(favorites: readonly FavoriteModel[], kind: string, id: string): FavoriteModel[] {
-  return isFavorite(favorites, kind, id)
-    ? favorites.filter((item) => item.kind !== kind || item.id !== id)
-    : [...favorites, { kind, id }];
+export function toggleFavorite(favorites: readonly FavoriteModel[], kind: string, id: string, instance = "default"): FavoriteModel[] {
+  return isFavorite(favorites, kind, id, instance)
+    ? favorites.filter((item) => item.kind !== kind || item.id !== id || (item.instance ?? "default") !== instance)
+    : [...favorites, { kind, id, ...(instance === "default" ? {} : { instance }) }];
 }
 
 /** A discovered catalog is a set of suggestions, not an allowlist. */

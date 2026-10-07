@@ -1,3 +1,6 @@
+import { AccountPicker } from "@/components/kybern/AccountPicker"
+import type { ThreadTargetState, SessionTarget, ProviderStatus } from "@/protocol"
+import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
 import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
@@ -13,7 +16,7 @@ import { TextSwap } from "@/components/kybern/motion"
 // actions, dock toggle), the transcript scrolling under the frosted composer,
 // queued follow-ups stacked above the input and the approval card.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useHotkey } from "@/lib/hooks"
 import { toast } from "sonner"
 
@@ -67,7 +70,7 @@ import { ComputerLiveView } from "./ComputerLiveView"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import { isFreeChatProject, type ApprovalRequest, type JsonValue, type RuntimeTask, type ThreadId, type UserMessage } from "@/protocol"
+import { ConnectionClosedError, isFreeChatProject, type ApprovalRequest, type JsonValue, type RuntimeTask, type ThreadId, type UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { activeRuntime, subscribeCollaboration, archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
 import { canSplitPane, type PaneId } from "@/state/splitView"
@@ -76,12 +79,14 @@ import { windowHoldsTranscript } from "@/state/windowSurfaceState"
 
 import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/kit/chat/composerPickerStyles"
 
+import { AccountRequestSequence } from "@/state/accountRequests"
 import { Composer, type ComposerHandle, type SlashCommand } from "./Composer"
 import { ENVIRONMENT_DOCKED_CONTENT_INSET_PX, EnvironmentPanel } from "./Environment"
 import { Transcript } from "./Transcript"
 import { SubagentStrip } from "./subagents/SubagentStrip"
 import { HeldMessagesPanel } from "./delegations/HeldMessagesPanel"
 import { structuredMessageBody, structuredMessageSummary } from "../../../../packages/kybern-client/src/delegations.ts"
+import { NativeSubagentComposer } from "./subagents/NativeSubagentComposer"
 import { SubagentBar, SubagentBreadcrumb } from "./subagents/SubagentPage"
 import { openParentOf, openParentShortcut, stopOneSubagent, useAncestors, useHelperThreads, useSubagentDepth } from "@/state/subagents"
 import { pageDirection, playPageMotion, lastInputWasPointer } from "@/lib/navMotion"
@@ -147,6 +152,83 @@ export function ThreadView({
   const page = useRef<HTMLDivElement>(null)
   const previousDepth = useRef<{ id: ThreadId; depth: number } | null>(null)
   const [overlayHeight, setOverlayHeight] = useState(120)
+  const [nextTarget, setNextTarget] = useState<{ threadId: string; environmentId: string; settings: typeof settings; state: ThreadTargetState } | null>(null)
+  const [accountCatalog, setAccountCatalog] = useState<{ key: string; settings: typeof settings; status: ProviderStatus } | null>(null)
+  const targetRequests = useRef(new AccountRequestSequence())
+  const catalogGeneration = useRef(0)
+  const targetEnvironmentId = useStore((s) => s.environmentId)
+  const connected = useStore((s) => s.connection.state === "open")
+  const hasThread = !!thread
+  const readOnlyThread = !!thread?.subagent
+  useEffect(() => {
+    if (!connected || !hasThread || readOnlyThread) return
+    const request = targetRequests.current.read({ threadId, settings, environmentId: targetEnvironmentId })
+    if (!request) return
+    let canceled = false
+    void Promise.resolve().then(async () => {
+      if (canceled) return
+      const state = await rpc().call("threads.target.get", { thread_id: threadId })
+      if (!canceled && targetRequests.current.accepts(request)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
+    }).catch((error) => { if (!canceled && targetRequests.current.accepts(request) && !(error instanceof ConnectionClosedError)) toast.error("Unable to load account selection", { description: errorText(error) }) })
+    return () => { canceled = true }
+  }, [threadId, thread?.status, thread?.provider.instance, thread?.model, settings, hasThread, readOnlyThread, targetEnvironmentId, connected])
+  const targetState = nextTarget?.threadId === threadId && nextTarget.environmentId === targetEnvironmentId && nextTarget.settings === settings ? nextTarget.state : null
+  const target = targetState?.target ?? (thread ? { provider: thread.provider, model: thread.model, effort: thread.effort } : null)
+  const catalogKey = target ? `${targetEnvironmentId}:${threadId}:${target.provider.kind}:${target.provider.instance}` : ""
+  const targetChanged = !!target && !!thread && (target.provider.kind !== thread.provider.kind || target.provider.instance !== thread.provider.instance)
+  const targetKind = target?.provider.kind
+  const targetInstance = target?.provider.instance
+  const targetProjectId = thread?.project_id
+  const refreshAccountCatalog = useCallback(async (provider: import("@/protocol").ProviderInstance, forceRefresh: boolean): Promise<ProviderStatus | undefined> => {
+    if (readOnlyThread || provider.kind !== targetKind || provider.instance !== targetInstance || !targetProjectId) return
+    const generation = ++catalogGeneration.current
+    try {
+      const status = await rpc().call("providers.accounts.catalog", { provider, project_id: targetProjectId, force_refresh: forceRefresh })
+      if (generation !== catalogGeneration.current) return
+      setAccountCatalog({ key: catalogKey, settings, status })
+      return status
+    } catch (error) {
+      if (generation === catalogGeneration.current) throw error
+    }
+  }, [catalogKey, targetKind, targetInstance, targetProjectId, readOnlyThread, settings])
+  useEffect(() => {
+    if (!connected || !targetKind || !targetInstance || !targetProjectId || readOnlyThread) return
+    let canceled = false
+    const generation = catalogGeneration
+    void Promise.resolve().then(() => {
+      if (!canceled) return refreshAccountCatalog({ kind: targetKind, instance: targetInstance }, false)
+    }).catch((error) => { if (!canceled && !(error instanceof ConnectionClosedError)) toast.error("Unable to load account models", { description: errorText(error) }) })
+    return () => { canceled = true; generation.current++ }
+  }, [refreshAccountCatalog, targetKind, targetInstance, targetProjectId, readOnlyThread, connected])
+  const composerProviders = useMemo(() => providers.map((status) => status.kind !== targetKind ? status : accountCatalog?.key === catalogKey && accountCatalog.settings === settings ? accountCatalog.status : { ...status, models: [] }), [providers, targetKind, accountCatalog, catalogKey, settings])
+  const chooseTarget = async (selection: SessionTarget, inherit = !targetState?.account_override) => {
+    const scope = { threadId, settings, environmentId: targetEnvironmentId }
+    const request = targetRequests.current.select(scope)
+    try {
+      const state = await rpc().call("threads.target.set", { thread_id: threadId, target: selection, inherit_account: inherit })
+      if (targetRequests.current.finish(request)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
+    } catch (error) {
+      if (!targetRequests.current.finish(request)) return
+      // A previous request may already have succeeded. Reconcile the admitted
+      // next target without discarding draft input after this selection failed.
+      const reload = targetRequests.current.read(scope)
+      if (reload) await rpc().call("threads.target.get", { thread_id: threadId }).then((state) => {
+        if (targetRequests.current.accepts(reload)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
+      }).catch(() => {})
+      throw error
+    }
+  }
+  const reloadTargetState = async () => {
+    const request = targetRequests.current.read({ threadId, settings, environmentId: targetEnvironmentId })
+    if (!request) return
+    const state = await rpc().call("threads.target.get", { thread_id: threadId })
+    if (targetRequests.current.accepts(request)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
+  }
+  const changePermission = async (mode: import("@/protocol").PermissionMode) => {
+    await updateThread(threadId, { permission_mode: mode })
+    await reloadTargetState()
+  }
+
 
   useEffect(() => {
     if (!loaded && windowHoldsTranscript()) void loadThread(threadId)
@@ -285,7 +367,8 @@ export function ThreadView({
     await sendMessage(threadId, message)
   }
 
-  const onSteer = ["claude-code", "codex", "pi", "omp"].includes(thread.provider.kind) ? async (message: UserMessage) => {
+  const handoffSelected = !!target && (targetChanged || (target.model ?? null) !== (thread.model ?? null) || (target.effort ?? null) !== (thread.effort ?? null))
+  const onSteer = handoffSelected || ["claude-code", "codex", "pi", "omp"].includes(thread.provider.kind) ? async (message: UserMessage) => {
     const signature = JSON.stringify([threadId, message])
     if (steeringAttempt.current?.signature !== signature) steeringAttempt.current = { signature, id: crypto.randomUUID() }
     await rpc().call("threads.steer", { thread_id: threadId, id: steeringAttempt.current.id, message })
@@ -350,7 +433,7 @@ export function ThreadView({
           }}
         >
           <div className="pointer-events-auto flex min-h-0 flex-col">
-            {thread.subagent ? <SubagentBar thread={thread} /> : <Composer
+            {thread.subagent ? thread.provider.kind === "claude-code" ? <NativeSubagentComposer key={thread.id} isFocused={isFocused} thread={thread} providers={providers} surfaceMode={splitPaneId ? "split" : "single"} /> : <SubagentBar thread={thread} /> : <Composer
               className="thread-composer"
               showProviderUsage
               providerUsage={providerUsage}
@@ -364,25 +447,37 @@ export function ThreadView({
               onStop={() => void interrupt(threadId)}
               onSend={onSend}
               onSteer={onSteer}
-              mode={thread.permission_mode}
-              onModeChange={(m) => updateThread(threadId, { permission_mode: m }).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
-              provider={thread.provider}
-              providerSessionId={thread.provider_session_id}
-              providers={providers}
-              onProviderChange={canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined}
-              model={thread.model}
-              effort={thread.effort}
+              mode={targetChanged ? targetState?.pending_permission_mode ?? thread.permission_mode : thread.permission_mode}
+              onModeChange={(m) => changePermission(m).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
+              provider={target?.provider ?? thread.provider}
+              accountControl={target && <AccountPicker provider={target.provider} settings={settings?.providers[target.provider.kind]} inherited={!targetState?.account_override} onChange={(instance) => void chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null).catch((error) => toast.error("Unable to change account", { description: errorText(error) }))} />}
+              providerSessionId={targetState?.native_session_id ?? null}
+              providers={composerProviders}
+              onRefreshModels={refreshAccountCatalog}
+              onProviderChange={thread.coordinator_project_id ? canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined : (provider, choice) => chooseTarget({ provider, model: choice?.model, effort: choice?.effort }, true)}
+              model={target?.model ?? undefined}
+              effort={target?.effort ?? undefined}
               surfaceMode={splitPaneId ? "split" : "single"}
               onModelChange={thread.coordinator_project_id
                 ? canSwitchCoordinator
                   ? (model, effort) => switchCoordinatorHarness(thread.provider, model, effort)
                   : undefined
-                : (model, effort) => updateThread(threadId, { model, effort })}
+                : (model, effort) => target ? chooseTarget({ ...target, model, effort }) : Promise.resolve()}
               projectId={freeChat ? undefined : thread.project_id}
               commands={commands}
               onDigit={(n) => answer(n)}
               above={
                 <ComposerPanelStack closed={hideInput}>
+                  {targetState?.pending_permission_mode && <ComposerStackedPanel>
+                    <ComposerStackedPanelRow compact>
+                      <ComposerStackedPanelRowMain>{targetChanged ? "Selected agent uses" : "Permissions change to"} {targetState.pending_permission_mode === "full-access" ? "Full access" : targetState.pending_permission_mode} {targetChanged ? "with your next message." : "after this turn."}</ComposerStackedPanelRowMain>
+                      {!targetChanged && <Button variant="ghost" size="sm" onClick={() => void rpc().call("threads.permissions.apply", { thread_id: threadId }).then(async (applied) => {
+                        set((state) => ({ threads: { ...state.threads, [threadId]: applied } }))
+                        await reloadTargetState()
+                      }).catch((error) => toast.error("Unable to apply permissions", { description: errorText(error) }))}>Stop and apply now</Button>}
+                    </ComposerStackedPanelRow>
+                  </ComposerStackedPanel>}
+                  <AccountLimitRecovery threadId={threadId} provider={thread.provider} />
                   {thread.coordinator_project_id && <CoordinatorControlsPanel key={thread.id} thread={thread} />}
                   {helperThreads.length > 0 && <HelperThreadsPanel threads={helperThreads} />}
                   <SubagentStrip
@@ -407,6 +502,44 @@ export function ThreadView({
       </div>
     </div>
   )
+}
+
+function AccountLimitRecovery({ threadId, provider }: { threadId: string; provider: import("@/protocol").ProviderInstance }) {
+  const connected = useStore((state) => state.connection.state === "open")
+  const environmentId = useStore((state) => state.environmentId)
+  const threadStatus = useStore((state) => state.threads[threadId]?.status)
+  const latestEnd = useStore((state) => {
+    const end = state.transcripts[threadId]?.blocks.findLast((block) => block.kind === "turn_end")
+    return end ? `${end.turnId}:${end.seq}` : ""
+  })
+  const limitsKey = useStore((state) => JSON.stringify(state.transcripts[threadId]?.providerUsage?.limits ?? null))
+  const identity = JSON.stringify([environmentId, threadId, provider.kind, provider.instance, threadStatus, latestEnd, limitsKey])
+  const [confirmation, setConfirmation] = useState<{ identity: string; limited: boolean } | null>(null)
+  useEffect(() => {
+    if (!connected || (threadStatus !== "failed" && threadStatus !== "idle")) return
+    let canceled = false
+    void Promise.resolve().then(async () => {
+      if (canceled) return
+      const state = await rpc().call("threads.target.get", { thread_id: threadId })
+      if (!canceled) setConfirmation({ identity, limited: state.quota_limited === true })
+    }).catch(() => { if (!canceled) setConfirmation({ identity, limited: false }) })
+    return () => { canceled = true }
+  }, [threadId, threadStatus, identity, connected])
+  const accounts = useStore((state) => state.settings?.providers[provider.kind]?.accounts)
+  const [selected, setSelected] = useState("")
+  const [busy, setBusy] = useState(false)
+  const attempt = useRef<string | null>(null)
+  if (!connected || confirmation?.identity !== identity || !confirmation.limited) return null
+  const options = [{ id: "default", name: "Default account" }, ...Object.entries(accounts ?? {}).map(([id, account]) => ({ id, name: account.name }))].filter((account) => account.id !== provider.instance)
+  const choice = options.find((account) => account.id === selected) ?? options[0]
+  return <ComposerStackedPanel><ComposerStackedPanelRow compact>
+    <ComposerStackedPanelRowMain><span>Account usage limit reached</span><span className="block text-xs text-muted-foreground">Choose an account to continue the interrupted task in this conversation.</span></ComposerStackedPanelRowMain>
+    {choice ? <><Menu><MenuTrigger render={<Button variant="ghost" size="sm" />}>{choice.name}</MenuTrigger><ComposerPickerMenuPopup align="end" side="top"><MenuGroup>{options.map((account) => <MenuItem key={account.id} onClick={() => { setSelected(account.id); attempt.current = null }}>{account.name}</MenuItem>)}</MenuGroup></ComposerPickerMenuPopup></Menu>
+      <Button variant="chrome-outline" size="sm" disabled={busy} onClick={() => {
+        setBusy(true); attempt.current ??= crypto.randomUUID()
+        void rpc().call("threads.switch_continue", { thread_id: threadId, provider: { kind: provider.kind, instance: choice.id }, message_id: attempt.current }).catch((problem) => toast.error("Unable to continue", { description: errorText(problem) })).finally(() => setBusy(false))
+      }}>Switch and continue</Button></> : <Button variant="ghost" size="sm" onClick={() => useStore.getState().set({ settingsOpen: true, settingsTab: "agents" })}>Add an account</Button>}
+  </ComposerStackedPanelRow></ComposerStackedPanel>
 }
 
 function CoordinatorControlsPanel({ thread }: { thread: import("@/protocol").Thread }) {
@@ -955,6 +1088,7 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
                     <MenuItem variant="destructive" onClick={() => thread.coordinator_project_id ? setDeleting(true) : void archiveThread(threadId).catch((error) => toast.error(errorText(error)))}>
                       <ArchiveIcon /> {thread.coordinator_project_id ? "Delete coordinator" : "Archive"}
                     </MenuItem>
+                    {thread.worktree && !thread.delegation && !thread.subagent && <MenuItem onClick={() => offerWorktreeCleanup(threadId)}>Remove worktree…</MenuItem>}
                   </MenuGroup>
                 </>
               )}

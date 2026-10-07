@@ -1,6 +1,6 @@
 import type { DelegationInfo, RuntimeTaskStatus, SubagentInfo } from "./types.ts";
 
-/** A read-only child thread that mirrors a provider-native subagent. */
+/** A child thread that mirrors a provider-native subagent. Native input has a dedicated route. */
 export function isSubagentThread(thread: { subagent?: SubagentInfo | null } | null | undefined): boolean {
   return !!thread?.subagent;
 }

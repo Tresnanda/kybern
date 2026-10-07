@@ -28,6 +28,7 @@ import {
   type ProviderKind,
   type ProviderInstance,
   type ProviderStatus,
+  type Settings,
   type RuntimeTask,
   type SkillInfo,
   type ThreadEvent,
@@ -223,6 +224,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
             detail: detail ?? "Connection closed",
           },
         })
+      }
+    })
+    client.onNotification("settings.changed", (params) => {
+      const settings = (params as { settings?: Settings } | null)?.settings
+      if (!disposed && settings) {
+        useStore.getState().set({ settings, providers: [] })
+        void refreshProviders().catch(() => {})
       }
     })
     client.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
@@ -1063,6 +1071,12 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       return { threads }
     })
     useStore.getState().removeThreadFromSplit(threadId)
+    const archived = useStore.getState().threads[threadId]
+    if (archived?.worktree && !archived.delegation && !archived.subagent) {
+      void rpc().call("threads.worktree.inspect", { thread_id: threadId }).then((inspection) => {
+        if (inspection.exists) useStore.getState().set({ worktreeCleanupThread: threadId })
+      }).catch(() => { /* Manual cleanup remains available in the thread menu. */ })
+    }
   }
 
   async function revertTo(threadId: ThreadId, turnId: TurnId) {
@@ -1120,6 +1134,11 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       }
       throw error
     }
+  }
+
+  async function visualFrameUrl(threadId: string, visualId: string): Promise<{url: string; ticket: string}> {
+    const { ticket } = await rpc().call("threads.visuals.frame", { thread_id: threadId, visual_id: visualId })
+    return { url: `${httpBase}/visual-frame/${encodeURIComponent(ticket)}`, ticket }
   }
 
   async function artifactPreviewUrl(threadId: string, path: string): Promise<string> {
@@ -1195,6 +1214,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     fetchThreadImage,
     fetchAssetImage,
     artifactPreviewUrl,
+    visualFrameUrl,
     subscribeCollaboration,
   }
 }

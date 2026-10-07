@@ -79,6 +79,43 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "Worktree metadata stays on the thread; this ref retains the recoverable source.",
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "recovery_commit": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "worktree_cleaned"
+        }
+      },
+      "required": [
+        "kind",
+        "branch",
+        "recovery_commit"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "worktree_restored"
+        }
+      },
+      "required": [
+        "kind",
+        "branch"
+      ]
+    },
+    {
       "description": "A saved native conversation was adopted without replaying its tools.",
       "type": "object",
       "properties": {
@@ -141,6 +178,22 @@ expression: schema_for!(ThreadEvent)
         "kind": {
           "type": "string",
           "const": "message_queue_updated"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/SubagentMessage"
+        },
+        "kind": {
+          "type": "string",
+          "const": "subagent_message_updated"
         }
       },
       "required": [
@@ -553,6 +606,60 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "Explicit native OMP boundaries recovered without rewriting old events.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "native_entry_id": {
+          "type": "string"
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecoveredAssistantBlock"
+          }
+        },
+        "terminal_message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "const": "assistant_message_blocks_recovered"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "session_id",
+        "native_entry_id",
+        "blocks",
+        "terminal_message_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "visual": {
+          "$ref": "#/$defs/HtmlVisual"
+        },
+        "kind": {
+          "type": "string",
+          "const": "html_published"
+        }
+      },
+      "required": [
+        "kind",
+        "visual"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "call": {
@@ -850,6 +957,35 @@ expression: schema_for!(ThreadEvent)
       "required": [
         "kind",
         "commands"
+      ]
+    },
+    {
+      "description": "A same-thread native account/harness transition. Context telemetry and\ncommands from the outgoing session no longer describe the new session.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "to": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "native_resume": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "session_transitioned"
+        }
+      },
+      "required": [
+        "kind",
+        "from",
+        "to",
+        "native_resume",
+        "text"
       ]
     },
     {
@@ -1992,6 +2128,91 @@ expression: schema_for!(ThreadEvent)
         "status"
       ]
     },
+    "SubagentMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "root_thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "native_task_id": {
+          "description": "Daemon-local admitted process. Never reuse this input in a replacement session.",
+          "type": "string"
+        },
+        "session_instance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "message": {
+          "$ref": "#/$defs/UserMessage"
+        },
+        "status": {
+          "$ref": "#/$defs/SubagentMessageStatus"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_message_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "parent_queued": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "root_thread_id",
+        "task_id",
+        "native_task_id",
+        "session_instance_id",
+        "turn_id",
+        "message",
+        "status",
+        "parent_queued",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "SubagentMessageStatus": {
+      "description": "Delivery through one native child's next tool callback. Pending is not delivered.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "delivered",
+        "failed"
+      ]
+    },
     "ThreadNotes": {
       "description": "A user-owned notepad, separate from the agent's conversation.",
       "type": "object",
@@ -2774,6 +2995,75 @@ expression: schema_for!(ThreadEvent)
             "task_id"
           ]
         }
+      ]
+    },
+    "RecoveredAssistantBlock": {
+      "description": "One retained native text/thinking block, placed immediately before the next\nnative tool invocation, or before the turn summary after the final tool.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "content_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string"
+        },
+        "thinking": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "before_tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "message_id",
+        "content_index",
+        "text",
+        "seq",
+        "at"
+      ]
+    },
+    "HtmlVisual": {
+      "description": "A durable, sandboxed HTML reply. Source bytes are stored separately from events.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "height": {
+          "description": "Agent-requested height cap in CSS pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "height"
       ]
     },
     "ToolCall": {

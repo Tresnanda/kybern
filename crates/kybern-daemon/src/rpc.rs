@@ -47,7 +47,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 )),
                 None => None,
             };
-            let settings = crate::settings::provider_settings(&state.settings.get(), p.provider, cwd.as_deref().and_then(|p| p.to_str()));
+            let snapshot = state.settings.get();
+            let raw_provider = snapshot.providers.get(&p.provider).cloned().unwrap_or_default();
+            let instance = crate::provider_accounts::resolve(&raw_provider, cwd.as_deref().and_then(|path| path.to_str()), None);
+            let settings = crate::settings::provider_settings(&snapshot, p.provider, cwd.as_deref().and_then(|p| p.to_str()));
             let context = kybern_drivers::ProbeContext { binary: settings.binary.map(std::path::PathBuf::from), cwd, env: settings.env };
             let driver = state.drivers.get(p.provider).ok_or_else(|| RpcError::not_found("harness"))?;
             let mut result =
@@ -56,7 +59,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             for session in &mut result.sessions {
                 session.thread_id = threads
                     .iter()
-                    .find(|thread| thread.provider.kind == session.provider && thread.provider_session_id.as_deref() == Some(&session.id))
+                    .find(|thread| {
+                        thread.provider.kind == session.provider
+                            && thread.provider.instance == instance
+                            && thread.provider_session_id.as_deref() == Some(&session.id)
+                    })
                     .map(|thread| thread.id);
             }
             ok(result)
@@ -94,7 +101,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                         };
                         async move {
                             match driver {
-                                Some(driver) => driver.probe_with_context(&context).await,
+                                Some(driver) => {
+                                    let mut status = driver.probe_with_context(&context).await;
+                                    status.instances =
+                                        std::iter::once("default".to_string()).chain(provider_settings.accounts.keys().cloned()).collect();
+                                    status
+                                }
                                 None => ProviderStatus {
                                     kind,
                                     display_name: kind.display_name().to_string(),
@@ -118,6 +130,20 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .await;
             ok(ProvidersListResult { providers })
         }
+        AccountsCreate::NAME => ok(crate::provider_accounts::create(state, parse(params)?).map_err(bad)?),
+        AccountsSignIn::NAME => ok(crate::provider_accounts::sign_in(state, parse(params)?).map_err(provider_err)?),
+        AccountsCatalog::NAME => ok(crate::provider_accounts::catalog(state, parse(params)?).await.map_err(provider_err)?),
+        AccountsUsage::NAME => ok(crate::provider_accounts::usage(state, parse(params)?).await.map_err(provider_err)?),
+        ThreadsTargetGet::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            ok(state.orchestrator.thread_target(p.thread_id).map_err(bad)?)
+        }
+        ThreadsTargetSet::NAME => ok(state.orchestrator.set_thread_target(parse(params)?).await.map_err(bad)?),
+        ThreadsPermissionsApply::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            ok(state.orchestrator.apply_pending_permission(p.thread_id, true).await.map_err(provider_err)?)
+        }
+        ThreadsSwitchContinue::NAME => ok(state.orchestrator.switch_continue(parse(params)?).await.map_err(provider_err)?),
         HarnessUpdatesList::NAME => ok(HarnessUpdatesResult { updates: state.harness_updates.list() }),
         HarnessUpdatesRun::NAME => {
             let p: HarnessUpdateParams = parse(params)?;
@@ -278,6 +304,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 pending_questions: projection.pending_questions.clone(),
             })
         }
+        ThreadsRecoverOmpAnswer::NAME => {
+            let p: ThreadsRecoverOmpAnswerParams = parse(params)?;
+            ok(state.orchestrator.recover_omp_answer(p).await.map_err(bad)?)
+        }
         ThreadsToolOutput::NAME => {
             let p: ThreadsToolOutputParams = parse(params)?;
             if p.start_seq.is_some_and(|seq| seq < 0) || p.through_seq.is_some_and(|seq| seq < 0) {
@@ -300,11 +330,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
-            let mode = p.permission_mode;
-            let model = p.model.clone();
-            let effort = p.effort.clone();
-            let thread = state.orchestrator.update_thread_fields(p).map_err(bad)?;
-            state.orchestrator.apply_session_settings(thread.id, mode, model.as_deref(), effort.as_deref()).await.map_err(provider_err)?;
+            let thread = state.orchestrator.update_session_fields(p).await.map_err(provider_err)?;
             ok(thread)
         }
         ThreadsArchive::NAME => {
@@ -320,6 +346,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             })?;
             ok(sent)
         }
+        SubagentsSend::NAME => ok(state.orchestrator.send_subagent_message(parse(params)?).await.map_err(bad)?),
+        SubagentsMessages::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            ok(state.orchestrator.subagent_messages(p.thread_id).await.map_err(bad)?)
+        }
+        SubagentsSendToParent::NAME => ok(state.orchestrator.send_subagent_message_to_parent(parse(params)?).await.map_err(bad)?),
         ThreadsSteer::NAME => ok(state.orchestrator.steer(parse(params)?).await.map_err(bad)?),
         ThreadNotesGet::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
@@ -616,7 +648,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
-            ok(state.settings.set(p.settings).map_err(internal)?)
+            let updated = state.settings.set(p.settings).map_err(internal)?;
+            state.orchestrator.usage().settings_changed();
+            ok(updated)
         }
         UsageSummary::NAME => {
             let p: UsageSummaryParams = parse_or_default(params)?;
@@ -678,6 +712,30 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ThreadFileReadParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::files::read_thread_file(std::path::Path::new(&thread.cwd), &p.path, p.max_bytes).await.map_err(bad)?)
+        }
+        HtmlPublish::NAME => {
+            let p: HtmlPublishParams = parse(params)?;
+            let turn = state
+                .store
+                .visual_latest_turn(p.thread_id)
+                .map_err(internal)?
+                .ok_or_else(|| RpcError::invalid_params("Send a message in this thread before publishing a visual."))?;
+            let event = crate::visuals::publish(&state.store, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
+            let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
+            let result = HtmlPublishResult { visual: visual.clone() };
+            let _ = state.events.send(event);
+            ok(result)
+        }
+        HtmlPreview::NAME => {
+            let p: HtmlPreviewParams = parse(params)?;
+            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::visuals::preview(&state.paths, p).await.map_err(bad)?)
+        }
+        HtmlRead::NAME => ok(crate::visuals::read(&state.store, parse(params)?).map_err(bad)?),
+        HtmlFrame::NAME => ok(crate::visuals::issue(&state.store, parse(params)?).map_err(bad)?),
+        HtmlRevoke::NAME => {
+            crate::visuals::revoke(parse(params)?);
+            ok(Empty {})
         }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
@@ -786,6 +844,34 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(PrListResult {
                 pull_requests: crate::github::pr_list(std::path::Path::new(&project.path), &p.state, p.limit).await.map_err(bad)?,
             })
+        }
+        PrDetail::NAME => {
+            let p: PrDetailParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(crate::github_review::detail(std::path::Path::new(&project.path), p.number).await.map_err(bad)?)
+        }
+        PrPage::NAME => {
+            let p: PrPageParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(crate::github_review::page(std::path::Path::new(&project.path), &p).await.map_err(bad)?)
+        }
+        PrAction::NAME => {
+            let p: PrActionParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            if matches!(p.action, PrActionKind::Checkout) {
+                state.orchestrator.pr_checkout(&p).await.map_err(bad)?;
+            } else {
+                crate::github_review::action(std::path::Path::new(&project.path), &p).await.map_err(bad)?;
+            }
+            ok(Empty {})
+        }
+        WorktreeInspect::NAME => {
+            let p: WorktreeInspectParams = parse(params)?;
+            ok(state.orchestrator.worktree_inspect(p.thread_id).await.map_err(bad)?)
+        }
+        WorktreeRemove::NAME => {
+            let p: WorktreeRemoveParams = parse(params)?;
+            ok(state.orchestrator.worktree_remove(p).await.map_err(bad)?)
         }
         ApprovalsRespond::NAME => {
             let p: ApprovalsRespondParams = parse(params)?;

@@ -7,6 +7,7 @@ import { responseImages } from "@/lib/responseImages"
 import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
 import { computerConsent, connectorApproval, isUserInput, notesTasksConsent, parseKybernMention } from "@/lib/userInput"
 import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards, type AgentItemTool, type AgentItemWrite } from "@/lib/agentItemTools"
+import { VisualReply } from "./VisualReply"
 import { AgentItemCard } from "./AgentItemCard"
 import { openNote } from "@/state/notes"
 import { openTask } from "@/state/tasks"
@@ -766,7 +767,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
 
 
       {settled && (
-        <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
+        <div className={ROW} data-timeline-row-kind="settled-work">
           {hasSettledActivity && (
             // One work block: delegated agents stay visible (harness-parity), the
             // routine execution history folds under a "Worked for Ns" row that
@@ -816,6 +817,13 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
             </div>
           )}
 
+        </div>
+      )}
+
+      {!!group.visuals?.length && <div className={ROW} data-timeline-row-kind="visuals">{group.visuals.map(block => <VisualReply key={block.id} threadId={threadId} visual={block.visual} />)}</div>}
+
+      {settled && (
+        <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
           <div className="chat-paint-host group min-w-0 py-0.5">
             {imageTools.map((block) => <GeneratedImageOutputLease key={block.id} threadId={threadId} block={block} />)}
             {deliveredImages.length > 0 && <div data-response-images className="chat-paint-host">{deliveredImages.map((image) => <ResponseImage key={image.source} source={image.source} label={image.label} />)}</div>}
@@ -1479,6 +1487,8 @@ const WorkRow = memo(function WorkRow({
         ? <SubagentLaunchRow block={block as LaunchBlock} tasksByToolCall={tasksByToolCall} onOpenLegacy={onOpenAgentActivity} legacy={row} />
         : row
     }
+    case "visual":
+      return null // Rendered with the reply rather than inside the work disclosure.
     case "image":
       return <ResponseImage source={block.source} />
     case "assistant":

@@ -24,34 +24,74 @@ export function runtimePolicy(mode) {
 
 // Params travel in the model selector so the existing Kybern model picker can
 // offer native variants without dropping a Cursor-specific parameter.
-export function modelSelection(selector) {
-  if (!selector || selector === "auto" || selector === "default") return { id: "default" };
+const EFFORT_PARAMS = new Set(["effort", "reason_effort", "reasoning_effort", "reasoningEffort"]);
+const selectorFor = (selection) => `cursor-model:${Buffer.from(JSON.stringify(selection)).toString("base64url")}`;
+
+export function modelSelection(selector, effort) {
+  if (!selector || selector === "auto" || selector === "default") {
+    if (effort) throw new Error("Select a model with an effort control first.");
+    return { id: "default" };
+  }
   if (selector.startsWith("cursor-model:")) {
     const parsed = JSON.parse(Buffer.from(selector.slice(13), "base64url").toString("utf8"));
     if (!parsed || typeof parsed.id !== "string" || !Array.isArray(parsed.params) ||
         parsed.params.some((p) => typeof p.id !== "string" || typeof p.value !== "string")) {
       throw new Error("Invalid Cursor model variant. Refresh the model list and select it again.");
     }
-    return parsed;
+    const legacyEffort = parsed.params.find((p) => EFFORT_PARAMS.has(p.id));
+    const effortParam = parsed.effortParam ?? legacyEffort?.id;
+    const params = parsed.params.filter((p) => !effort || !EFFORT_PARAMS.has(p.id)).map((p) => ({ ...p }));
+    if (effort) {
+      if (!EFFORT_PARAMS.has(effortParam) || (parsed.effortValues && !parsed.effortValues.includes(effort))) {
+        throw new Error("This Cursor model does not offer that effort. Refresh models and select an available effort.");
+      }
+      params.push({ id: effortParam, value: effort });
+    } else if (parsed.defaultEffort && parsed.effortParam) {
+      params.push({ id: parsed.effortParam, value: parsed.defaultEffort });
+    }
+    return { id: parsed.id, params };
   }
+  if (effort) throw new Error("This Cursor model has no effort control.");
   return { id: selector };
+}
+
+function variantLabel(params) {
+  return params.map(({ id, value }) => {
+    if (/context/i.test(id)) return `${value.replace(/000000$/, "M").replace(/000$/, "K")} context`;
+    if (/zdr/i.test(id)) return value === "true" || value === "on" ? "ZDR" : `ZDR ${value}`;
+    if (value === "true" || value === "on") return id.replaceAll("_", " ");
+    return `${id.replaceAll("_", " ")}: ${value}`;
+  }).join(" · ");
 }
 
 export function modelCatalog(models) {
   const out = [{ id: "default", display_name: "Default", description: "Cursor’s default model", is_default: true, efforts: [] }];
   for (const model of models) {
     if (model.id === "default") continue;
-    out.push({ id: model.id, display_name: model.displayName || model.id, description: model.description, is_default: false, efforts: [] });
+    const base = model.displayName || model.id;
+    const groups = new Map();
     for (const variant of model.variants ?? []) {
       if (!variant.params?.length) continue;
-      const selection = { id: model.id, params: variant.params };
-      out.push({
-        id: `cursor-model:${Buffer.from(JSON.stringify(selection)).toString("base64url")}`,
-        display_name: variant.displayName || model.displayName || model.id,
-        description: variant.description || model.description,
-        is_default: false,
-        efforts: [],
-      });
+      const effort = variant.params.find((p) => EFFORT_PARAMS.has(p.id));
+      const params = variant.params.filter((p) => !EFFORT_PARAMS.has(p.id));
+      const key = JSON.stringify([...params].sort((a, b) => a.id.localeCompare(b.id))) + (effort?.id ?? "");
+      let group = groups.get(key);
+      if (!group) {
+        group = { params, effortParam: effort?.id, efforts: [], description: variant.description || model.description,
+          name: variant.displayName || base };
+        groups.set(key, group);
+      }
+      if (effort && !group.efforts.includes(effort.value)) group.efforts.push(effort.value);
+    }
+    const plain = ![...groups.values()].some((g) => g.params.length === 0);
+    if (plain) out.push({ id: model.id, display_name: base, description: model.description, is_default: false, efforts: [] });
+    for (const group of groups.values()) {
+      const defaultEffort = group.efforts.includes("medium") ? "medium" : group.efforts[0];
+      const selection = { id: model.id, params: group.params,
+        ...(group.effortParam ? { effortParam: group.effortParam, effortValues: group.efforts, defaultEffort } : {}) };
+      const detail = variantLabel(group.params);
+      out.push({ id: selectorFor(selection), display_name: detail ? `${base} · ${detail}` : base,
+        description: group.description, is_default: false, efforts: group.efforts, default_effort: defaultEffort });
     }
   }
   return out;
@@ -77,6 +117,8 @@ export function errorText(error, secrets = []) {
 export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
   let agent;
   let options;
+  let modelSelector;
+  let selectedEffort;
   let active;
   let opening = false;
   let opened = Promise.resolve();
@@ -110,7 +152,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
     opened = openingDone.promise;
     try {
       const local = { cwd: request.cwd, settingSources: SETTING_SOURCES, ...runtimePolicy(request.mode), enableAgentRetries: true, ...(store ? { store } : {}) };
-      const next = { apiKey, model: modelSelection(request.model), mode: "agent", local, ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}) };
+      const next = { apiKey, model: modelSelection(request.model, request.effort), mode: "agent", local, ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}) };
       for (const server of Object.values(request.mcpServers ?? {})) {
         for (const value of Object.values(server.headers ?? {})) {
           secrets.push(value, value.replace(/^Bearer\s+/i, ""));
@@ -121,6 +163,8 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
       const id = request.agentId ?? previous?.agentId;
       agent = id ? await sdk.Agent.resume(id, next) : await sdk.Agent.create(next);
       options = next;
+      modelSelector = request.model;
+      selectedEffort = request.effort;
       previous?.close();
       recoverAbandonedRun = !!id;
       if (closing) throw new Error("Cursor session is closing.");
@@ -231,10 +275,11 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
         case "open": return open(request);
         case "send": return send(request);
         case "cancel": if (active) await cancelRun(active); return {};
-        case "set_model": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(request.model); return {};
+        case "set_model": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(request.model); modelSelector = request.model; selectedEffort = undefined; return {};
+        case "set_effort": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(modelSelector, request.effort); selectedEffort = request.effort; return {};
         case "set_mode":
           if (!agent) throw new Error("Cursor session is not open.");
-          return open({ cwd: options.local.cwd, model: request.model, mode: request.mode, mcpServers: options.mcpServers });
+          return open({ cwd: options.local.cwd, model: request.model ?? modelSelector, effort: selectedEffort, mode: request.mode, mcpServers: options.mcpServers });
         case "list": return sdk.Agent.list({ ...localReadOptions(request.cwd), limit: 50, ...(request.cursor ? { cursor: request.cursor } : {}) });
         case "read": {
           const readOptions = localReadOptions(request.cwd);

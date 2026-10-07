@@ -1,4 +1,5 @@
 import { ArtifactsPane } from "./Artifacts"
+import { PrReviewDock } from "./PrReview"
 // Right dock: a 46px tab strip of surface chips, a
 // collapse control, and chosen panes kept mounted until closed. The Changes pane
 // combines the Environment card rows with the diff file list.
@@ -39,6 +40,7 @@ const DOCK_PANELS = [
   { id: "collaboration", label: "Agents", Icon: UsersIcon },
   { id: "activity", label: "Activity", Icon: WorkflowIcon },
   { id: "changes", label: "Diff", Icon: DiffIcon },
+  { id: "review", label: "Review", Icon: GitPullRequestIcon },
   { id: "terminal", label: "Terminal", Icon: TerminalIcon },
   { id: "artifacts", label: "Artifacts", Icon: AppsIcon },
   { id: "explorer", label: "Explorer", Icon: FoldersIcon },
@@ -151,6 +153,9 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
               {collaborationThread
                 ? <CollaborationPane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />
                 : <LineagePane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />}
+            </div>}
+            {tabs.includes("review") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "review" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "review"} aria-hidden={tab !== "review"}>
+              <PrReviewDock key={threadId} threadId={threadId} active={workspaceActive && tab === "review"} />
             </div>}
             {tabs.includes("activity") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "activity" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "activity"} aria-hidden={tab !== "activity"}>
               <ActivityPane key={threadId} threadId={threadId} visible={workspaceActive && tab === "activity"} />
@@ -278,7 +283,7 @@ const Changes = memo(function Changes({ threadId, active }: { threadId: ThreadId
             <div className="my-1 border-t border-[color:var(--color-border-light)]" />
             <p className={ENV_SECTION_LABEL}>Pull request</p>
             {git.pull_request ? (
-              <EnvRow icon={<GitPullRequestIcon className={ENV_ICON} />} label={`#${git.pull_request.number} ${git.pull_request.title}`} onClick={() => void openExternal(git.pull_request!.url)} trailing={<ArrowUpRightIcon className="size-3 shrink-0 opacity-60" />} />
+              <EnvRow icon={<GitPullRequestIcon className={ENV_ICON} />} label={`#${git.pull_request.number} ${git.pull_request.title}`} onClick={() => useStore.getState().set({ rightOpen: true, rightTab: "review" })} trailing={<ArrowUpRightIcon className="size-3 shrink-0 opacity-60" />} />
             ) : (
               <EnvRow icon={busy === "pr" ? <Spinner size={14} className={ENV_ICON} /> : <GitPullRequestIcon className={ENV_ICON} />} label="Create pull request" onClick={pr} disabled={!!busy} />
             )}

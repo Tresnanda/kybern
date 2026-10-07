@@ -67,6 +67,51 @@ impl Drop for Host {
 }
 
 #[tokio::test]
+async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
+    let host = Host::start().await;
+    let repo = host.root.join("repository");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["commit", "--allow-empty", "-qm", "initial"]] {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+    let project = host.state.orchestrator.add_project(repo.to_string_lossy().into_owned(), Some("Worktree fixture".into())).unwrap();
+    let client = host.client().await;
+    let thread = client
+        .call::<ThreadsCreate>(ThreadsCreateParams {
+            project_id: Some(project.id),
+            provider: ProviderInstance::default_for(ProviderKind::Codex),
+            model: None,
+            effort: None,
+            permission_mode: None,
+            use_worktree: Some(true),
+            base_branch: None,
+            title: Some("Cleanup fixture".into()),
+            message: None,
+        })
+        .await
+        .unwrap();
+    let inspected = client.call::<WorktreeInspect>(WorktreeInspectParams { thread_id: thread.id }).await.unwrap();
+    assert!(inspected.eligible);
+    let removed =
+        client.call::<WorktreeRemove>(WorktreeRemoveParams { thread_id: thread.id, force: false, delete_branch: false }).await.unwrap();
+    assert!(!removed.exists);
+    let retained = host.state.store.thread_get(thread.id).unwrap().unwrap();
+    assert_eq!(retained.cwd, thread.cwd);
+    assert_eq!(retained.worktree.as_ref().unwrap().branch, thread.worktree.as_ref().unwrap().branch);
+    let events = host.state.store.events_for_thread(thread.id).unwrap();
+    assert!(events.iter().any(|event| matches!(&event.payload, EventPayload::WorktreeCleaned { branch, recovery_commit } if branch == &inspected.branch && !recovery_commit.is_empty())));
+    let source = kybern_git::Repo::new(&repo);
+    assert!(source.rev_parse(&inspected.branch).await.is_ok(), "the branch is kept by default");
+}
+
+#[tokio::test]
 async fn environments_keep_projects_and_identity_separate() {
     let a = Host::start().await;
     let b = Host::start().await;

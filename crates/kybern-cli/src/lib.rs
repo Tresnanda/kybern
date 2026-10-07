@@ -73,6 +73,42 @@ enum ArtifactsCmd {
 }
 
 #[derive(Subcommand)]
+enum VisualsCmd {
+    /// Publish self-contained HTML from a file as a durable inline reply.
+    Publish {
+        thread: String,
+        path: std::path::PathBuf,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value_t = 480)]
+        height: u32,
+    },
+    /// Render a screenshot and diagnostics using Kybern's own preview browser.
+    Preview {
+        thread: String,
+        path: std::path::PathBuf,
+        #[arg(long, default_value_t = 728)]
+        width: u32,
+        #[arg(long, default_value = "dark", value_parser = ["dark", "light"])]
+        appearance: String,
+        #[arg(long)]
+        screenshot: std::path::PathBuf,
+    },
+    Read {
+        thread: String,
+        visual: uuid::Uuid,
+    },
+    Frame {
+        thread: String,
+        visual: uuid::Uuid,
+    },
+    Revoke {
+        thread: String,
+        ticket: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Install or sign in to the official Cursor SDK on this machine.
     Cursor {
@@ -99,6 +135,37 @@ enum Cmd {
         #[arg(long)]
         refresh: bool,
     },
+    /// Manage native-isolated named accounts.
+    Accounts {
+        #[command(subcommand)]
+        cmd: AccountsCmd,
+    },
+    /// Inspect or choose the next-message target of an existing conversation.
+    Target {
+        thread: ThreadId,
+        #[arg(long)]
+        provider: Option<ProviderKind>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        #[arg(long)]
+        inherit: bool,
+    },
+    /// Continue an interrupted usage-limited task on an explicitly selected account.
+    SwitchContinue {
+        thread: ThreadId,
+        #[arg(long)]
+        provider: ProviderKind,
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        message_id: Option<MessageId>,
+    },
+    /// Stop the turn and apply a pending permission change now.
+    ApplyPermissions { thread: ThreadId },
     /// List saved conversations from an agent harness.
     Sessions {
         #[arg(long)]
@@ -178,6 +245,17 @@ enum Cmd {
     },
     /// Steer the currently running turn using the provider's native input control.
     Steer { thread: String, prompt: Vec<String> },
+    /// Queue a message for an active Claude native subagent's next tool call.
+    SubagentSend {
+        thread: String,
+        #[arg(long)]
+        message_id: Option<uuid::Uuid>,
+        prompt: Vec<String>,
+    },
+    /// Read durable native child delivery states.
+    SubagentMessages { thread: String },
+    /// Explicitly send an undelivered child message to its root parent.
+    SubagentSendToParent { thread: String, message_id: uuid::Uuid },
     /// Read or update a thread's personal notes.
     Notes {
         thread: String,
@@ -206,6 +284,8 @@ enum Cmd {
         #[arg(long)]
         through_seq: Option<i64>,
     },
+    /// Recover a historical OMP answer from exact retained native block boundaries.
+    RecoverOmpAnswer { thread: String, turn: String },
     /// Read one saved tool result at an optional historical snapshot.
     ToolOutput {
         thread: String,
@@ -263,6 +343,16 @@ enum Cmd {
     },
     /// Archive a thread.
     Archive { thread: String },
+    /// Inspect or remove an ordinary conversation’s managed worktree.
+    Worktree {
+        thread: String,
+        #[arg(long)]
+        remove: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        delete_branch: bool,
+    },
     /// List git checkpoints for a thread.
     Checkpoints { thread: String },
     /// Show the diff for a thread (whole thread) or one turn.
@@ -328,6 +418,11 @@ enum Cmd {
     Integrations {
         #[command(subcommand)]
         cmd: IntegrationsCmd,
+    },
+    /// Preview and publish durable inline interactive HTML replies.
+    Visuals {
+        #[command(subcommand)]
+        cmd: VisualsCmd,
     },
     /// Inspect native Claude artifact receipts and local source files.
     Artifacts {
@@ -558,6 +653,47 @@ enum QueueCmd {
 }
 
 #[derive(Subcommand)]
+enum AccountsCmd {
+    List {
+        #[arg(long)]
+        provider: ProviderKind,
+    },
+    Create {
+        #[arg(long)]
+        provider: ProviderKind,
+        name: String,
+        #[arg(long)]
+        directory: Option<String>,
+    },
+    SignIn {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+    },
+    Usage {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+    },
+    Catalog {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        refresh: bool,
+    },
+    Default {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ProjectsCmd {
     List,
     /// Browse directories on the connected environment.
@@ -582,6 +718,19 @@ enum TokensCmd {
 
 #[derive(Subcommand)]
 enum PrCmd {
+    /// Read pull request description, checks and requested reviewers.
+    View { project: String, number: u64 },
+    /// Read one bounded page of files, comments, reviews or review_comments.
+    Page {
+        project: String,
+        number: u64,
+        kind: String,
+        #[arg(long, default_value = "1")]
+        page: u32,
+    },
+    /// Explicitly comment, approve, request_changes, checkout, merge or close.
+    /// Read structured PrActionParams from a JSON file (or stdin with -).
+    Action { file: String },
     /// Create a pull request from a thread's branch (commits and pushes first).
     Create {
         thread: String,
@@ -791,6 +940,120 @@ pub async fn run() -> Result<()> {
             let r = client.call::<ProvidersList>(ProvidersListParams { project_id, force_refresh: refresh }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::providers(&r.providers) }
         }
+        Cmd::Accounts { cmd } => match cmd {
+            AccountsCmd::List { provider } => {
+                let settings = client.call::<SettingsGet>(Empty {}).await?;
+                let provider_settings = settings.providers.get(&provider).cloned().unwrap_or_default();
+                println!("{}", serde_json::to_string_pretty(&provider_settings)?);
+            }
+            AccountsCmd::Create { provider, name, directory } => {
+                let account = client.call::<AccountsCreate>(AccountsCreateParams { kind: provider, name, directory }).await?;
+                println!("{}", serde_json::to_string_pretty(&account)?);
+            }
+            AccountsCmd::SignIn { provider, account } => {
+                let terminal = client.call::<AccountsSignIn>(ProviderInstance { kind: provider, instance: account }).await?;
+                println!("{}", serde_json::to_string_pretty(&terminal)?);
+            }
+            AccountsCmd::Usage { provider, account } => {
+                let usage = client.call::<AccountsUsage>(ProviderInstance { kind: provider, instance: account }).await?;
+                println!("{}", serde_json::to_string_pretty(&usage)?);
+            }
+            AccountsCmd::Catalog { provider, account, project, refresh } => {
+                let project_id = match project {
+                    Some(project) => Some(resolve_project(&client, &project, false).await?),
+                    None => None,
+                };
+                let status = client
+                    .call::<AccountsCatalog>(AccountsCatalogParams {
+                        provider: ProviderInstance { kind: provider, instance: account },
+                        project_id,
+                        force_refresh: refresh,
+                    })
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            }
+            AccountsCmd::Default { provider, account, project } => {
+                let mut settings = client.call::<SettingsGet>(Empty {}).await?;
+                let path = match project {
+                    Some(project) => {
+                        let id = resolve_project(&client, &project, false).await?;
+                        Some(
+                            client
+                                .call::<ProjectsList>(Empty {})
+                                .await?
+                                .projects
+                                .into_iter()
+                                .find(|p| p.id == id)
+                                .ok_or_else(|| anyhow!("project not found"))?
+                                .path,
+                        )
+                    }
+                    None => None,
+                };
+                let provider_settings = settings.providers.entry(provider).or_default();
+                if let Some(path) = path {
+                    if account == "inherit" {
+                        provider_settings.project_accounts.remove(&path);
+                    } else {
+                        provider_settings.project_accounts.insert(path, account);
+                    }
+                } else {
+                    provider_settings.default_account = Some(account);
+                }
+                println!("{}", serde_json::to_string_pretty(&client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?)?);
+            }
+        },
+        Cmd::Target { thread, provider, account, model, effort, inherit } => {
+            let state = client.call::<ThreadsTargetGet>(ThreadsInterruptParams { thread_id: thread }).await?;
+            if provider.is_some() || account.is_some() || model.is_some() || effort.is_some() || inherit {
+                let mut target = state.target;
+                if let Some(provider) = provider {
+                    target.provider.kind = provider;
+                    target.provider.instance = "default".into();
+                    target.model = None;
+                    target.effort = None;
+                }
+                if let Some(account) = account {
+                    target.provider.instance = account;
+                }
+                if let Some(model) = model {
+                    target.model = (!model.is_empty()).then_some(model);
+                }
+                if let Some(effort) = effort {
+                    target.effort = (!effort.is_empty()).then_some(effort);
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &client
+                            .call::<ThreadsTargetSet>(ThreadTargetParams { thread_id: thread, target, inherit_account: inherit })
+                            .await?
+                    )?
+                );
+            } else {
+                println!("{}", serde_json::to_string_pretty(&state)?);
+            }
+        }
+        Cmd::SwitchContinue { thread, provider, account, message_id } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &client
+                        .call::<ThreadsSwitchContinue>(ThreadsSwitchContinueParams {
+                            thread_id: thread,
+                            provider: ProviderInstance { kind: provider, instance: account },
+                            message_id: message_id.unwrap_or_else(uuid::Uuid::now_v7)
+                        })
+                        .await?
+                )?
+            );
+        }
+        Cmd::ApplyPermissions { thread } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&client.call::<ThreadsPermissionsApply>(ThreadsInterruptParams { thread_id: thread }).await?)?
+            );
+        }
         Cmd::Sessions { provider, project, cursor, query } => {
             let project_id = match project {
                 Some(project) => Some(resolve_project(&client, &project, false).await?),
@@ -925,6 +1188,25 @@ pub async fn run() -> Result<()> {
                 render::follow_turn(&client, sub.subscription_id, thread_id, json).await?;
             }
         }
+        Cmd::SubagentSend { thread, message_id, prompt } => {
+            let result = client
+                .call::<SubagentsSend>(QueuedMessage {
+                    thread_id: thread.parse()?,
+                    id: message_id.unwrap_or_else(uuid::Uuid::now_v7),
+                    message: UserMessage::text(join_prompt(prompt)?),
+                })
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Cmd::SubagentMessages { thread } => {
+            let result = client.call::<SubagentsMessages>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Cmd::SubagentSendToParent { thread, message_id } => {
+            let result =
+                client.call::<SubagentsSendToParent>(SubagentMessageActionParams { thread_id: thread.parse()?, message_id }).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         Cmd::Steer { thread, prompt } => {
             let result = client
                 .call::<ThreadsSteer>(QueuedMessage {
@@ -1040,6 +1322,12 @@ pub async fn run() -> Result<()> {
                 .await?;
             if json { print_json(&r)? } else { render::transcript(&r) }
         }
+        Cmd::RecoverOmpAnswer { thread, turn } => {
+            let result = client
+                .call::<ThreadsRecoverOmpAnswer>(ThreadsRecoverOmpAnswerParams { thread_id: thread.parse()?, turn_id: turn.parse()? })
+                .await?;
+            print_json(&result)?;
+        }
         Cmd::ToolOutput { thread, tool_call_id, start_seq, through_seq } => {
             let result = client
                 .call::<ThreadsToolOutput>(ThreadsToolOutputParams {
@@ -1139,6 +1427,15 @@ pub async fn run() -> Result<()> {
                 println!("denied");
             }
         },
+        Cmd::Worktree { thread, remove, force, delete_branch } => {
+            let thread_id = thread.parse()?;
+            let result = if remove {
+                client.call::<WorktreeRemove>(WorktreeRemoveParams { thread_id, force, delete_branch }).await?
+            } else {
+                client.call::<WorktreeInspect>(WorktreeInspectParams { thread_id }).await?
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         Cmd::Archive { thread } => {
             client.call::<ThreadsArchive>(ThreadsArchiveParams { thread_id: thread.parse()? }).await?;
             println!("archived");
@@ -1357,6 +1654,44 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
+        Cmd::Visuals { cmd } => match cmd {
+            VisualsCmd::Publish { thread, path, title, height } => {
+                let html = tokio::fs::read_to_string(path).await?;
+                print_json(&client.call::<HtmlPublish>(HtmlPublishParams { thread_id: thread.parse()?, html, title, height }).await?)?;
+            }
+            VisualsCmd::Preview { thread, path, width, appearance, screenshot } => {
+                let html = tokio::fs::read_to_string(path).await?;
+                let mut result = client
+                    .call::<HtmlPreview>(HtmlPreviewParams {
+                        thread_id: thread.parse()?,
+                        html,
+                        width: Some(width),
+                        appearance: Some(appearance),
+                    })
+                    .await?;
+                use base64::Engine;
+                tokio::fs::write(&screenshot, base64::engine::general_purpose::STANDARD.decode(&result.screenshot)?).await?;
+                result.screenshot.clear();
+                print_json(&result)?;
+            }
+            VisualsCmd::Read { thread, visual } => {
+                let result =
+                    client.call::<HtmlRead>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual, max_bytes: None }).await?;
+                if json {
+                    print_json(&result)?;
+                } else {
+                    print!("{}", result.html);
+                }
+            }
+            VisualsCmd::Frame { thread, visual } => {
+                print_json(
+                    &client.call::<HtmlFrame>(HtmlReadParams { thread_id: thread.parse()?, visual_id: visual, max_bytes: None }).await?,
+                )?;
+            }
+            VisualsCmd::Revoke { thread, ticket } => {
+                client.call::<HtmlRevoke>(HtmlRevokeParams { thread_id: thread.parse()?, ticket }).await?;
+            }
+        },
         Cmd::Artifacts { cmd } => match cmd {
             ArtifactsCmd::List { thread, before_seq, limit } => {
                 let result = client.call::<ArtifactsList>(ArtifactsListParams { thread_id: thread.parse()?, before_seq, limit }).await?;
@@ -1439,6 +1774,28 @@ pub async fn run() -> Result<()> {
             println!("{}  {}", &r.commit[..10], r.message.lines().next().unwrap_or(""));
         }
         Cmd::Pr { cmd } => match cmd {
+            PrCmd::View { project, number } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client.call::<PrDetail>(PrDetailParams { project_id, number }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            PrCmd::Page { project, number, kind, page } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let kind = serde_json::from_value(serde_json::Value::String(kind))?;
+                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            PrCmd::Action { file } => {
+                let source = if file == "-" {
+                    use std::io::Read;
+                    let mut source = String::new();
+                    std::io::stdin().read_to_string(&mut source)?;
+                    source
+                } else {
+                    std::fs::read_to_string(file)?
+                };
+                client.call::<PrAction>(serde_json::from_str(&source)?).await?;
+            }
             PrCmd::Create { thread, title, body, base, draft } => {
                 let r = client
                     .call::<PrCreate>(PrCreateParams { thread_id: thread.parse()?, title, body, base, draft, commit_first: true })

@@ -22,12 +22,16 @@ use uuid::Uuid;
 use crate::config::Paths;
 use crate::settings::SettingsStore;
 
+mod accounts;
 mod agent_items;
 mod delegation;
 mod messaging;
 mod notes;
+mod omp_recovery;
+mod subagent_messaging;
 mod subagents;
 mod tasks;
+mod worktrees;
 
 #[derive(Clone)]
 pub struct Orchestrator {
@@ -128,7 +132,7 @@ impl Orchestrator {
             .get_or_refresh(cache_key, false, || async move {
                 let probes = ProviderKind::ALL.into_iter().map(|kind| {
                     let driver = drivers.get(kind);
-                    let provider_settings = settings.providers.get(&kind).cloned().unwrap_or_default();
+                    let provider_settings = crate::settings::provider_settings(&settings, kind, cwd.to_str());
                     let context = kybern_drivers::ProbeContext {
                         binary: provider_settings.binary.map(PathBuf::from),
                         cwd: Some(cwd.clone()),
@@ -167,12 +171,14 @@ impl Orchestrator {
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Result<()> {
-        if provider.instance != "default" {
-            return Err(anyhow!(
-                "Unknown {} provider instance '{}'. Available instances: default. Put the model selector in child.model.",
-                provider.kind,
-                provider.instance,
-            ));
+        let settings = self.inner.settings.get();
+        let provider_settings = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
+        crate::provider_accounts::environment(&provider_settings, provider.kind, &provider.instance)?;
+        let project = self.inner.store.project_get(project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
+        if provider.instance != crate::provider_accounts::resolve(&provider_settings, Some(&project.path), None) {
+            // The legacy aggregate cache describes the project-default account.
+            // It cannot reject a model/effort advertised by a different account.
+            return Ok(());
         }
 
         let Some(statuses) = self.cached_provider_statuses(project_id).await? else { return Ok(()) };
@@ -1087,6 +1093,21 @@ impl Orchestrator {
             let mut project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
             let configured_model =
                 self.inner.settings.get().providers.get(&child.provider.kind).and_then(|provider| provider.model.clone());
+            if child.provider.instance != "default"
+                && !self
+                    .inner
+                    .settings
+                    .get()
+                    .providers
+                    .get(&child.provider.kind)
+                    .is_some_and(|provider| provider.accounts.contains_key(&child.provider.instance))
+            {
+                return Err(anyhow!(
+                    "Unknown {} provider instance '{}'. Choose a configured account. Put the model selector in child.model, not child.provider.instance.",
+                    child.provider.kind,
+                    child.provider.instance
+                ));
+            }
             let selected_model = child.model.as_deref().or(configured_model.as_deref());
             self.validate_provider_selection(project.id, &child.provider, selected_model, child.effort.as_deref()).await?;
             if params.kind.mutates_workspace() && !project.is_git {
@@ -2146,6 +2167,30 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed)
                 .map(|turn| turn.id)
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
+            if matches!(name, "kybern_html_preview" | "kybern_html_publish") {
+                anyhow::ensure!(serde_json::to_vec(&arguments)?.len() <= 768 * 1024, "HTML tool arguments exceed 768 KiB.");
+                if name == "kybern_html_preview" {
+                    let mut object = arguments.as_object().cloned().ok_or_else(|| anyhow!("HTML arguments must be an object"))?;
+                    anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
+                    object.insert("thread_id".into(), serde_json::json!(thread_id));
+                    let params = crate::app_tools::parse(serde_json::Value::Object(object))?;
+                    let result = crate::visuals::preview(&self.inner.paths, params).await?;
+                    let metadata = serde_json::json!({"width": result.width, "contentHeight":result.content_height,"capturedHeight":result.captured_height,"consoleMessages":result.console_messages,"missingImages":result.missing_images});
+                    return Ok(
+                        serde_json::json!({"_kybern_content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":result.screenshot}]}),
+                    );
+                }
+                let mut object = arguments.as_object().cloned().ok_or_else(|| anyhow!("HTML arguments must be an object"))?;
+                anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
+                object.insert("thread_id".into(), serde_json::json!(thread_id));
+                let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
+                let event =
+                    crate::visuals::publish(&self.inner.store, thread_id, turn_id, &params.html, &params.title, params.height).await?;
+                let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
+                let result = serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."});
+                let _ = self.inner.events.send(event);
+                return Ok(result);
+            }
             if crate::computer::ComputerUse::is_tool(name) {
                 let consent = ComputerConsent { orchestrator: self, thread_id, turn_id, live: live.clone() };
                 let ctx = crate::computer::CallContext {
@@ -2679,8 +2724,12 @@ async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<Stri
     Ok(oid)
 }
 
+type RetainedSessions = HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveSession>)>;
+
 struct Inner {
     commands: std::sync::Mutex<()>,
+    session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
+    workspace_ops: Mutex<()>,
     collaboration_writes: std::sync::Mutex<()>,
     question_answers: Mutex<()>,
     collaboration_commands: Mutex<()>,
@@ -2695,6 +2744,7 @@ struct Inner {
     native_tools: Option<crate::native_tools_mcp::NativeToolsGateway>,
     computer: crate::computer::ComputerUse,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
+    retained_sessions: Mutex<RetainedSessions>,
     releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
     /// Threads whose next session must fork the provider conversation at this point.
@@ -2742,6 +2792,8 @@ struct LiveSession {
     /// Set once the daemon decided to close this process on purpose, so the
     /// provider's exit is not reported as a failure.
     released: AtomicBool,
+    /// Owns outgoing background services; root responses cannot re-enter the thread.
+    retained: AtomicBool,
     /// Forced stop owns cleanup and discards late provider events.
     stop_cleanup: AtomicBool,
     /// The turn currently executing, if any.
@@ -2755,6 +2807,9 @@ struct LiveSession {
     last_turn_id: Mutex<Option<TurnId>>,
     /// Latest provider-owned task state for targeted controls and checkpointing.
     tasks: Mutex<HashMap<String, RuntimeTask>>,
+    /// Raw harness ids may repeat across accounts/processes. Only colliding ids
+    /// acquire a public namespace; native controls translate back to their owner.
+    task_aliases: Mutex<HashMap<String, String>>,
     /// Parent turns whose after-checkpoint waits for launched work to settle.
     deferred_checkpoints: Mutex<HashSet<TurnId>>,
     /// Approval id -> provider request id, for pending permission requests.
@@ -2960,6 +3015,8 @@ impl Orchestrator {
         Self {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
+                session_admission: Mutex::new(HashMap::new()),
+                workspace_ops: Mutex::new(()),
                 collaboration_writes: std::sync::Mutex::new(()),
                 question_answers: Mutex::new(()),
                 collaboration_commands: Mutex::new(()),
@@ -2974,6 +3031,7 @@ impl Orchestrator {
                 native_tools: None,
                 computer,
                 sessions: Mutex::new(HashMap::new()),
+                retained_sessions: Mutex::new(HashMap::new()),
                 releasing: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
                 pending_rewinds: Mutex::new(HashMap::new()),
@@ -3019,6 +3077,9 @@ impl Orchestrator {
     }
 
     fn revoke_native_session(&self, live: &LiveSession) {
+        if let Err(error) = self.fail_session_subagent_messages(live.session_instance_id) {
+            tracing::warn!(%error, "Unable to settle the closed native child inbox");
+        }
         if let Some(gateway) = &self.inner.native_tools {
             gateway.revoke(live.session_instance_id);
         }
@@ -3226,6 +3287,7 @@ impl Orchestrator {
     /// Provider-owned tasks and turns cannot survive a daemon restart. Close
     /// both projections explicitly so clients never show immortal work.
     pub async fn recover_after_restart(&self) -> Result<()> {
+        self.fail_all_subagent_messages("Not delivered — native session ended before delivery could be confirmed.")?;
         let threads = self.inner.store.threads_list(None, true)?;
         for t in &threads {
             let tasks = self.inner.store.runtime_tasks_for_thread(t.id)?;
@@ -3239,7 +3301,7 @@ impl Orchestrator {
                 checkpoint_turns.insert(task.origin_turn_id);
                 self.emit(t.id, Some(task.origin_turn_id), EventPayload::RuntimeTaskCompleted { task: task.clone() })?;
                 if t.subagent.is_none()
-                    && let Err(error) = self.subagent_sync(t.id, &task)
+                    && let Err(error) = self.subagent_sync(t.id, &task, None)
                 {
                     tracing::warn!(thread_id = %t.id, task_id = %task.id, %error, "could not settle the subagent thread");
                 }
@@ -3364,7 +3426,8 @@ impl Orchestrator {
     }
 
     pub async fn shutdown(&self) {
-        let sessions: Vec<_> = self.inner.sessions.lock().await.drain().collect();
+        let mut sessions: Vec<_> = self.inner.sessions.lock().await.drain().collect();
+        sessions.extend(self.inner.retained_sessions.lock().await.drain().map(|((thread_id, _), (_, live))| (thread_id, live)));
         for (_, live) in &sessions {
             live.mark_released();
             self.revoke_native_session(live);
@@ -3574,8 +3637,15 @@ impl Orchestrator {
     // ---- threads ----
 
     pub async fn resume_external_session(&self, params: methods::SessionsResumeParams) -> Result<Thread> {
+        let settings = self.inner.settings.get();
+        let source_project =
+            params.project_id.map(|id| self.inner.store.project_get(id)?.ok_or_else(|| anyhow!("Project not found"))).transpose()?;
+        let raw_provider = settings.providers.get(&params.provider).cloned().unwrap_or_default();
+        let instance = crate::provider_accounts::resolve(&raw_provider, source_project.as_ref().map(|project| project.path.as_str()), None);
         let existing = self.inner.store.threads_list(None, true)?.into_iter().find(|thread| {
-            thread.provider.kind == params.provider && thread.provider_session_id.as_deref() == Some(params.session_id.as_str())
+            thread.provider.kind == params.provider
+                && thread.provider.instance == instance
+                && thread.provider_session_id.as_deref() == Some(params.session_id.as_str())
         });
         if let Some(mut thread) = existing {
             if thread.status == ThreadStatus::Archived {
@@ -3587,9 +3657,6 @@ impl Orchestrator {
         }
         let _gate = self.inner.harness_gates.get(&params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?.read().await;
         let driver = self.inner.drivers.get(params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?;
-        let settings = self.inner.settings.get();
-        let source_project =
-            params.project_id.map(|id| self.inner.store.project_get(id)?.ok_or_else(|| anyhow!("Project not found"))).transpose()?;
         let provider = crate::settings::provider_settings(&settings, params.provider, source_project.as_ref().map(|p| p.path.as_str()));
         let context = kybern_drivers::ProbeContext {
             binary: provider.binary.map(PathBuf::from),
@@ -3618,7 +3685,7 @@ impl Orchestrator {
             title: if session.title.trim().is_empty() { DEFAULT_TITLE.into() } else { session.title },
             model: session.model,
             effort: None,
-            provider: ProviderInstance { kind: session.provider, instance: "default".into() },
+            provider: ProviderInstance { kind: session.provider, instance: instance.clone() },
             permission_mode: if session.id.starts_with("cursor-sdk:") {
                 default_provider_permission(session.provider, settings.default_permission_mode)
             } else {
@@ -3640,6 +3707,10 @@ impl Orchestrator {
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
+        // Imported native ids belong to the discovery account, even if global
+        // defaults change later or the session cwd uses a different project.
+        self.inner.store.meta_set(&format!("account_override:{}", thread.id), &instance)?;
+        self.save_account_binding(&thread)?;
         if let Some(profile) = imported_profile {
             self.inner.store.meta_set(&format!("omp_profile:{}", thread.id), &profile)?;
         }
@@ -3726,6 +3797,10 @@ impl Orchestrator {
             delegation: None,
         };
         self.inner.store.thread_upsert(&thread)?;
+        if thread.provider.instance != "default" {
+            self.inner.store.meta_set(&format!("account_override:{}", thread.id), &thread.provider.instance)?;
+        }
+
         let ev = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() })?;
         let mut thread = Thread { last_seq: ev.seq, ..thread };
         self.inner.store.thread_upsert(&thread)?;
@@ -3794,30 +3869,6 @@ impl Orchestrator {
         self.update_thread(t)
     }
 
-    /// Push mode/model/effort changes to a live session after the store is updated.
-    pub async fn apply_session_settings(
-        &self,
-        thread_id: ThreadId,
-        mode: Option<PermissionMode>,
-        model: Option<&str>,
-        effort: Option<&str>,
-    ) -> Result<()> {
-        let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
-        if let Some(live) = live {
-            live.touch();
-            if let Some(mode) = mode {
-                live.session.set_permission_mode(mode).await?;
-            }
-            if let Some(model) = model {
-                live.session.set_model(model).await?;
-            }
-            if let Some(effort) = effort {
-                live.session.set_effort(effort).await?;
-            }
-        }
-        Ok(())
-    }
-
     /// Archive a thread and, with it, every agent it delegated work to. Running
     /// children are stopped first; delegated worktrees are removed when safe.
     pub async fn archive_thread(&self, thread_id: ThreadId) -> Result<()> {
@@ -3843,6 +3894,7 @@ impl Orchestrator {
         for id in descendants.iter().map(|descendant| descendant.id).chain([thread_id]) {
             self.delegation_cleanup_on_archive(id).await;
         }
+        self.cleanup_eligible_worktrees().await;
         Ok(())
     }
 
@@ -3858,6 +3910,7 @@ impl Orchestrator {
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
         }
+        self.close_retained_sessions(thread_id).await?;
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
             live.mark_released();
             self.revoke_native_session(&live);
@@ -3900,11 +3953,49 @@ impl Orchestrator {
         queued: bool,
         retryable: bool,
     ) -> Result<(TurnId, MessageId, bool)> {
+        let _workspace = self.inner.workspace_ops.lock().await;
+        let admission_gate = self.session_admission(thread_id).await;
+        let _admission = admission_gate.lock().await;
+        let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
         let target = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        self.restore_worktree_if_cleaned(&target).await?;
         if target.subagent.is_some() {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
         }
-        let kind = target.provider.kind;
+        let selected_target = if queued {
+            self.inner
+                .store
+                .meta_get(&format!("queue_target:{message_id}"))?
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?
+                .unwrap_or(self.thread_target(thread_id)?.target)
+        } else {
+            self.inner
+                .store
+                .meta_get(&format!("quota_target:{message_id}"))?
+                .or(self.inner.store.meta_get(&format!("steer_target:{message_id}"))?)
+                .map(|saved| serde_json::from_str(&saved))
+                .transpose()?
+                .unwrap_or(self.thread_target(thread_id)?.target)
+        };
+        let selected_mode = if queued {
+            self.inner.store.meta_get(&format!("queue_permission:{message_id}"))?.map(|saved| serde_json::from_str(&saved)).transpose()?
+        } else {
+            self.inner
+                .store
+                .meta_get(&format!("steer_permission:{message_id}"))?
+                .map(|saved| serde_json::from_str(&saved))
+                .transpose()?
+                .or(self.pending_permission_for(&current, &selected_target.provider)?)
+        };
+        if selected_target.provider == current.provider
+            && !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+            && let Some(mode) = selected_mode
+            && mode != current.permission_mode
+        {
+            self.apply_permission_admitted(thread_id, mode).await?;
+        }
+        let kind = selected_target.provider.kind;
         let _harness = self.inner.harness_gates[&kind]
             .clone()
             .try_read_owned()
@@ -3966,7 +4057,12 @@ impl Orchestrator {
                 return Err(anyhow!("Wait for agents and background tasks to finish before compacting."));
             }
         }
+        if let Some(mode) = selected_mode {
+            thread.permission_mode = mode;
+        }
+        self.admit_target(&mut thread, selected_target)?;
         let turn_id = Uuid::now_v7();
+        self.inner.store.meta_set(&format!("turn_target:{turn_id}"), &serde_json::to_string(&thread.provider)?)?;
         if thread.title == DEFAULT_TITLE {
             thread.title = title_from_message(&message);
         }
@@ -3974,6 +4070,12 @@ impl Orchestrator {
         let thread = self.update_thread(thread)?;
         let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+        if selected_mode.is_some() && self.pending_permission_for(&thread, &thread.provider)? == selected_mode {
+            self.inner.store.meta_set_many(&[
+                (&format!("pending_permission:{thread_id}"), ""),
+                (&format!("pending_permission_target:{thread_id}"), ""),
+            ])?;
+        }
         self.messaging_turn_started(thread.id, turn_id, message_id);
 
         // The user's intent is persisted and broadcast, so the call returns now
@@ -4004,6 +4106,16 @@ impl Orchestrator {
             }
             return Ok(());
         }
+        let target = self.thread_target(message.thread_id)?.target;
+        let mut receiving = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let mode = self.pending_permission_for(&receiving, &target.provider)?.unwrap_or(receiving.permission_mode);
+        receiving.provider_session_id = self.compatible_native_session(&receiving, &target.provider)?;
+        receiving.provider = target.provider.clone();
+        accounts::validate_permission(&receiving, mode)?;
+        self.inner.store.meta_set_many(&[
+            (&format!("queue_target:{}", message.id), &serde_json::to_string(&target)?),
+            (&format!("queue_permission:{}", message.id), &serde_json::to_string(&mode)?),
+        ])?;
         self.emit(message.thread_id, None, EventPayload::MessageQueued { message })?;
         Ok(())
     }
@@ -4035,7 +4147,11 @@ impl Orchestrator {
         let redirect_summary = title_from_message(&params.message);
         self.resolve_attachments(&mut params.message);
         let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
-            let Some((thread, turn_id, message)) = self.inner.store.steering_receipt(params.id)? else { return Ok(None) };
+            let Some((thread, turn_id, message)) =
+                self.inner.store.steering_receipt(params.id)?.or(self.inner.store.turn_started_receipt(params.id)?)
+            else {
+                return Ok(None);
+            };
             if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(&params.message)? {
                 return Err(anyhow!("Message id already belongs to another request."));
             }
@@ -4045,6 +4161,62 @@ impl Orchestrator {
             return Ok(result);
         }
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let target = {
+            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+            let saved = self.inner.store.meta_get(&format!("steer_request:{}", params.id))?;
+            if let Some(saved) = saved {
+                let original: methods::QueuedMessage = serde_json::from_str(&saved)?;
+                anyhow::ensure!(
+                    serde_json::to_value(&original)? == serde_json::to_value(&params)?,
+                    "Message id already belongs to another steering request."
+                );
+                serde_json::from_str(
+                    &self
+                        .inner
+                        .store
+                        .meta_get(&format!("steer_target:{}", params.id))?
+                        .ok_or_else(|| anyhow!("The admitted steering target is missing. Send a new message."))?,
+                )?
+            } else {
+                let target = self.thread_target(thread.id)?.target;
+                if target.provider != thread.provider || target.model != thread.model || target.effort != thread.effort {
+                    let mode = self.pending_permission_for(&thread, &target.provider)?.unwrap_or(thread.permission_mode);
+                    let mut receiving = thread.clone();
+                    receiving.provider_session_id = self.compatible_native_session(&thread, &target.provider)?;
+                    receiving.provider = target.provider.clone();
+                    accounts::validate_permission(&receiving, mode)?;
+                    self.inner.store.meta_set_many(&[
+                        (&format!("steer_request:{}", params.id), &serde_json::to_string(&params)?),
+                        (&format!("steer_target:{}", params.id), &serde_json::to_string(&target)?),
+                        (&format!("steer_permission:{}", params.id), &serde_json::to_string(&mode)?),
+                    ])?;
+                }
+                target
+            }
+        };
+        if target.provider != thread.provider || target.model != thread.model || target.effort != thread.effort {
+            if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+                self.interrupt(thread.id).await?;
+            }
+            for _ in 0..100 {
+                if self
+                    .inner
+                    .store
+                    .thread_get(thread.id)?
+                    .is_some_and(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            return self
+                .send_client_message(methods::ThreadsSendParams {
+                    thread_id: thread.id,
+                    message: params.message,
+                    message_id: Some(params.id),
+                })
+                .await;
+        }
         if !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             return Err(anyhow!("This turn has ended. Send your message to start the next turn."));
         }
@@ -4265,10 +4437,17 @@ impl Orchestrator {
             elapsed_ms = startup_started.elapsed().as_millis() as u64,
         );
 
+        let mut workspace_transition = None;
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            live.session.send_message(&message_id.to_string(), &self.provider_message(&message, &live)).await
+            match self.portable_message(&thread, &message).and_then(|portable| self.workspace_transition_message(&thread, &portable)) {
+                Ok((workspace_message, transition)) => {
+                    workspace_transition = transition;
+                    live.session.send_message(&message_id.to_string(), &self.provider_message(&workspace_message, &live)).await
+                }
+                Err(error) => Err(kybern_drivers::DriverError::Unsupported(error.to_string())),
+            }
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -4279,6 +4458,12 @@ impl Orchestrator {
             *live.turn.lock().await = None;
             self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(e.to_string()));
             return Err(e.into());
+        }
+        if !is_compact_message(&message) {
+            self.inner.store.meta_set(&format!("handoff:{}", thread.id), "")?;
+            if let Some(sequence) = workspace_transition {
+                self.workspace_transition_delivered(thread.id, sequence)?;
+            }
         }
         self.collaboration_delivery_submitted(thread.id, turn_id, message_id)?;
         tracing::info!(
@@ -4394,14 +4579,7 @@ impl Orchestrator {
     pub async fn stop_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
         let (thread_id, task_id) = self.resolve_task_control(thread_id, task_id)?;
         let task_id = task_id.as_str();
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("this task no longer has a live provider session"))?;
+        let live = self.task_session(thread_id, task_id).await?;
         let task = live
             .tasks
             .lock()
@@ -4416,7 +4594,7 @@ impl Orchestrator {
             return Err(anyhow!("{} does not expose a targeted stop control for this task", self.provider_name(thread_id)?));
         }
         live.touch();
-        live.session.stop_runtime_task(&task).await?;
+        live.session.stop_runtime_task(&self.native_runtime_task(&live, &task).await).await?;
         self.apply_runtime_task_update(
             thread_id,
             &live,
@@ -4430,14 +4608,7 @@ impl Orchestrator {
     pub async fn background_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
         let (thread_id, task_id) = self.resolve_task_control(thread_id, task_id)?;
         let task_id = task_id.as_str();
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("this task no longer has a live provider session"))?;
+        let live = self.task_session(thread_id, task_id).await?;
         let task = live
             .tasks
             .lock()
@@ -4452,7 +4623,7 @@ impl Orchestrator {
             return Err(anyhow!("{} cannot move this task to the background", self.provider_name(thread_id)?));
         }
         live.touch();
-        live.session.background_runtime_task(&task).await?;
+        live.session.background_runtime_task(&self.native_runtime_task(&live, &task).await).await?;
         self.apply_runtime_task_update(
             thread_id,
             &live,
@@ -5031,13 +5202,32 @@ impl Orchestrator {
     }
 
     async fn ensure_session(&self, thread: &Thread) -> Result<(Arc<LiveSession>, bool)> {
-        let waiting = {
-            let sessions = self.inner.sessions.lock().await;
-            if let Some(live) = sessions.get(&thread.id).cloned() {
+        let expected = self.session_identity(thread)?;
+        let current = self.inner.sessions.lock().await.get(&thread.id).cloned();
+        if let Some(live) = current {
+            let identity = self.inner.store.meta_get(&format!("live_identity:{}", thread.id))?;
+            if identity.as_deref().is_none_or(|identity| identity == expected) {
                 return Ok((live, true));
             }
-            self.inner.releasing.lock().await.get(&thread.id).cloned()
-        };
+            self.retire_or_close_session(thread.id, live, identity.unwrap_or_default()).await?;
+        }
+        let retained = self.inner.retained_sessions.lock().await.remove(&(thread.id, expected.clone()));
+        if let Some((owner, live)) = retained {
+            if owner == thread.provider && !live.is_released() {
+                live.retained.store(false, Ordering::Relaxed);
+                self.inner.sessions.lock().await.insert(thread.id, live.clone());
+                self.inner.store.meta_set_many(&[
+                    (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
+                    (&format!("live_identity:{}", thread.id), &expected),
+                    (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
+                ])?;
+                return Ok((live, true));
+            }
+            live.mark_released();
+            self.revoke_native_session(&live);
+            live.session.close().await?;
+        }
+        let waiting = self.inner.releasing.lock().await.get(&thread.id).cloned();
         if let Some(mut waiting) = waiting {
             let _ = waiting.changed().await;
         }
@@ -5054,8 +5244,9 @@ impl Orchestrator {
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found"))?;
         let mut provider_settings =
             crate::settings::provider_settings(&self.inner.settings.get(), thread.provider.kind, Some(&project.path));
+        provider_settings.env = self.account_environment(thread)?;
         let mut profile_binding = None;
-        if thread.provider.kind == ProviderKind::Omp {
+        if thread.provider.kind == ProviderKind::Omp && thread.provider.instance == "default" {
             // A resumed chat must keep the profile that owns its native session,
             // even after project defaults change or the daemon releases it at idle.
             let key = format!("omp_profile:{}", thread.id);
@@ -5125,18 +5316,25 @@ impl Orchestrator {
             computer_tools,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(None),
             continuation: Mutex::new(None),
             turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(None),
             tasks: Mutex::new(HashMap::new()),
+            task_aliases: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
+        self.inner.store.meta_set_many(&[
+            (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
+            (&format!("live_identity:{}", thread.id), &self.session_identity(thread)?),
+            (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
+        ])?;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
@@ -5243,8 +5441,32 @@ impl Orchestrator {
         thread_id: ThreadId,
         live: &Arc<LiveSession>,
         turn_id: Option<TurnId>,
-        incoming: DriverRuntimeTask,
+        mut incoming: DriverRuntimeTask,
     ) -> Result<RuntimeTask> {
+        let raw_id = incoming.id.clone();
+        let alias = live.task_aliases.lock().await.get(&raw_id).cloned();
+        if let Some(alias) = alias {
+            incoming.id = alias;
+        } else if !live.tasks.lock().await.contains_key(&raw_id)
+            && self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.id == raw_id)
+        {
+            incoming.id = format!("native:{}:{raw_id}", live.session_instance_id);
+            live.task_aliases.lock().await.insert(raw_id, incoming.id.clone());
+        }
+        if let Some(parent) = incoming.parent_id.as_mut() {
+            let existing = live.task_aliases.lock().await.get(parent).cloned();
+            if let Some(alias) = existing {
+                *parent = alias;
+            } else if !live.tasks.lock().await.contains_key(parent)
+                && self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.id == *parent)
+            {
+                // Native child rosters can precede their parent's start frame.
+                // Reserve the owning parent's alias before linking the child.
+                let alias = format!("native:{}:{parent}", live.session_instance_id);
+                live.task_aliases.lock().await.insert(parent.clone(), alias.clone());
+                *parent = alias;
+            }
+        }
         let origin_turn_id = match turn_id.or(*live.last_turn_id.lock().await) {
             Some(turn_id) => turn_id,
             None => self
@@ -5332,7 +5554,7 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
-        if let Err(error) = self.subagent_sync(thread_id, &task) {
+        if let Err(error) = self.subagent_sync(thread_id, &task, Some(live.session_instance_id)) {
             tracing::warn!(%thread_id, task_id = %task.id, %error, "could not update the subagent thread");
         }
         if !task.status.is_active() {
@@ -5345,9 +5567,12 @@ impl Orchestrator {
         &self,
         thread_id: ThreadId,
         live: &Arc<LiveSession>,
-        update: DriverRuntimeTaskUpdate,
+        mut update: DriverRuntimeTaskUpdate,
         kind: RuntimeTaskUpdateKind,
     ) -> Result<Option<RuntimeTask>> {
+        if let Some(alias) = live.task_aliases.lock().await.get(&update.id).cloned() {
+            update.id = alias;
+        }
         let mut tasks = live.tasks.lock().await;
         let Some(task) = tasks.get_mut(&update.id) else {
             tracing::debug!(thread_id = %thread_id, task_id = %update.id, "provider updated an unknown runtime task");
@@ -5406,7 +5631,7 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
-        if let Err(error) = self.subagent_sync(thread_id, &task) {
+        if let Err(error) = self.subagent_sync(thread_id, &task, Some(live.session_instance_id)) {
             tracing::warn!(%thread_id, task_id = %task.id, %error, "could not update the subagent thread");
         }
         if !resumed && (completed || !task.status.is_active()) {
@@ -5454,8 +5679,13 @@ impl Orchestrator {
     /// current handle's task map. Include it in the same terminal projection.
     async fn restore_active_runtime_tasks(&self, thread_id: ThreadId, live: &Arc<LiveSession>) -> Result<()> {
         let stored = self.inner.store.runtime_tasks_for_thread(thread_id)?;
+        let owners = self.inner.retained_sessions.lock().await.values().map(|(_, owner)| owner.clone()).collect::<Vec<_>>();
+        let mut retained_ids = HashSet::new();
+        for owner in owners {
+            retained_ids.extend(owner.tasks.lock().await.keys().cloned());
+        }
         let mut tasks = live.tasks.lock().await;
-        for task in stored.into_iter().filter(|task| task.status.is_active()) {
+        for task in stored.into_iter().filter(|task| task.status.is_active() && !retained_ids.contains(&task.id)) {
             tasks.entry(task.id.clone()).or_insert(task);
         }
         Ok(())
@@ -5475,6 +5705,7 @@ impl Orchestrator {
                 break;
             }
         }
+        self.inner.retained_sessions.lock().await.retain(|_, (_, current)| !Arc::ptr_eq(current, &live));
         // An idle session retired for an update must not remove its replacement.
         let cleanup_barrier = {
             let mut sessions = self.inner.sessions.lock().await;
@@ -5551,8 +5782,8 @@ impl Orchestrator {
             reject_app_tool_request(live, request_id, "invalid app tool name");
             return;
         }
-        if serde_json::to_vec(&arguments).map_or(true, |encoded| encoded.len() > crate::app_tools::MAX_ARGUMENT_BYTES) {
-            reject_app_tool_request(live, request_id, "app tool arguments exceed the 64 KiB limit");
+        if serde_json::to_vec(&arguments).map_or(true, |encoded| encoded.len() > crate::app_tools::argument_limit(&name)) {
+            reject_app_tool_request(live, request_id, "tool arguments exceed the size limit for this tool");
             return;
         }
         let Some(turn_id) = self.owns_app_tool_turn(thread_id, &live, None).await else {
@@ -5584,6 +5815,7 @@ impl Orchestrator {
                 let timeout = if name == "kybern_collaboration_wait"
                     || delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
+                    || matches!(name.as_str(), "kybern_html_preview" | "kybern_html_publish")
                     || crate::computer::ComputerUse::is_tool(&name)
                     || agent_items::WRITE_TOOLS.contains(&name.as_str())
                 {
@@ -5615,6 +5847,9 @@ impl Orchestrator {
     }
 
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
+        if live.retained.load(Ordering::Relaxed) {
+            return self.handle_retained_event(thread_id, live, ev).await;
+        }
         match ev {
             DriverEvent::AppToolRequest { request_id, name, arguments } => {
                 self.queue_app_tool_request(thread_id, live.clone(), request_id, name, arguments).await;
@@ -5626,6 +5861,10 @@ impl Orchestrator {
 
     async fn process_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent, retiring: bool) -> Result<()> {
         live.touch();
+        if let DriverEvent::SubagentMessageDelivered { task_id, message_id } = &ev {
+            self.acknowledge_subagent_message(thread_id, live.session_instance_id, task_id, message_id)?;
+            return Ok(());
+        }
         // A subagent's own prose and tool calls belong to its child thread and
         // never reach the parent's log or its turn bookkeeping.
         if live.stop_cleanup.load(Ordering::Relaxed) && !retiring {
@@ -5708,6 +5947,7 @@ impl Orchestrator {
             );
         }
         match ev {
+            DriverEvent::SubagentMessageDelivered { .. } => unreachable!("handled before root turn bookkeeping"),
             // Consumed by `subagent_take_event` before this point.
             DriverEvent::SubagentPrompt { .. } | DriverEvent::SubagentOnly { .. } => {}
             DriverEvent::ResponseStarted => {}
@@ -5723,6 +5963,17 @@ impl Orchestrator {
                 if let Some(m) = model.clone() {
                     t.model = Some(m);
                 }
+                if let Some(mut selected) = self.stored_target(&t)?
+                    && selected.provider == t.provider
+                    && selected.model.is_none()
+                    && model.is_some()
+                {
+                    selected.model = t.model.clone();
+                    self.inner.store.meta_set(&format!("target:{thread_id}"), &serde_json::to_string(&selected)?)?;
+                }
+                // Native canonical model reports belong to this live binding and must
+                // not look like a user-requested reconfiguration on the next send.
+                self.inner.store.meta_set(&format!("live_identity:{thread_id}"), &self.session_identity(&t)?)?;
                 if changed {
                     self.update_thread(t)?;
                 }
@@ -5820,6 +6071,11 @@ impl Orchestrator {
                 }
             }
             DriverEvent::ToolOutputDelta { tool_call_id, delta } => {
+                // Preview screenshots belong only to the transient tool transport.
+                // A provider may echo its MCP content as a JSON output stream.
+                if self.inner.store.tool_call_name(thread_id, &tool_call_id)?.as_deref().is_some_and(crate::visuals::is_preview_tool) {
+                    return Ok(());
+                }
                 if self.subagent_holds_call(thread_id, &tool_call_id) {
                     self.subagent_mirror_tool_event(
                         thread_id,
@@ -5842,7 +6098,10 @@ impl Orchestrator {
                     turn_id,
                     EventPayload::ToolCallCompleted {
                         tool_call_id: tool_call_id.clone(),
-                        output: output.clone(),
+                        output: crate::visuals::persisted_output(
+                            self.inner.store.tool_call_name(thread_id, &tool_call_id)?.as_deref(),
+                            output.clone(),
+                        ),
                         output_omitted: false,
                         stream_recoverable: false,
                         is_error,
@@ -5959,11 +6218,12 @@ impl Orchestrator {
             DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
                 let has_pending_tasks = if turn.provider == ProviderKind::ClaudeCode && stop_reason == StopReason::Completed {
-                    live.tasks
-                        .lock()
-                        .await
-                        .values()
-                        .any(|task| task.origin_turn_id == turn.id && task.kind != RuntimeTaskKind::Monitor && task.status.is_active())
+                    live.tasks.lock().await.values().any(|task| {
+                        task.origin_turn_id == turn.id
+                            && task.kind != RuntimeTaskKind::Monitor
+                            && !(task.kind == RuntimeTaskKind::Process && task.backgrounded)
+                            && task.status.is_active()
+                    })
                 } else {
                     false
                 };
@@ -6052,6 +6312,13 @@ impl Orchestrator {
                 self.inner.usage.turn_finished(t.provider.kind);
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
+                self.save_account_binding(&t)?;
+                let this = self.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = this.apply_pending_permission(thread_id, false).await {
+                        tracing::warn!(%error, "pending permission change was not applied");
+                    }
+                });
                 self.maybe_generate_title(&t);
                 self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Completed { stop_reason, terminal_message_id });
             }
@@ -6081,12 +6348,35 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
             }
             DriverEvent::UsageUpdated(usage) => {
+                if let Some(context) = &usage.context
+                    && let Some(thread) = self.inner.store.thread_get(thread_id)?
+                {
+                    self.inner.store.meta_set(
+                        &format!(
+                            "model_context:{}:{}:{}",
+                            thread.provider.kind,
+                            thread.provider.instance,
+                            thread.model.as_deref().unwrap_or("default")
+                        ),
+                        &context.window_tokens.to_string(),
+                    )?;
+                }
                 // Plan limits are account-wide: every client's limits view
                 // updates, not only this thread's.
                 if let Some(limits) = usage.limits.as_deref()
                     && let Some(thread) = self.inner.store.thread_get(thread_id)?
                 {
-                    self.inner.usage.observe(thread.provider.kind, limits);
+                    let admitted = self.inner.store.meta_get(&format!("live_fingerprint:{thread_id}"))?;
+                    if admitted
+                        .as_deref()
+                        .is_none_or(|identity| self.environment_fingerprint(&thread).is_ok_and(|current| current == identity))
+                    {
+                        self.inner.usage.observe_account(&thread.provider, limits);
+                    }
+                    self.inner.store.meta_set(
+                        &format!("account_usage:{}:{}", thread.provider.kind, thread.provider.instance),
+                        &serde_json::to_string(&usage)?,
+                    )?;
                 }
                 self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
             }
@@ -6343,11 +6633,16 @@ mod tests {
         app_tool_responses: CapturedAppToolResponses,
         hang_interrupt: bool,
         broken_interrupt: bool,
+        reject_permission: bool,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
     }
 
     #[async_trait::async_trait]
     impl AgentSession for TestSession {
+        async fn send_subagent_message(&self, _task_id: &str, _message_id: &str, _message: &UserMessage) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
         async fn stop_runtime_task(&self, task: &RuntimeTask) -> kybern_drivers::Result<()> {
             self.stopped_tasks.lock().await.push(task.id.clone());
             Ok(())
@@ -6374,6 +6669,9 @@ mod tests {
         }
 
         async fn set_permission_mode(&self, _mode: PermissionMode) -> kybern_drivers::Result<()> {
+            if self.reject_permission {
+                return Err(kybern_drivers::DriverError::Unsupported("fixture rejects permissions".into()));
+            }
             Ok(())
         }
 
@@ -6562,7 +6860,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_result_waits_for_background_processes_and_scopes_the_continuation() {
+    async fn claude_background_process_leaves_the_composer_ready_for_normal_send() {
         assert_claude_background_continuation(RuntimeTaskKind::Process).await;
     }
 
@@ -6648,6 +6946,7 @@ mod tests {
             computer_tools: false,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(Some(ActiveTurn {
                 response_id: Uuid::now_v7(),
@@ -6667,6 +6966,7 @@ mod tests {
             turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(Some(turn_id)),
             tasks: Mutex::new(HashMap::from([(task.id.clone(), task)])),
+            task_aliases: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             daemon_approvals: Mutex::new(HashMap::new()),
@@ -6709,7 +7009,7 @@ mod tests {
             )
             .await
             .unwrap();
-        if kind != RuntimeTaskKind::Monitor {
+        if kind == RuntimeTaskKind::Agent {
             assert!(live.turn.lock().await.as_ref().is_some_and(|turn| turn.pending_completion.is_some()));
             assert!(
                 !store
@@ -6719,7 +7019,7 @@ mod tests {
                     .any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
             );
         } else {
-            assert!(live.turn.lock().await.is_none(), "monitors may outlive the foreground request");
+            assert!(live.turn.lock().await.is_none(), "background services and monitors may outlive the foreground request");
             assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
         }
 
@@ -6731,7 +7031,7 @@ mod tests {
             )
             .await
             .unwrap();
-        if kind != RuntimeTaskKind::Monitor {
+        if kind == RuntimeTaskKind::Agent {
             // A notification can start another wave of work. Each provisional
             // result must keep the same parent busy without emitting an alert.
             for wave in 2..=3 {
@@ -6795,7 +7095,7 @@ mod tests {
         assert!(!orchestrator.session_parked(thread.id, &live).await.unwrap());
         let resumed =
             store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnResumed)).count();
-        assert_eq!(resumed, usize::from(kind == RuntimeTaskKind::Monitor));
+        assert_eq!(resumed, usize::from(kind != RuntimeTaskKind::Agent));
         assert!(
             orchestrator.send(thread.id, UserMessage::text("continue?")).await.is_err(),
             "manual input must not replace a running continuation"
@@ -6878,7 +7178,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(completed.len(), if kind != RuntimeTaskKind::Monitor { 1 } else { 2 });
+        assert_eq!(completed.len(), if kind == RuntimeTaskKind::Agent { 1 } else { 2 });
         let completed = &completed[completed.len() - 1..];
         assert_eq!(completed[0].0.input_tokens, 4);
         assert_eq!(completed[0].0.output_tokens, 6);
@@ -7008,12 +7308,14 @@ mod tests {
                 computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime { monotonic: last_activity, wall: SystemTime::now() }),
                 released: AtomicBool::new(false),
+                retained: AtomicBool::new(false),
                 stop_cleanup: AtomicBool::new(false),
                 turn: Mutex::new(None),
                 continuation: Mutex::new(None),
                 turn_ready: tokio::sync::Notify::new(),
                 last_turn_id: Mutex::new(None),
                 tasks: Mutex::new(HashMap::new()),
+                task_aliases: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
                 pending: Mutex::new(HashMap::new()),
                 daemon_approvals: Mutex::new(HashMap::new()),
@@ -7032,12 +7334,14 @@ mod tests {
                 computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
                 released: AtomicBool::new(false),
+                retained: AtomicBool::new(false),
                 stop_cleanup: AtomicBool::new(false),
                 turn: Mutex::new(None),
                 continuation: Mutex::new(None),
                 turn_ready: tokio::sync::Notify::new(),
                 last_turn_id: Mutex::new(None),
                 tasks: Mutex::new(HashMap::new()),
+                task_aliases: Mutex::new(HashMap::new()),
                 deferred_checkpoints: Mutex::new(HashSet::new()),
                 pending: Mutex::new(HashMap::new()),
                 daemon_approvals: Mutex::new(HashMap::new()),
@@ -10110,12 +10414,14 @@ for line in sys.stdin:
             computer_tools: false,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(None),
             continuation: Mutex::new(None),
             turn_ready: tokio::sync::Notify::new(),
             last_turn_id: Mutex::new(None),
             tasks: Mutex::new(HashMap::new()),
+            task_aliases: Mutex::new(HashMap::new()),
             deferred_checkpoints: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             daemon_approvals: Mutex::new(HashMap::new()),
@@ -10174,4 +10480,7 @@ for line in sys.stdin:
 
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/messaging_tests.rs");
+    include!("orchestrator/account_tests.rs");
+    include!("orchestrator/worktree_tests.rs");
+    include!("orchestrator/subagent_messaging_tests.rs");
 }

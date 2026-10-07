@@ -1,0 +1,189 @@
+[
+  {
+    "seq": 1,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "turn_started",
+    "message_id": "00000000-0000-0000-0000-000000000004",
+    "message": {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Show the result"
+        }
+      ]
+    }
+  },
+  {
+    "seq": 2,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "assistant_text_delta",
+    "message_id": "00000000-0000-0000-0000-000000000003",
+    "origin": {
+      "kind": "root"
+    },
+    "delta": "I’m checking the retained blocks.\n"
+  },
+  {
+    "seq": 3,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "assistant_thinking_delta",
+    "message_id": "00000000-0000-0000-0000-000000000003",
+    "origin": {
+      "kind": "root"
+    },
+    "delta": "Inspect native ordering."
+  },
+  {
+    "seq": 4,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "tool_call_started",
+    "call": {
+      "id": "tool-1",
+      "name": "read",
+      "input": {},
+      "parent_id": null
+    },
+    "origin": {
+      "kind": "root"
+    }
+  },
+  {
+    "seq": 5,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "tool_call_started",
+    "call": {
+      "id": "tool-1",
+      "name": "write",
+      "input": {},
+      "parent_id": null
+    },
+    "origin": {
+      "kind": "root"
+    }
+  },
+  {
+    "seq": 6,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "assistant_text_delta",
+    "message_id": "00000000-0000-0000-0000-000000000003",
+    "origin": {
+      "kind": "root"
+    },
+    "delta": "The tool finished; formatting the result.\n"
+  },
+  {
+    "seq": 7,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "assistant_text_delta",
+    "message_id": "00000000-0000-0000-0000-000000000003",
+    "origin": {
+      "kind": "root"
+    },
+    "delta": "Recovered answer\n\n| Item | Value |\n| --- | --- |\n| Exact | café 🪴 |\n\n```rust\nlet answer = 42;\n```\n"
+  },
+  {
+    "seq": 8,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "assistant_message_completed",
+    "message_id": "00000000-0000-0000-0000-000000000003",
+    "origin": {
+      "kind": "root"
+    },
+    "text": "I’m checking the retained blocks.\nThe tool finished; formatting the result.\nRecovered answer\n\n| Item | Value |\n| --- | --- |\n| Exact | café 🪴 |\n\n```rust\nlet answer = 42;\n```\n",
+    "thinking": "Inspect native ordering."
+  },
+  {
+    "seq": 9,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "tool_call_completed",
+    "tool_call_id": "tool-1",
+    "output": {
+      "ok": true
+    },
+    "is_error": false
+  },
+  {
+    "seq": 10,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "turn_completed",
+    "stop_reason": "completed",
+    "usage": {
+      "input_tokens": 1,
+      "output_tokens": 2,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
+    },
+    "cost_usd": 0.1,
+    "duration_ms": 10,
+    "terminal_message_id": "00000000-0000-0000-0000-000000000003"
+  },
+  {
+    "seq": 11,
+    "thread_id": "00000000-0000-0000-0000-000000000001",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "at": "2026-10-07T14:32:19.392Z",
+    "kind": "assistant_message_blocks_recovered",
+    "message_id": "00000000-0000-0000-0000-000000000003",
+    "session_id": "native-session",
+    "native_entry_id": "native-entry",
+    "blocks": [
+      {
+        "message_id": "00000000-0000-0000-0000-000000000010",
+        "content_index": 0,
+        "text": "I’m checking the retained blocks.\n",
+        "thinking": null,
+        "before_tool_call_id": "tool-1",
+        "seq": 4,
+        "at": "2026-10-07T14:32:19.392Z"
+      },
+      {
+        "message_id": "00000000-0000-0000-0000-000000000011",
+        "content_index": 1,
+        "text": "",
+        "thinking": "Inspect native ordering.",
+        "before_tool_call_id": "tool-1",
+        "seq": 4,
+        "at": "2026-10-07T14:32:19.392Z"
+      },
+      {
+        "message_id": "00000000-0000-0000-0000-000000000012",
+        "content_index": 3,
+        "text": "The tool finished; formatting the result.\n",
+        "thinking": null,
+        "before_tool_call_id": null,
+        "seq": 8,
+        "at": "2026-10-07T14:32:19.392Z"
+      },
+      {
+        "message_id": "00000000-0000-0000-0000-000000000013",
+        "content_index": 4,
+        "text": "Recovered answer\n\n| Item | Value |\n| --- | --- |\n| Exact | café 🪴 |\n\n```rust\nlet answer = 42;\n```\n",
+        "thinking": null,
+        "before_tool_call_id": null,
+        "seq": 8,
+        "at": "2026-10-07T14:32:19.392Z"
+      }
+    ],
+    "terminal_message_id": "00000000-0000-0000-0000-000000000013"
+  }
+]

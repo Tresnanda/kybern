@@ -17,6 +17,8 @@ const ADD_NUM_BG = "bg-[color-mix(in_srgb,var(--background)_88%,var(--success))]
 const DEL_BG = "bg-[color-mix(in_srgb,var(--background)_92%,var(--destructive))]"
 const DEL_NUM_BG = "bg-[color-mix(in_srgb,var(--background)_88%,var(--destructive))]"
 const SEP_BG = "bg-[color-mix(in_srgb,var(--background)_95%,var(--foreground))]"
+export type DiffLineSelect = (line: number, side: "LEFT" | "RIGHT") => void
+
 const DIFF_LINES_BATCH = 600
 
 export function FileDiffHeader({ file, open, onToggle, trailing }: { file: FileDiff; open?: boolean; onToggle?: () => void; trailing?: React.ReactNode }) {
@@ -50,7 +52,7 @@ export function FileDiffHeader({ file, open, onToggle, trailing }: { file: FileD
   )
 }
 
-function HunkRows({ hunk, first }: { hunk: DiffHunk; first: boolean }) {
+function HunkRows({ hunk, first, onLineSelect }: { hunk: DiffHunk; first: boolean; onLineSelect?: DiffLineSelect }) {
   return (
     <>
       <tr className={cn(SEP_BG, "font-system-ui text-muted-foreground")}>
@@ -64,10 +66,10 @@ function HunkRows({ hunk, first }: { hunk: DiffHunk; first: boolean }) {
       {hunk.lines.map((l, i) => (
         <tr key={i} className={cn(l.kind === "add" && ADD_BG, l.kind === "del" && DEL_BG, l.kind === "ctx" && "hover:bg-[color-mix(in_srgb,var(--background)_96%,var(--foreground))]")}>
           <td className={cn("w-px min-w-[3ch] pr-1 pl-3 text-right align-top font-system-ui tabular-nums text-muted-foreground/45 select-none", l.kind === "add" && ADD_NUM_BG, l.kind === "del" && DEL_NUM_BG)}>
-            {l.oldNo ?? ""}
+            {onLineSelect && l.oldNo != null ? <button type="button" aria-label={`Comment on original line ${l.oldNo}`} onClick={() => onLineSelect(l.oldNo!, "LEFT")} className="w-full rounded-sm hover:text-foreground focus-visible:outline focus-visible:outline-ring">{l.oldNo}</button> : l.oldNo ?? ""}
           </td>
           <td className={cn("w-px min-w-[3ch] pr-1.5 text-right align-top font-system-ui tabular-nums text-muted-foreground/45 select-none", l.kind === "add" && ADD_NUM_BG, l.kind === "del" && DEL_NUM_BG)}>
-            {l.newNo ?? ""}
+            {onLineSelect && l.newNo != null ? <button type="button" aria-label={`Comment on new line ${l.newNo}`} onClick={() => onLineSelect(l.newNo!, "RIGHT")} className="w-full rounded-sm hover:text-foreground focus-visible:outline focus-visible:outline-ring">{l.newNo}</button> : l.newNo ?? ""}
           </td>
           <td className="pr-3 pl-[1.25ch] align-top whitespace-pre">
             <span className={cn("inline-block w-[1.5ch] select-none", l.kind === "add" ? "text-[var(--color-decoration-added)]" : l.kind === "del" ? "text-[var(--color-decoration-deleted)]" : "text-transparent")}>
@@ -81,7 +83,7 @@ function HunkRows({ hunk, first }: { hunk: DiffHunk; first: boolean }) {
   )
 }
 
-export function FileDiffBody({ file, truncated = false }: { file: FileDiff; truncated?: boolean }) {
+export function FileDiffBody({ file, truncated = false, onLineSelect }: { file: FileDiff; truncated?: boolean; onLineSelect?: DiffLineSelect }) {
   const [visibleLines, setVisibleLines] = useState(DIFF_LINES_BATCH)
   const totalLines = useMemo(() => file.hunks.reduce((total, hunk) => total + hunk.lines.length, 0), [file.hunks])
   const visibleHunks = useMemo(() => {
@@ -104,7 +106,7 @@ export function FileDiffBody({ file, truncated = false }: { file: FileDiff; trun
         <table className="w-full border-collapse font-chat-code text-[length:var(--app-font-size-chat-code,11px)] leading-[1.65] text-foreground">
           <tbody>
             {visibleHunks.map((h, i) => (
-              <HunkRows key={i} hunk={h} first={i === 0} />
+              <HunkRows key={i} hunk={h} first={i === 0} onLineSelect={onLineSelect} />
             ))}
           </tbody>
         </table>

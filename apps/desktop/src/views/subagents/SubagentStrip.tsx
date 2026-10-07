@@ -22,15 +22,15 @@ import { ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from 
 import {
   COMPOSER_STACKED_PANEL_HEADER_ROW_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
-  COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "@/components/kit/chat/composerStackedPanelStyles"
-import { BackgroundTrayIcon, ChevronDownIcon, StopIcon, WorkflowIcon } from "@/lib/kit/icons"
+import { BackgroundTrayIcon, ChevronDownIcon, StopIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { Thread, ThreadId } from "@/protocol"
 import { openThreadView, runSubagentInBackground, stopAllSubagents, stopOneSubagent, useSubagentChildren, useSubagentModel } from "@/state/subagents"
 import { SubagentHoverCard } from "./SubagentHoverCard"
-import { SubagentElapsed, SubagentGlyph } from "./parts"
+import { ProviderAvatarStack, SubagentElapsed, SubagentGlyph } from "./parts"
+import { ProviderMark } from "@/components/kybern/bits"
 
 /** Keep a panel mounted for `ms` after it should go, so it can fade out. */
 function usePresence(present: boolean, ms: number): { mounted: boolean; leaving: boolean } {
@@ -81,7 +81,7 @@ function StripBody({ rows, working, leaving }: { rows: Thread[]; working: number
     <ComposerStackedPanel className={cn(leaving ? "sa-strip-leave" : "t-panel-enter")} data-subagent-strip="">
       <div className={COMPOSER_STACKED_PANEL_HEADER_ROW_CLASS_NAME}>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs">
-          <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          <ProviderAvatarStack kinds={rows.map((thread) => thread.provider.kind)} />
           <span className="truncate font-medium text-foreground/85">{stripLabel(rows.length, working)}</span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -139,6 +139,7 @@ function StripRow({ thread }: { thread: Thread }) {
       onClick={() => openThreadView(thread.id)}
       className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-[7px] ps-1.5 text-start text-xs outline-hidden focus-visible:ring-2 focus-visible:ring-ring/60"
     >
+      <ProviderMark kind={thread.provider.kind} size={14} className="size-3.5 shrink-0" />
       <SubagentGlyph thread={thread} />
       <span className="shrink-0 font-medium text-foreground/85">{thread.title || "Subagent"}</span>
       <span className="sa-secondary min-w-0 flex-1 truncate text-foreground/45">{meta}</span>

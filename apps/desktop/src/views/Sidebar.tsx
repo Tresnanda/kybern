@@ -1,3 +1,4 @@
+import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
 import { collaborationThreadRows } from "../../../../packages/kybern-client/src/collaboration"
 // Thread panel: the leading section of the workspace card, beside the app rail.
 // Brand row, chat actions, and the "Projects" list with nested thread rows.
@@ -904,9 +905,12 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
             </ContextMenuItem>
           )}
           {!thread.coordinator_project_id && (
+            <>
             <ContextMenuItem variant="destructive" onClick={() => archiveThread(thread.id).catch((e) => toast.error("Unable to archive", { description: errorText(e) }))}>
               <ArchiveIcon /> Archive
             </ContextMenuItem>
+            {thread.worktree && !thread.delegation && !thread.subagent && <ContextMenuItem onClick={() => offerWorktreeCleanup(thread.id)}>Remove worktree…</ContextMenuItem>}
+            </>
           )}
         </ContextMenuGroup>
       </ContextMenuContent>

@@ -51,7 +51,8 @@ import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, N
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
 import { ComposerEditor, type ComposerEditorHandle, type EditorSegment } from "@/components/kit/chat/ComposerEditor"
-import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderStatus, type SkillInfo, type TaskItem, type TaskItemId, type Thread, type UserMessage } from "@/protocol"
+import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderKind, type ProviderStatus, type SkillInfo, type TaskItem, type TaskItemId, type Thread, type UserMessage } from "@/protocol"
+import { refreshComposerCatalog } from "@/state/accountRequests"
 import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { COMPUTER_MENTION_PATH, COMPUTER_MENTION_SKILL, noteMentionPart, taskMentionPart, type MentionPart } from "@/lib/userInput"
@@ -151,9 +152,13 @@ export interface ComposerProps {
   onStop?: () => void
   mode: PermissionMode
   onModeChange: (m: PermissionMode) => void
+  /** Native children inherit permissions from their owning session. */
+  lockMode?: boolean
   provider: ProviderInstance | null
+  accountControl?: React.ReactNode
   providerSessionId?: string | null
   providers: ProviderStatus[]
+  onRefreshModels?: (provider: ProviderInstance, forceRefresh: boolean) => Promise<ProviderStatus | undefined>
   /** `choice` carries a model picked from another harness's favorites. */
   onProviderChange?: (p: ProviderInstance, choice?: { model?: string; effort?: string }) => Promise<void> | void
   model?: string | null
@@ -305,6 +310,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   })
   const connected = useStore((s) => s.connection.state === "open")
   const projects = useStore((s) => s.projects)
+  const providerSettings = useStore((s) => s.settings?.providers)
+  const projectPath = props.projectId ? projects[props.projectId]?.path : undefined
+  const providerInstances = useMemo(() => Object.fromEntries(providers.map((status) => [status.kind,
+    status.kind === provider?.kind ? provider.instance : (projectPath ? providerSettings?.[status.kind]?.project_accounts?.[projectPath] : undefined) ?? providerSettings?.[status.kind]?.default_account ?? "default",
+  ])) as Partial<Record<ProviderKind, string>>, [providers, provider, projectPath, providerSettings])
   const threads = useStore((s) => s.threads)
   const disabled = disabledByParent || !connected
   const [text, setText] = useState(savedDraft?.text ?? prefill?.text ?? "")
@@ -314,7 +324,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [sending, setSending] = useState(false)
   const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue")
   const steering = running && !!onSteer && promptMode === "steer"
-  const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
+  const catalogEnvironmentId = useStore((s) => s.environmentId)
+  const modelCatalogScope = useMemo(() => ({
+    kind: provider?.kind, instance: provider?.instance, projectId,
+    environmentId: catalogEnvironmentId, refresh: props.onRefreshModels,
+  }), [provider?.kind, provider?.instance, projectId, catalogEnvironmentId, props.onRefreshModels])
+  const [loadingCatalogScope, setLoadingCatalogScope] = useState<typeof modelCatalogScope | null>(null)
+  const modelCatalogLoading = loadingCatalogScope === modelCatalogScope
   // Throttles the silent catalog refresh fired whenever the picker opens, so
   // rapid re-opens don't re-probe every agent CLI. Matches the daemon's cache window.
   const lastModelRefresh = useRef(0)
@@ -689,6 +705,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const submit = async (delivery: "queue" | "steer" = promptMode) => {
     if (!canSend) return
+    const targetStatus = provider ? providers.find((candidate) => candidate.kind === provider.kind) : undefined
+    const targetLegacyCursor = provider?.kind === "cursor" && !!props.providerSessionId && !props.providerSessionId.startsWith("cursor-sdk:")
+    const unsupportedMode = provider?.kind === "cursor" && !targetLegacyCursor
+      ? mode !== "auto" && mode !== "full-access"
+      : provider?.kind === "pi" ? mode === "auto" : !!targetStatus && !targetStatus.supported_permission_modes.includes(mode)
+    if (unsupportedMode) {
+      toast.error("Choose permissions", { description: "Choose a supported permission mode for the selected agent before sending." })
+      return
+    }
     setSending(true)
     try {
       await (running && delivery === "steer" && onSteer ? onSteer : onSend)({ parts: buildParts() })
@@ -850,7 +875,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       ? { ...m, label: "Auto-review", description: "Run in Cursor’s sandbox with automatic review; no approval prompts" }
       : { ...m, description: "Disable Cursor’s sandbox and automatic review" })
     : MODES
-  const modeInfo = modes.find((m) => m.mode === mode) ?? modes[0]!
+  const supportedMode = modes.find((candidate) => candidate.mode === mode && (legacyCursor || !status || status.supported_permission_modes.includes(mode)))
+  const effectiveMode = MODES.find((candidate) => candidate.mode === mode)!
+  const modeInfo = supportedMode ?? { ...effectiveMode, label: "Choose permissions", description: `${effectiveMode.label} is not supported by the selected agent` }
   const wantsMention = (kind: MentionKind) => mentionFilter === "all" || mentionFilter === kind
   const menuLoading = mention && term !== null
     ? (wantsMention("file") && !!projectId && fileResult.query !== term) || (wantsMention("thread") && !!term && threadResult.query !== term)
@@ -894,14 +921,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // Re-probe the daemon for the current agent's catalog. `silent` is the
   // background refresh fired on picker open — it never toasts; the explicit
   // "Reload models" action reports an empty result or a failure.
+  const modelRefreshGeneration = useRef(0)
+  useEffect(() => {
+    modelRefreshGeneration.current++
+    lastModelRefresh.current = 0
+  }, [modelCatalogScope])
   const refreshModelCatalog = async (silent: boolean) => {
     if (!provider || modelCatalogLoading) return
+    const generation = ++modelRefreshGeneration.current
     lastModelRefresh.current = Date.now()
-    setModelCatalogLoading(true)
+    setLoadingCatalogScope(modelCatalogScope)
     try {
-      const refreshed = await refreshProviders(projectId)
-      if (silent) return
-      const count = refreshed.find((item) => item.kind === provider.kind)?.models?.length ?? 0
+      const refreshed = await refreshComposerCatalog(provider, projectId, !silent, props.onRefreshModels, refreshProviders)
+      if (generation !== modelRefreshGeneration.current || silent || !refreshed) return
+      const count = refreshed.models?.length ?? 0
       if (count === 0) {
         const description = provider.kind === "omp"
           ? "Run omp models ls --json and check the provider login, then reload models."
@@ -909,9 +942,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         toast.error("Models are still unavailable", { description })
       }
     } catch (error) {
-      if (!silent) toast.error("Unable to reload models", { description: errorText(error) })
+      if (!silent && generation === modelRefreshGeneration.current) toast.error("Unable to reload models", { description: errorText(error) })
     } finally {
-      setModelCatalogLoading(false)
+      if (generation === modelRefreshGeneration.current) setLoadingCatalogScope(null)
     }
   }
   const reloadModels = () => refreshModelCatalog(false)
@@ -1178,7 +1211,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         <Button
                           size="sm"
                           variant="chrome"
-                          title={`${modeInfo.label}: ${modeInfo.description}. Click to change permissions.`}
+                          disabled={props.lockMode}
+                          title={props.lockMode ? `${modeInfo.label}: inherited from the parent session` : `${modeInfo.label}: ${modeInfo.description}. Click to change permissions.`}
                           className={cn(
                             COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
                             COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
@@ -1235,11 +1269,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     running={running}
                   />
                 )}
+                {props.accountControl}
                 {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
                   <ModelPicker
                     provider={provider}
                     providers={providers}
+                    instances={providerInstances}
                     model={model}
                     effort={effort}
                     canPickModel={canPickModel}

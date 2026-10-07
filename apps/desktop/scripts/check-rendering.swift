@@ -2,8 +2,9 @@
 import AppKit
 import WebKit
 import UniformTypeIdentifiers
+import CoreGraphics
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(ProcessInfo.processInfo.environment["KYBERN_PERF_FOREGROUND"] == "1" ? .regular : .accessory)
 final class Assets: NSObject, WKURLSchemeHandler {
  let root = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
  let policy = String(decoding: try! Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2])), as: UTF8.self)
@@ -49,7 +50,22 @@ final class Bench: NSObject, WKScriptMessageHandler {
   window.title = "Kybern rendering checks"
   if ProcessInfo.processInfo.environment["KYBERN_PERF_DEBUG_LAYERS"] == "1" || ProcessInfo.processInfo.environment["KYBERN_PERF_HOLD"] == "1" { print("Debug window id: \(window.windowNumber)"); fflush(stdout) }
   window.contentView = web
-  window.orderFront(nil)
+  // Functional fixtures can opt into an actually visible window. WebKit's
+  // inactive scheduling override keeps timers alive but leaves document.hidden
+  // true in an occluded window, so it cannot exercise visible iframe behavior.
+  if ProcessInfo.processInfo.environment["KYBERN_PERF_FOREGROUND"] == "1" {
+   // Activation must follow AppKit launch, after app.run starts its loop.
+   DispatchQueue.main.async {
+    self.window.makeKeyAndOrderFront(nil)
+    app.activate(ignoringOtherApps: true)
+    if let session = CGSessionCopyCurrentDictionary() as? [String: Any], session["CGSSessionScreenIsLocked"] as? Bool == true {
+     print("{\"stage\":\"native-window-locked\",\"message\":\"Unlock macOS to exercise visible WebKit frames\"}")
+     fflush(stdout)
+    }
+   }
+  } else {
+   window.orderFront(nil)
+  }
   let fixture = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "rendering"
   let history = Int(ProcessInfo.processInfo.environment["KYBERN_PERF_HISTORY"] ?? "400") ?? 400
   var query = "?history=\(history)"

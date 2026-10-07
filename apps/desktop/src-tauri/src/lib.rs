@@ -543,6 +543,7 @@ pub fn run() {
             set_window_vibrancy,
             save_image_file,
             text_export::save_text_file,
+            text_export::save_html_file,
             write_image_clipboard,
             notifications::notification_permission,
             notifications::send_notification,

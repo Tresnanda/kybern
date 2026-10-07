@@ -739,3 +739,134 @@ test("an omitted settled stream ignores partial late deltas until exact hydratio
   assert.equal(state.blocks[0].streamOmitted, true)
   assert.equal(state.lastSeq, 4)
 })
+
+
+test("native child delivery state does not remount transcript rows and survives streaming", () => {
+  let state = applyEvent(emptyThreadState(), { seq: 1, thread_id: "child", turn_id: T, at: AT, kind: "turn_started", message_id: "launch", message: { parts: [{ type: "text", text: "Original task" }] } })
+  const blocks = state.blocks
+  const record = { id: "child-input", thread_id: "child", task_id: "task", native_task_id: "task", session_instance_id: "process", turn_id: T, message: { parts: [{ type: "text", text: "Queued user input" }] }, status: "pending", created_at: AT, updated_at: AT }
+  state = applyEvent(state, { seq: 2, thread_id: "child", turn_id: T, at: AT, kind: "subagent_message_updated", message: record })
+  assert.equal(state.blocks, blocks)
+  assert.equal(state.subagentMessages[0].status, "pending")
+  state = applyEvent(state, { seq: 3, thread_id: "child", turn_id: T, at: AT, kind: "assistant_text_delta", message_id: "child-response", origin: ROOT, delta: "Readable child output" })
+  const streamed = state.blocks
+  assert.equal(state.subagentMessages[0], record)
+  state = applyEvent(state, { seq: 4, thread_id: "child", turn_id: T, at: AT, kind: "subagent_message_updated", message: { ...record, status: "delivered" } })
+  assert.equal(state.blocks, streamed)
+  assert.equal(state.subagentMessages.length, 1)
+  assert.equal(state.subagentMessages[0].status, "delivered")
+})
+
+test("OMP recovery preserves explicit progress/tool order and exact final text live, settled and reloaded", async () => {
+  const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const correction = events.at(-1)
+  const exact = correction.blocks.at(-1).text
+  let state = emptyThreadState()
+  for (const event of events.slice(0, -2)) state = applyEvent(state, event)
+  assert.equal(groupTurns(state.blocks)[0].answer, null, "live output remains work before completion")
+  state = applyEvent(state, events.at(-2))
+  assert.equal(groupTurns(state.blocks)[0].answer.text, events.find(e => e.kind === "assistant_message_completed").text)
+  const originalTools = state.blocks.filter(b => b.kind === "tool")
+  state = applyEvent(state, correction)
+  const settled = groupTurns(state.blocks)[0]
+  assert.equal(settled.answer.text, exact)
+  assert.deepEqual(settled.work.filter(b => b.kind === "assistant" && b.text).map(b => b.text), correction.blocks.slice(0, -1).filter(b => b.text).map(b => b.text))
+  assert.deepEqual(state.blocks.filter(b => b.kind === "tool"), originalTools)
+  assert.deepEqual(settled.work.map(b => b.kind), ["assistant", "assistant", "tool", "tool", "assistant"])
+  assert.equal(settled.work[1].thinking, "Inspect native ordering.")
+  assert.deepEqual(applyEvent(state, { ...correction, seq: correction.seq + 1 }).blocks, state.blocks, "duplicate correction retains row identities")
+  const transcript = state.blocks.map(b => b.kind === "assistant" ? {
+    role: "assistant", id: b.messageId, turn_id: b.turnId, seq: b.seq, origin: b.origin, segment: b.segment,
+    text: b.text, thinking: b.thinking || null, thinking_complete: b.thinkingComplete, complete: b.complete, at: b.at,
+  } : b.kind === "tool" ? { role: "tool_call", turn_id: b.turnId, seq: b.seq, origin: b.origin, call: b.call,
+    output: b.output, complete: b.complete, is_error: b.isError, at: b.at,
+  } : b.kind === "user" ? { role: "user", id: b.id, turn_id: b.turnId, seq: b.seq, message: b.message, at: b.at }
+    : { role: "turn_summary", turn_id: b.turnId, seq: b.seq, at: b.at, stop_reason: b.stopReason, usage: b.usage,
+      cost_usd: b.costUsd, duration_ms: b.durationMs, terminal_message_id: b.terminalMessageId, error: null })
+  const reloaded = seedFromGet({ thread: { id: correction.thread_id, last_seq: correction.seq }, transcript: JSON.parse(JSON.stringify(transcript)), pending_approvals: [] })
+  assert.equal(groupTurns(reloaded.blocks)[0].answer.text, exact)
+  assert.deepEqual(groupTurns(reloaded.blocks)[0].work.map(b => b.kind), settled.work.map(b => b.kind))
+  const mobile = await import("../mobile/src/state/transcript.ts")
+  let mobileState = mobile.emptyThreadState()
+  for (const event of events) mobileState = mobile.applyEvent(mobileState, event)
+  assert.equal(groupTurns(mobileState.blocks)[0].answer.text, exact)
+  const mobileReloaded = mobile.seedFromGet({ thread: { id: correction.thread_id, last_seq: correction.seq }, transcript, pending_approvals: [] })
+  assert.equal(groupTurns(mobileReloaded.blocks)[0].answer.text, exact)
+})
+
+
+test("explicit OMP native text identities keep adjacent progress separate from the final answer", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const recovered = fixture.at(-1)
+  const blocks = recovered.blocks
+  const payloads = [start, ...blocks.flatMap(block => [
+    ...(block.text ? [{ kind: "assistant_text_delta", message_id: block.message_id, origin: ROOT, delta: block.text }] : []),
+    ...(block.thinking ? [{ kind: "assistant_thinking_delta", message_id: block.message_id, origin: ROOT, delta: block.thinking }] : []),
+    { kind: "assistant_message_completed", message_id: block.message_id, origin: ROOT, text: block.text, thinking: block.thinking },
+  ])]
+  const live = fold(payloads)
+  assert.equal(groupTurns(live.blocks)[0].answer, null)
+  const settled = applyEvent(live, { ...done, terminal_message_id: recovered.terminal_message_id, seq: live.lastSeq + 1, turn_id: T, at: AT })
+  const group = groupTurns(settled.blocks)[0]
+  assert.equal(group.answer.text, blocks.at(-1).text)
+  assert.deepEqual(group.work.filter(b => b.kind === "assistant" && b.text).map(b => b.text), blocks.slice(0, -1).filter(b => b.text).map(b => b.text))
+})
+
+test("historical OMP correction leaves a newer loaded turn's objects intact", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const newer = fold([start, { kind: "assistant_message_completed", message_id: "newer", origin: ROOT, text: "Newer exact answer", thinking: null }, { ...done, terminal_message_id: "newer" }])
+  const corrected = applyEvent(newer, { ...fixture.at(-1), seq: newer.lastSeq + 1 })
+  assert.deepEqual(corrected.blocks, newer.blocks)
+  assert.ok(corrected.blocks.every((block, i) => block === newer.blocks[i]))
+  assert.equal(groupTurns(corrected.blocks)[0].answer.text, "Newer exact answer")
+})
+
+test("account transitions stay on the latest conversation turn after old-turn recovery and background updates", async () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const group = createTurnGrouper()
+  let state = emptyThreadState()
+  for (const event of fixture.slice(0, -1)) state = applyEvent(state, event)
+  let seq = state.lastSeq
+  const newerTurn = "newer-turn"
+  for (const payload of [
+    { ...start, message_id: "newer-user" },
+    { kind: "assistant_message_completed", message_id: "newer-answer", origin: ROOT, text: "Newer exact answer", thinking: null },
+    { ...done, terminal_message_id: "newer-answer" },
+  ]) state = applyEvent(state, { ...payload, seq: ++seq, turn_id: newerTurn, at: AT })
+  state = applyEvent(state, { ...fixture.at(-1), seq: ++seq })
+  state = applyEvent(state, { kind: "provider_notice", seq: ++seq, turn_id: fixture[0].turn_id, at: AT, level: "info", text: "Old background work settled" })
+  const before = group(state.blocks)
+  const oldBlocks = state.blocks.slice()
+  const transition = { kind: "session_transitioned", seq: ++seq, turn_id: null, at: AT, from: { kind: "omp", instance: "default" }, to: { kind: "omp", instance: "other" }, native_resume: false, text: "Using the receiving account" }
+  state = applyEvent(state, transition)
+  assert.equal(state.blocks.at(-1).turnId, newerTurn)
+  assert.ok(oldBlocks.every((block, index) => state.blocks[index] === block), "existing transcript rows retain their objects")
+  const after = group(state.blocks)
+  assert.deepEqual(after.map(turn => turn.turnId), before.map(turn => turn.turnId), "no anonymous turn is created")
+  assert.equal(after[0], before[0], "the unaffected historical turn stays referentially stable")
+  assert.equal(after.find(turn => turn.turnId === newerTurn).answer.text, "Newer exact answer")
+  const projectedNotice = seedFromGet({ thread: { id: "thread", last_seq: seq }, transcript: [{ role: "notice", turn_id: newerTurn, seq, at: AT, level: "info", text: transition.text }], pending_approvals: [] }).blocks[0]
+  assert.deepEqual(state.blocks.at(-1), projectedNotice, "live notice matches the daemon's reloaded turn attribution")
+  const mobile = await import("../mobile/src/state/transcript.ts")
+  assert.equal(mobile.applyEvent({ ...state, blocks: oldBlocks, lastSeq: seq - 1 }, transition).blocks.at(-1).turnId, newerTurn)
+})
+
+test("an account transition clears the old account's limits until the new owner reports them", () => {
+  let state = applyEvent(emptyThreadState(), {
+    kind: "provider_usage_updated", seq: 1, thread_id: "thread", turn_id: T, at: AT,
+    usage: { context: { used_tokens: 100, window_tokens: 1000 }, limits: [{ name: "Weekly", used_percent: 100, window_minutes: 10080, resets_at: 1900000000 }] },
+  })
+  assert.equal(state.providerUsage.limits[0].used_percent, 100)
+  state = applyEvent(state, {
+    kind: "session_transitioned", seq: 2, thread_id: "thread", turn_id: null, at: AT,
+    from: { kind: "codex", instance: "default" }, to: { kind: "codex", instance: "work" }, native_resume: false, text: "Using work",
+  })
+  assert.equal(state.providerUsage, undefined)
+  state = applyEvent(state, { ...start, seq: 3, thread_id: "thread", turn_id: "new-account-turn", at: AT })
+  state = applyEvent(state, {
+    kind: "provider_usage_updated", seq: 4, thread_id: "thread", turn_id: "new-account-turn", at: AT,
+    usage: { context: { used_tokens: 200, window_tokens: 1000 } },
+  })
+  assert.equal(state.providerUsage.context.used_tokens, 200)
+  assert.deepEqual(state.providerUsage.limits, [], "unknown account usage has no inherited quota windows after sparse context updates")
+})

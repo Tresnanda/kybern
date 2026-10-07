@@ -10,6 +10,7 @@ use kybern_protocol::Settings;
 pub struct SettingsStore {
     path: PathBuf,
     current: Arc<RwLock<Settings>>,
+    changed: tokio::sync::broadcast::Sender<Settings>,
 }
 
 impl SettingsStore {
@@ -23,7 +24,7 @@ impl SettingsStore {
             }
             Err(e) => return Err(e.into()),
         };
-        Ok(Self { path: path.to_path_buf(), current: Arc::new(RwLock::new(settings)) })
+        Ok(Self { path: path.to_path_buf(), current: Arc::new(RwLock::new(settings)), changed: tokio::sync::broadcast::channel(32).0 })
     }
 
     /// The data directory `settings.json` lives in.
@@ -35,6 +36,10 @@ impl SettingsStore {
         self.current.read().unwrap().clone()
     }
 
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Settings> {
+        self.changed.subscribe()
+    }
+
     pub fn set(&self, settings: Settings) -> Result<Settings> {
         validate_orchestration(&settings.orchestration)?;
         if let Some(omp) = settings.providers.get(&kybern_protocol::ProviderKind::Omp) {
@@ -42,8 +47,10 @@ impl SettingsStore {
                 kybern_drivers::omp_profile::normalize(profile)?;
             }
         }
+        crate::provider_accounts::validate(&settings)?;
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();
+        let _ = self.changed.send(settings.clone());
         Ok(settings)
     }
 }
@@ -80,6 +87,11 @@ pub fn provider_settings(
         && let Some(profile) = project_path.and_then(|path| provider.project_profiles.get(path))
     {
         provider.env.insert("OMP_PROFILE".into(), profile.trim().into());
+    }
+    let instance = crate::provider_accounts::resolve(&provider, project_path, None);
+    // Settings are validated before persistence. Legacy defaults stay unchanged.
+    if let Ok(env) = crate::provider_accounts::environment(&provider, kind, &instance) {
+        provider.env = env;
     }
     provider
 }

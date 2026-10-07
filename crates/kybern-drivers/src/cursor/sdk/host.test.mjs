@@ -107,3 +107,40 @@ test("run errors redact the SDK key and scoped MCP capability", async () => {
   assert.equal(f.events.at(-1).result.error.message, "[redacted] [redacted] [redacted]");
   await f.host.close();
 });
+
+
+test("effort variants share a model; context and ZDR preserve native parameters", () => {
+  const models = modelCatalog([{ id: "gpt", displayName: "GPT", variants: [
+    { params: [{ id: "reasoning_effort", value: "low" }] },
+    { params: [{ id: "reasoning_effort", value: "high" }] },
+    { params: [{ id: "context", value: "1000000" }, { id: "reasoning_effort", value: "high" }] },
+    { params: [{ id: "zdr", value: "true" }] },
+  ] }]);
+  assert.equal(models.length, 4);
+  assert.deepEqual(models[1].efforts, ["low", "high"]);
+  assert.equal(models[1].display_name, "GPT");
+  assert.equal(models[2].display_name, "GPT · 1M context");
+  assert.equal(models[3].display_name, "GPT · ZDR");
+  assert.deepEqual(modelSelection(models[1].id, "high"), { id: "gpt", params: [{ id: "reasoning_effort", value: "high" }] });
+  assert.deepEqual(modelSelection(models[2].id), { id: "gpt", params: [{ id: "context", value: "1000000" }, { id: "reasoning_effort", value: "high" }] });
+  assert.throws(() => modelSelection(models[1].id, "max"), /does not offer/);
+  assert.deepEqual(modelSelection(`cursor-model:${Buffer.from(JSON.stringify({id: "gpt", params: [{id: "reason_effort", value: "low"}]})).toString("base64url")}`),
+    {id: "gpt", params: [{id: "reason_effort", value: "low"}]});
+});
+
+
+test("the effort control reaches native sends and survives permission changes", async () => {
+  const f = fixture();
+  const [, model] = modelCatalog([{id:"m", variants:[
+    {params:[{id:"reason_effort",value:"low"}]},
+    {params:[{id:"reason_effort",value:"high"}]},
+  ]}]);
+  await open(f.host, {model:model.id, effort:"high"});
+  assert.deepEqual(f.calls.find((c) => c[0] === "create")[1].model.params, [{id:"reason_effort",value:"high"}]);
+  await f.host.request({type:"set_effort",effort:"low"});
+  await f.host.request({type:"set_mode",mode:"full-access",model:model.id});
+  assert.deepEqual(f.calls.filter((c) => c[0] === "resume").at(-1)[2].model.params, [{id:"reason_effort",value:"low"}]);
+  await f.host.request({type:"send",message:{text:"hello"}});
+  assert.deepEqual(f.calls.find((c) => c[0] === "send")[2].model.params, [{id:"reason_effort",value:"low"}]);
+  await f.host.close();
+});

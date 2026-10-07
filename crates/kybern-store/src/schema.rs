@@ -413,6 +413,29 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX thread_messages_from ON thread_messages(from_thread_id);
     CREATE INDEX thread_messages_reply ON thread_messages(reply_to);
     ",
+    // v19: durable inline visual source, independent of a thread's workspace.
+    "CREATE TABLE html_visuals (
+       id TEXT PRIMARY KEY,
+       thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+       title TEXT NOT NULL,
+       height INTEGER NOT NULL,
+       html TEXT NOT NULL
+     ); CREATE INDEX html_visuals_thread ON html_visuals(thread_id);",
+    // v20: bounded, indexed identity lookup for preview-result persistence.
+    "CREATE INDEX tool_start_identity ON events(thread_id, json_extract(payload, '$.call.id'), seq)
+      WHERE kind = 'tool_call_started';",
+    // v21: durable native child inbox, bound to the admitted process.
+    "CREATE TABLE subagent_messages(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, session_instance_id TEXT NOT NULL,
+      task_id TEXT NOT NULL, status TEXT NOT NULL, record TEXT NOT NULL);
+      CREATE INDEX subagent_messages_child ON subagent_messages(thread_id);
+      CREATE INDEX subagent_messages_pending ON subagent_messages(session_instance_id, task_id, status);",
+    // v22: historical answer overlays must not scan large unrelated event logs.
+    "CREATE INDEX assistant_recovery_identity ON events(thread_id, json_extract(payload, '$.message_id'), seq)
+      WHERE kind = 'assistant_message_blocks_recovered';",
+    // v23: lifecycle settlement queries only pending messages, independently of UI history.
+    "CREATE INDEX subagent_messages_pending_child ON subagent_messages(thread_id) WHERE status = 'pending';
+      CREATE INDEX subagent_messages_pending_owner ON subagent_messages(session_instance_id) WHERE status = 'pending';
+      CREATE INDEX subagent_messages_pending_status ON subagent_messages(status) WHERE status = 'pending';",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

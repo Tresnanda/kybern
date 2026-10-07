@@ -104,6 +104,23 @@ impl ProviderInstance {
     }
 }
 
+/// A named, native-isolated account. Secrets remain in the harness directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderAccount {
+    pub name: String,
+    pub directory: String,
+}
+
+/// The target of the next message, separate from the admitted live session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionTarget {
+    pub provider: ProviderInstance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
 /// Availability of a provider binary on the daemon host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderModel {
@@ -1289,10 +1306,25 @@ pub enum StopReason {
     Error,
 }
 
+/// A durable, sandboxed HTML reply. Source bytes are stored separately from events.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct HtmlVisual {
+    pub id: uuid::Uuid,
+    pub title: String,
+    /// Agent-requested height cap in CSS pixels.
+    pub height: u32,
+}
+
 /// Rendered transcript entries, projected from events by the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum TranscriptEntry {
+    Visual {
+        turn_id: TurnId,
+        seq: EventSeq,
+        at: DateTime<Utc>,
+        visual: HtmlVisual,
+    },
     Image {
         id: String,
         turn_id: TurnId,
@@ -1406,6 +1438,13 @@ pub enum TranscriptEntry {
 /// Per-provider configuration in settings.json.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderSettings {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub accounts: std::collections::BTreeMap<String, ProviderAccount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_account: Option<String>,
+    /// Account overrides keyed by the registered project path.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub project_accounts: std::collections::BTreeMap<String, String>,
     /// Absolute path to the executable; omit to look it up on PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
@@ -1429,6 +1468,8 @@ pub struct Settings {
     pub default_permission_mode: PermissionMode,
     /// Global default for new threads; projects can override.
     pub worktrees_default: bool,
+    /// Remove clean, merged, inactive managed worktrees when their thread is archived.
+    pub automatic_worktree_cleanup: bool,
     /// Generate thread titles with a model after the first turn.
     pub generate_titles: bool,
     /// Provider used for titles; falls back to the thread's own provider.
@@ -1516,6 +1557,7 @@ impl Default for Settings {
             default_provider: ProviderKind::ClaudeCode,
             default_permission_mode: PermissionMode::Supervised,
             worktrees_default: false,
+            automatic_worktree_cleanup: false,
             generate_titles: true,
             title_provider: None,
             providers: Default::default(),
@@ -1943,4 +1985,32 @@ mod orchestration_tests {
         let legacy: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(legacy.orchestration, OrchestrationSettings::default());
     }
+}
+
+/// Delivery through one native child's next tool callback. Pending is not delivered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentMessageStatus {
+    Pending,
+    Delivered,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubagentMessage {
+    pub id: MessageId,
+    pub thread_id: ThreadId,
+    pub root_thread_id: ThreadId,
+    pub task_id: String,
+    /// Daemon-local admitted process. Never reuse this input in a replacement session.
+    pub native_task_id: String,
+    pub session_instance_id: uuid::Uuid,
+    pub turn_id: TurnId,
+    pub message: UserMessage,
+    pub status: SubagentMessageStatus,
+    pub error: Option<String>,
+    pub parent_message_id: Option<MessageId>,
+    pub parent_queued: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }

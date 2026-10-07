@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 3;
+pub(crate) const GUIDE_VERSION: u32 = 5;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -87,6 +87,9 @@ pub(crate) fn render(tools: &GuideTools) -> String {
          - To show an image, embed it with Markdown, `![Caption](path/to/image.png)`. It renders only when the file (PNG, JPEG, GIF, WebP or AVIF) is inside your working folder, so copy an image from elsewhere into the folder first. Paths outside the folder, including `file://` links, do not render.\n\
          - Link files with relative paths, `[main.rs](src/main.rs)` or `[main.rs:42](src/main.rs#L42)`; Kybern shows them as clickable links that open the file.\n",
     );
+    if tools.has("kybern_html_preview") && tools.has("kybern_html_publish") {
+        out.push_str("\n## Visual replies\nUse interactive HTML charts, tables, diagrams, collages or mockups when asked, or when they make an explanation easier to understand. Write one self-contained document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. Publication stores a durable inline attachment, embeds supported absolute local image paths, and needs no browser. Preview installs Kybern’s own small headless browser on first use; retry in a minute if it is installing. Pages run scripts in an isolated sandbox and follow the reader’s light, dark and custom theme live through CSS variables (see the tool description). Keep width fluid and height content-driven; avoid an outer card or banner title. The reader sees the page: add only what it does not explain in the final reply.\n");
+    }
     if tools.any(&NOTE_TASK_TOOLS) {
         out.push_str(
             "\n## Notes and tasks\n\
@@ -112,6 +115,7 @@ pub(crate) fn render(tools: &GuideTools) -> String {
             out.push_str(&format!("Inspect this thread with {}.\n", describe(&inspect)));
         }
     }
+    out.push_str("\n## Native subagents\nUsers can message an active Claude native subagent in its own thread. These messages arrive at that child's next tool call as additional context; they never enter the parent's input. Pending means waiting for that callback, not delivered. File attachments arrive as readable file references, not visual multimodal input. If the child finishes first, the message stays undelivered and only the user's explicit Send to parent action queues it for the parent. Other harnesses' native child threads remain read-only.\n");
     if tools.has("kybern_agent_delegate") {
         out.push_str(
             "\n## Helpers\n\
@@ -166,7 +170,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 3);
+        assert_eq!(GUIDE_VERSION, 5);
     }
 
     #[test]

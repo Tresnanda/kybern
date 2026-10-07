@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["theme-provider", "real-session", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat", "orchestrator"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["accounts", "native-subagents", "visuals", "theme-provider", "real-session", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat", "orchestrator", "pr-review"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 let daemon
 try {
@@ -55,6 +55,46 @@ try {
     }
     if (!port) throw new Error("Scratch session daemon did not start")
     process.env.KYBERN_TOOL_LEASE_ENDPOINT = JSON.stringify({ url: `ws://127.0.0.1:${port}/ws`, http_base: `http://127.0.0.1:${port}`, token: readFileSync(path.join(dataDir, "daemon.token"), "utf8").trim() })
+  }
+  if (fixture === "visuals") {
+    const repo = path.resolve(desktop, "../..")
+    const binary = process.env.KYBERN_PERF_DAEMON_BINARY ?? path.join(repo, "target/debug/kybernd")
+    const cli = process.env.KYBERN_PERF_CLI_BINARY ?? path.join(repo, "target/debug/kybern")
+    const dataDir = path.join(scratch, "daemon")
+    daemon = spawn(binary, ["--data-dir", dataDir, "--port", "0"], { stdio: "ignore" })
+    const until = Date.now() + 10000
+    let port
+    while (!port && Date.now() < until) { try { port = readFileSync(path.join(dataDir,"daemon.port"),"utf8").trim() } catch { await new Promise(resolve=>setTimeout(resolve,50)) } }
+    if (!port) throw new Error("Build kybern before running the visual fixture")
+    const call = (method,params) => {
+      const result = spawnSync(cli,["--data-dir",dataDir,"call",method,JSON.stringify(params)],{encoding:"utf8"})
+      if (result.status !== 0) throw new Error(result.stderr)
+      return JSON.parse(result.stdout)
+    }
+    const project = call("projects.add",{path:scratch,name:"Inline visual fixture"})
+    const thread = call("threads.create",{project_id:project.id,provider:{kind:"codex",instance:"default"},title:"Visual fixture",use_worktree:false})
+    // Seed a turn in scratch storage without starting an authenticated provider.
+    const seed = spawnSync("python3",["-c",`import sqlite3,json,uuid,sys
+c=sqlite3.connect(sys.argv[1]); thread=sys.argv[2]; turn=str(uuid.uuid4()); at="2026-10-07T00:00:00Z"
+payload=json.dumps({"kind":"turn_started","message_id":str(uuid.uuid4()),"message":{"content":[{"type":"text","text":"Show a visual"}]}})
+c.execute("INSERT INTO events(thread_id,turn_id,at,kind,payload) VALUES(?,?,?,'turn_started',?)",(thread,turn,at,payload))
+c.commit()`,path.join(dataDir,"state.sqlite"),thread.id],{encoding:"utf8"})
+    if (seed.status!==0) throw new Error(seed.stderr)
+    const image = path.join(scratch,"embedded.svg")
+    writeFileSync(image,'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#526fff"/></svg>')
+    const html = `<html><head><style>@keyframes fixturePulse{from{transform:translateX(0)}to{transform:translateX(5px)}}.late-css{animation:fixturePulse 100ms infinite}svg{display:block;width:100%;height:100px}table{border-collapse:collapse;width:100%}td{padding:6px 0;border-bottom:1px solid var(--border)}button{margin-top:12px;color:var(--foreground);background:var(--card);border:1px solid var(--border);padding:8px 12px;border-radius:var(--radius)}</style></head><body><svg viewBox="0 0 300 100" aria-label="Comparison chart"><rect width="80" height="80" y="20" fill="var(--chart-1)"/><rect x="100" width="80" height="55" y="45" fill="var(--chart-2)"/><rect x="200" width="80" height="35" y="65" fill="var(--chart-3)"/></svg><table><tbody><tr><td>North</td><td>80</td></tr><tr><td>South</td><td>55</td></tr><tr><td>West</td><td>35</td></tr></tbody></table><img id="embedded" width="40" height="40" src="${image}"><button id="counter">Count: 0</button><script>
+      let counter=0,interval=0,raf=0,visible=true,isolated=false;
+      try{void parent.document.body}catch{isolated=true}
+      setInterval(()=>interval++,20);function tick(){raf++;requestAnimationFrame(tick)}requestAnimationFrame(tick);
+      addEventListener('kybern-visibility',e=>visible=e.detail.visible);
+      function report(){parent.postMessage({fixture:'kybern-visual',counter,interval,raf,visible,isolated,image:document.getElementById('embedded').naturalWidth>0,table:document.querySelectorAll('tbody tr').length,bars:document.querySelectorAll('svg rect').length,runningAnimations:document.getAnimations().filter(animation=>animation.playState==='running').length,pausedAnimations:document.getAnimations().filter(animation=>animation.playState==='paused').length,background:getComputedStyle(document.documentElement).backgroundColor,foreground:getComputedStyle(document.documentElement).color,accent:getComputedStyle(document.querySelector('svg rect')).fill},'*')}
+      document.getElementById('counter').onclick=()=>{document.getElementById('counter').textContent='Count: '+(++counter);report()};
+      addEventListener('message',e=>{if(e.data?.fixture!=='kybern-visual-command')return;if(e.data.action==='click')document.getElementById('counter').click();else if(e.data.action==='spoof-link')parent.postMessage({kind:'kybern-visual-link',url:'https://example.test/spoof'},'*');else if(e.data.action==='animate'){const css=document.createElement('span');css.className='late-css';document.body.append(css);const moving=document.createElement('span');document.body.append(moving);moving.animate([{opacity:0.5},{opacity:1}],{duration:200,iterations:Infinity});const paused=document.createElement('span');document.body.append(paused);paused.animate([{opacity:0.5},{opacity:1}],{duration:200,iterations:Infinity}).pause();report()}else report()});
+      console.log('table rows',document.querySelectorAll('tbody tr').length);addEventListener('load',report);
+    </script></body></html>`
+    const {visual} = call("threads.visuals.publish",{thread_id:thread.id,html,title:"Regional comparison",height:600})
+    rmSync(image)
+    process.env.KYBERN_VISUAL_FIXTURE = JSON.stringify({url:`ws://127.0.0.1:${port}/ws`,http_base:`http://127.0.0.1:${port}`,token:readFileSync(path.join(dataDir,"daemon.token"),"utf8").trim(),thread_id:thread.id,visual})
   }
   if (fixture === "integrations") {
     const repo = path.resolve(desktop, "../..")

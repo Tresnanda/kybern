@@ -31,6 +31,14 @@ pub enum EventPayload {
         thread: Thread,
     },
     ThreadArchived,
+    /// Worktree metadata stays on the thread; this ref retains the recoverable source.
+    WorktreeCleaned {
+        branch: String,
+        recovery_commit: String,
+    },
+    WorktreeRestored {
+        branch: String,
+    },
     /// A saved native conversation was adopted without replaying its tools.
     SessionImported {
         provider: ProviderKind,
@@ -44,6 +52,9 @@ pub enum EventPayload {
     },
     MessageQueueUpdated {
         message: crate::methods::QueuedMessage,
+    },
+    SubagentMessageUpdated {
+        message: SubagentMessage,
     },
     MessageSteered {
         message_id: MessageId,
@@ -135,6 +146,17 @@ pub enum EventPayload {
         text: String,
         thinking: Option<String>,
     },
+    /// Explicit native OMP boundaries recovered without rewriting old events.
+    AssistantMessageBlocksRecovered {
+        message_id: MessageId,
+        session_id: String,
+        native_entry_id: String,
+        blocks: Vec<RecoveredAssistantBlock>,
+        terminal_message_id: MessageId,
+    },
+    HtmlPublished {
+        visual: HtmlVisual,
+    },
     ToolCallStarted {
         call: ToolCall,
         #[serde(default)]
@@ -205,6 +227,14 @@ pub enum EventPayload {
     ProviderCommandsUpdated {
         commands: Vec<crate::ProviderCommand>,
     },
+    /// A same-thread native account/harness transition. Context telemetry and
+    /// commands from the outgoing session no longer describe the new session.
+    SessionTransitioned {
+        from: ProviderInstance,
+        to: ProviderInstance,
+        native_resume: bool,
+        text: String,
+    },
     ProviderUsageUpdated {
         usage: ProviderUsage,
     },
@@ -233,10 +263,13 @@ impl EventPayload {
             Self::ThreadCreated { .. } => "thread_created",
             Self::ThreadUpdated { .. } => "thread_updated",
             Self::ThreadArchived => "thread_archived",
+            Self::WorktreeCleaned { .. } => "worktree_cleaned",
+            Self::WorktreeRestored { .. } => "worktree_restored",
             Self::SessionImported { .. } => "session_imported",
             Self::MessageQueued { .. } => "message_queued",
             Self::MessageRemoved { .. } => "message_removed",
             Self::MessageQueueUpdated { .. } => "message_queue_updated",
+            Self::SubagentMessageUpdated { .. } => "subagent_message_updated",
             Self::MessageSteered { .. } => "message_steered",
             Self::ThreadNotesUpdated { .. } => "thread_notes_updated",
             Self::ProjectCoordinatorDeleted { .. } => "project_coordinator_deleted",
@@ -257,6 +290,8 @@ impl EventPayload {
             Self::AssistantThinkingDelta { .. } => "assistant_thinking_delta",
             Self::AssistantThinkingCompleted { .. } => "assistant_thinking_completed",
             Self::AssistantMessageCompleted { .. } => "assistant_message_completed",
+            Self::AssistantMessageBlocksRecovered { .. } => "assistant_message_blocks_recovered",
+            Self::HtmlPublished { .. } => "html_published",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallOutputDelta { .. } => "tool_call_output_delta",
             Self::ToolCallCompleted { .. } => "tool_call_completed",
@@ -271,12 +306,26 @@ impl EventPayload {
             Self::TurnCompleted { .. } => "turn_completed",
             Self::TurnFailed { .. } => "turn_failed",
             Self::ProviderCommandsUpdated { .. } => "provider_commands_updated",
+            Self::SessionTransitioned { .. } => "session_transitioned",
             Self::ProviderUsageUpdated { .. } => "provider_usage_updated",
             Self::ProviderNotice { .. } => "provider_notice",
             Self::CheckpointUpdated { .. } => "checkpoint_updated",
             Self::WorkspaceReverted { .. } => "workspace_reverted",
         }
     }
+}
+
+/// One retained native text/thinking block, placed immediately before the next
+/// native tool invocation, or before the turn summary after the final tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RecoveredAssistantBlock {
+    pub message_id: MessageId,
+    pub content_index: u32,
+    pub text: String,
+    pub thinking: Option<String>,
+    pub before_tool_call_id: Option<String>,
+    pub seq: EventSeq,
+    pub at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

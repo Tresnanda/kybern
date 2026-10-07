@@ -1,3 +1,5 @@
+import { TerminalInstance } from "./Terminal"
+import type { TerminalInfo } from "@/protocol"
 import { Integrations } from "./Integrations"
 import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from "@/lib/appUpdate"
 import { cliInstall, cliRemoveOther, cliStatus, cliUninstall, isTauri, notificationPermission, notify, openExternal, type CliStatus, type NotificationPermissionState } from "@/lib/tauri"
@@ -15,6 +17,7 @@ import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/c
 import { ArrowUpRightIcon, CheckIcon, ChevronDownIcon, XIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, InfoIcon } from "@/lib/kit/icons"
 import { Switch } from "@/components/kit/switch"
 import { Textarea } from "@/components/kit/textarea"
+import { Label } from "@/components/kit/label"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/kit/collapsible"
 import { MatrixLoader, TextSwap } from "@/components/kybern/motion"
@@ -72,7 +75,7 @@ const SEARCH_TERMS: Record<Tab, string> = {
   general: "default agent permissions worktree thread titles close workspace notes global shared separate",
   notifications: "alerts sound permission work finishes fails input",
   background: "idle memory warm shells daemon battery power activity",
-  agents: "provider harness install updates claude codex cursor opencode pi omp profiles sign in sdk",
+  agents: "provider harness install updates claude codex cursor opencode pi omp profiles accounts directory global project override sign in sdk",
   integrations: "plugins connectors tools mcp skills sign in authentication",
   computer: "computer use cuadriver screen apps click type accessibility screen recording permissions cursor",
   appearance: "theme light dark system translucent glass window",
@@ -194,7 +197,9 @@ export function SettingsScreen({
   )
 }
 
-function useSettings() {
+// Reused by the native account fixture to exercise the production rollback path.
+// eslint-disable-next-line react-refresh/only-export-components
+export function useSettings() {
   const settings = useStore((s) => s.settings)
   const set = useStore((s) => s.set)
   const update = async (patch: Partial<Settings>) => {
@@ -288,6 +293,11 @@ function General() {
         </Row>
         <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this.">
           <Switch aria-label="Use a worktree for new threads" checked={settings.worktrees_default} onCheckedChange={(v) => update({ worktrees_default: v })} />
+        </Row>
+      </Section>
+      <Section title="Worktrees">
+        <Row title="Remove eligible archived worktrees" description="Automatically remove clean, merged worktrees after archiving. Keeps branches and conversation history; continuing restores the folder.">
+          <Switch aria-label="Remove eligible archived worktrees" checked={settings.automatic_worktree_cleanup ?? false} onCheckedChange={(v) => update({ automatic_worktree_cleanup: v })} />
         </Row>
       </Section>
       <Section title="Threads">
@@ -806,6 +816,7 @@ function AgentSettings() {
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
       <DaemonUpdateRows autoUpdate={settings?.auto_update_daemon ?? false} onAutoUpdate={(checked) => void update({ auto_update_daemon: checked })} />
     </Section>
+    {settings && <AccountSettings settings={settings} update={update} />}
     {settings && <OmpProfiles settings={settings} update={update} />}
     {settings && <DelegationSection orchestration={settings.orchestration} onChange={(orchestration) => void update({ orchestration })} />}
     <Section title="Installed agents">
@@ -993,6 +1004,89 @@ function CursorProviderRow({ provider, fallback }: { provider: ProviderStatus; f
       {status.error && !status.installing && !status.signing_in && <p role="status" className={cn(ROW_NOTE_CLASS_NAME, "text-destructive")}>{status.error}</p>}
     </div>
   </Row>
+}
+
+export function AccountSettings({ settings, update }: { settings: Settings; update: (patch: Partial<Settings>) => Promise<void> }) {
+  const providers = useStore((s) => s.providers)
+  const projects = useStore((s) => s.projects)
+  const nameId = useId()
+  const directoryId = useId()
+  const [kind, setKind] = useState<ProviderKind>(settings.default_provider)
+  const [name, setName] = useState("")
+  const [directory, setDirectory] = useState("")
+  const [projectPath, setProjectPath] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const [terminal, setTerminal] = useState<TerminalInfo | null>(null)
+  const provider = settings.providers[kind] ?? { env: {} }
+  const options = [{ value: "default", label: "Default account" }, ...Object.entries(provider.accounts ?? {}).map(([value, account]) => ({ value, label: <span className="min-w-0 truncate" title={account.name}><bdi>{account.name}</bdi></span> }))]
+  const project = Object.values(projects).find((p) => p.path === projectPath)
+  const save = async (account: string, path?: string) => {
+    setError("")
+    const next = { ...provider }
+    if (path) {
+      next.project_accounts = { ...next.project_accounts }
+      if (account === "inherit") delete next.project_accounts[path]
+      else next.project_accounts[path] = account
+    } else next.default_account = account
+    await update({ providers: { ...settings.providers, [kind]: next } })
+  }
+  const refresh = async () => {
+    const next = await rpc().call("settings.get", {})
+    useStore.getState().set({ settings: next })
+    await refreshProviders()
+  }
+  const create = async () => {
+    setBusy(true); setError("")
+    try {
+      await rpc().call("providers.accounts.create", { kind, name, ...(directory.trim() ? { directory: directory.trim() } : {}) })
+      await refresh(); setName(""); setDirectory("")
+    } catch (problem) { setError(`${errorText(problem)} Check the account name and directory, then try again.`) }
+    finally { setBusy(false) }
+  }
+  const signIn = async (instance: string) => {
+    setBusy(true); setError("")
+    try { setTerminal(await rpc().call("providers.accounts.sign_in", { kind, instance })) }
+    catch (problem) { setError(`${errorText(problem)} Check the agent installation, then try signing in again.`) }
+    finally { setBusy(false) }
+  }
+  return <Section title="Accounts">
+    <Row title="Agent" description="Named accounts use separate native sign-in and session storage. Default keeps your regular CLI account.">
+      <SettingsPicker value={kind} label="Account agent" onChange={(value) => setKind(value as ProviderKind)} options={providers.map((item) => ({ value: item.kind, label: item.display_name }))} />
+    </Row>
+    <Row title="Global account" description="Threads following defaults use this account on their next message. Running turns keep their current account.">
+      <SettingsPicker value={provider.default_account ?? "default"} label="Global account" options={options} onChange={(value) => void save(value).catch((problem) => setError(`${errorText(problem)} Check your connection, then try again.`))} />
+    </Row>
+    {Object.entries(provider.accounts ?? {}).map(([id, account]) => <Row key={id} title={account.name} description={<span className="block [overflow-wrap:anywhere]" title={account.directory}>{account.directory}</span>}>
+      <Button size="sm" variant="chrome-outline" disabled={busy || terminal !== null} onClick={() => void signIn(id)}>Sign in</Button>
+    </Row>)}
+    <Row title="Add an account" description="Leave the directory empty to create isolated storage, or reference an existing native account directory.">
+      <div className="grid w-64 max-w-full min-w-0 gap-2">
+        <div className="grid min-w-0 gap-1.5">
+          <Label htmlFor={nameId}>Account name</Label>
+          <InputGroup><InputGroupInput id={nameId} value={name} maxLength={120} placeholder="e.g. Work" onChange={(event) => setName(event.target.value)} /></InputGroup>
+        </div>
+        <div className="grid min-w-0 gap-1.5">
+          <Label htmlFor={directoryId}>Existing directory <span className="font-normal text-muted-foreground">(optional)</span></Label>
+          <InputGroup><InputGroupInput id={directoryId} value={directory} placeholder="e.g. /Users/me/.claude-work" autoCapitalize="none" autoCorrect="off" spellCheck={false} onChange={(event) => setDirectory(event.target.value)} /></InputGroup>
+        </div>
+        <Button size="sm" variant="chrome-outline" disabled={busy || !name.trim()} onClick={() => void create()}>Add account</Button>
+      </div>
+    </Row>
+    {Object.values(projects).length > 0 && <>
+      <Row title="Project override" description="Choose a project to override the global account for this agent.">
+        <SettingsPicker value={projectPath} label="Choose account project" options={[{ value: "", label: "Choose project" }, ...Object.values(projects).map((p) => ({ value: p.path, label: p.name }))]} onChange={setProjectPath} />
+      </Row>
+      {project && <Row title={`${project.name} account`}>
+        <SettingsPicker value={provider.project_accounts?.[project.path] ?? "inherit"} label="Project account" options={[{ value: "inherit", label: "Follow global account" }, ...options]} onChange={(value) => void save(value, project.path).catch((problem) => setError(`${errorText(problem)} Check your connection, then try again.`))} />
+      </Row>}
+    </>}
+    {error && <Row title="Unable to update account" description={<span role="status">{error}</span>} />}
+    {terminal && <div className="grid min-w-0 gap-2 p-3">
+      <div className="flex items-center justify-between gap-2"><span className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Finish native sign-in</span><Button size="sm" variant="ghost" onClick={() => void rpc().call("terminals.close", { terminal_id: terminal.id }).then(() => setTerminal(null)).catch((problem) => setError(`${errorText(problem)} Check your connection, then try again.`))}>Cancel sign-in</Button></div>
+      <div className="relative h-72 min-w-0 overflow-hidden rounded-[var(--radius-surface)]"><TerminalInstance key={terminal.id} threadId="" tab={{ key: terminal.id, title: "Sign in", kind: "shell", terminalId: terminal.id, connectorLogin: true }} active externalTerminal onExit={() => { setTerminal(null); void refresh().catch((problem) => setError(`${errorText(problem)} Check your connection, then try again.`)) }} onTitle={() => {}} /></div>
+    </div>}
+  </Section>
 }
 
 export function OmpProfiles({ settings, update }: { settings: Settings; update: (patch: Partial<Settings>) => Promise<void> }) {

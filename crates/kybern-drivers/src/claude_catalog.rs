@@ -230,6 +230,22 @@ impl ModelCatalog {
         }
     }
 
+    /// Explicit reload bypasses age/retry throttling, joins an existing read,
+    /// and leaves the previous catalog intact if the bounded read fails.
+    pub(crate) async fn refresh(self: &Arc<Self>, binary: &Path, context: &ProbeContext) -> Option<Vec<CatalogModel>> {
+        let key = CatalogKey::new(binary, context)?;
+        let fallback = {
+            let mut state = self.lock();
+            state.attempts.remove(&key);
+            state.entries.iter().find(|entry| entry.key == key).map(|entry| entry.models.clone()).or_else(|| stand_in(&state.entries, &key))
+        };
+        let Some(pending) = self.read(key, binary, context) else { return fallback };
+        match tokio::time::timeout(COLD_WAIT, pending).await {
+            Ok(Some(models)) => Some(models),
+            _ => fallback,
+        }
+    }
+
     /// Store a catalog a live session reported in its `initialize` response.
     pub(crate) fn record(&self, key: CatalogKey, models: Vec<CatalogModel>) {
         self.store(key, models);
@@ -316,7 +332,7 @@ impl ModelCatalog {
 fn stand_in(entries: &[Entry], key: &CatalogKey) -> Option<Vec<CatalogModel>> {
     entries
         .iter()
-        .filter(|entry| entry.key.binary == key.binary)
+        .filter(|entry| entry.key.binary == key.binary && entry.key.inputs == key.inputs)
         .max_by_key(|entry| (entry.key.stamp == key.stamp, entry.fetched_at))
         .map(|entry| entry.models.clone())
 }
@@ -459,8 +475,9 @@ mod tests {
             entry(key("/bin/claude", "new"), 10, "same-build"),
             entry(key("/other/claude", "new"), 50, "other-cli"),
         ];
-        let wanted = CatalogKey { inputs: "changed".into(), ..key("/bin/claude", "new") };
-        assert_eq!(stand_in(&entries, &wanted).unwrap()[0].value, "same-build");
+        let changed_account = CatalogKey { inputs: "different-account".into(), ..key("/bin/claude", "new") };
+        assert_eq!(stand_in(&entries, &changed_account), None, "fallback must never borrow another account/config's catalog");
+        assert_eq!(stand_in(&entries, &key("/bin/claude", "new")).unwrap()[0].value, "same-build");
         assert_eq!(stand_in(&entries, &key("/bin/claude", "newest")).unwrap()[0].value, "older-build");
         assert_eq!(stand_in(&entries, &key("/missing/claude", "new")), None);
     }
@@ -537,6 +554,28 @@ mod tests {
         assert_eq!(catalog.models(&binary, &context).await, None);
         assert_eq!(launch_count(&launches), 1);
         assert!(catalog.lock().entries.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn explicit_account_refresh_bypasses_fresh_models_and_keeps_previous_good_on_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let (binary, context, launches) = fake_cli(temp.path(), true);
+        let catalog = Arc::new(ModelCatalog::default());
+        let key = CatalogKey::new(&binary, &context).unwrap();
+        catalog.record(key, vec![model("old-model")]);
+        assert_eq!(catalog.models(&binary, &context).await.unwrap()[0].value, "old-model");
+        assert_eq!(launch_count(&launches), 0);
+        let refreshed = catalog.refresh(&binary, &context).await.unwrap();
+        assert_eq!(refreshed[0].value, "opus");
+        assert_eq!(launch_count(&launches), 1);
+        // The fake CLI's answer depends on its script, so use an account-specific
+        // valid cached key with a CLI that exits without an initialize response.
+        let failed_dir = tempfile::tempdir().unwrap();
+        let (failed_binary, failed_context, _) = fake_cli(failed_dir.path(), false);
+        let failed_key = CatalogKey::new(&failed_binary, &failed_context).unwrap();
+        catalog.record(failed_key, vec![model("previous-good")]);
+        assert_eq!(catalog.refresh(&failed_binary, &failed_context).await.unwrap()[0].value, "previous-good");
     }
 
     /// Claude Code refreshes an expiring login during startup, sometimes

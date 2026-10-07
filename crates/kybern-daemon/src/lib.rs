@@ -13,6 +13,7 @@ mod discovery;
 mod exposure;
 mod files;
 mod github;
+mod github_review;
 mod harness_updates;
 mod http;
 mod integrations;
@@ -20,6 +21,7 @@ mod maintenance;
 mod native_tools_mcp;
 mod orchestrator;
 mod power;
+mod provider_accounts;
 #[cfg(test)]
 mod remote_tests;
 mod rpc;
@@ -31,6 +33,7 @@ mod terminal;
 mod thread_projection;
 mod thumbnail;
 mod usage;
+mod visuals;
 mod ws;
 
 use std::fs::OpenOptions;

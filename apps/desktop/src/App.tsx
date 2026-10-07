@@ -1,3 +1,4 @@
+import { WorktreeCleanupDialog } from "@/views/WorktreeCleanup"
 import { SidebarLeadingControls } from "@/views/chrome"
 import { platform } from "@/lib/tauri"
 // App shell: a window frame (title bar + app rail) on the window material, with
@@ -321,6 +322,7 @@ function Workspace() {
       </ErrorBoundary>
       <ErrorBoundary label="hand off">
         <HandoffDialog />
+        <WorktreeCleanupDialog />
       </ErrorBoundary>
       <ErrorBoundary label="closing">
         <CloseGuard />

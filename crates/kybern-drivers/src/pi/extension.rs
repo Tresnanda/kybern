@@ -15,7 +15,7 @@ use crate::{DriverError, NativeToolBridge, Result};
 const SOURCE: &str = include_str!("extension.ts");
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_MARKER_BYTES: usize = 256 * 1024;
-const MAX_APP_ARGUMENT_BYTES: usize = 64 * 1024;
+const MAX_APP_ARGUMENT_BYTES: usize = 768 * 1024;
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 128;
 
