@@ -86,3 +86,13 @@ test("legacy Cursor effort selectors resolve to the grouped model without losing
   assert.equal(findModel(rows, selector([{id:"reason_effort",value:"low"},{id:"context",value:"1000000"}]))?.id, large);
   assert.equal(findModel(rows, "cursor-model:broken"), undefined);
 });
+
+test("named accounts have isolated favorites while legacy favorites stay default", () => {
+  const legacy = [{ kind: "codex", id: "shared-model" }];
+  assert.equal(isFavorite(legacy, "codex", "shared-model", "default"), true);
+  assert.equal(isFavorite(legacy, "codex", "shared-model", "work"), false);
+  const both = toggleFavorite(legacy, "codex", "shared-model", "work");
+  assert.equal(isFavorite(both, "codex", "shared-model", "work"), true);
+  assert.equal(isFavorite(both, "codex", "shared-model", "default"), true);
+  assert.deepEqual(toggleFavorite(both, "codex", "shared-model", "work"), legacy);
+});

@@ -61,6 +61,7 @@ interface ModelPickerProps {
   trigger: ReactElement
   provider: ProviderInstance
   providers: ProviderStatus[]
+  instances?: Partial<Record<ProviderKind, string>>
   model?: string | null
   effort?: string | null
   canPickModel: boolean
@@ -112,6 +113,7 @@ export function ModelPicker(props: ModelPickerProps) {
 function ModelPickerPanel({
   provider,
   providers,
+  instances,
   model,
   effort,
   canPickModel,
@@ -164,7 +166,7 @@ function ModelPickerPanel({
         // Another harness's favorites are only reachable where the harness can change.
         if (!item.available || (item.kind !== provider.kind && !canPickProvider)) continue
         const starred = favorites
-          .filter((favorite) => favorite.kind === item.kind && (favorite.instance ?? "default") === (item.kind === provider.kind ? provider.instance : "default"))
+          .filter((favorite) => favorite.kind === item.kind && (favorite.instance ?? "default") === (item.kind === provider.kind ? provider.instance : instances?.[item.kind] ?? "default"))
           .map((favorite) => item.models?.find((entry) => entry.id === favorite.id) ?? { id: favorite.id, display_name: favorite.id })
         const shown = search ? searchModels(starred, search) : starred
         if (!shown.length) continue
@@ -215,7 +217,7 @@ function ModelPickerPanel({
       out.push({ key: section.key, label: section.label, rows })
     }
     return out
-  }, [canPickProvider, catalog, current, expanded, favorites, large, model, multiBackend, provider.kind, provider.instance, providers, query, recents, results, showFavorites])
+  }, [canPickProvider, catalog, current, expanded, favorites, large, model, multiBackend, provider.kind, provider.instance, providers, instances, query, recents, results, showFavorites])
 
   const isSelected = (row: Row) =>
     row.kind === "default" ? !selectedId
@@ -234,7 +236,7 @@ function ModelPickerPanel({
   }, [activeRow])
 
   const star = (row: Row) => {
-    if (row.kind === "model") setFavorites((value) => toggleFavorite(value, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : "default"))
+    if (row.kind === "model") setFavorites((value) => toggleFavorite(value, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default"))
   }
 
   const pick = async (row: Row) => {
@@ -256,9 +258,9 @@ function ModelPickerPanel({
     const harness = row.kind === "model" ? row.harness : provider.kind
     const saved = harness === provider.kind
       ? await onModelChange(id, nextEffort)
-      : await onProviderChange({ kind: harness, instance: "default" }, { model: id, effort: nextEffort })
+      : await onProviderChange({ kind: harness, instance: instances?.[harness] ?? "default" }, { model: id, effort: nextEffort })
     if (saved) {
-      setRecents((value) => ({ ...value, [`${harness}:${harness === provider.kind ? provider.instance : "default"}`]: rememberModel(value[`${harness}:${harness === provider.kind ? provider.instance : "default"}`] ?? [], id) }))
+      setRecents((value) => ({ ...value, [`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`]: rememberModel(value[`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`] ?? [], id) }))
       close()
     }
   }
@@ -425,7 +427,7 @@ function ModelPickerPanel({
                     agentName={agentName}
                     active={row === activeRow}
                     selected={isSelected(row)}
-                    favorite={row.kind === "model" && isFavorite(favorites, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : "default")}
+                    favorite={row.kind === "model" && isFavorite(favorites, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default")}
                     starOnHover={showFavorites}
                     onHover={() => setActiveKey(row.key)}
                     onPick={() => void pick(row)}

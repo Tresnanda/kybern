@@ -153,7 +153,7 @@ export function ThreadView({
   const previousDepth = useRef<{ id: ThreadId; depth: number } | null>(null)
   const [overlayHeight, setOverlayHeight] = useState(120)
   const [nextTarget, setNextTarget] = useState<{ threadId: string; state: ThreadTargetState } | null>(null)
-  const [accountCatalog, setAccountCatalog] = useState<{ key: string; status: ProviderStatus } | null>(null)
+  const [accountCatalog, setAccountCatalog] = useState<{ key: string; settings: typeof settings; status: ProviderStatus } | null>(null)
   const hasThread = !!thread
   const readOnlyThread = !!thread?.subagent
   useEffect(() => {
@@ -175,11 +175,11 @@ export function ThreadView({
     if (!targetKind || !targetInstance || !targetProjectId || readOnlyThread) return
     let canceled = false
     void rpc().call("providers.accounts.catalog", { provider: { kind: targetKind, instance: targetInstance }, project_id: targetProjectId }).then((status) => {
-      if (!canceled) setAccountCatalog({ key: catalogKey, status })
+      if (!canceled) setAccountCatalog({ key: catalogKey, settings, status })
     }).catch((error) => { if (!canceled) toast.error("Unable to load account models", { description: errorText(error) }) })
     return () => { canceled = true }
-  }, [catalogKey, targetKind, targetInstance, targetProjectId, readOnlyThread])
-  const composerProviders = useMemo(() => providers.map((status) => status.kind !== targetKind ? status : accountCatalog?.key === catalogKey ? accountCatalog.status : { ...status, models: [] }), [providers, targetKind, accountCatalog, catalogKey])
+  }, [catalogKey, targetKind, targetInstance, targetProjectId, readOnlyThread, settings])
+  const composerProviders = useMemo(() => providers.map((status) => status.kind !== targetKind ? status : accountCatalog?.key === catalogKey && accountCatalog.settings === settings ? accountCatalog.status : { ...status, models: [] }), [providers, targetKind, accountCatalog, catalogKey, settings])
   const chooseTarget = async (selection: SessionTarget, inherit = !targetState?.account_override) => {
     const state = await rpc().call("threads.target.set", { thread_id: threadId, target: selection, inherit_account: inherit })
     setNextTarget({ threadId, state })

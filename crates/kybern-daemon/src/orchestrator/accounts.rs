@@ -333,7 +333,8 @@ impl Orchestrator {
                 thread.provider.instance,
                 thread.model.as_deref().unwrap_or("default")
             );
-            let advertised_tokens = self.inner.store.meta_get(&capacity_key)?.and_then(|value| value.parse::<usize>().ok());
+            let advertised_tokens =
+                self.inner.store.meta_get(&capacity_key)?.and_then(|value| value.parse::<usize>().ok()).filter(|capacity| *capacity > 0);
             // Native context reports are model/account bound. Unknown models use
             // an explicit conservative 32k-token estimate, charged at one byte
             // per token instead of assuming English's usual four-byte ratio.

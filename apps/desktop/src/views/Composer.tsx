@@ -51,7 +51,7 @@ import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, N
 import { cn } from "@/lib/utils"
 import { IconSwap } from "@/components/kybern/motion"
 import { ComposerEditor, type ComposerEditorHandle, type EditorSegment } from "@/components/kit/chat/ComposerEditor"
-import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderStatus, type SkillInfo, type TaskItem, type TaskItemId, type Thread, type UserMessage } from "@/protocol"
+import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderKind, type ProviderStatus, type SkillInfo, type TaskItem, type TaskItemId, type Thread, type UserMessage } from "@/protocol"
 import { errorText, listSkills, refreshProviders, rpc, searchFiles, uploadFile } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { COMPUTER_MENTION_PATH, COMPUTER_MENTION_SKILL, noteMentionPart, taskMentionPart, type MentionPart } from "@/lib/userInput"
@@ -308,6 +308,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   })
   const connected = useStore((s) => s.connection.state === "open")
   const projects = useStore((s) => s.projects)
+  const providerSettings = useStore((s) => s.settings?.providers)
+  const projectPath = props.projectId ? projects[props.projectId]?.path : undefined
+  const providerInstances = useMemo(() => Object.fromEntries(providers.map((status) => [status.kind,
+    status.kind === provider?.kind ? provider.instance : (projectPath ? providerSettings?.[status.kind]?.project_accounts?.[projectPath] : undefined) ?? providerSettings?.[status.kind]?.default_account ?? "default",
+  ])) as Partial<Record<ProviderKind, string>>, [providers, provider, projectPath, providerSettings])
   const threads = useStore((s) => s.threads)
   const disabled = disabledByParent || !connected
   const [text, setText] = useState(savedDraft?.text ?? prefill?.text ?? "")
@@ -1256,6 +1261,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   <ModelPicker
                     provider={provider}
                     providers={providers}
+                    instances={providerInstances}
                     model={model}
                     effort={effort}
                     canPickModel={canPickModel}

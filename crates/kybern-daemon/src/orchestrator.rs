@@ -6307,7 +6307,13 @@ impl Orchestrator {
                 if let Some(limits) = usage.limits.as_deref()
                     && let Some(thread) = self.inner.store.thread_get(thread_id)?
                 {
-                    self.inner.usage.observe_account(&thread.provider, limits);
+                    let admitted = self.inner.store.meta_get(&format!("live_fingerprint:{thread_id}"))?;
+                    if admitted
+                        .as_deref()
+                        .is_none_or(|identity| self.environment_fingerprint(&thread).is_ok_and(|current| current == identity))
+                    {
+                        self.inner.usage.observe_account(&thread.provider, limits);
+                    }
                     self.inner.store.meta_set(
                         &format!("account_usage:{}:{}", thread.provider.kind, thread.provider.instance),
                         &serde_json::to_string(&usage)?,
