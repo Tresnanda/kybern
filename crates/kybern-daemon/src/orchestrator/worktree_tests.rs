@@ -142,3 +142,26 @@ fn checkout_transition_is_bounded_provider_only_context_and_retries_until_delive
     assert_eq!(next, human);
     assert!(cleared.is_none());
 }
+
+#[tokio::test]
+async fn cleanup_closes_an_idle_agent_before_rechecking_external_process_ownership() {
+    let (fixture, thread) = ordinary_worktree_fixture().await;
+    let (_, closes) = fixture.park(&thread, Instant::now()).await;
+    let mut external = tokio::process::Command::new("sleep").arg("30").current_dir(&thread.cwd).kill_on_drop(true).spawn().unwrap();
+    // Inspection permits the explicit close/recheck operation, without stopping
+    // a process from a read-only request or assuming the external cwd is safe.
+    assert!(fixture.orchestrator.worktree_inspect(thread.id).await.unwrap().eligible);
+    assert_eq!(closes.load(Ordering::Relaxed), 0);
+    assert!(fixture.orchestrator.worktree_remove(methods::WorktreeRemoveParams {
+        thread_id: thread.id, force: false, delete_branch: false,
+    }).await.is_err());
+    assert_eq!(closes.load(Ordering::Relaxed), 1);
+    assert!(PathBuf::from(&thread.cwd).exists());
+    assert!(fixture.orchestrator.worktree_inspect(thread.id).await.unwrap().blockers.iter().any(|b| b.contains("process is using")));
+    external.kill().await.unwrap();
+    external.wait().await.unwrap();
+    fixture.orchestrator.worktree_remove(methods::WorktreeRemoveParams {
+        thread_id: thread.id, force: false, delete_branch: false,
+    }).await.unwrap();
+    assert!(!PathBuf::from(&thread.cwd).exists());
+}

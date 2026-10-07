@@ -32,10 +32,14 @@ expression: names
 - threads.create
 - threads.get
 - threads.tool_output
+- threads.recover_omp_answer
 - threads.update
 - threads.archive
 - threads.send
 - threads.steer
+- subagents.send
+- subagents.messages
+- subagents.send_to_parent
 - threads.notes.get
 - threads.notes.set
 - notes.list

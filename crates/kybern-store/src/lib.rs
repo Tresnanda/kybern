@@ -2984,6 +2984,7 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     parent_thread_id, coordinator_project_id, collaboration_group_id, subagent, delegation)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
                  ON CONFLICT(id) DO UPDATE SET
+                    provider_kind = excluded.provider_kind, provider_instance = excluded.provider_instance,
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
                     status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
                     cwd = excluded.cwd, provider_session_id = excluded.provider_session_id, pinned = excluded.pinned,
@@ -3024,6 +3025,23 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thread_updates_persist_the_admitted_harness_and_account() {
+        let (store, group) = collaboration_fixture();
+        let mut thread = store.thread_get(group.coordinator_thread_id).unwrap().unwrap();
+        let original = thread.provider.clone();
+        thread.provider = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+        thread.provider_session_id = Some("work-native".into());
+        store.thread_upsert(&thread).unwrap();
+        let saved = store.thread_get(thread.id).unwrap().unwrap();
+        assert_eq!(saved.provider, thread.provider);
+        assert_eq!(saved.provider_session_id, thread.provider_session_id);
+        thread.provider = original;
+        thread.provider_session_id = Some("original-native".into());
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().provider, thread.provider);
+    }
 
     fn collaboration_fixture() -> (Store, CollaborationGroup) {
         let store = Store::open_in_memory().unwrap();

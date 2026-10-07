@@ -65,13 +65,16 @@ impl Orchestrator {
                 break;
             }
         }
-        if let Some(live) = self.inner.sessions.lock().await.get(&id).cloned()
-            && (live.turn.lock().await.is_some()
-                || live.tasks.lock().await.values().any(|task| task.status.is_active())
-                || !live.app_tool_requests.lock().await.is_empty())
-        {
-            blockers.push("Wait for the agent session and its tools to finish first.".into());
-        }
+        let live = self.inner.sessions.lock().await.get(&id).cloned();
+        let idle_native_session = if let Some(live) = live {
+            let parked = self.session_parked(id, &live).await? && live.app_tool_requests.lock().await.is_empty() && !live.is_released();
+            if !parked {
+                blockers.push("Wait for the agent session and its tools to finish first.".into());
+            }
+            parked
+        } else {
+            false
+        };
         if self.inner.app_tools.terminals().iter().any(|t| t.alive && Path::new(&t.cwd).starts_with(&wt.path)) {
             blockers.push("Close terminals using this worktree first.".into());
         }
@@ -87,7 +90,10 @@ impl Orchestrator {
             if count > 0 {
                 blockers.push("Move or delete ignored files (including build output) before removing this worktree.".into());
             }
-            if processes_use_path(Path::new(&wt.path)).await? {
+            // An owned idle process may hold this cwd. Removal/checkout closes it
+            // under admission, then performs an unconditional OS check before Git.
+            // An external process still prevents the final mutation.
+            if processes_use_path(Path::new(&wt.path)).await? && !idle_native_session {
                 blockers.push("A process is using this worktree. Stop it or change its working directory first.".into());
             }
             (clean, count)
@@ -291,6 +297,8 @@ impl Orchestrator {
             self.revoke_native_session(&live);
             live.session.close().await?;
         }
+        let final_state = self.worktree_inspect(id).await?;
+        ensure!(final_state.clean && final_state.blockers.is_empty(), "{}", final_state.blockers.join(" "));
         crate::github_review::action(Path::new(&thread.cwd), p).await?;
         let branch = Repo::new(&thread.cwd).current_branch().await.ok_or_else(|| anyhow!("The pull request checkout has no branch."))?;
         thread.worktree.as_mut().unwrap().branch = branch;
