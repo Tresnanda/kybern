@@ -10,6 +10,8 @@ fn add_test_account(fixture: &Fixture, kind: ProviderKind, id: &str) {
 
 #[test]
 fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
+    use crate::orchestrator::accounts;
+    use chrono::Utc;
     let now = 1_800_000_000;
     let turn = Uuid::now_v7();
     let start = EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("task") };
