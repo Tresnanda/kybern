@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { FileDiffBody, FileDiffHeader } from "@/components/kybern/DiffView"
 import { Markdown } from "@/components/kybern/Markdown"
 import { Button } from "@/components/kit/button"
+import { Checkbox } from "@/components/kit/checkbox"
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPopup, DialogTitle } from "@/components/kit/dialog"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/kit/menu"
@@ -13,13 +14,13 @@ import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import type { PrActionKind, PrFile, PrPageKind, PrReviewEntry, ProjectId, ThreadId } from "@/protocol"
 import { emptyReviewDraft, ensureReview, loadReview, reviewKey, updateReview, updateReviewDraft, useReviews } from "@/state/prReview"
-import { selectedReviewFindings, submitReviewDraft, toggleReviewFinding } from "@/state/prReviewModel"
-import { createThread, errorText, loadGitStatus, rpc, sendMessage } from "@/state/rpc"
+import { repairReviewPrompt, selectedReviewFindings, submitReviewDraft, toggleReviewFinding } from "@/state/prReviewModel"
+import { activeRuntime, errorText, loadGitStatus } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { SurfaceHeader } from "./chrome"
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 
-const TABS: [PrPageKind, string][] = [["files", "Files"], ["comments", "Comments"], ["review_comments", "Inline comments"], ["reviews", "Reviews"]]
+const TABS: [PrPageKind, string][] = [["files", "Files"], ["comments", "Comments"], ["review_comments", "Inline comments"], ["reviews", "Reviews"], ["checks", "Checks"]]
 const LABELS: Record<PrActionKind, string> = { comment: "Post comment", approve: "Approve", request_changes: "Request changes", checkout: "Check out pull request", merge: "Merge pull request", close: "Close pull request" }
 const ROW = "rounded-lg px-2.5 py-2 text-start font-system-ui text-[length:var(--app-font-size-ui,12px)] hover:bg-[var(--color-background-elevated-secondary)] focus-visible:outline focus-visible:outline-ring"
 
@@ -38,9 +39,10 @@ export function PrReview({ projectId, number, threadId, dock = false, active = t
   const threads = useStore((s) => s.threads)
   const settings = useStore((s) => s.settings)
   const project = useStore((s) => s.projects[projectId])
-  const [busy, setBusy] = useState(false)
+  const busy = review?.submitting ?? false
+  const setBusy = (submitting: boolean) => updateReview(key, { submitting })
   const [actionError, setActionError] = useState<string | null>(null)
-  const [confirmation, setConfirmation] = useState<PrActionKind | "repair" | null>(null)
+  const [confirmation, setConfirmation] = useState<PrActionKind | null>(null)
   const anchor = review?.draft.pendingInline
   const inlineBody = anchor?.body ?? ""
   const inlineInput = useRef<HTMLTextAreaElement>(null)
@@ -51,7 +53,10 @@ export function PrReview({ projectId, number, threadId, dock = false, active = t
     const current = useReviews.getState().entries[key]
     if (!current.detail && !current.loading) void loadReview(projectId, number)
   }, [active, key, number, projectId])
-  useEffect(() => { if (anchor) inlineInput.current?.focus() }, [anchor?.path, anchor?.line, anchor?.side])
+  const anchorPath = anchor?.path
+  const anchorLine = anchor?.line
+  const anchorSide = anchor?.side
+  useEffect(() => { if (anchorPath) inlineInput.current?.focus() }, [anchorPath, anchorLine, anchorSide])
   if (!active) return null
   const detail = review?.detail
   const pr = detail?.pull_request
@@ -63,37 +68,41 @@ export function PrReview({ projectId, number, threadId, dock = false, active = t
   const selectedFindings = selectedReviewFindings(draft)
 
   const submit = async (action: PrActionKind) => {
-    if (!detail) return
+    if (!detail || useReviews.getState().entries[key]?.submitting) return
+    const runtime = activeRuntime()
+    const client = runtime.rpc()
     setBusy(true); setActionError(null)
     try {
-      const publish = () => rpc().call("github.pr.action", { project_id: projectId, number, action, head_sha: detail.head_sha, body: draft.body, inline_comments: ["comment", "approve", "request_changes"].includes(action) ? draft.inline : [], ...(linked ? { thread_id: linked } : {}) })
+      const publish = () => client.call("github.pr.action", { project_id: projectId, number, action, head_sha: detail.head_sha, body: draft.body, inline_comments: ["comment", "approve", "request_changes"].includes(action) ? draft.inline : [], ...(linked ? { thread_id: linked } : {}) })
       if (["comment", "approve", "request_changes"].includes(action)) {
         await submitReviewDraft(draft, publish, () => useReviews.getState().entries[key].draft, (next) => updateReviewDraft(key, next))
       } else await publish()
       setConfirmation(null)
       await loadReview(projectId, number, review?.kind, review?.page?.page ?? 1)
-      if (linked) void loadGitStatus(linked)
+      if (linked) void runtime.loadGitStatus(linked)
     } catch (error) { setActionError(errorText(error)) } finally { setBusy(false) }
   }
   const repair = async () => {
-    if (!detail || !settings) return
+    if (!detail || !settings || useReviews.getState().entries[key]?.submitting) return
+    const runtime = activeRuntime()
+    const client = runtime.rpc()
     setBusy(true); setActionError(null)
     try {
+      const body = repairReviewPrompt(number, detail.pull_request.title, detail.pull_request.url, detail.head_sha, draft)
       let target = linked
       if (!target) {
-        target = await createThread({ projectId, provider: { kind: settings.default_provider, instance: "default" }, permissionMode: settings.default_permission_mode, useWorktree: true })
+        target = await runtime.createThread({ projectId, provider: { kind: settings.default_provider, instance: "default" }, permissionMode: settings.default_permission_mode, useWorktree: true })
         // Keep this identity even when checkout/send fails, so retry never creates
         // a second repair conversation or loses the selected findings.
         updateReviewDraft(key, { threadId: target })
       }
-      const status = await rpc().call("git.status", { thread_id: target })
+      const status = await client.call("git.status", { thread_id: target })
       if (status.branch !== detail.pull_request.head) {
-        await rpc().call("github.pr.action", { project_id: projectId, number, action: "checkout", thread_id: target })
+        await client.call("github.pr.action", { project_id: projectId, number, action: "checkout", thread_id: target })
       }
-      const findings = [...selectedFindings.map((f) => `${f.path ? `${f.path}:${f.line ?? "?"} (${f.side ?? "RIGHT"})` : `Review by ${f.author}`}\n${f.body}`), ...draft.inline.map((f) => `${f.path}:${f.line} (${f.side})\n${f.body}`)]
-      const body = `Repair pull request #${number}: ${pr?.title}\n${pr?.url}\nReviewed head: ${detail.head_sha}\n\nAddress these selected review findings and verify the changes:\n\n${findings.join("\n\n")}\n\nKeep the repair on this pull request’s branch. Report the changes and validation. Leave publishing reviews, closing and merging to the human.`
-      await sendMessage(target, { parts: [{ type: "text", text: body }] })
+      await runtime.sendMessage(target, { parts: [{ type: "text", text: body }] })
       setConfirmation(null)
+      if (useStore.getState().environmentId !== environmentId) return
       useStore.getState().selectThread(target)
       useStore.getState().set({ rightOpen: true, rightTab: "review" })
     } catch (error) { setActionError(errorText(error)) } finally { setBusy(false) }
@@ -126,22 +135,32 @@ export function PrReview({ projectId, number, threadId, dock = false, active = t
               {dock && <Button variant="ghost" size="sm" onClick={() => { useStore.getState().selectPulls(); useStore.getState().set({ prSelection: { projectId, number } }) }}>Open full review</Button>}
             </div>
             <details><summary className="cursor-pointer py-1 font-medium">Description</summary><div className="max-w-[75ch] break-words pt-2 leading-relaxed">{detail.body ? <Markdown text={detail.body} /> : <p className="text-muted-foreground">No description.</p>}</div></details>
-            <details><summary className="cursor-pointer py-1 font-medium">Checks and reviewers · {detail.checks.length} checks</summary><div className="flex flex-col gap-2 pt-2">
+            <details><summary className="cursor-pointer py-1 font-medium">Checks and reviewers</summary><div className="flex flex-col gap-2 pt-2">
               <p className="break-words text-muted-foreground">Requested reviewers: {detail.reviewers.join(", ") || "None"}</p>
               {detail.checks.map((check, i) => <div key={`${check.name}:${i}`} className="flex flex-wrap items-center justify-between gap-2"><span className="break-words">{check.name}</span><Button variant="ghost" size="sm" disabled={!check.url} onClick={() => void openExternal(check.url)}>{check.conclusion || check.status || "Pending"}</Button></div>)}
               {!detail.checks.length && <p className="text-muted-foreground">No checks reported.</p>}
+              <Button variant="ghost" size="sm" className="self-start" onClick={() => void loadReview(projectId, number, "checks")}>View all check pages</Button>
             </div></details>
           </section>
           <section className="flex min-w-0 flex-col gap-3">
-            <div className="flex flex-wrap gap-1" role="tablist" aria-label="Review content">{TABS.map(([kind, label]) => <Button key={kind} role="tab" aria-selected={review?.kind === kind} variant={review?.kind === kind ? "secondary" : "ghost"} size="sm" onClick={() => { void loadReview(projectId, number, kind) }}>{label}{kind === "files" ? ` (${detail.changed_files})` : ""}</Button>)}</div>
-            <div role="status" className="text-muted-foreground">{review?.loading ? "Refreshing…" : `Page ${review?.page?.page ?? 1}`}</div>
+            <div className="flex flex-wrap gap-1" role="tablist" aria-label="Review content" onKeyDown={(event) => {
+              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+              const index = buttons.indexOf(event.target as HTMLButtonElement)
+              if (index < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
+              event.preventDefault()
+              const rtl = getComputedStyle(event.currentTarget).direction === "rtl"
+              const step = event.key === "ArrowRight" ? (rtl ? -1 : 1) : (rtl ? 1 : -1)
+              const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + step + buttons.length) % buttons.length
+              buttons[next]?.focus(); buttons[next]?.click()
+            }}>{TABS.map(([kind, label]) => <Button key={kind} id={`pr-tab-${dock ? "dock" : "page"}-${key}-${kind}`} role="tab" tabIndex={review?.kind === kind ? 0 : -1} aria-controls={`pr-panel-${dock ? "dock" : "page"}-${key}`} aria-selected={review?.kind === kind} variant={review?.kind === kind ? "secondary" : "ghost"} size="sm" onClick={() => { void loadReview(projectId, number, kind) }}>{label}{kind === "files" ? ` (${detail.changed_files})` : ""}</Button>)}</div>
+            <div role="tabpanel" id={`pr-panel-${dock ? "dock" : "page"}-${key}`} aria-labelledby={`pr-tab-${dock ? "dock" : "page"}-${key}-${review?.kind ?? "files"}`} className="flex min-w-0 flex-col gap-3"><div role="status" className="text-muted-foreground">{review?.loading ? "Refreshing…" : `Page ${review?.page?.page ?? 1}`}</div>
             {review?.kind === "files" ? <>
               <div className="max-h-52 overflow-auto rounded-lg border border-[color:var(--color-border)]" aria-label="Changed files">{review.page?.files.map((f) => <button key={f.path} type="button" aria-pressed={file?.path === f.path} className={cn(ROW, "flex w-full items-start justify-between gap-2", file?.path === f.path && "bg-[var(--color-background-button-secondary)]")} onClick={() => { updateReview(key, { file: f.path }) }}><span className="min-w-0 break-all">{f.path}</span><span className="shrink-0 tabular-nums">+{f.additions} −{f.deletions}</span></button>)}</div>
               {file && <div key={file.path} className="min-w-0 overflow-hidden rounded-lg border border-[color:var(--color-border)]"><FileDiffHeader file={prFileDiff(file)} /><FileDiffBody file={prFileDiff(file)} onLineSelect={(line, side) => { updateReviewDraft(key, { pendingInline: { path: file.path, line, side, body: "" } }) }} />{file.patch_truncated && <p className="p-3 text-muted-foreground">GitHub omitted or truncated this patch. Open the pull request on GitHub to read the full file.</p>}</div>}
               {!review.page?.files.length && <p className="text-muted-foreground">No changed files on this page.</p>}
-              {anchor && <div className="flex flex-col gap-2"><label htmlFor={`inline-${number}`} className="break-all font-medium">Comment on {anchor.path}:{anchor.line} · {anchor.side === "LEFT" ? "original" : "new"} version</label><textarea ref={inlineInput} id={`inline-${number}`} value={inlineBody} maxLength={65536} onChange={(e) => anchor && updateReviewDraft(key, { pendingInline: { ...anchor, body: e.target.value } })} className="min-h-24 w-full rounded-lg border border-input bg-background p-3 leading-relaxed outline-none focus-visible:border-[color:var(--color-border-focus)]" /><div className="flex gap-2"><Button size="sm" disabled={!inlineBody.trim() || draft.inline.length >= 100} onClick={() => { updateReviewDraft(key, { inline: [...draft.inline, { ...anchor, body: inlineBody }], pendingInline: null }) }}>Save inline draft</Button><Button size="sm" variant="ghost" onClick={() => updateReviewDraft(key, { pendingInline: null })}>Cancel</Button></div></div>}
-            </> : <div className="flex flex-col gap-4">{review?.page?.entries.map((entry) => <article key={entry.id} className="flex flex-col gap-2 rounded-lg border border-[color:var(--color-border)] p-3"><div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2"><input type="checkbox" aria-label={`Select finding by ${entry.author}`} checked={draft.selected.includes(`${review.kind}:${entry.id}`)} onChange={() => toggleFinding(entry)} /><span className="font-medium">{entry.author}</span></label><span className="text-muted-foreground">{entry.state.toLowerCase().replaceAll("_", " ")}</span></div>{entry.path && <p className="break-all text-muted-foreground">{entry.path}:{entry.line ?? "outdated"}</p>}<div className="break-words leading-relaxed"><Markdown text={entry.body || "No review summary."} /></div></article>)}{!review?.page?.entries.length && <p className="text-muted-foreground">No {TABS.find(([kind]) => kind === review?.kind)?.[1].toLowerCase()} on this page.</p>}</div>}
-            <div className="flex flex-wrap gap-2"><Button variant="secondary" size="sm" disabled={review?.loading || (review?.page?.page ?? 1) <= 1} onClick={() => void loadReview(projectId, number, review?.kind, (review?.page?.page ?? 1) - 1)}>Previous page</Button><Button variant="secondary" size="sm" disabled={review?.loading || !review?.page?.has_more} onClick={() => void loadReview(projectId, number, review?.kind, (review?.page?.page ?? 1) + 1)}>Next page</Button></div>
+              {anchor && <div className="flex flex-col gap-2"><label htmlFor={`inline-${number}`} className="break-all font-medium">Comment on {anchor.path}:{anchor.line} · {anchor.side === "LEFT" ? "original" : "new"} version</label><Textarea ref={inlineInput} id={`inline-${number}`} value={inlineBody} maxLength={65536} onChange={(e) => anchor && updateReviewDraft(key, { pendingInline: { ...anchor, body: e.target.value } })} className="[&_textarea]:min-h-24 [&_textarea]:leading-relaxed" /><div className="flex gap-2"><Button size="sm" disabled={!inlineBody.trim() || draft.inline.length >= 100} onClick={() => { updateReviewDraft(key, { inline: [...draft.inline, { ...anchor, body: inlineBody }], pendingInline: null }) }}>Save inline draft</Button><Button size="sm" variant="ghost" onClick={() => updateReviewDraft(key, { pendingInline: null })}>Cancel</Button></div></div>}
+            </> : review?.kind === "checks" ? <div className="flex flex-col gap-2">{review.page?.checks?.map((check, index) => <div key={`${check.name}:${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--color-border)] p-3"><span className="break-words">{check.name}</span><Button variant="ghost" size="sm" disabled={!check.url} onClick={() => void openExternal(check.url)}>{check.conclusion || check.status || "Pending"}</Button></div>)}{!review.page?.checks?.length && <p className="text-muted-foreground">No checks on this page.</p>}</div> : <div className="flex flex-col gap-4">{review?.page?.entries.map((entry) => <article key={entry.id} className="flex flex-col gap-2 rounded-lg border border-[color:var(--color-border)] p-3"><div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2"><Checkbox aria-label={`Select finding by ${entry.author}`} checked={draft.selected.includes(`${review.kind}:${entry.id}`)} onCheckedChange={() => toggleFinding(entry)} /><span className="font-medium">{entry.author}</span></label><span className="text-muted-foreground">{entry.state.toLowerCase().replaceAll("_", " ")}</span></div>{entry.path && <p className="break-all text-muted-foreground">{entry.path}:{entry.line ?? "outdated"}</p>}<div className="break-words leading-relaxed"><Markdown text={entry.body || "No review summary."} /></div></article>)}{!review?.page?.entries.length && <p className="text-muted-foreground">No {TABS.find(([kind]) => kind === review?.kind)?.[1].toLowerCase()} on this page.</p>}</div>}
+            <div className="flex flex-wrap gap-2"><Button variant="secondary" size="sm" disabled={review?.loading || (review?.page?.page ?? 1) <= 1} onClick={() => void loadReview(projectId, number, review?.kind, (review?.page?.page ?? 1) - 1)}>Previous page</Button><Button variant="secondary" size="sm" disabled={review?.loading || !review?.page?.has_more} onClick={() => void loadReview(projectId, number, review?.kind, (review?.page?.page ?? 1) + 1)}>Next page</Button></div></div>
           </section>
           <section className="flex flex-col gap-3">
             <h3 className="font-medium">Your review</h3>
@@ -154,12 +173,12 @@ export function PrReview({ projectId, number, threadId, dock = false, active = t
             <h3 className="font-medium">Repair with an agent</h3>
             <Menu><MenuTrigger render={<Button variant="secondary" size="sm" className="max-w-full self-start" />}>{linkedThread?.title ?? "Create a repair conversation"}</MenuTrigger><ComposerPickerMenuPopup align="start" className="max-w-80"><MenuGroup><MenuItem onClick={() => updateReviewDraft(key, { threadId: "new" })}>Create a repair conversation</MenuItem>{choices.map((t) => <MenuItem key={t.id} onClick={() => updateReviewDraft(key, { threadId: t.id })}><span className="truncate">{t.title}</span></MenuItem>)}</MenuGroup></ComposerPickerMenuPopup></Menu>
             <p className="leading-relaxed text-muted-foreground">Send {selectedFindings.length + draft.inline.length} selected findings and inline drafts. The agent repairs the branch; you review and merge separately.</p>
-            <Button className="self-start" size="sm" disabled={busy || !settings || (!selectedFindings.length && !draft.inline.length) || linkedThread?.status === "running" || linkedThread?.status === "awaiting-approval"} onClick={() => setConfirmation("repair")}>Send to agent</Button>
+            <Button className="self-start" size="sm" disabled={busy || !settings || (!selectedFindings.length && !draft.inline.length) || linkedThread?.status === "running" || linkedThread?.status === "awaiting-approval"} onClick={() => void repair()}>{busy ? "Sending…" : "Send to agent"}</Button>
           </section>
         </>}
       </div>
     </div>
-    <Dialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busy) setConfirmation(null) }}><DialogPopup><DialogHeader><DialogTitle>{confirmation === "repair" ? "Send findings to an agent?" : `${confirmation ? LABELS[confirmation] : "Review"}?`}</DialogTitle><DialogDescription>{confirmation === "merge" ? `Squash merge #${number} at the reviewed head into ${pr?.base}. The branch stays available.` : confirmation === "close" ? `Close #${number} on GitHub. Its branch and your drafts remain available.` : confirmation === "checkout" ? `Check out #${number} in ${linkedThread?.title ?? "the linked conversation"}. Running work, dirty files and open terminals block checkout.` : confirmation === "repair" ? `Send the selected findings to ${linkedThread?.title ?? "a new conversation in its own worktree"}. Review and merge remain your next steps.` : "Publish your review summary and saved inline drafts on GitHub."}</DialogDescription></DialogHeader>{actionError && <p role="alert" className="px-4 py-2 text-destructive">{actionError} Your draft is kept.</p>}<DialogFooter><Button variant="ghost" disabled={busy} onClick={() => setConfirmation(null)}>Cancel</Button><Button disabled={busy} onClick={() => confirmation === "repair" ? void repair() : confirmation && void submit(confirmation)}>{busy ? "Working…" : confirmation === "repair" ? "Send to agent" : confirmation ? LABELS[confirmation] : "Submit"}</Button></DialogFooter></DialogPopup></Dialog>
+    <Dialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busy) setConfirmation(null) }}><DialogPopup><DialogHeader><DialogTitle>{`${confirmation ? LABELS[confirmation] : "Review"}?`}</DialogTitle><DialogDescription>{confirmation === "merge" ? `Squash merge #${number} at the reviewed head into ${pr?.base}. The branch stays available.` : confirmation === "close" ? `Close #${number} on GitHub. Its branch and your drafts remain available.` : confirmation === "checkout" ? `Check out #${number} in ${linkedThread?.title ?? "the linked conversation"}. Running work, dirty files and open terminals block checkout.` : "Publish your review summary and saved inline drafts on GitHub."}</DialogDescription></DialogHeader>{actionError && <p role="alert" className="px-4 py-2 text-destructive">{actionError} Your draft is kept.</p>}<DialogFooter><Button variant="ghost" disabled={busy} onClick={() => setConfirmation(null)}>Cancel</Button><Button disabled={busy} onClick={() => confirmation && void submit(confirmation)}>{busy ? "Working…" : confirmation ? LABELS[confirmation] : "Submit"}</Button></DialogFooter></DialogPopup></Dialog>
   </div>
 }
 

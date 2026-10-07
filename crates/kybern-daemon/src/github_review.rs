@@ -66,11 +66,24 @@ pub async fn detail(cwd: &Path, number: u64) -> Result<PrDetailResult> {
 pub async fn page(cwd: &Path, p: &PrPageParams) -> Result<PrPageResult> {
     validate_number(p.number)?;
     ensure!((1..=1000).contains(&p.page), "Choose a page between 1 and 1000.");
+    if matches!(p.kind, PrPageKind::Checks) {
+        let head = detail(cwd, p.number).await?.head_sha;
+        let checks_endpoint = format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs?per_page={PAGE_SIZE}&page={}", p.page);
+        let status_endpoint = format!("repos/{{owner}}/{{repo}}/commits/{head}/status?per_page={PAGE_SIZE}&page={}", p.page);
+        let (checks, statuses) = tokio::try_join!(
+            run(cwd, "gh", &["api", &checks_endpoint, "--method", "GET"]),
+            run(cwd, "gh", &["api", &status_endpoint, "--method", "GET"])
+        )?;
+        let checks: Value = serde_json::from_str(&checks)?;
+        let statuses: Value = serde_json::from_str(&statuses)?;
+        return parse_checks(&checks, &statuses, p.page);
+    }
     let endpoint = match p.kind {
         PrPageKind::Files => format!("repos/{{owner}}/{{repo}}/pulls/{}/files", p.number),
         PrPageKind::Comments => format!("repos/{{owner}}/{{repo}}/issues/{}/comments", p.number),
         PrPageKind::Reviews => format!("repos/{{owner}}/{{repo}}/pulls/{}/reviews", p.number),
         PrPageKind::ReviewComments => format!("repos/{{owner}}/{{repo}}/pulls/{}/comments", p.number),
+        PrPageKind::Checks => unreachable!("checks handled above"),
     };
     let endpoint = format!("{endpoint}?per_page={PAGE_SIZE}&page={}", p.page);
     let response = run(cwd, "gh", &["api", &endpoint, "--method", "GET"]).await?;
@@ -80,7 +93,7 @@ pub async fn page(cwd: &Path, p: &PrPageParams) -> Result<PrPageResult> {
 
 fn parse_page(value: &Value, kind: PrPageKind, page: u32) -> Result<PrPageResult> {
     let items = value.as_array().ok_or_else(|| anyhow!("Unable to read GitHub results. Refresh and try again."))?;
-    let mut result = PrPageResult { files: vec![], entries: vec![], page, has_more: items.len() == PAGE_SIZE };
+    let mut result = PrPageResult { checks: vec![], files: vec![], entries: vec![], page, has_more: items.len() == PAGE_SIZE };
     for v in items.iter().take(PAGE_SIZE) {
         if matches!(kind, PrPageKind::Files) {
             let (patch, truncated) = bounded(text(v, "patch"), PATCH_BYTES);
@@ -106,6 +119,35 @@ fn parse_page(value: &Value, kind: PrPageKind, page: u32) -> Result<PrPageResult
                 updated_at: v.get("updated_at").or_else(|| v.get("submitted_at")).and_then(Value::as_str).unwrap_or_default().to_owned(),
             });
         }
+    }
+    Ok(result)
+}
+
+fn parse_checks(checks: &Value, statuses: &Value, page: u32) -> Result<PrPageResult> {
+    let checks = checks["check_runs"].as_array().ok_or_else(|| anyhow!("Unable to read check runs. Refresh and try again."))?;
+    let statuses = statuses["statuses"].as_array().ok_or_else(|| anyhow!("Unable to read commit statuses. Refresh and try again."))?;
+    let mut result = PrPageResult {
+        checks: vec![],
+        files: vec![],
+        entries: vec![],
+        page,
+        has_more: checks.len() == PAGE_SIZE || statuses.len() == PAGE_SIZE,
+    };
+    for value in checks.iter().take(PAGE_SIZE) {
+        result.checks.push(PrCheck {
+            name: text(value, "name"),
+            status: text(value, "status"),
+            conclusion: text(value, "conclusion"),
+            url: text(value, "details_url"),
+        });
+    }
+    for value in statuses.iter().take(PAGE_SIZE) {
+        result.checks.push(PrCheck {
+            name: text(value, "context"),
+            status: text(value, "state"),
+            conclusion: text(value, "state"),
+            url: text(value, "target_url"),
+        });
     }
     Ok(result)
 }
@@ -136,6 +178,10 @@ async fn write_api(cwd: &Path, endpoint: &str, method: &str, value: Value) -> Re
 pub async fn action(cwd: &Path, p: &PrActionParams) -> Result<()> {
     validate_number(p.number)?;
     ensure!(p.body.len() <= 64 * 1024 && p.inline_comments.len() <= 100, "Keep the review below 64 KiB and 100 inline comments.");
+    ensure!(
+        p.body.len() + p.inline_comments.iter().map(|comment| comment.body.len()).sum::<usize>() <= 128 * 1024,
+        "This review exceeds 128 KiB. Shorten your summary or submit fewer inline comments."
+    );
     let pull = format!("repos/{{owner}}/{{repo}}/pulls/{}", p.number);
     match p.action {
         PrActionKind::Checkout => {
@@ -209,5 +255,16 @@ mod tests {
         let value = json!(vec![json!({"filename":"a"}); PAGE_SIZE]);
         assert!(parse_page(&value, PrPageKind::Files, 1).unwrap().has_more);
         assert!(!parse_page(&json!([]), PrPageKind::Files, 2).unwrap().has_more);
+    }
+
+    #[test]
+    fn checks_page_includes_legacy_contexts_and_offers_more_without_truncating() {
+        let checks = json!({"check_runs":vec![json!({"name":"CI","status":"completed","conclusion":"success","details_url":"https://github.com/example/repo/actions/1"}); PAGE_SIZE]});
+        let statuses = json!({"statuses":[{"context":"Build","state":"pending","target_url":"https://example.test/build"}]});
+        let page = parse_checks(&checks, &statuses, 2).unwrap();
+        assert_eq!(page.checks.len(), PAGE_SIZE + 1);
+        assert!(page.has_more);
+        assert_eq!(page.checks[PAGE_SIZE].name, "Build");
+        assert_eq!(page.checks[PAGE_SIZE].conclusion, "pending");
     }
 }

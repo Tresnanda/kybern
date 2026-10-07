@@ -44,13 +44,18 @@ impl Orchestrator {
             blockers.push("Remove queued messages before removing the worktree.".into());
         }
         let owners = self.inner.store.threads_list(Some(thread.project_id), true)?;
-        if owners
-            .iter()
-            .any(|t| t.id != id && (Path::new(&t.cwd).starts_with(&wt.path) || t.worktree.as_ref().is_some_and(|w| w.branch == wt.branch)))
-        {
+        if owners.iter().any(|t| {
+            t.id != id
+                && t.subagent.is_none()
+                && (Path::new(&t.cwd).starts_with(&wt.path) || t.worktree.as_ref().is_some_and(|w| w.branch == wt.branch))
+        }) {
             blockers.push("Another conversation owns this folder or branch. Keep the worktree while it is shared.".into());
         }
         for owner in &owners {
+            if Path::new(&owner.cwd).starts_with(&wt.path) && matches!(owner.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+            {
+                blockers.push("Stop running sessions using this worktree first.".into());
+            }
             if Path::new(&owner.cwd).starts_with(&wt.path)
                 && kybern_store::project_runtime_tasks(&self.inner.store.events_for_thread(owner.id)?)
                     .iter()
@@ -106,6 +111,8 @@ impl Orchestrator {
 
     pub async fn worktree_remove(&self, p: WorktreeRemoveParams) -> Result<WorktreeInspectResult> {
         let _workspace = self.inner.workspace_ops.lock().await;
+        let admission = self.session_admission(p.thread_id).await;
+        let _session = admission.lock().await;
         self.worktree_remove_locked(p).await
     }
 
@@ -129,9 +136,11 @@ impl Orchestrator {
             live.session.close().await?;
         }
         let repo = Repo::new(&state.path);
-        let commit = if state.clean { repo.rev_parse("HEAD").await? } else { repo.snapshot("Kybern worktree cleanup recovery").await? };
+        let head = repo.rev_parse("HEAD").await?;
+        let commit = if state.clean { head.clone() } else { repo.snapshot("Kybern worktree cleanup recovery").await? };
         let source = Repo::new(&project.path);
-        source.update_ref(&recovery_ref(thread.id), &commit).await?;
+        source.update_ref(&format!("{}/head", recovery_ref(thread.id)), &head).await?;
+        source.update_ref(&format!("{}/source", recovery_ref(thread.id)), &commit).await?;
         // Re-probe after session close/snapshot. Ignored files and active owners never
         // become permission to discard content, even when force is explicitly set.
         let current = self.worktree_inspect(thread.id).await?;
@@ -173,7 +182,8 @@ impl Orchestrator {
         );
         let source = Repo::new(&project.path);
         // The ref prevents Git GC from discarding recovered uncommitted source.
-        let commit = source.rev_parse(&recovery_ref(thread.id)).await?;
+        let commit = source.rev_parse(&format!("{}/source", recovery_ref(thread.id))).await?;
+        let head = source.rev_parse(&format!("{}/head", recovery_ref(thread.id))).await?;
         ensure!(commit == receipt, "The worktree recovery ref changed. Inspect it before continuing.");
         source.worktree_prune().await?;
         std::fs::create_dir_all(expected.parent().unwrap())?;
@@ -183,7 +193,10 @@ impl Orchestrator {
                 Repo::new(&wt.path).restore(&commit).await?;
             }
         } else {
-            source.worktree_add(&expected, &wt.branch, Some(&commit)).await?;
+            source.worktree_add(&expected, &wt.branch, Some(&head)).await?;
+            if head != commit {
+                Repo::new(&wt.path).restore(&commit).await?;
+            }
         }
         self.emit(thread.id, None, EventPayload::WorktreeRestored { branch: wt.branch.clone() })?;
         Ok(())
@@ -211,11 +224,56 @@ impl Orchestrator {
         }
     }
 
+    /// Provider-only context. Keep the human’s original message and the native
+    /// conversation identity; clear this durable marker only after delivery.
+    pub(super) fn workspace_transition_message(&self, thread: &Thread, message: &UserMessage) -> Result<(UserMessage, Option<u64>)> {
+        let events = self.inner.store.events_for_thread(thread.id)?;
+        let mut delivered = None;
+        for event in events.iter().rev() {
+            if let EventPayload::ProviderNotice { data: Some(data), .. } = &event.payload {
+                if let Some(sequence) = data.get("workspace_transition_delivered").and_then(serde_json::Value::as_u64) {
+                    delivered = Some(sequence);
+                }
+                if let Some(change) = data.get("workspace_transition") {
+                    if delivered.is_some_and(|sequence| sequence >= event.seq) {
+                        break;
+                    }
+                    let mut text = format!(
+                        "Kybern workspace update requested by the human: checked out pull request #{} on branch {} at {}. This is the same conversation and working directory. Earlier discussion may describe the previous checkout; inspect the current branch and files before editing.\n\n",
+                        change["number"],
+                        change["branch"].as_str().unwrap_or("unknown"),
+                        change["head"].as_str().unwrap_or("unknown")
+                    );
+                    truncate_utf8(&mut text, 4096);
+                    let mut message = message.clone();
+                    message.parts.insert(0, ContentPart::Text { text });
+                    return Ok((message, Some(event.seq)));
+                }
+            }
+        }
+        Ok((message.clone(), None))
+    }
+
+    pub(super) fn workspace_transition_delivered(&self, id: ThreadId, sequence: u64) -> Result<()> {
+        self.emit(
+            id,
+            None,
+            EventPayload::ProviderNotice {
+                level: NoticeLevel::Info,
+                text: "Checkout context delivered to the agent.".into(),
+                data: Some(serde_json::json!({"workspace_transition_delivered":sequence})),
+            },
+        )?;
+        Ok(())
+    }
+
     pub async fn pr_checkout(&self, p: &PrActionParams) -> Result<()> {
         let _workspace = self.inner.workspace_ops.lock().await;
         let id = p
             .thread_id
             .ok_or_else(|| anyhow!("Choose a linked conversation with its own worktree before checking out this pull request."))?;
+        let admission = self.session_admission(id).await;
+        let _session = admission.lock().await;
         let mut thread = self.inner.store.thread_get(id)?.ok_or_else(|| anyhow!("thread not found"))?;
         ensure!(
             thread.project_id == p.project_id && thread.status != ThreadStatus::Archived,
@@ -236,9 +294,15 @@ impl Orchestrator {
         crate::github_review::action(Path::new(&thread.cwd), p).await?;
         let branch = Repo::new(&thread.cwd).current_branch().await.ok_or_else(|| anyhow!("The pull request checkout has no branch."))?;
         thread.worktree.as_mut().unwrap().branch = branch;
-        // A provider resume may retain the old checkout; start a fresh native session
-        // with Kybern’s retained transcript rather than reuse the stale process.
-        self.update_thread(thread)?;
+        // The path and account stay compatible with native continuation. The next
+        // delivered prompt receives the explicit checkout marker below.
+        self.update_thread(thread.clone())?;
+        let head = Repo::new(&thread.cwd).rev_parse("HEAD").await?;
+        self.emit(thread.id, None, EventPayload::ProviderNotice {
+            level: NoticeLevel::Info,
+            text: format!("Checked out pull request #{} on {}. The next message continues this conversation with the new checkout.", p.number, thread.worktree.as_ref().unwrap().branch),
+            data: Some(serde_json::json!({"workspace_transition":{"number":p.number,"branch":thread.worktree.as_ref().unwrap().branch,"head":head}})),
+        })?;
         Ok(())
     }
 }

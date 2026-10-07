@@ -12,11 +12,12 @@ export interface ReviewState {
   loading: boolean
   error: string | null
   version: number
+  submitting: boolean
   draft: ReviewDraft
 }
 import { emptyReviewDraft, readReviewDraft, type ReviewDraft } from "./prReviewModel"
 export { emptyReviewDraft } from "./prReviewModel"
-const empty = (): ReviewState => ({ detail: null, page: null, kind: "files", file: null, loading: false, error: null, version: 0, draft: emptyReviewDraft() })
+const empty = (): ReviewState => ({ detail: null, page: null, kind: "files", file: null, loading: false, error: null, version: 0, submitting: false, draft: emptyReviewDraft() })
 export const useReviews = create<{ entries: Record<string, ReviewState> }>(() => ({ entries: {} }))
 export function reviewKey(projectId: ProjectId, number: number) {
   return `${useStore.getState().environmentId}:${projectId}:${number}`

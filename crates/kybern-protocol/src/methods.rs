@@ -1765,6 +1765,7 @@ pub enum PrPageKind {
     Comments,
     Reviews,
     ReviewComments,
+    Checks,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrPageParams {
@@ -1801,6 +1802,8 @@ pub struct PrReviewEntry {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrPageResult {
+    #[serde(default)]
+    pub checks: Vec<PrCheck>,
     pub files: Vec<PrFile>,
     pub entries: Vec<PrReviewEntry>,
     pub page: u32,

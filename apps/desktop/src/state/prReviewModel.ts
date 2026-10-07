@@ -1,4 +1,4 @@
-import type { PrInlineComment, PrReviewEntry } from "../../../../../packages/kybern-client/src/types.ts"
+import type { PrInlineComment, PrReviewEntry } from "../../../../packages/kybern-client/src/types.ts"
 
 export interface ReviewDraft {
   body: string
@@ -51,4 +51,11 @@ export function readReviewDraft(value: unknown): ReviewDraft {
     }
   }
   return { body: typeof draft.body === "string" ? draft.body.slice(0, 65536) : "", inline: Array.isArray(draft.inline) ? draft.inline.filter(validComment).slice(0, 100) : [], pendingInline: validComment(draft.pendingInline) ? draft.pendingInline : null, selected, findings, threadId: typeof draft.threadId === "string" ? draft.threadId : null }
+}
+
+export function repairReviewPrompt(number: number, title: string, url: string, head: string, draft: ReviewDraft): string {
+  const findings = [...selectedReviewFindings(draft).map((entry) => `${entry.path ? `${entry.path}:${entry.line ?? "?"} (${entry.side ?? "RIGHT"})` : `Review by ${entry.author}`}\n${entry.body}`), ...draft.inline.map((entry) => `${entry.path}:${entry.line} (${entry.side})\n${entry.body}`)]
+  const body = `Repair pull request #${number}: ${title}\n${url}\nReviewed head: ${head}\n\nAddress these selected review findings and verify the changes:\n\n${findings.join("\n\n")}\n\nKeep the repair on this pull request’s branch. Report the changes and validation. Leave publishing reviews, closing and merging to the human.`
+  if (new TextEncoder().encode(body).byteLength > 64 * 1024) throw new Error("These findings exceed the 64 KiB repair limit. Select fewer findings or shorten your inline drafts, then send again.")
+  return body
 }

@@ -1862,11 +1862,11 @@ export interface PrListResult {
 export interface PrDetailParams { project_id: ProjectId; number: number }
 export interface PrCheck { name: string; status: string; conclusion: string; url: string }
 export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number }
-export type PrPageKind = "files" | "comments" | "reviews" | "review_comments";
+export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks";
 export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number }
 export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
 export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string }
-export interface PrPageResult { files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
+export interface PrPageResult { checks?: PrCheck[]; files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
 export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
 export interface PrInlineComment { path: string; line: number; side: string; body: string }
 export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId }

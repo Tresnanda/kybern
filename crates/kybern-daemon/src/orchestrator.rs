@@ -4318,13 +4318,12 @@ impl Orchestrator {
             elapsed_ms = startup_started.elapsed().as_millis() as u64,
         );
 
+        let portable = self.portable_message(&thread, &message)?;
+        let (workspace_message, workspace_transition) = self.workspace_transition_message(&thread, &portable)?;
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            match self.portable_message(&thread, &message) {
-                Ok(portable) => live.session.send_message(&message_id.to_string(), &self.provider_message(&portable, &live)).await,
-                Err(error) => Err(kybern_drivers::DriverError::Unsupported(error.to_string())),
-            }
+            live.session.send_message(&message_id.to_string(), &self.provider_message(&workspace_message, &live)).await
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -4336,7 +4335,12 @@ impl Orchestrator {
             self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(e.to_string()));
             return Err(e.into());
         }
-        self.inner.store.meta_set(&format!("handoff:{}", thread.id), "")?;
+        if !is_compact_message(&message) {
+            self.inner.store.meta_set(&format!("handoff:{}", thread.id), "")?;
+            if let Some(sequence) = workspace_transition {
+                self.workspace_transition_delivered(thread.id, sequence)?;
+            }
+        }
         self.collaboration_delivery_submitted(thread.id, turn_id, message_id)?;
         tracing::info!(
             target: "kybern::turn_startup",
@@ -10271,4 +10275,5 @@ for line in sys.stdin:
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
+    include!("orchestrator/worktree_tests.rs");
 }
