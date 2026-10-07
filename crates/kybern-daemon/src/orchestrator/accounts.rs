@@ -96,6 +96,10 @@ impl Orchestrator {
     }
 
     pub async fn set_thread_target(&self, params: methods::ThreadTargetParams) -> Result<methods::ThreadTargetState> {
+        // Admit selections before async discovery: a slow earlier validation
+        // cannot persist after a later human selection or race send admission.
+        let admission = self.session_admission(params.thread_id).await;
+        let _admission = admission.lock().await;
         self.ensure_not_subagent(params.thread_id)?;
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
         self.validate_provider_selection(

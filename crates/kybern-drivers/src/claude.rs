@@ -58,6 +58,14 @@ impl AgentDriver for ClaudeDriver {
     async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
         self.probe_context(context).await
     }
+    async fn probe_fresh_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        if let Ok(binary) = resolve(ProviderKind::ClaudeCode, context.binary.as_ref()) {
+            // Refresh this native config/account only; normal probes keep using
+            // the bounded, coalesced cache and preserve previous-good fallback.
+            let _ = self.catalog.refresh(&binary, context).await;
+        }
+        self.probe_context(context).await
+    }
 
     async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
         let bin = resolve(ProviderKind::ClaudeCode, binary)?;

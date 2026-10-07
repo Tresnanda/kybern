@@ -504,6 +504,10 @@ pub trait AgentDriver: Send + Sync {
     async fn probe_with_context(&self, context: &ProbeContext) -> ProviderStatus {
         self.probe(context.binary.as_ref()).await
     }
+    /// Explicit model reload; drivers with another catalog cache bypass it.
+    async fn probe_fresh_with_context(&self, context: &ProbeContext) -> ProviderStatus {
+        self.probe_with_context(context).await
+    }
     /// Discover saved conversations without starting a model turn.
     async fn list_sessions(
         &self,

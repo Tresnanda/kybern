@@ -762,3 +762,46 @@ async fn handoff_steering_freezes_target_and_permissions_and_retries_after_admis
     assert_eq!(delivered.len(), 2);
     assert_eq!(delivered[1].plain_text(), "continue with the selected model");
 }
+
+#[tokio::test]
+async fn target_mutations_wait_for_session_admission_and_keep_human_request_order() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Running);
+    add_test_account(&fixture, thread.provider.kind, "account-b");
+    add_test_account(&fixture, thread.provider.kind, "account-c");
+    let admission = fixture.orchestrator.session_admission(thread.id).await;
+    let held = admission.lock().await;
+    let select = |instance: &str| methods::ThreadTargetParams {
+        thread_id: thread.id,
+        target: SessionTarget {
+            provider: ProviderInstance { kind: thread.provider.kind, instance: instance.into() },
+            model: None,
+            effort: None,
+        },
+        inherit_account: false,
+    };
+    let first_orchestrator = fixture.orchestrator.clone();
+    let first = select("account-b");
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let first = tokio::spawn(async move {
+        entered.send(()).unwrap();
+        first_orchestrator.set_thread_target(first).await
+    });
+    waiting.await.unwrap();
+    assert!(!first.is_finished(), "target validation/persistence waits behind admission");
+    let second_orchestrator = fixture.orchestrator.clone();
+    let second = select("account-c");
+    let second = tokio::spawn(async move { second_orchestrator.set_thread_target(second).await });
+    tokio::task::yield_now().await;
+    assert!(!second.is_finished());
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().target.provider, thread.provider);
+    drop(held);
+    assert_eq!(first.await.unwrap().unwrap().target.provider.instance, "account-b");
+    assert_eq!(second.await.unwrap().unwrap().target.provider.instance, "account-c");
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().target.provider.instance, "account-c");
+    assert_eq!(
+        fixture.store.thread_get(thread.id).unwrap().unwrap().provider,
+        thread.provider,
+        "selection never changes the active native owner"
+    );
+}

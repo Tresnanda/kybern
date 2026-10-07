@@ -16,7 +16,7 @@ import { TextSwap } from "@/components/kybern/motion"
 // actions, dock toggle), the transcript scrolling under the frosted composer,
 // queued follow-ups stacked above the input and the approval card.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useHotkey } from "@/lib/hooks"
 import { toast } from "sonner"
 
@@ -79,6 +79,7 @@ import { windowHoldsTranscript } from "@/state/windowSurfaceState"
 
 import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/kit/chat/composerPickerStyles"
 
+import { AccountRequestSequence } from "@/state/accountRequests"
 import { Composer, type ComposerHandle, type SlashCommand } from "./Composer"
 import { ENVIRONMENT_DOCKED_CONTENT_INSET_PX, EnvironmentPanel } from "./Environment"
 import { Transcript } from "./Transcript"
@@ -151,42 +152,78 @@ export function ThreadView({
   const page = useRef<HTMLDivElement>(null)
   const previousDepth = useRef<{ id: ThreadId; depth: number } | null>(null)
   const [overlayHeight, setOverlayHeight] = useState(120)
-  const [nextTarget, setNextTarget] = useState<{ threadId: string; settings: typeof settings; state: ThreadTargetState } | null>(null)
+  const [nextTarget, setNextTarget] = useState<{ threadId: string; environmentId: string; settings: typeof settings; state: ThreadTargetState } | null>(null)
   const [accountCatalog, setAccountCatalog] = useState<{ key: string; settings: typeof settings; status: ProviderStatus } | null>(null)
+  const targetRequests = useRef(new AccountRequestSequence())
+  const catalogGeneration = useRef(0)
+  const targetEnvironmentId = useStore((s) => s.environmentId)
   const hasThread = !!thread
   const readOnlyThread = !!thread?.subagent
   useEffect(() => {
     if (!hasThread || readOnlyThread) return
+    const request = targetRequests.current.read({ threadId, settings, environmentId: targetEnvironmentId })
+    if (!request) return
     let canceled = false
     void rpc().call("threads.target.get", { thread_id: threadId }).then((state) => {
-      if (!canceled) setNextTarget({ threadId, settings, state })
-    }).catch((error) => { if (!canceled) toast.error("Unable to load account selection", { description: errorText(error) }) })
+      if (!canceled && targetRequests.current.accepts(request)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
+    }).catch((error) => { if (!canceled && targetRequests.current.accepts(request)) toast.error("Unable to load account selection", { description: errorText(error) }) })
     return () => { canceled = true }
-  }, [threadId, thread?.status, thread?.provider.instance, thread?.model, settings, hasThread, readOnlyThread])
-  const targetState = nextTarget?.threadId === threadId && nextTarget.settings === settings ? nextTarget.state : null
+  }, [threadId, thread?.status, thread?.provider.instance, thread?.model, settings, hasThread, readOnlyThread, targetEnvironmentId])
+  const targetState = nextTarget?.threadId === threadId && nextTarget.environmentId === targetEnvironmentId && nextTarget.settings === settings ? nextTarget.state : null
   const target = targetState?.target ?? (thread ? { provider: thread.provider, model: thread.model, effort: thread.effort } : null)
-  const catalogKey = target ? `${threadId}:${target.provider.kind}:${target.provider.instance}` : ""
+  const catalogKey = target ? `${targetEnvironmentId}:${threadId}:${target.provider.kind}:${target.provider.instance}` : ""
   const targetChanged = !!target && !!thread && (target.provider.kind !== thread.provider.kind || target.provider.instance !== thread.provider.instance)
   const targetKind = target?.provider.kind
   const targetInstance = target?.provider.instance
   const targetProjectId = thread?.project_id
+  const refreshAccountCatalog = useCallback(async (provider: import("@/protocol").ProviderInstance, forceRefresh: boolean): Promise<ProviderStatus | undefined> => {
+    if (readOnlyThread || provider.kind !== targetKind || provider.instance !== targetInstance || !targetProjectId) return
+    const generation = ++catalogGeneration.current
+    try {
+      const status = await rpc().call("providers.accounts.catalog", { provider, project_id: targetProjectId, force_refresh: forceRefresh })
+      if (generation !== catalogGeneration.current) return
+      setAccountCatalog({ key: catalogKey, settings, status })
+      return status
+    } catch (error) {
+      if (generation === catalogGeneration.current) throw error
+    }
+  }, [catalogKey, targetKind, targetInstance, targetProjectId, readOnlyThread, settings])
   useEffect(() => {
     if (!targetKind || !targetInstance || !targetProjectId || readOnlyThread) return
     let canceled = false
-    void rpc().call("providers.accounts.catalog", { provider: { kind: targetKind, instance: targetInstance }, project_id: targetProjectId }).then((status) => {
-      if (!canceled) setAccountCatalog({ key: catalogKey, settings, status })
+    const generation = catalogGeneration
+    void Promise.resolve().then(() => {
+      if (!canceled) return refreshAccountCatalog({ kind: targetKind, instance: targetInstance }, false)
     }).catch((error) => { if (!canceled) toast.error("Unable to load account models", { description: errorText(error) }) })
-    return () => { canceled = true }
-  }, [catalogKey, targetKind, targetInstance, targetProjectId, readOnlyThread, settings])
+    return () => { canceled = true; generation.current++ }
+  }, [refreshAccountCatalog, targetKind, targetInstance, targetProjectId, readOnlyThread])
   const composerProviders = useMemo(() => providers.map((status) => status.kind !== targetKind ? status : accountCatalog?.key === catalogKey && accountCatalog.settings === settings ? accountCatalog.status : { ...status, models: [] }), [providers, targetKind, accountCatalog, catalogKey, settings])
   const chooseTarget = async (selection: SessionTarget, inherit = !targetState?.account_override) => {
-    const state = await rpc().call("threads.target.set", { thread_id: threadId, target: selection, inherit_account: inherit })
-    setNextTarget({ threadId, settings, state })
+    const scope = { threadId, settings, environmentId: targetEnvironmentId }
+    const request = targetRequests.current.select(scope)
+    try {
+      const state = await rpc().call("threads.target.set", { thread_id: threadId, target: selection, inherit_account: inherit })
+      if (targetRequests.current.finish(request)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
+    } catch (error) {
+      if (!targetRequests.current.finish(request)) return
+      // A previous request may already have succeeded. Reconcile the admitted
+      // next target without discarding draft input after this selection failed.
+      const reload = targetRequests.current.read(scope)
+      if (reload) await rpc().call("threads.target.get", { thread_id: threadId }).then((state) => {
+        if (targetRequests.current.accepts(reload)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
+      }).catch(() => {})
+      throw error
+    }
+  }
+  const reloadTargetState = async () => {
+    const request = targetRequests.current.read({ threadId, settings, environmentId: targetEnvironmentId })
+    if (!request) return
+    const state = await rpc().call("threads.target.get", { thread_id: threadId })
+    if (targetRequests.current.accepts(request)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
   }
   const changePermission = async (mode: import("@/protocol").PermissionMode) => {
     await updateThread(threadId, { permission_mode: mode })
-    const state = await rpc().call("threads.target.get", { thread_id: threadId })
-    setNextTarget({ threadId, settings, state })
+    await reloadTargetState()
   }
 
 
@@ -413,6 +450,7 @@ export function ThreadView({
               accountControl={target && <AccountPicker provider={target.provider} settings={settings?.providers[target.provider.kind]} inherited={!targetState?.account_override} onChange={(instance) => void chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null).catch((error) => toast.error("Unable to change account", { description: errorText(error) }))} />}
               providerSessionId={targetState?.native_session_id ?? null}
               providers={composerProviders}
+              onRefreshModels={refreshAccountCatalog}
               onProviderChange={thread.coordinator_project_id ? canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined : (provider, choice) => chooseTarget({ provider, model: choice?.model, effort: choice?.effort }, true)}
               model={target?.model ?? undefined}
               effort={target?.effort ?? undefined}
@@ -432,7 +470,7 @@ export function ThreadView({
                       <ComposerStackedPanelRowMain>{targetChanged ? "Selected agent uses" : "Permissions change to"} {targetState.pending_permission_mode === "full-access" ? "Full access" : targetState.pending_permission_mode} {targetChanged ? "with your next message." : "after this turn."}</ComposerStackedPanelRowMain>
                       {!targetChanged && <Button variant="ghost" size="sm" onClick={() => void rpc().call("threads.permissions.apply", { thread_id: threadId }).then(async (applied) => {
                         set((state) => ({ threads: { ...state.threads, [threadId]: applied } }))
-                        setNextTarget({ threadId, settings, state: await rpc().call("threads.target.get", { thread_id: threadId }) })
+                        await reloadTargetState()
                       }).catch((error) => toast.error("Unable to apply permissions", { description: errorText(error) }))}>Stop and apply now</Button>}
                     </ComposerStackedPanelRow>
                   </ComposerStackedPanel>}

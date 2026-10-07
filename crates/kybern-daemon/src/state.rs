@@ -171,12 +171,21 @@ impl ProviderCatalogCache {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Vec<ProviderStatus>>,
     {
+        let requested_at = Instant::now();
         if !force_refresh && let Some(providers) = self.fresh(&key).await {
             return providers;
         }
 
         let _refresh = self.refresh.lock().await;
-        if !force_refresh && let Some(providers) = self.fresh(&key).await {
+        if force_refresh {
+            // A concurrent request already refreshed this exact account after
+            // this call began. Share its result instead of probing it again.
+            if let Some(entry) = self.entries.lock().await.get(&key)
+                && entry.refreshed_at >= requested_at
+            {
+                return entry.providers.clone();
+            }
+        } else if let Some(providers) = self.fresh(&key).await {
             return providers;
         }
 
@@ -260,5 +269,32 @@ mod tests {
         cache.get_or_refresh("global".into(), true, &mut load).await;
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+    #[tokio::test]
+    async fn simultaneous_forced_account_catalog_refreshes_share_one_native_probe() {
+        let cache = ProviderCatalogCache::default();
+        let calls = AtomicUsize::new(0);
+        let entered = tokio::sync::Notify::new();
+        let release = tokio::sync::Notify::new();
+        let first = cache.get_or_refresh("named-account".into(), true, || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            entered.notify_one();
+            release.notified().await;
+            Vec::new()
+        });
+        let second = async {
+            entered.notified().await;
+            let second = cache.get_or_refresh("named-account".into(), true, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Vec::new()
+            });
+            tokio::pin!(second);
+            // Poll into the refresh lock before allowing the first probe to end.
+            assert!(futures::poll!(&mut second).is_pending());
+            release.notify_one();
+            second.await
+        };
+        let _ = tokio::join!(first, second);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

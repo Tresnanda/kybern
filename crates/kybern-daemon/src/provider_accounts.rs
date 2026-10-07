@@ -194,7 +194,13 @@ pub async fn catalog(state: &AppState, params: AccountsCatalogParams) -> Result<
     let driver = state.drivers.get(params.provider.kind).ok_or_else(|| anyhow!("Harness is unavailable."))?;
     let mut statuses = state
         .provider_catalogs
-        .get_or_refresh(cache_key, params.force_refresh, || async move { vec![driver.probe_with_context(&context).await] })
+        .get_or_refresh(cache_key, params.force_refresh, || async move {
+            vec![if params.force_refresh {
+                driver.probe_fresh_with_context(&context).await
+            } else {
+                driver.probe_with_context(&context).await
+            }]
+        })
         .await;
     let mut status = statuses.remove(0);
     let settings = state.settings.get();
