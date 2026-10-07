@@ -70,10 +70,9 @@ pub async fn page(cwd: &Path, p: &PrPageParams) -> Result<PrPageResult> {
         let head = detail(cwd, p.number).await?.head_sha;
         let checks_endpoint = format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs?per_page={PAGE_SIZE}&page={}", p.page);
         let status_endpoint = format!("repos/{{owner}}/{{repo}}/commits/{head}/status?per_page={PAGE_SIZE}&page={}", p.page);
-        let (checks, statuses) = tokio::try_join!(
-            run(cwd, "gh", &["api", &checks_endpoint, "--method", "GET"]),
-            run(cwd, "gh", &["api", &status_endpoint, "--method", "GET"])
-        )?;
+        let checks_args = ["api", checks_endpoint.as_str(), "--method", "GET"];
+        let status_args = ["api", status_endpoint.as_str(), "--method", "GET"];
+        let (checks, statuses) = tokio::try_join!(run(cwd, "gh", &checks_args), run(cwd, "gh", &status_args))?;
         let checks: Value = serde_json::from_str(&checks)?;
         let statuses: Value = serde_json::from_str(&statuses)?;
         return parse_checks(&checks, &statuses, p.page);

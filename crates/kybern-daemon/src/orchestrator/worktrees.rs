@@ -226,12 +226,12 @@ impl Orchestrator {
 
     /// Provider-only context. Keep the human’s original message and the native
     /// conversation identity; clear this durable marker only after delivery.
-    pub(super) fn workspace_transition_message(&self, thread: &Thread, message: &UserMessage) -> Result<(UserMessage, Option<u64>)> {
+    pub(super) fn workspace_transition_message(&self, thread: &Thread, message: &UserMessage) -> Result<(UserMessage, Option<EventSeq>)> {
         let events = self.inner.store.events_for_thread(thread.id)?;
         let mut delivered = None;
         for event in events.iter().rev() {
             if let EventPayload::ProviderNotice { data: Some(data), .. } = &event.payload {
-                if let Some(sequence) = data.get("workspace_transition_delivered").and_then(serde_json::Value::as_u64) {
+                if let Some(sequence) = data.get("workspace_transition_delivered").and_then(serde_json::Value::as_i64) {
                     delivered = Some(sequence);
                 }
                 if let Some(change) = data.get("workspace_transition") {
@@ -254,7 +254,7 @@ impl Orchestrator {
         Ok((message.clone(), None))
     }
 
-    pub(super) fn workspace_transition_delivered(&self, id: ThreadId, sequence: u64) -> Result<()> {
+    pub(super) fn workspace_transition_delivered(&self, id: ThreadId, sequence: EventSeq) -> Result<()> {
         self.emit(
             id,
             None,

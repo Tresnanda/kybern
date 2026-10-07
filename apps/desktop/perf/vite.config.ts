@@ -34,6 +34,14 @@ export default mergeConfig(base, {
       if (!id.endsWith("/views/VisualReply.tsx")) return
       return code.replace(/"@\/state\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "visuals-rpc.ts")))
     },
+  }] : process.env.KYBERN_PERF_FIXTURE === "pr-review" ? [{
+    name: "pr-review-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/\/(views\/(PrReview|WorktreeCleanup)\.tsx|state\/prReview\.ts)$/.test(id)) return
+      const transport = JSON.stringify(path.resolve(import.meta.dirname, "pr-review-rpc.ts"))
+      return code.replaceAll('"@/state/rpc"', transport).replaceAll('"./rpc"', transport)
+    },
   }] : process.env.KYBERN_PERF_FIXTURE === "theme-provider" ? [{
     name: "theme-provider-fixture-tauri",
     enforce: "pre",

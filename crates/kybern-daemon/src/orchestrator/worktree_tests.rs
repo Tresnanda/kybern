@@ -1,3 +1,4 @@
+use kybern_git::Repo;
 // Included into the parent fixture module: no real user worktrees or daemons.
 async fn ordinary_worktree_fixture() -> (Fixture, Thread) {
     let mut fixture = Fixture::new();
