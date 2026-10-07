@@ -74,13 +74,13 @@ export function NativeSubagentComposer({ thread, providers, surfaceMode, isFocus
     above={<ComposerPanelStack>
       <ComposerStackedPanel><SubagentBar thread={thread} embedded /></ComposerStackedPanel>
       <ComposerStackedPanel className="px-4 py-2 text-xs leading-[1.5] text-muted-foreground">
-        <p>Messages arrive at this subagent’s next tool call. Attachments are sent as file references.</p>
+        <p>{active ? "Messages arrive at this subagent’s next tool call. Attachments are sent as file references." : "This subagent has finished. Send an undelivered message to its parent."}</p>
         {loadError && <p role="alert" className="mt-1 text-destructive">Unable to load delivery status: {loadError}</p>}
         {visible.length > 0 && <ul aria-label="Subagent message delivery" className="mt-2 flex max-h-40 flex-col gap-2 overflow-y-auto">
           {visible.map((message) => <li key={message.id} className="flex min-w-0 flex-wrap items-start gap-2" data-subagent-message-status={message.status}>
-            {message.status === "pending" ? <ClockIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" /> : message.status === "delivered" ? <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" /> : <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-destructive" />}
+            {message.parent_queued || message.status === "pending" ? <ClockIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" /> : message.status === "delivered" ? <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" /> : <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-destructive" />}
             <div className="min-w-0 flex-1 basis-40 break-words">
-              <p role="status" className={cn(message.status === "failed" && "text-destructive")}>
+              <p role="status" className={cn(message.status === "failed" && !message.parent_queued && "text-destructive")}>
                 {message.parent_queued ? "Queued for parent" : message.status === "pending" ? "Waiting for next tool call" : message.status === "delivered" ? "Delivered to subagent" : message.error ?? "Not delivered — subagent finished"}
               </p>
               <p className="line-clamp-2" title={messagePreview(message)}>{messagePreview(message)}</p>

@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
+import { ProviderMark } from "../src/components/kybern/bits"
 import { NativeSubagentComposer } from "../src/views/subagents/NativeSubagentComposer"
 import { ThemeProviderContext } from "../src/components/theme-context"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
@@ -8,17 +9,18 @@ import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { emptyThreadState } from "../src/state/transcript"
 import { childFixture } from "./native-subagents-rpc"
-import type { Thread } from "../src/protocol"
+import type { ProviderKind, Thread } from "../src/protocol"
 import "../src/index.css"
 declare const __COLLAB_THEME__: "dark" | "light"
 const theme = __COLLAB_THEME__
 const at = "2026-10-08T10:00:00Z"
 const thread: Thread = { id: "child", parent_thread_id: "parent", title: "Review the native child message routing", project_id: "project", provider: { kind: "claude-code", instance: "default" }, model: "sonnet", permission_mode: "supervised", status: "running", cwd: "/project", pinned: false, created_at: at, updated_at: at, last_seq: 0,
   subagent: {task_id:"child-task",root_thread_id:"parent",parent_turn_id:"parent-turn",status:"running",backgrounded:false,transcript:true,started_at:at} }
+const harnesses: [ProviderKind, string][] = [["claude-code","Claude Code"],["codex","Codex"],["cursor","Cursor"],["opencode","OpenCode"],["pi","Pi"],["omp","Oh My Pi"]]
 const pause = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms))
 function Shell() {
   const child = useStore((state) => state.threads.child)
-  return <ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><main className="flex h-screen flex-col justify-end p-4"><NativeSubagentComposer thread={child} providers={[]} surfaceMode="single" isFocused /></main></ThemeProviderContext>
+  return <ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><main className="flex h-screen flex-col justify-end gap-6 p-4"><section aria-label="Harness logos" className="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-foreground">{harnesses.map(([kind,label])=><span key={kind} className="flex items-center gap-2"><ProviderMark kind={kind} size={16} />{label}</span>)}</section><NativeSubagentComposer thread={child} providers={[]} surfaceMode="single" isFocused /></main></ThemeProviderContext>
 }
 async function run() {
   document.documentElement.classList.toggle("dark",theme === "dark")
@@ -33,6 +35,7 @@ async function run() {
   const checks: Record<string,boolean> = {}
   const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!
   checks.normalComposer = !!editor
+  checks.harnessLogos = document.querySelectorAll('[aria-label="Harness logos"] svg').length === harnesses.length
   editor.focus()
   document.execCommand("insertText",false,"Keep this complete message with a long file path /project/docs/native-child-routing-and-attachment-references.md.")
   editor.dispatchEvent(new KeyboardEvent("keyup",{key:".",bubbles:true}))
@@ -46,6 +49,7 @@ async function run() {
   useStore.getState().set((state) => ({threads:{...state.threads,child:{...thread,status:"idle",subagent:{...thread.subagent!,status:"completed",completed_at:new Date().toISOString()}}},transcripts:{...state.transcripts,child:{...state.transcripts.child,subagentMessages:[failed]}}}))
   await pause(250)
   const forward = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Send to parent")
+  checks.completedDisclosure = document.body.textContent!.includes("This subagent has finished. Send an undelivered message to its parent.") && !document.body.textContent!.includes("Messages arrive at this subagent’s next tool call")
   checks.explicitRecovery = !!forward && document.body.textContent!.includes("Not delivered — subagent finished")
   forward?.click()
   await pause(250)
