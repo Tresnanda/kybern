@@ -185,6 +185,9 @@ impl Orchestrator {
             DriverEvent::RuntimeTaskCompleted(update) => {
                 self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await?;
             }
+            DriverEvent::AppToolRequest { request_id, .. } => {
+                live.session.respond_app_tool(&request_id, Err("The foreground conversation switched accounts. This outgoing session may finish its existing background work, but cannot start another Kybern operation.".into())).await?;
+            }
             DriverEvent::PermissionRequest { request_id, .. } => {
                 live.session
                     .respond_permission(

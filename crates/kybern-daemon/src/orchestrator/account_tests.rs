@@ -413,3 +413,30 @@ async fn receiving_modes_are_explicit_target_bound_and_queued_without_reconfigur
         }
     }
 }
+
+#[tokio::test]
+async fn outgoing_app_tool_requests_are_rejected_without_blocking_background_owner() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Idle);
+    let (live, _) = fixture.park(&thread, Instant::now()).await;
+    fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+    let mut live = Arc::try_unwrap(live).ok().unwrap();
+    let responses = Arc::new(Mutex::new(Vec::new()));
+    live.session = Box::new(TestSession { app_tool_responses: responses.clone(), ..Default::default() });
+    let live = Arc::new(live);
+    live.retained.store(true, Ordering::Relaxed);
+    fixture
+        .orchestrator
+        .handle_driver_event(
+            thread.id,
+            &live,
+            DriverEvent::AppToolRequest { request_id: "outgoing-request".into(), name: "kybern_send_message".into(), arguments: json!({}) },
+        )
+        .await
+        .unwrap();
+    let responses = responses.lock().await;
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].0, "outgoing-request");
+    assert!(responses[0].1.is_err());
+    assert!(fixture.store.events_for_thread(thread.id).unwrap().is_empty());
+}
