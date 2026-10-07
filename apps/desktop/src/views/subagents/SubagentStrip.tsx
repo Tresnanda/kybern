@@ -135,35 +135,39 @@ function StripRow({ thread }: { thread: Thread }) {
   const row = (
     <button
       type="button"
+      data-subagent-strip-open={thread.id}
       aria-label={subagentRowLabel(thread, now)}
       onClick={() => openThreadView(thread.id)}
-      className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-[7px] ps-1.5 text-start text-xs outline-hidden focus-visible:ring-2 focus-visible:ring-ring/60"
+      className={cn("flex min-h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-[7px] py-1 ps-1.5 text-start text-[length:var(--app-font-size-ui,12px)] leading-[1.4] outline-hidden focus-visible:ring-2 focus-visible:ring-ring/60", info.backgrounded && working && "@max-[24em]/sa-row:flex-wrap")}
     >
-      <ProviderMark kind={thread.provider.kind} size={14} className="size-3.5 shrink-0" />
-      <SubagentGlyph thread={thread} />
-      <span className="shrink-0 font-medium text-foreground/85">{thread.title || "Subagent"}</span>
-      <span className="sa-secondary min-w-0 flex-1 truncate text-foreground/45">{meta}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <ProviderMark kind={thread.provider.kind} size={14} className="size-3.5 shrink-0" />
+        <SubagentGlyph thread={thread} />
+        <span data-subagent-strip-title="" title={thread.title || "Subagent"} className="min-w-0 max-w-[55%] truncate font-medium text-foreground/85">{thread.title || "Subagent"}</span>
+        <span className="sa-secondary min-w-0 flex-1 truncate text-foreground/45">{meta}</span>
+      </span>
       {info.backgrounded && working && (
-        <span className="sa-secondary inline-flex shrink-0 items-center gap-1 text-foreground/45">
-          <BackgroundTrayIcon className="size-3" /> In background
+        <span data-subagent-strip-background="" className="sa-secondary inline-flex min-w-0 shrink-0 items-center gap-1 whitespace-nowrap text-foreground/45 @max-[24em]/sa-row:basis-full @max-[24em]/sa-row:whitespace-normal">
+          <BackgroundTrayIcon className="size-3 shrink-0" /><span className="min-w-0">In background</span>
         </span>
       )}
     </button>
   )
   return (
-    <div className="group/sa-sr relative flex h-7 items-center rounded-[7px] hover:bg-[var(--color-background-button-secondary-hover)] focus-within:bg-[var(--color-background-button-secondary-hover)]">
+    <div data-subagent-strip-row={thread.id} className="@container/sa-row group/sa-sr relative flex min-h-7 items-stretch rounded-[7px] text-[length:var(--app-font-size-ui,12px)] hover:bg-[var(--color-background-button-secondary-hover)] focus-within:bg-[var(--color-background-button-secondary-hover)]">
       <SubagentHoverCard thread={thread} trigger={row} side="top" align="start" />
-      <div className="relative h-full w-[52px] shrink-0">
+      <div className="grid min-w-[52px] shrink-0 grid-cols-[max-content] text-[length:var(--app-font-size-ui,12px)] leading-[1.4]">
         <span
+          data-subagent-strip-time=""
           className={cn(
-            "absolute inset-0 flex items-center justify-end pe-1.5 text-xs text-foreground/48 transition-opacity",
+            "col-start-1 row-start-1 flex items-center justify-end ps-2 pe-1.5 whitespace-nowrap text-foreground/48 transition-opacity",
             (canStop || canBackground) && "group-hover/sa-sr:pointer-events-none group-hover/sa-sr:opacity-0 group-focus-within/sa-sr:pointer-events-none group-focus-within/sa-sr:opacity-0",
           )}
         >
           {isSubagentQueued(thread) ? null : <SubagentElapsed thread={thread} />}
         </span>
         {(canStop || canBackground) && (
-          <span className="pointer-events-none absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/sa-sr:pointer-events-auto group-hover/sa-sr:opacity-100 group-focus-within/sa-sr:pointer-events-auto group-focus-within/sa-sr:opacity-100">
+          <span className="pointer-events-none col-start-1 row-start-1 me-0.5 flex items-center justify-self-end gap-0.5 opacity-0 transition-opacity group-hover/sa-sr:pointer-events-auto group-hover/sa-sr:opacity-100 group-focus-within/sa-sr:pointer-events-auto group-focus-within/sa-sr:opacity-100">
             {canBackground && (
               <button type="button" aria-label={`Run ${thread.title || "subagent"} in background`} title="Run in background" className={ROW_ACTION_CLASS} onClick={() => void runSubagentInBackground(thread)}>
                 <BackgroundTrayIcon />

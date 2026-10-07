@@ -5,7 +5,8 @@ import {
   buildThemeCssVariables,
   DEFAULT_THEME_STATE,
 } from "../src/lib/kit/theme/theme.logic"
-import { PrReview, PrReviewDock } from "../src/views/PrReview"
+import { PrReviewDock } from "../src/views/PrReview"
+import { PullRequests } from "../src/views/PullRequests"
 import { WorktreeCleanupDialog } from "../src/views/WorktreeCleanup"
 import { useReviews, reviewKey, updateReviewDraft } from "../src/state/prReview"
 import { useStore } from "../src/state/store"
@@ -14,7 +15,9 @@ import { detail, reviewFixture } from "./pr-review-rpc"
 import "../src/index.css"
 
 declare const __ORCH_THEME__: "light" | "dark"
+declare const __COLLAB_STRESS__: string
 const theme = __ORCH_THEME__
+const stress = __COLLAB_STRESS__
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const post = (value: unknown) =>
   (
@@ -29,15 +32,32 @@ function check(condition: unknown, message: string) {
 }
 async function screenshot(name: string) {
   if (!(window as unknown as { webkit?: unknown }).webkit) return
+  const finiteEntries = document
+    .getAnimations()
+    .filter(
+      (animation) =>
+        animation.playState === "running" &&
+        Number.isFinite(animation.effect?.getComputedTiming().endTime)
+    )
+  await Promise.race([
+    Promise.allSettled(finiteEntries.map((animation) => animation.finished)),
+    sleep(1500),
+  ])
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  )
   await new Promise<void>((resolve) => {
     ;(
       window as unknown as { __screenshotContinue: () => void }
     ).__screenshotContinue = resolve
-    post({ screenshot: `${name}-${theme}-${innerWidth}` })
+    post({
+      screenshot: `${name}-${theme}-${innerWidth}${stress ? `-${stress}` : ""}`,
+    })
   })
 }
 export function Shell() {
   const dock = useStore((state) => state.rightTab === "review")
+  const active = useStore((state) => state.rightOpen)
   return (
     <ThemeProviderContext
       value={{
@@ -48,11 +68,20 @@ export function Shell() {
       }}
     >
       <main className="flex h-screen min-w-0 flex-col">
-        {dock ? (
-          <PrReviewDock threadId="repair" active />
-        ) : (
-          <PrReview projectId="project" number={24} onBack={() => {}} />
-        )}
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {(!dock || innerWidth >= 1000) && <PullRequests />}
+          {dock && (
+            <aside
+              className="flex min-h-0 min-w-0 flex-col border-s border-[color:var(--color-border)]"
+              style={{
+                width: innerWidth >= 1000 ? 360 : "100%",
+                flexShrink: 0,
+              }}
+            >
+              <PrReviewDock threadId="repair" active={active} />
+            </aside>
+          )}
+        </div>
         <WorktreeCleanupDialog />
       </main>
     </ThemeProviderContext>
@@ -61,10 +90,21 @@ export function Shell() {
 const visible = (element: HTMLElement) =>
   element.getClientRects().length > 0 &&
   !element.closest('[aria-hidden="true"]')
+function reviewRoot() {
+  return (
+    document.querySelector<HTMLElement>('[data-review-mode="dock"]') ??
+    document.querySelector<HTMLElement>('[data-review-mode="page"]') ??
+    document.body
+  )
+}
 function button(label: string) {
-  const element = Array.from(
-    document.querySelectorAll<HTMLElement>('button,[role="menuitem"]')
-  ).find(
+  const selector = 'button,[role="menuitem"]'
+  const element = [
+    ...document.querySelectorAll<HTMLElement>('[role="dialog"] button'),
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ...reviewRoot().querySelectorAll<HTMLElement>(selector),
+    ...document.querySelectorAll<HTMLElement>(selector),
+  ].find(
     (candidate) =>
       visible(candidate) &&
       (candidate.getAttribute("aria-label") === label ||
@@ -83,11 +123,14 @@ async function waitFor(condition: () => boolean, message: string) {
   check(condition(), message)
 }
 function write(id: string, value: string) {
-  const textarea = document.getElementById(id) as HTMLTextAreaElement
+  const textarea = document.getElementById(id) as
+    HTMLTextAreaElement | HTMLInputElement
   check(textarea, `Missing input ${id}`)
   textarea.focus()
   Object.getOwnPropertyDescriptor(
-    HTMLTextAreaElement.prototype,
+    textarea.tagName === "INPUT"
+      ? HTMLInputElement.prototype
+      : HTMLTextAreaElement.prototype,
     "value"
   )!.set!.call(textarea, value)
   textarea.dispatchEvent(new Event("input", { bubbles: true }))
@@ -107,6 +150,14 @@ async function run() {
   )
   for (const [name, value] of Object.entries(built.variables))
     document.documentElement.style.setProperty(name, value)
+  if (stress === "large-text") {
+    document.documentElement.style.setProperty("--app-font-size-ui", "24px")
+    document.documentElement.style.fontSize = "32px"
+  }
+  if (stress === "rtl") document.documentElement.dir = "rtl"
+  const rootRem = Number.parseFloat(
+    getComputedStyle(document.documentElement).fontSize
+  )
   const at = "2026-10-08T00:00:00Z"
   const thread: Thread = {
     id: "repair",
@@ -125,6 +176,8 @@ async function run() {
   useStore.getState().set({
     environmentId: "review-fixture",
     rightTab: null,
+    rightOpen: false,
+    prSelection: null,
     rightTabs: [],
     projects: {
       project: {
@@ -159,10 +212,125 @@ async function run() {
       onUncaughtError: (error) => post({ pass: false, error: String(error) }),
     }).render(<Shell />)
   )
-  await sleep(450)
+  await waitFor(
+    () => !!document.getElementById("pr-row-project-24"),
+    "Pull request list did not load"
+  )
+  document.getElementById("pr-row-project-24")!.click()
+  await waitFor(
+    () => !!useReviews.getState().entries[key]?.detail,
+    "Selected pull request did not load"
+  )
+  check(
+    useReviews.getState().entries[key].workspace === "overview",
+    "New review did not open on Overview"
+  )
+  check(
+    !document.querySelector("[data-pr-diff]"),
+    "Overview mounted a hidden diff"
+  )
+  check(
+    !reviewFixture.calls.some((call) => call.method === "github.pr.page"),
+    "Overview eagerly downloaded changes"
+  )
+  const inbox = document.querySelector<HTMLElement>(".pr-inbox")!
+  const list = document.querySelector<HTMLElement>(
+    '[aria-label="Pull requests list"]'
+  )!
+  check(
+    visible(list) === inbox.clientWidth >= 60 * rootRem,
+    "List/detail did not adapt to its available pane width"
+  )
+  check(
+    !!document.querySelector('[aria-label="Pull request details"]'),
+    "Metadata disappeared"
+  )
+  const reviewPane = document.querySelector<HTMLElement>(
+    '[data-review-mode="page"]'
+  )!
+  const bodyColumns = getComputedStyle(
+    reviewPane.querySelector(".pr-review-body")!
+  ).gridTemplateColumns.split(/\s+/).length
+  check(
+    bodyColumns === (reviewPane.clientWidth >= 66 * rootRem ? 2 : 1),
+    "Metadata did not adapt to its detail width and computed text size"
+  )
+  check(
+    document
+      .querySelector('[aria-label="Pull request description"]')
+      ?.textContent?.includes("Preserve unsent drafts"),
+    "Overview description is not open"
+  )
+  check(
+    document
+      .querySelector('[aria-label="Pull request checks"]')
+      ?.textContent?.includes("Desktop checks"),
+    "Overview checks missing"
+  )
+  write("review-page-24", "Draft summary retained across views")
+  if (inbox.clientWidth < 60 * rootRem) {
+    await click("Back to pull requests")
+    check(
+      document.activeElement?.id === "pr-row-project-24",
+      "Back did not restore selected row focus"
+    )
+    write("pr-search", "draft")
+    await sleep(100)
+    document.getElementById("pr-row-project-24")!.click()
+    await sleep(100)
+    check(
+      (document.getElementById("pr-search") as HTMLInputElement).value ===
+        "draft",
+      "Back discarded the list filter"
+    )
+  } else {
+    document.getElementById("pr-row-project-25")!.click()
+    await waitFor(
+      () =>
+        !!document
+          .querySelector(".pr-review h2")
+          ?.textContent?.includes("keyboard navigation"),
+      "Master/detail row selection failed"
+    )
+    document.getElementById("pr-row-project-24")!.click()
+    await sleep(100)
+  }
+  check(
+    (document.getElementById("review-page-24") as HTMLTextAreaElement).value ===
+      "Draft summary retained across views",
+    "Selecting a PR discarded its draft"
+  )
+  const originalTitle = detail.pull_request.title
+  detail.pull_request.title =
+    "Preserve review drafts and exact inline comment anchors when GitHub rejects a request while a reviewer keeps typing in another conversation pane"
+  await click("Refresh pull request")
+  check(
+    document.querySelector(".pr-review h2")?.textContent ===
+      detail.pull_request.title,
+    "Long title was truncated"
+  )
+  check(
+    document.documentElement.scrollWidth <= innerWidth + 2,
+    "Long title overflowed the viewport"
+  )
+  detail.pull_request.title = originalTitle
+  await click("Refresh pull request")
+  const resetScroll = () =>
+    document
+      .querySelectorAll<HTMLElement>("[data-pr-scroll]")
+      .forEach((element) => {
+        element.scrollTop = 0
+      })
+  resetScroll()
+  await screenshot("pr-overview")
+  await click("Changes")
+  await waitFor(
+    () => !!document.querySelector("[data-pr-diff]"),
+    "Changes did not lazily load its selected diff"
+  )
   check(
     document.querySelectorAll("tr").length <= 610,
-    "Large diff mounted more than the initial line budget"
+    "Large diff exceeded initial line budget"
   )
   check(
     document.querySelectorAll('[aria-label="Changed files"] button').length ===
@@ -173,33 +341,79 @@ async function run() {
     document.querySelectorAll("[data-pr-diff]").length === 1,
     "More than the selected file is mounted"
   )
-  write("review-page-24", "Draft summary retained across views")
+  resetScroll()
+  await screenshot("pr-changes")
   await click("Comment on new line 7")
-  write("inline-24", "Preserve this inline draft")
+  write("inline-page-24", "Preserve this inline draft")
   await click("Save inline draft")
   check(
-    useReviews.getState().entries[key].draft.inline.length === 1,
-    "Inline draft was not saved"
+    useReviews.getState().entries[key].draft.inline[0]?.side === "RIGHT",
+    "Inline draft lost its line side"
   )
-  const scroller = Array.from(
-    document.querySelectorAll<HTMLElement>(".overflow-auto")
-  ).find(
-    (element) =>
-      element.clientHeight > 250 && element.scrollHeight > element.clientHeight
+  await click("Conversation")
+  await waitFor(
+    () =>
+      !!reviewRoot().querySelector('[aria-label="Select finding by reviewer"]'),
+    "Conversation did not load"
   )
-  if (scroller) scroller.scrollTop = 0
-  await screenshot("pr-full")
-  flushSync(() => useStore.getState().set({ rightTab: "review" }))
+  reviewRoot()
+    .querySelector<HTMLElement>('[aria-label="Select finding by reviewer"]')!
+    .click()
+  await click("Reviews")
+  reviewRoot()
+    .querySelector<HTMLElement>('[aria-label="Select finding by reviewer"]')!
+    .click()
+  await click("Inline comments")
+  reviewRoot()
+    .querySelector<HTMLElement>('[aria-label="Select finding by reviewer"]')!
+    .click()
+  check(
+    useReviews.getState().entries[key].draft.selected.length === 3,
+    "Conversation source IDs collided or selection disappeared"
+  )
+  await click("Next page")
+  check(
+    useReviews.getState().entries[key].page?.page === 2,
+    "Conversation pagination did not advance"
+  )
+  check(
+    useReviews.getState().entries[key].draft.selected.length === 3,
+    "Paging discarded selected findings"
+  )
+  check(
+    !document.querySelector("[data-pr-diff]"),
+    "Conversation retained an offscreen diff"
+  )
+  resetScroll()
+  await screenshot("pr-conversation")
+  flushSync(() =>
+    useStore.getState().set({ rightTab: "review", rightOpen: true })
+  )
   await sleep(180)
   check(
     (document.getElementById("review-dock-24") as HTMLTextAreaElement).value ===
       "Draft summary retained across views",
-    "Full page and dock lost shared summary"
+    "Page and dock lost their shared summary"
   )
   check(
-    document.body.textContent?.includes("Preserve this inline draft"),
+    reviewRoot().textContent?.includes("Preserve this inline draft"),
     "Dock lost saved inline draft"
   )
+  resetScroll()
+  await screenshot("pr-context-dock")
+  const callsBeforeHide = reviewFixture.calls.length
+  flushSync(() => useStore.getState().set({ rightOpen: false }))
+  await sleep(100)
+  check(
+    !document.querySelector('[data-review-mode="dock"]'),
+    "Inactive dock retained mounted content"
+  )
+  check(
+    reviewFixture.calls.length === callsBeforeHide,
+    "Inactive dock loaded GitHub data"
+  )
+  flushSync(() => useStore.getState().set({ rightOpen: true }))
+  await sleep(100)
   reviewFixture.failSubmit = true
   await click("Post comment and 1 inline draft")
   check(
@@ -225,47 +439,130 @@ async function run() {
     "Successful post did not remove submitted inline draft"
   )
   const tabs = Array.from(
-    document.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+    reviewRoot().querySelectorAll<HTMLButtonElement>(
+      '[aria-label="Review workspace"] [role="tab"]'
+    )
   )
   tabs[0].focus()
   tabs[0].dispatchEvent(
     new KeyboardEvent("keydown", { key: "End", bubbles: true })
   )
-  await sleep(160)
+  await sleep(100)
   check(
-    document.activeElement?.textContent === "Checks",
-    "End did not move keyboard focus to Checks"
+    document.activeElement?.textContent === "Conversation",
+    "End did not focus Conversation"
   )
   check(
-    useReviews.getState().entries[key].kind === "checks",
-    "Keyboard focus did not select the check page"
+    useReviews.getState().entries[key].workspace === "conversation",
+    "Keyboard did not select Conversation"
   )
-  check(document.body.textContent?.includes("Check 1.0"), "Check page missing")
-  tabs[4].dispatchEvent(
+  tabs[2].dispatchEvent(
     new KeyboardEvent("keydown", { key: "Home", bubbles: true })
   )
-  await sleep(160)
+  await sleep(100)
   check(
-    useReviews.getState().entries[key].kind === "files",
-    "Home did not return to Files"
+    useReviews.getState().entries[key].workspace === "overview",
+    "Home did not return to Overview"
+  )
+  if (stress === "rtl") {
+    tabs[0].dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })
+    )
+    await sleep(100)
+    check(
+      document.activeElement?.textContent === "Conversation",
+      "RTL ArrowRight did not move toward the previous tab"
+    )
+    tabs[2].dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })
+    )
+    await sleep(100)
+    check(
+      document.activeElement?.textContent === "Overview",
+      "RTL ArrowLeft did not move toward the next tab"
+    )
+  }
+  await click("View all check pages")
+  check(
+    reviewRoot().textContent?.includes("Check 1.0"),
+    "Complete check page missing"
   )
   await click("Next page")
   check(
     useReviews.getState().entries[key].page?.page === 2,
-    "File paging did not advance"
+    "Checks pagination did not advance"
+  )
+  await click("Changes")
+  await click("Next page")
+  check(
+    useReviews.getState().entries[key].page?.page === 2,
+    "File pagination did not advance"
   )
   check(
-    document.querySelectorAll("tr").length <= 610,
-    "Paging mounted cumulative diffs"
+    Array.from(document.querySelectorAll("[data-pr-diff]")).every(
+      (diff) => diff.querySelectorAll("tr").length <= 610
+    ),
+    "A pane mounted cumulative diffs"
   )
-  const dockScroller = Array.from(
-    document.querySelectorAll<HTMLElement>(".overflow-auto")
-  ).find(
-    (element) =>
-      element.clientHeight > 250 && element.scrollHeight > element.clientHeight
+  resetScroll()
+  await screenshot("pr-dock-changes")
+  await click("Overview")
+  const bodyBeforeNewHead = useReviews.getState().entries[key].draft.body
+  const pageCallsBeforeNewHead = reviewFixture.calls.filter(
+    (call) => call.method === "github.pr.page" && call.params.kind === "files"
+  ).length
+  detail.head_sha = "reviewed-head-updated"
+  await click("Refresh pull request")
+  check(
+    useReviews.getState().entries[key].page === null,
+    "Overview refresh retained a diff from the prior head"
   )
-  if (dockScroller) dockScroller.scrollTop = 0
-  await screenshot("pr-dock")
+  await click("Changes")
+  await waitFor(
+    () =>
+      useReviews.getState().entries[key].file ===
+      "src/reviews/submission-updated.ts",
+    "Changes reused the prior head's cached file page"
+  )
+  check(
+    reviewFixture.calls.filter(
+      (call) => call.method === "github.pr.page" && call.params.kind === "files"
+    ).length ===
+      pageCallsBeforeNewHead + 1,
+    "Changed head did not fetch exactly one fresh file page"
+  )
+  check(
+    useReviews.getState().entries[key].draft.body === bodyBeforeNewHead,
+    "New head discarded the retained draft"
+  )
+  check(
+    reviewRoot().textContent?.includes("This draft refers to"),
+    "Changed head did not warn about stale draft"
+  )
+  check(
+    (button("Post comment") as HTMLButtonElement).disabled,
+    "Stale summary remained publishable"
+  )
+  await click("Use draft text for current commit")
+  check(
+    useReviews.getState().entries[key].draft.sourceHead === detail.head_sha,
+    "Explicit draft reuse did not bind current commit"
+  )
+  for (const action of [
+    "Merge pull request",
+    "Close pull request",
+    "Approve",
+  ]) {
+    await click("Review actions")
+    await click(action)
+    check(
+      document
+        .querySelector('[role="dialog"]')
+        ?.textContent?.includes(`${action}?`),
+      `${action} skipped explicit confirmation`
+    )
+    await click("Cancel")
+  }
   useStore.getState().set({ worktreeCleanupThread: "repair" })
   await sleep(160)
   check(
@@ -288,7 +585,7 @@ async function run() {
   updateReviewDraft(key, {
     inline: [
       {
-        path: "src/review-1-0.ts",
+        path: "src/reviews/submission.ts",
         line: 7,
         side: "RIGHT",
         body: "Repair this finding",
@@ -328,7 +625,7 @@ async function run() {
     "Explicit repair did not send exactly once"
   )
   check(
-    JSON.stringify(reviewFixture.sent[0].message).includes("reviewed-head"),
+    JSON.stringify(reviewFixture.sent[0].message).includes(detail.head_sha),
     "Repair lost reviewed head context"
   )
   check(
@@ -342,11 +639,20 @@ async function run() {
     pass: true,
     fixture: "pr-review",
     theme,
+    stress,
+    rootRem,
+    largeText: stress === "large-text",
+    rtl: stress === "rtl",
     width: innerWidth,
     mountedDiffRows: document.querySelectorAll("tr").length,
     sharedDrafts: true,
     retainedFailureDrafts: true,
-    keyboardChecks: true,
+    keyboardWorkspace: true,
+    lazyOverview: true,
+    responsiveMasterDetail: true,
+    conversationPagination: true,
+    staleDraftReuse: true,
+    confirmations: true,
     cleanupConfirmation: true,
     checkoutForRepair: true,
     explicitRepair: true,

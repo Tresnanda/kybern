@@ -16,6 +16,9 @@ const SOURCE: &str = include_str!("extension.ts");
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_MARKER_BYTES: usize = 256 * 1024;
 const MAX_APP_ARGUMENT_BYTES: usize = 768 * 1024;
+// An app marker includes the serialized arguments plus three bounded strings
+// and its envelope. Reserve space even when those strings need JSON escaping.
+const MAX_APP_MARKER_BYTES: usize = MAX_APP_ARGUMENT_BYTES + 4096;
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 128;
 
@@ -27,7 +30,7 @@ pub const APP_TOOL_TITLE_PREFIX: &str = "kybern_app_tool_request:";
 pub const ALLOW_ONCE: &str = "Allow once";
 pub const ALLOW_ALWAYS: &str = "Always allow this exact call";
 pub const DENY: &str = "Deny";
-pub const APP_TOOL_NAMES: [&str; 39] = [
+pub const APP_TOOL_NAMES: [&str; 41] = [
     "kybern_thread_context",
     "kybern_workspace_diff",
     "kybern_read_file",
@@ -35,6 +38,8 @@ pub const APP_TOOL_NAMES: [&str; 39] = [
     "kybern_runtime_tasks",
     "kybern_list_terminals",
     "kybern_read_terminal",
+    "kybern_html_preview",
+    "kybern_html_publish",
     "kybern_threads_search",
     "kybern_thread_read",
     "kybern_thread_send",
@@ -233,7 +238,7 @@ pub fn permission_response(decision: &ApprovalDecision) -> Result<&'static str> 
 /// Reserved prefixes return `Some` even when malformed so callers can fail
 /// closed instead of showing an internal bridge request as an ordinary dialog.
 pub fn parse_permission_request(title: &str) -> Option<Result<PermissionRequest>> {
-    parse_marker(title, PERMISSION_TITLE_PREFIX).map(|result| {
+    parse_marker(title, PERMISSION_TITLE_PREFIX, MAX_MARKER_BYTES).map(|result| {
         let request: PermissionRequest = result?;
         if request.version != PROTOCOL_VERSION
             || !valid_bounded_string(&request.request_id, MAX_ID_LEN)
@@ -250,7 +255,7 @@ pub fn parse_permission_request(title: &str) -> Option<Result<PermissionRequest>
 /// Reserved prefixes return `Some` even when malformed so callers can cancel
 /// them without surfacing an internal bridge request to the user.
 pub fn parse_app_tool_request(title: &str) -> Option<Result<AppToolRequest>> {
-    parse_marker(title, APP_TOOL_TITLE_PREFIX).map(|result| {
+    parse_marker(title, APP_TOOL_TITLE_PREFIX, MAX_APP_MARKER_BYTES).map(|result| {
         let request: AppToolRequest = result?;
         if request.version != PROTOCOL_VERSION
             || !valid_bounded_string(&request.id, MAX_ID_LEN)
@@ -276,16 +281,16 @@ pub fn encode_app_tool_result(success: bool, data: Option<&Value>, error: Option
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
 }
 
-fn parse_marker<T: for<'de> Deserialize<'de>>(title: &str, prefix: &str) -> Option<Result<T>> {
+fn parse_marker<T: for<'de> Deserialize<'de>>(title: &str, prefix: &str, max_bytes: usize) -> Option<Result<T>> {
     let encoded = title.strip_prefix(prefix)?;
     Some((|| {
-        if encoded.is_empty() || encoded.len() > MAX_MARKER_BYTES.saturating_mul(2) {
+        if encoded.is_empty() || encoded.len() > max_bytes.div_ceil(3).saturating_mul(4) {
             return Err(DriverError::Protocol("invalid Kybern Pi extension marker".into()));
         }
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(encoded)
             .map_err(|_| DriverError::Protocol("invalid Kybern Pi extension marker encoding".into()))?;
-        if bytes.len() > MAX_MARKER_BYTES {
+        if bytes.len() > max_bytes {
             return Err(DriverError::Protocol("Kybern Pi extension marker is too large".into()));
         }
         serde_json::from_slice(&bytes).map_err(|_| DriverError::Protocol("invalid Kybern Pi extension marker payload".into()))
@@ -467,6 +472,47 @@ mod tests {
     }
 
     #[test]
+    fn html_tools_are_forwarded_and_their_requests_are_accepted() {
+        let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
+        let names = ["kybern_html_preview", "kybern_html_publish"];
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: None,
+            authorization: None,
+            coordinator_instructions: None,
+            guide: None,
+            tools: names
+                .iter()
+                .map(|name| NativeToolDefinition {
+                    name: (*name).into(),
+                    description: format!("HTML tool {name}"),
+                    input_schema: json!({"type": "object", "properties": {"html": {"type": "string"}}, "required": ["html"]}),
+                })
+                .collect(),
+            restrictions: NativeToolRestrictions::default(),
+        };
+        let mut command = Command::new("pi");
+        staged.configure(&mut command, Some(&bridge));
+        let encoded = command_env(&command, "KYBERN_PI_APP_TOOLS").unwrap().unwrap().to_str().unwrap();
+        let tools: Vec<Value> = serde_json::from_str(encoded).unwrap();
+        assert_eq!(tools.iter().map(|tool| tool["name"].as_str().unwrap()).collect::<Vec<_>>(), names);
+        for (tool, definition) in tools.iter().zip(&bridge.tools) {
+            assert_eq!(tool["parameters"], definition.input_schema);
+            let request = marker(
+                APP_TOOL_TITLE_PREFIX,
+                json!({"version": 1, "id": "html-request", "name": definition.name,
+                    "arguments": {"html": "<button>Chart</button>"}, "toolCallId": "html-call"}),
+            );
+            let parsed = parse_app_tool_request(&request).unwrap().unwrap();
+            assert_eq!(parsed.name, definition.name);
+            assert_eq!(parsed.arguments["html"], "<button>Chart</button>");
+        }
+        let expected = names.map(str::to_owned).into_iter().collect();
+        staged.verify_omp_tools(&json!({"dumpTools": [{"name": names[0]}, {"name": names[1]}]}), &expected).unwrap();
+        assert!(staged.verify_omp_tools(&json!({"dumpTools": [{"name": names[0]}]}), &expected).is_err());
+    }
+
+    #[test]
     fn configure_delivers_the_guide_before_a_coordinator_role() {
         let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
         let mut bridge = NativeToolBridge {
@@ -541,6 +587,53 @@ mod tests {
     }
 
     #[test]
+    fn html_markers_accept_supported_sources_and_exact_escaped_argument_budget() {
+        for name in ["kybern_html_preview", "kybern_html_publish"] {
+            let mut boundary_arguments = if name == "kybern_html_publish" {
+                json!({"html": "", "title": "HTML boundary", "height": 240})
+            } else {
+                json!({"html": ""})
+            };
+            let overhead = serde_json::to_vec(&boundary_arguments).unwrap().len();
+            let text_budget = MAX_APP_ARGUMENT_BYTES - overhead;
+            let escaped_html = format!("{}{}", "\"".repeat(text_budget / 2), "x".repeat(text_budget % 2));
+            boundary_arguments["html"] = json!(escaped_html);
+            assert_eq!(serde_json::to_vec(&boundary_arguments).unwrap().len(), MAX_APP_ARGUMENT_BYTES);
+            assert!(escaped_html.len() <= 512_000, "The escaped source itself fits the supported HTML limit");
+            let mut plain_arguments = boundary_arguments.clone();
+            plain_arguments["html"] = json!("x".repeat(512_000));
+            for arguments in [plain_arguments, boundary_arguments.clone()] {
+                let request = marker(
+                    APP_TOOL_TITLE_PREFIX,
+                    json!({"version": 1, "id": "html-request", "name": name,
+                        "arguments": arguments, "toolCallId": "html-call"}),
+                );
+                let parsed = parse_app_tool_request(&request).unwrap().unwrap();
+                assert_eq!(parsed.name, name);
+                assert_eq!(parsed.arguments, arguments);
+            }
+            boundary_arguments["html"] = json!(format!("{escaped_html}x"));
+            let over_limit = marker(
+                APP_TOOL_TITLE_PREFIX,
+                json!({"version": 1, "id": "html-request", "name": name,
+                    "arguments": boundary_arguments, "toolCallId": "html-call"}),
+            );
+            assert!(parse_app_tool_request(&over_limit).unwrap().is_err(), "One byte over the argument budget: {name}");
+        }
+        let permission = marker(
+            PERMISSION_TITLE_PREFIX,
+            json!({"version": 1, "requestId": "permission", "toolCallId": "call", "toolName": "write",
+                "input": {"content": "x".repeat(MAX_MARKER_BYTES)}}),
+        );
+        assert!(parse_permission_request(&permission).unwrap().is_err(), "The permission marker keeps its smaller budget");
+        let oversized_marker = format!(
+            "{APP_TOOL_TITLE_PREFIX}{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(vec![b'x'; MAX_APP_MARKER_BYTES + 1])
+        );
+        assert!(parse_app_tool_request(&oversized_marker).unwrap().is_err(), "The enlarged app marker is still bounded");
+    }
+
+    #[test]
     fn malformed_reserved_markers_fail_closed() {
         assert!(parse_permission_request("ordinary title").is_none());
         assert!(parse_permission_request(PERMISSION_TITLE_PREFIX).unwrap().is_err());
@@ -548,18 +641,26 @@ mod tests {
     }
 
     #[test]
-    fn rust_and_typescript_allow_lists_name_the_same_tools_and_agent_waits_get_the_long_timeout() {
+    fn rust_and_typescript_allow_lists_match_and_waits_and_html_get_the_long_timeout() {
         let source = include_str!("extension.ts");
-        for name in APP_TOOL_NAMES {
-            assert!(source.contains(&format!("\"{name}\"")), "{name} must be allow-listed in extension.ts");
-        }
-        // Delegation and thread tools that block for up to a minute need more than the 30 s default.
+        let typescript_tools: HashSet<_> = source
+            .split("const APP_TOOL_NAMES = new Set([")
+            .nth(1)
+            .unwrap()
+            .split("]);")
+            .next()
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix('"').and_then(|name| name.split_once('"').map(|(name, _)| name)))
+            .collect();
+        assert_eq!(typescript_tools, APP_TOOL_NAMES.into_iter().collect(), "The native and extension catalogs must agree");
+        // Blocking replies and HTML rendering need more than the 30 s default.
         assert!(source.contains("const COMPUTER_TOOL_TIMEOUT_MS = 70 * 1000;"));
-        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send"] {
+        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send", "kybern_html_preview", "kybern_html_publish"] {
             assert!(APP_TOOL_NAMES.contains(&name), "{name}");
         }
         let long = source.split("const LONG_TOOL_NAMES = new Set([").nth(1).and_then(|rest| rest.split("]);").next()).unwrap();
-        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send"] {
+        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send", "kybern_html_preview", "kybern_html_publish"] {
             assert!(long.contains(name), "{name} must use the long timeout");
         }
         assert!(source.contains("LONG_TOOL_NAMES.has(name)"));

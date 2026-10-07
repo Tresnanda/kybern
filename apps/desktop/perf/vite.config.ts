@@ -46,7 +46,7 @@ export default mergeConfig(base, {
     name: "pr-review-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!/\/(views\/(PrReview|WorktreeCleanup)\.tsx|state\/prReview\.ts)$/.test(id)) return
+      if (!/\/(views\/(PrReview|PullRequests|WorktreeCleanup)\.tsx|state\/prReview\.ts)$/.test(id)) return
       const transport = JSON.stringify(path.resolve(import.meta.dirname, "pr-review-rpc.ts"))
       return code.replaceAll('"@/state/rpc"', transport).replaceAll('"./rpc"', transport)
     },
@@ -54,8 +54,9 @@ export default mergeConfig(base, {
     name: "native-subagent-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!id.endsWith("/views/subagents/NativeSubagentComposer.tsx")) return
-      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "native-subagents-rpc.ts")))
+      if (!id.endsWith("/views/subagents/NativeSubagentComposer.tsx") && !id.endsWith("/state/subagents.ts")) return
+      const transport = JSON.stringify(path.resolve(import.meta.dirname, "native-subagents-rpc.ts"))
+      return code.replaceAll('"@/state/rpc"', transport).replaceAll('"./rpc"', transport)
     },
   }] : process.env.KYBERN_PERF_FIXTURE === "theme-provider" ? [{
     name: "theme-provider-fixture-tauri",

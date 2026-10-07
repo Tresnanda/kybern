@@ -5372,6 +5372,8 @@ impl Orchestrator {
                 "kybern_read_file",
                 "kybern_list_files",
                 "kybern_workspace_diff",
+                "kybern_html_preview",
+                "kybern_html_publish",
                 "kybern_threads_search",
                 "kybern_thread_read",
                 "kybern_thread_send",
@@ -7938,6 +7940,40 @@ mod tests {
             .execute_native_app_tool_call(thread.id, live.session_instance_id, "allowed-context", "kybern_thread_context", json!({}))
             .await
             .unwrap();
+        // A visual is part of the coordinator's reply, not an edit to project code.
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+        let published = fixture
+            .orchestrator
+            .execute_native_app_tool_call(
+                thread.id,
+                live.session_instance_id,
+                "allowed-visual",
+                "kybern_html_publish",
+                json!({"html": "<button>Review findings</button>", "title": "Review", "height": 240}),
+            )
+            .await
+            .unwrap();
+        let visual_id: Uuid = serde_json::from_value(published["visual"]["id"].clone()).unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(events.iter().any(|event| event.turn_id == Some(turn_id)
+            && matches!(&event.payload, EventPayload::HtmlPublished { visual } if visual.id == visual_id)));
+        assert!(fixture.store.visual_read(thread.id, visual_id).unwrap().unwrap().contains("Review findings"));
+        assert!(fixture.store.visual_read(fixture.thread(ThreadStatus::Idle).id, visual_id).unwrap().is_none());
+        assert!(live.daemon_approvals.lock().await.is_empty(), "Publishing a reply needs no notes/tasks write approval");
+        for name in ["kybern_html_preview", "kybern_html_publish"] {
+            let error = fixture
+                .orchestrator
+                .execute_native_app_tool_call(
+                    thread.id,
+                    live.session_instance_id,
+                    "wrong-visual-owner",
+                    name,
+                    json!({"thread_id": Uuid::now_v7(), "html": "<p>Wrong owner</p>", "title": "Review", "height": 240}),
+                )
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("bound to the current thread"), "{name}: {error}");
+        }
     }
 
     #[tokio::test]
@@ -8726,7 +8762,11 @@ mod tests {
         assert_eq!(bridge.provider_instructions(), Some(format!("{guide}\n{role}")));
         assert!(guide.contains("## Notes and tasks") && guide.contains("kybern_thread_read"));
         assert!(!guide.contains("kybern_collaboration_spawn") || bridge.has_tool("kybern_collaboration_spawn"));
-        for name in ["kybern_thread_send", "kybern_workspace_diff"] {
+        assert!(guide.contains("## Visual replies"));
+        for name in ["kybern_html_preview", "kybern_html_publish"] {
+            assert!(bridge.has_tool(name), "Coordinators can illustrate their own review: {name}");
+        }
+        for name in ["kybern_thread_send", "kybern_workspace_diff", "kybern_html_preview", "kybern_html_publish"] {
             assert_eq!(guide.contains(name), bridge.has_tool(name), "the guide must describe exactly the tools the session has: {name}");
         }
     }

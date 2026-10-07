@@ -24,6 +24,7 @@ import {
 } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { basename, relativeTime } from "@/lib/format"
 import type {
   PrActionKind,
   PrFile,
@@ -47,6 +48,8 @@ import {
   repairReviewPrompt,
   reuseReviewDraftText,
   reviewDraftIsStale,
+  reviewWorkspaceKind,
+  type ReviewWorkspace,
   selectedReviewFindings,
   submitReviewDraft,
   toggleReviewFinding,
@@ -54,14 +57,18 @@ import {
 import { activeRuntime, errorText, loadGitStatus } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { SurfaceHeader } from "./chrome"
-import { CHAT_COLUMN_GUTTER } from "./chatLayout"
+import { ReviewMetadata, ReviewTabs } from "./prReview/PrReviewWorkspace"
+import "./prReview/review.css"
 
+const WORKSPACES = [
+  ["overview", "Overview"],
+  ["changes", "Changes"],
+  ["conversation", "Conversation"],
+] as const
 const TABS: [PrPageKind, string][] = [
-  ["files", "Files"],
   ["comments", "Comments"],
-  ["review_comments", "Inline comments"],
   ["reviews", "Reviews"],
-  ["checks", "Checks"],
+  ["review_comments", "Inline comments"],
 ]
 const LABELS: Record<PrActionKind, string> = {
   comment: "Post comment",
@@ -127,7 +134,14 @@ export function PrReview({
     if (!active) return
     ensureReview(key)
     const current = useReviews.getState().entries[key]
-    if (!current.detail && !current.loading) void loadReview(projectId, number)
+    if (!current.detail && !current.loading)
+      void loadReview(
+        projectId,
+        number,
+        undefined,
+        1,
+        current.workspace === "overview" && current.kind !== "checks"
+      )
   }, [active, key, number, projectId])
   const anchorPath = anchor?.path
   const anchorLine = anchor?.line
@@ -164,6 +178,28 @@ export function PrReview({
   )
   const file = review?.page?.files.find((f) => f.path === review.file)
   const selectedFindings = selectedReviewFindings(draft)
+  const workspace = review?.workspace ?? "overview"
+  const panelId = `pr-workspace-${dock ? "dock" : "page"}-${key}`
+  const selectWorkspace = (next: ReviewWorkspace) => {
+    updateReview(key, { workspace: next })
+    if (next !== "overview") {
+      const kind = reviewWorkspaceKind(next, review?.kind ?? "files")
+      if (review?.kind !== kind || !review.page)
+        void loadReview(projectId, number, kind)
+    }
+  }
+  const refresh = () =>
+    loadReview(
+      projectId,
+      number,
+      review?.kind,
+      review?.page?.page ?? 1,
+      workspace === "overview" && review?.kind !== "checks"
+    )
+  const focusReview = () =>
+    document
+      .getElementById(`review-${dock ? "dock" : "page"}-${number}`)
+      ?.focus()
 
   const openConfirmation = (action: PrActionKind) => {
     setConfirmationHead(detail?.head_sha ?? null)
@@ -206,7 +242,7 @@ export function PrReview({
         )
       } else await publish()
       setConfirmation(null)
-      await loadReview(projectId, number, review?.kind, review?.page?.page ?? 1)
+      await refresh()
       if (linked) void runtime.loadGitStatus(linked)
     } catch (error) {
       setActionError(errorText(error))
@@ -277,29 +313,29 @@ export function PrReview({
   }
 
   return (
-    <div className="font-system-ui flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)] text-[length:var(--app-font-size-ui,12px)] text-foreground">
-      {!dock && (
-        <SurfaceHeader
-          trailing={
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Refresh pull request"
-              disabled={review?.loading}
-              onClick={() =>
-                void loadReview(
-                  projectId,
-                  number,
-                  review?.kind,
-                  review?.page?.page ?? 1
-                )
-              }
-            >
-              <RefreshCwIcon className="size-4" />
-            </Button>
-          }
-        >
+    <div
+      className="pr-review font-system-ui flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)] text-[length:var(--app-font-size-ui,12px)] text-foreground"
+      data-workspace={workspace}
+      data-review-mode={dock ? "dock" : "page"}
+    >
+      <SurfaceHeader
+        inline
+        dock={!dock}
+        trailing={
           <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Refresh pull request"
+            disabled={review?.loading}
+            onClick={() => void refresh()}
+          >
+            <RefreshCwIcon className="size-4" />
+          </Button>
+        }
+      >
+        {!dock && onBack && (
+          <Button
+            className="pr-back"
             size="icon-sm"
             variant="ghost"
             aria-label="Back to pull requests"
@@ -307,367 +343,179 @@ export function PrReview({
           >
             <ArrowLeftIcon className="size-4" />
           </Button>
-          <GitPullRequestIcon className="size-4 shrink-0" />
-          <h1 className="truncate text-sm font-medium">
-            {project?.name} · #{number}
-          </h1>
-        </SurfaceHeader>
-      )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div
-          className={cn(
-            "mx-auto flex w-full max-w-5xl flex-col gap-6 py-5",
-            dock ? "px-3" : CHAT_COLUMN_GUTTER
-          )}
-        >
-          {(review?.error || actionError) && (
-            <p
-              role="alert"
-              className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 leading-relaxed break-words text-destructive"
-            >
-              {actionError ?? review?.error}{" "}
-              {actionError &&
-                "Your draft is kept. Check the pull request and try again."}
-            </p>
-          )}
-          {!detail ? (
-            <div role="status" className="py-8 text-muted-foreground">
-              {review?.loading
-                ? "Loading pull request…"
-                : "Refresh to read this pull request."}
-              <Button
-                variant="ghost"
-                onClick={() => void loadReview(projectId, number)}
-              >
-                Refresh
-              </Button>
+        )}
+        <GitPullRequestIcon className="size-4 shrink-0" />
+        <h1 className="truncate text-sm font-medium">
+          {project?.name} · #{number}
+        </h1>
+      </SurfaceHeader>
+      {detail && (
+        <>
+          <div className="pr-review-heading flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+              <span className="rounded-md bg-[var(--color-background-elevated-secondary)] px-2 py-1 capitalize">
+                {pr?.state.toLowerCase()}
+                {pr?.is_draft ? " · draft" : ""}
+              </span>
+              <span>
+                #{number} by {pr?.author}
+              </span>
             </div>
-          ) : (
-            <>
-              <section className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-                  <span className="rounded-md bg-[var(--color-background-elevated-secondary)] px-2 py-1">
-                    {pr?.state.toLowerCase()}
-                    {pr?.is_draft ? " · draft" : ""}
-                  </span>
-                  <span>
-                    #{number} by {pr?.author}
-                  </span>
-                  <span className="break-all">
-                    {pr?.head} → {pr?.base}
-                  </span>
-                </div>
-                <h2 className="text-lg leading-[1.4] font-medium [text-wrap:balance] break-words">
-                  {pr?.title}
-                </h2>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => void openExternal(pr!.url)}
-                  >
-                    Open on GitHub <ArrowUpRightIcon className="size-3.5" />
-                  </Button>
-                  <Menu>
-                    <MenuTrigger
-                      render={<Button variant="secondary" size="sm" />}
+            <h2 className="text-lg leading-[1.4] font-medium [text-wrap:balance] break-words">
+              {pr?.title}
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void openExternal(pr!.url)}
+              >
+                Open on GitHub <ArrowUpRightIcon className="size-3.5" />
+              </Button>
+              <Button variant="secondary" size="sm" onClick={focusReview}>
+                Write review
+              </Button>
+              <Menu>
+                <MenuTrigger render={<Button variant="secondary" size="sm" />}>
+                  Review actions
+                </MenuTrigger>
+                <ComposerPickerMenuPopup align="start">
+                  <MenuGroup>
+                    <MenuItem
+                      disabled={busy || staleDraft || pr?.state !== "OPEN"}
+                      onClick={() => openConfirmation("approve")}
                     >
-                      Review actions
-                    </MenuTrigger>
-                    <ComposerPickerMenuPopup align="start">
-                      <MenuGroup>
-                        <MenuItem
-                          disabled={
-                            busy ||
-                            !linked ||
-                            linkedThread?.status === "running" ||
-                            linkedThread?.status === "awaiting-approval"
-                          }
-                          onClick={() => openConfirmation("checkout")}
-                        >
-                          Check out pull request
-                        </MenuItem>
-                        <MenuItem
-                          disabled={busy || pr?.state !== "OPEN" || pr.is_draft}
-                          onClick={() => openConfirmation("merge")}
-                        >
-                          Merge pull request
-                        </MenuItem>
-                        <MenuItem
-                          disabled={busy || pr?.state !== "OPEN"}
-                          onClick={() => openConfirmation("close")}
-                        >
-                          Close pull request
-                        </MenuItem>
-                      </MenuGroup>
-                    </ComposerPickerMenuPopup>
-                  </Menu>
-                  {dock && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        useStore.getState().selectPulls()
-                        useStore
-                          .getState()
-                          .set({ prSelection: { projectId, number } })
-                      }}
-                    >
-                      Open full review
-                    </Button>
-                  )}
-                </div>
-                <details>
-                  <summary className="cursor-pointer py-1 font-medium">
-                    Description
-                  </summary>
-                  <div className="max-w-[75ch] pt-2 leading-relaxed break-words">
-                    {detail.body ? (
-                      <Markdown text={detail.body} />
-                    ) : (
-                      <p className="text-muted-foreground">No description.</p>
-                    )}
-                  </div>
-                </details>
-                <details>
-                  <summary className="cursor-pointer py-1 font-medium">
-                    Checks and reviewers
-                  </summary>
-                  <div className="flex flex-col gap-2 pt-2">
-                    <p className="break-words text-muted-foreground">
-                      Requested reviewers:{" "}
-                      {detail.reviewers.join(", ") || "None"}
-                    </p>
-                    {detail.checks.map((check, i) => (
-                      <div
-                        key={`${check.name}:${i}`}
-                        className="flex flex-wrap items-center justify-between gap-2"
-                      >
-                        <span className="break-words">{check.name}</span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={!check.url}
-                          onClick={() => void openExternal(check.url)}
-                        >
-                          {check.conclusion || check.status || "Pending"}
-                        </Button>
-                      </div>
-                    ))}
-                    {!detail.checks.length && (
-                      <p className="text-muted-foreground">
-                        No checks reported.
-                      </p>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="self-start"
-                      onClick={() =>
-                        void loadReview(projectId, number, "checks")
+                      Approve
+                    </MenuItem>
+                    <MenuItem
+                      disabled={
+                        busy ||
+                        staleDraft ||
+                        pr?.state !== "OPEN" ||
+                        (!draft.body.trim() && !draft.inline.length)
                       }
+                      onClick={() => openConfirmation("request_changes")}
                     >
-                      View all check pages
-                    </Button>
-                  </div>
-                </details>
-              </section>
-              <section className="flex min-w-0 flex-col gap-3">
-                <div
-                  className="flex flex-wrap gap-1"
-                  role="tablist"
-                  aria-label="Review content"
-                  onKeyDown={(event) => {
-                    const buttons = Array.from(
-                      event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                        '[role="tab"]'
-                      )
-                    )
-                    const index = buttons.indexOf(
-                      event.target as HTMLButtonElement
-                    )
-                    if (
-                      index < 0 ||
-                      !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
-                        event.key
-                      )
-                    )
-                      return
-                    event.preventDefault()
-                    const rtl =
-                      getComputedStyle(event.currentTarget).direction === "rtl"
-                    const step =
-                      event.key === "ArrowRight" ? (rtl ? -1 : 1) : rtl ? 1 : -1
-                    const next =
-                      event.key === "Home"
-                        ? 0
-                        : event.key === "End"
-                          ? buttons.length - 1
-                          : (index + step + buttons.length) % buttons.length
-                    buttons[next]?.focus()
-                    buttons[next]?.click()
+                      Request changes
+                    </MenuItem>
+                    <MenuItem
+                      disabled={
+                        busy ||
+                        !linked ||
+                        linkedThread?.status === "running" ||
+                        linkedThread?.status === "awaiting-approval"
+                      }
+                      onClick={() => openConfirmation("checkout")}
+                    >
+                      Check out pull request
+                    </MenuItem>
+                    <MenuItem
+                      disabled={busy || pr?.state !== "OPEN" || pr.is_draft}
+                      onClick={() => openConfirmation("merge")}
+                    >
+                      Merge pull request
+                    </MenuItem>
+                    <MenuItem
+                      disabled={busy || pr?.state !== "OPEN"}
+                      onClick={() => openConfirmation("close")}
+                    >
+                      Close pull request
+                    </MenuItem>
+                  </MenuGroup>
+                </ComposerPickerMenuPopup>
+              </Menu>
+              {dock && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    useStore.getState().selectPulls()
+                    useStore
+                      .getState()
+                      .set({ prSelection: { projectId, number } })
                   }}
                 >
-                  {TABS.map(([kind, label]) => (
-                    <Button
-                      key={kind}
-                      id={`pr-tab-${dock ? "dock" : "page"}-${key}-${kind}`}
-                      role="tab"
-                      tabIndex={review?.kind === kind ? 0 : -1}
-                      aria-controls={`pr-panel-${dock ? "dock" : "page"}-${key}`}
-                      aria-selected={review?.kind === kind}
-                      variant={review?.kind === kind ? "secondary" : "ghost"}
-                      size="sm"
-                      onClick={() => {
-                        void loadReview(projectId, number, kind)
-                      }}
-                    >
-                      {label}
-                      {kind === "files" ? ` (${detail.changed_files})` : ""}
-                    </Button>
-                  ))}
-                </div>
-                <div
-                  role="tabpanel"
-                  id={`pr-panel-${dock ? "dock" : "page"}-${key}`}
-                  aria-labelledby={`pr-tab-${dock ? "dock" : "page"}-${key}-${review?.kind ?? "files"}`}
-                  className="flex min-w-0 flex-col gap-3"
-                >
-                  <div role="status" className="text-muted-foreground">
-                    {review?.loading
-                      ? "Refreshing…"
-                      : `Page ${review?.page?.page ?? 1}`}
-                  </div>
-                  {review?.kind === "files" ? (
-                    <>
-                      <div
-                        className="max-h-52 overflow-auto rounded-lg border border-[color:var(--color-border)]"
-                        aria-label="Changed files"
-                      >
-                        {review.page?.files.map((f) => (
-                          <button
-                            key={f.path}
-                            type="button"
-                            aria-pressed={file?.path === f.path}
-                            className={cn(
-                              ROW,
-                              "flex w-full items-start justify-between gap-2",
-                              file?.path === f.path &&
-                                "bg-[var(--color-background-button-secondary)]"
-                            )}
-                            onClick={() => {
-                              updateReview(key, { file: f.path })
-                            }}
-                          >
-                            <span className="min-w-0 break-all">{f.path}</span>
-                            <span className="shrink-0 tabular-nums">
-                              +{f.additions} −{f.deletions}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                      {file && (
-                        <div
-                          data-pr-diff={file.path}
-                          key={file.path}
-                          className="min-w-0 overflow-hidden rounded-lg border border-[color:var(--color-border)]"
-                        >
-                          <FileDiffHeader file={prFileDiff(file)} />
-                          <FileDiffBody
-                            file={prFileDiff(file)}
-                            onLineSelect={(line, side) => {
-                              if (staleDraft) {
-                                setActionError(
-                                  "This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor."
-                                )
-                                return
-                              }
-                              updateReviewDraft(key, {
-                                pendingInline: {
-                                  path: file.path,
-                                  line,
-                                  side,
-                                  body: "",
-                                },
-                              })
-                            }}
-                          />
-                          {file.patch_truncated && (
-                            <p className="p-3 text-muted-foreground">
-                              GitHub omitted or truncated this patch. Open the
-                              pull request on GitHub to read the full file.
-                            </p>
-                          )}
-                        </div>
+                  Open full review
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="pr-review-toolbar">
+            <ReviewTabs
+              value={workspace}
+              choices={WORKSPACES}
+              onChange={selectWorkspace}
+              label="Review workspace"
+              id={panelId}
+            />
+          </div>
+        </>
+      )}
+      <div className="pr-review-scroll" data-pr-scroll>
+        {(review?.error || actionError) && (
+          <p
+            role="alert"
+            className="mx-4 mt-4 rounded-lg border border-destructive/20 bg-destructive/5 p-3 leading-relaxed break-words text-destructive"
+          >
+            {actionError ?? review?.error}{" "}
+            {actionError &&
+              "Your draft is kept. Check the pull request and try again."}
+          </p>
+        )}
+        {!detail ? (
+          <div role="status" className="p-5 text-muted-foreground">
+            {review?.loading
+              ? "Loading pull request…"
+              : "Refresh to read this pull request."}
+            <Button variant="ghost" onClick={() => void refresh()}>
+              Refresh
+            </Button>
+          </div>
+        ) : (
+          <div className="pr-review-body">
+            <ReviewMetadata
+              detail={detail}
+              projectName={project?.name}
+              linkedTitle={linkedThread?.title}
+            />
+            <section
+              className="pr-review-content flex flex-col gap-5"
+              role="tabpanel"
+              id={`${panelId}-panel`}
+              aria-labelledby={`${panelId}-${workspace}`}
+            >
+              {workspace === "overview" ? (
+                <>
+                  <section
+                    className="flex flex-col gap-3"
+                    aria-label="Pull request description"
+                  >
+                    <h3 className="font-medium">Description</h3>
+                    <div className="max-w-[75ch] leading-relaxed break-words">
+                      {detail.body ? (
+                        <Markdown text={detail.body} />
+                      ) : (
+                        <p className="text-muted-foreground">No description.</p>
                       )}
-                      {!review.page?.files.length && (
-                        <p className="text-muted-foreground">
-                          No changed files on this page.
-                        </p>
-                      )}
-                      {anchor && (
-                        <div className="flex flex-col gap-2">
-                          <label
-                            htmlFor={`inline-${number}`}
-                            className="font-medium break-all"
-                          >
-                            Comment on {anchor.path}:{anchor.line} ·{" "}
-                            {anchor.side === "LEFT" ? "original" : "new"}{" "}
-                            version
-                          </label>
-                          <Textarea
-                            ref={inlineInput}
-                            id={`inline-${number}`}
-                            value={inlineBody}
-                            maxLength={65536}
-                            onChange={(e) =>
-                              anchor &&
-                              updateReviewDraft(key, {
-                                pendingInline: {
-                                  ...anchor,
-                                  body: e.target.value,
-                                },
-                              })
-                            }
-                            className="[&_textarea]:min-h-24 [&_textarea]:leading-relaxed"
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              disabled={
-                                !inlineBody.trim() || draft.inline.length >= 100
-                              }
-                              onClick={() => {
-                                updateReviewDraft(key, {
-                                  inline: [
-                                    ...draft.inline,
-                                    { ...anchor, body: inlineBody },
-                                  ],
-                                  pendingInline: null,
-                                })
-                              }}
-                            >
-                              Save inline draft
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() =>
-                                updateReviewDraft(key, { pendingInline: null })
-                              }
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  ) : review?.kind === "checks" ? (
+                    </div>
+                  </section>
+                  <section
+                    className="flex flex-col gap-3"
+                    aria-label="Pull request checks"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="font-medium">Checks</h3>
+                      <span className="text-muted-foreground tabular-nums">
+                        {detail.checks.length
+                          ? `${detail.checks.filter((check) => check.conclusion === "SUCCESS").length} passing · ${detail.checks.length} reported`
+                          : "None reported"}
+                      </span>
+                    </div>
                     <div className="flex flex-col gap-2">
-                      {review.page?.checks?.map((check, index) => (
+                      {detail.checks.map((check, index) => (
                         <div
                           key={`${check.name}:${index}`}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--color-border)] p-3"
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-3 py-2"
                         >
                           <span className="break-words">{check.name}</span>
                           <Button
@@ -680,95 +528,382 @@ export function PrReview({
                           </Button>
                         </div>
                       ))}
-                      {!review.page?.checks?.length && (
-                        <p className="text-muted-foreground">
-                          No checks on this page.
-                        </p>
-                      )}
                     </div>
-                  ) : (
-                    <div className="flex flex-col gap-4">
-                      {review?.page?.entries.map((entry) => (
-                        <article
-                          key={entry.id}
-                          className="flex flex-col gap-2 rounded-lg border border-[color:var(--color-border)] p-3"
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <label className="flex items-center gap-2">
-                              <Checkbox
-                                aria-label={`Select finding by ${entry.author}`}
-                                checked={draft.selected.includes(
-                                  `${review.kind}:${entry.id}`
-                                )}
-                                onCheckedChange={() => toggleFinding(entry)}
-                              />
-                              <span className="font-medium">
-                                {entry.author}
-                              </span>
-                            </label>
-                            <span className="text-muted-foreground">
-                              {entry.state.toLowerCase().replaceAll("_", " ")}
-                            </span>
-                          </div>
-                          {entry.path && (
-                            <p className="break-all text-muted-foreground">
-                              {entry.path}:{entry.line ?? "outdated"}
-                            </p>
-                          )}
-                          <div className="leading-relaxed break-words">
-                            <Markdown
-                              text={entry.body || "No review summary."}
-                            />
-                          </div>
-                        </article>
-                      ))}
-                      {!review?.page?.entries.length && (
-                        <p className="text-muted-foreground">
-                          No{" "}
-                          {TABS.find(
-                            ([kind]) => kind === review?.kind
-                          )?.[1].toLowerCase()}{" "}
-                          on this page.
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="self-start"
+                      onClick={() =>
+                        void loadReview(projectId, number, "checks")
+                      }
+                    >
+                      View all check pages
+                    </Button>
+                    {review?.kind === "checks" && (
+                      <div
+                        className="flex flex-col gap-3"
+                        aria-label="Paged checks"
+                      >
+                        <p role="status" className="text-muted-foreground">
+                          {review.loading
+                            ? "Refreshing…"
+                            : `Checks · page ${review.page?.page ?? 1}`}
                         </p>
-                      )}
+                        {review.page?.checks?.map((check, index) => (
+                          <div
+                            key={`${check.name}:${index}`}
+                            className="flex flex-wrap items-center justify-between gap-2"
+                          >
+                            <span className="break-words">{check.name}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={!check.url}
+                              onClick={() => void openExternal(check.url)}
+                            >
+                              {check.conclusion || check.status || "Pending"}
+                            </Button>
+                          </div>
+                        ))}
+                        {!review.page?.checks?.length && (
+                          <p className="text-muted-foreground">
+                            No checks on this page.
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={
+                              review?.loading || (review?.page?.page ?? 1) <= 1
+                            }
+                            onClick={() =>
+                              void loadReview(
+                                projectId,
+                                number,
+                                review?.kind,
+                                (review?.page?.page ?? 1) - 1
+                              )
+                            }
+                          >
+                            Previous page
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={
+                              review?.loading || !review?.page?.has_more
+                            }
+                            onClick={() =>
+                              void loadReview(
+                                projectId,
+                                number,
+                                review?.kind,
+                                (review?.page?.page ?? 1) + 1
+                              )
+                            }
+                          >
+                            Next page
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                </>
+              ) : (
+                <>
+                  {workspace === "conversation" && (
+                    <div className="flex flex-col gap-2">
+                      <ReviewTabs
+                        value={review?.kind ?? "comments"}
+                        choices={TABS}
+                        onChange={(kind) =>
+                          void loadReview(projectId, number, kind)
+                        }
+                        label="Conversation source"
+                        id={`${panelId}-conversation`}
+                      />
+                      <p className="leading-relaxed text-muted-foreground">
+                        Comments, reviews and inline comments have separate
+                        pages. Select findings to send them to an agent.
+                      </p>
                     </div>
                   )}
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={
-                        review?.loading || (review?.page?.page ?? 1) <= 1
-                      }
-                      onClick={() =>
-                        void loadReview(
-                          projectId,
-                          number,
-                          review?.kind,
-                          (review?.page?.page ?? 1) - 1
-                        )
-                      }
-                    >
-                      Previous page
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={review?.loading || !review?.page?.has_more}
-                      onClick={() =>
-                        void loadReview(
-                          projectId,
-                          number,
-                          review?.kind,
-                          (review?.page?.page ?? 1) + 1
-                        )
-                      }
-                    >
-                      Next page
-                    </Button>
+                  <div
+                    id={`${panelId}-conversation-panel`}
+                    role={workspace === "conversation" ? "tabpanel" : undefined}
+                    aria-labelledby={
+                      workspace === "conversation"
+                        ? `${panelId}-conversation-${review?.kind ?? "comments"}`
+                        : undefined
+                    }
+                    className="flex min-w-0 flex-col gap-3"
+                  >
+                    <p role="status" className="text-muted-foreground">
+                      {review?.loading
+                        ? "Refreshing…"
+                        : `${workspace === "changes" ? "Changed files" : TABS.find(([kind]) => kind === review?.kind)?.[1]} · page ${review?.page?.page ?? 1}`}
+                    </p>
+                    {review?.kind === "files" ? (
+                      <div className="pr-review-changes">
+                        <div
+                          className="pr-review-files rounded-lg border border-[color:var(--color-border)]"
+                          aria-label="Changed files"
+                        >
+                          {review.page?.files.map((f) => {
+                            const name = basename(f.path)
+                            const dir = f.path.slice(
+                              0,
+                              f.path.length - name.length
+                            )
+                            return (
+                              <button
+                                key={f.path}
+                                type="button"
+                                aria-label={f.path}
+                                aria-pressed={file?.path === f.path}
+                                className={cn(
+                                  ROW,
+                                  "flex w-full items-start justify-between gap-2",
+                                  file?.path === f.path &&
+                                    "bg-[var(--color-background-button-secondary)]"
+                                )}
+                                onClick={() => {
+                                  updateReview(key, { file: f.path })
+                                }}
+                              >
+                                <span className="min-w-0 flex-1" title={f.path}>
+                                  <span className="block truncate font-medium text-foreground/85">
+                                    {name}
+                                  </span>
+                                  {dir && (
+                                    <span className="mt-0.5 block truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/55">
+                                      {dir}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="shrink-0 tabular-nums">
+                                  +{f.additions} −{f.deletions}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <div className="pr-review-diff flex flex-col gap-3">
+                          {file && (
+                            <div
+                              data-pr-diff={file.path}
+                              key={file.path}
+                              className="min-w-0 overflow-hidden rounded-lg border border-[color:var(--color-border)]"
+                            >
+                              <FileDiffHeader file={prFileDiff(file)} />
+                              <FileDiffBody
+                                file={prFileDiff(file)}
+                                onLineSelect={(line, side) => {
+                                  if (staleDraft) {
+                                    setActionError(
+                                      "This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor."
+                                    )
+                                    return
+                                  }
+                                  updateReviewDraft(key, {
+                                    pendingInline: {
+                                      path: file.path,
+                                      line,
+                                      side,
+                                      body: "",
+                                    },
+                                  })
+                                }}
+                              />
+                              {file.patch_truncated && (
+                                <p className="p-3 text-muted-foreground">
+                                  GitHub omitted or truncated this patch. Open
+                                  the pull request on GitHub to read the full
+                                  file.
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {!review.page?.files.length && (
+                            <p className="text-muted-foreground">
+                              No changed files on this page.
+                            </p>
+                          )}
+                          {anchor && (
+                            <div className="flex flex-col gap-2">
+                              <label
+                                htmlFor={`inline-${dock ? "dock" : "page"}-${number}`}
+                                className="font-medium break-all"
+                              >
+                                Comment on {anchor.path}:{anchor.line} ·{" "}
+                                {anchor.side === "LEFT" ? "original" : "new"}{" "}
+                                version
+                              </label>
+                              <Textarea
+                                ref={inlineInput}
+                                id={`inline-${dock ? "dock" : "page"}-${number}`}
+                                value={inlineBody}
+                                maxLength={65536}
+                                onChange={(e) =>
+                                  anchor &&
+                                  updateReviewDraft(key, {
+                                    pendingInline: {
+                                      ...anchor,
+                                      body: e.target.value,
+                                    },
+                                  })
+                                }
+                                className="[&_textarea]:min-h-24 [&_textarea]:leading-relaxed"
+                              />
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  disabled={
+                                    !inlineBody.trim() ||
+                                    draft.inline.length >= 100
+                                  }
+                                  onClick={() => {
+                                    updateReviewDraft(key, {
+                                      inline: [
+                                        ...draft.inline,
+                                        { ...anchor, body: inlineBody },
+                                      ],
+                                      pendingInline: null,
+                                    })
+                                  }}
+                                >
+                                  Save inline draft
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() =>
+                                    updateReviewDraft(key, {
+                                      pendingInline: null,
+                                    })
+                                  }
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : review?.kind === "checks" ? (
+                      <div className="flex flex-col gap-2">
+                        {review.page?.checks?.map((check, index) => (
+                          <div
+                            key={`${check.name}:${index}`}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--color-border)] p-3"
+                          >
+                            <span className="break-words">{check.name}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={!check.url}
+                              onClick={() => void openExternal(check.url)}
+                            >
+                              {check.conclusion || check.status || "Pending"}
+                            </Button>
+                          </div>
+                        ))}
+                        {!review.page?.checks?.length && (
+                          <p className="text-muted-foreground">
+                            No checks on this page.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-4">
+                        {review?.page?.entries.map((entry) => (
+                          <article
+                            key={entry.id}
+                            className="flex flex-col gap-2 rounded-lg border border-[color:var(--color-border)] p-3"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label className="flex items-center gap-2">
+                                <Checkbox
+                                  aria-label={`Select finding by ${entry.author}`}
+                                  checked={draft.selected.includes(
+                                    `${review.kind}:${entry.id}`
+                                  )}
+                                  onCheckedChange={() => toggleFinding(entry)}
+                                />
+                                <span className="font-medium">
+                                  {entry.author}
+                                </span>
+                              </label>
+                              <span className="text-muted-foreground">
+                                {entry.state.toLowerCase().replaceAll("_", " ")}
+                              </span>
+                              <span className="text-muted-foreground">
+                                {relativeTime(entry.updated_at)}
+                              </span>
+                            </div>
+                            {entry.path && (
+                              <p className="break-all text-muted-foreground">
+                                {entry.path}:{entry.line ?? "outdated"}
+                              </p>
+                            )}
+                            <div className="leading-relaxed break-words">
+                              <Markdown
+                                text={entry.body || "No review summary."}
+                              />
+                            </div>
+                          </article>
+                        ))}
+                        {!review?.page?.entries.length && (
+                          <p className="text-muted-foreground">
+                            No{" "}
+                            {TABS.find(
+                              ([kind]) => kind === review?.kind
+                            )?.[1].toLowerCase()}{" "}
+                            on this page.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={
+                          review?.loading || (review?.page?.page ?? 1) <= 1
+                        }
+                        onClick={() =>
+                          void loadReview(
+                            projectId,
+                            number,
+                            review?.kind,
+                            (review?.page?.page ?? 1) - 1
+                          )
+                        }
+                      >
+                        Previous page
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={review?.loading || !review?.page?.has_more}
+                        onClick={() =>
+                          void loadReview(
+                            projectId,
+                            number,
+                            review?.kind,
+                            (review?.page?.page ?? 1) + 1
+                          )
+                        }
+                      >
+                        Next page
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </section>
+                </>
+              )}
+            </section>
+            <aside className="pr-review-context" aria-label="Review and repair">
               <section className="flex flex-col gap-3">
                 <h3 className="font-medium">Your review</h3>
                 {staleDraft && (
@@ -940,6 +1075,36 @@ export function PrReview({
                     </MenuGroup>
                   </ComposerPickerMenuPopup>
                 </Menu>
+                {selectedFindings.length > 0 && (
+                  <details className="leading-relaxed">
+                    <summary className="cursor-pointer text-muted-foreground">
+                      {selectedFindings.length} selected{" "}
+                      {selectedFindings.length === 1 ? "finding" : "findings"}
+                    </summary>
+                    <ul className="mt-2 flex flex-col gap-2">
+                      {selectedFindings.slice(0, 3).map((finding, index) => (
+                        <li
+                          key={`${finding.id}:${index}`}
+                          className="break-words whitespace-pre-wrap"
+                        >
+                          {finding.path && (
+                            <span className="block font-mono text-muted-foreground">
+                              {finding.path}:{finding.line ?? "outdated"}
+                            </span>
+                          )}
+                          {finding.body.slice(0, 400)}
+                          {finding.body.length > 400 ? "…" : ""}
+                        </li>
+                      ))}
+                      {selectedFindings.length > 3 && (
+                        <li className="text-muted-foreground">
+                          {selectedFindings.length - 3} more selected. All
+                          selected findings are included when you send.
+                        </li>
+                      )}
+                    </ul>
+                  </details>
+                )}
                 <p className="leading-relaxed text-muted-foreground">
                   Send {selectedFindings.length + draft.inline.length} selected
                   findings and inline drafts. The agent repairs the branch; you
@@ -961,9 +1126,9 @@ export function PrReview({
                   {busy ? "Sending…" : "Send to agent"}
                 </Button>
               </section>
-            </>
-          )}
-        </div>
+            </aside>
+          </div>
+        )}
       </div>
       <Dialog
         open={confirmation !== null}

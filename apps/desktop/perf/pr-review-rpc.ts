@@ -27,8 +27,7 @@ export const reviewFixture = {
 export const detail: PrDetailResult = {
   pull_request: {
     number: 24,
-    title:
-      "Preserve a long, readable review title while sharing drafts between the full page and the conversation dock",
+    title: "Preserve review drafts when GitHub rejects a request",
     url: "https://github.com/example/repository/pull/24",
     state: "OPEN",
     head: "feature/review",
@@ -53,7 +52,31 @@ export const detail: PrDetailResult = {
 const patch = `@@ -1,1 +1,1200 @@\n-old value\n${Array.from({ length: 1200 }, (_, index) => `+new value ${index + 1}`).join("\n")}\n`
 async function call(method: string, params: any): Promise<any> {
   reviewFixture.calls.push({ method, params: structuredClone(params) })
-  if (method === "github.pr.detail") return detail
+  if (method === "github.pr.list")
+    return {
+      pull_requests: [
+        detail.pull_request,
+        {
+          ...detail.pull_request,
+          number: 25,
+          title: "Improve reviewer keyboard navigation",
+          head: "feature/review-keyboard",
+        },
+      ],
+    }
+  if (method === "github.pr.detail")
+    return params.number === 24
+      ? structuredClone(detail)
+      : {
+          ...detail,
+          head_sha: "reviewed-keyboard-head",
+          pull_request: {
+            ...detail.pull_request,
+            number: 25,
+            title: "Improve reviewer keyboard navigation",
+            head: "feature/review-keyboard",
+          },
+        }
   if (method === "github.pr.page") {
     const page: PrPageResult = {
       files: [],
@@ -64,7 +87,12 @@ async function call(method: string, params: any): Promise<any> {
     }
     if (params.kind === "files")
       page.files = Array.from({ length: 30 }, (_, index) => ({
-        path: `src/review-${page.page}-${index}.ts`,
+        path:
+          page.page === 1 && index === 0
+            ? detail.head_sha === "reviewed-head"
+              ? "src/reviews/submission.ts"
+              : "src/reviews/submission-updated.ts"
+            : `src/reviews/validation-${page.page}-${index}.ts`,
         old_path: null,
         status: "modified",
         additions: 1200,
@@ -86,7 +114,10 @@ async function call(method: string, params: any): Promise<any> {
           author: "reviewer",
           body: "Handle the rejected request and **keep the local draft**.\n\n`source.ts:7` must remain reachable.",
           state: params.kind === "reviews" ? "CHANGES_REQUESTED" : "",
-          path: params.kind === "review_comments" ? "src/review-1-0.ts" : null,
+          path:
+            params.kind === "review_comments"
+              ? "src/reviews/submission.ts"
+              : null,
           line: 7,
           side: "RIGHT",
           url: detail.pull_request.url,

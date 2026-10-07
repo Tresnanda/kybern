@@ -28,7 +28,7 @@ export function ElapsedText({ startedAt, endedAt = null, className }: { startedA
     }
   }, [startedAt, endedAt])
   return (
-    <span ref={ref} aria-hidden className={cn("tabular-nums", className)}>
+    <span ref={ref} aria-hidden className={cn("whitespace-nowrap tabular-nums", className)}>
       {initial}
     </span>
   )
