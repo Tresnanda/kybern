@@ -272,9 +272,11 @@ fn widen_path() {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Some(home) = &home {
         candidates.extend([".local/bin", ".cargo/bin", ".bun/bin"].map(|relative| home.join(relative)));
-        if let Ok(node) = std::fs::read_link(home.join(".nvm/current")) {
+        let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| home.join(".nvm"));
+        if let Ok(node) = std::fs::read_link(nvm.join("current")) {
             candidates.push(node.join("bin"));
         }
+        candidates.extend(nvm_default_bin(&nvm));
     }
     candidates.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(std::path::PathBuf::from));
     for candidate in candidates {
@@ -286,6 +288,41 @@ fn widen_path() {
         // SAFETY: called once at startup before any thread is spawned.
         unsafe { std::env::set_var("PATH", joined) };
     }
+}
+
+/// The bin directory of nvm's default Node. `nvm.sh` adds it to PATH only in
+/// an interactive shell, so a daemon started without the user's shell PATH
+/// (a slow login shell at boot, launchd, a GUI launcher) never sees `codex`
+/// and other global npm installs. Follows alias chains such as `lts/*` →
+/// `lts/krypton` → `v24.15.0`; a partial version such as `24` picks the newest
+/// matching install, and an alias that names no install picks the newest one.
+fn nvm_default_bin(nvm: &std::path::Path) -> Option<std::path::PathBuf> {
+    fn parse(version: &str) -> Option<Vec<u64>> {
+        version.trim().trim_start_matches('v').split('.').map(|part| part.parse().ok()).collect()
+    }
+    let mut installed: Vec<(Vec<u64>, std::path::PathBuf)> = std::fs::read_dir(nvm.join("versions/node"))
+        .ok()?
+        .flatten()
+        .filter_map(|entry| Some((parse(entry.file_name().to_str()?)?, entry.path().join("bin"))))
+        .filter(|(_, bin)| bin.is_dir())
+        .collect();
+    installed.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut alias = "default".to_string();
+    for _ in 0..8 {
+        match std::fs::read_to_string(nvm.join("alias").join(&alias)) {
+            Ok(target) => alias = target.trim().to_string(),
+            Err(_) => break,
+        }
+    }
+    if alias == "system" {
+        return None;
+    }
+    let wanted = parse(&alias);
+    installed
+        .iter()
+        .find(|(version, _)| wanted.as_ref().is_some_and(|wanted| version.starts_with(wanted)))
+        .or_else(|| installed.first())
+        .map(|(_, bin)| bin.clone())
 }
 
 /// Remove the port and listen files on exit, but only while they still name
@@ -306,7 +343,7 @@ fn owns_endpoint_file(contents: &str, expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{desktop_listen_port, owns_endpoint_file, startup_announcement_filename};
+    use super::{desktop_listen_port, nvm_default_bin, owns_endpoint_file, startup_announcement_filename};
 
     #[test]
     fn desktop_self_restart_reuses_the_port_but_explicit_and_scratch_ports_stay_explicit() {
@@ -339,5 +376,35 @@ mod tests {
         assert!(startup_announcement_filename("../daemon.token").is_err());
         assert!(startup_announcement_filename("nested/file").is_err());
         assert!(startup_announcement_filename("").is_err());
+    }
+
+    #[test]
+    fn nvm_default_bin_follows_aliases_to_an_installed_node() {
+        let nvm = std::env::temp_dir().join(format!("kybern-nvm-{}", uuid::Uuid::new_v4()));
+        for version in ["v18.20.8", "v22.7.0", "v24.15.0", "v24.9.1"] {
+            std::fs::create_dir_all(nvm.join("versions/node").join(version).join("bin")).unwrap();
+        }
+        let bin = |version: &str| Some(nvm.join("versions/node").join(version).join("bin"));
+        let alias = |name: &str, target: &str| {
+            let path = nvm.join("alias").join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("{target}\n")).unwrap();
+        };
+
+        assert_eq!(nvm_default_bin(&nvm), bin("v24.15.0"), "no default alias picks the newest install");
+        alias("default", "lts/*");
+        alias("lts/*", "lts/krypton");
+        alias("lts/krypton", "v24.15.0");
+        assert_eq!(nvm_default_bin(&nvm), bin("v24.15.0"));
+        alias("default", "22");
+        assert_eq!(nvm_default_bin(&nvm), bin("v22.7.0"));
+        alias("default", "v24");
+        assert_eq!(nvm_default_bin(&nvm), bin("v24.15.0"), "a partial version picks the newest match");
+        alias("default", "20");
+        assert_eq!(nvm_default_bin(&nvm), bin("v24.15.0"), "an uninstalled version falls back to the newest");
+        alias("default", "system");
+        assert_eq!(nvm_default_bin(&nvm), None);
+        assert_eq!(nvm_default_bin(&nvm.join("missing")), None);
+        std::fs::remove_dir_all(&nvm).unwrap();
     }
 }
