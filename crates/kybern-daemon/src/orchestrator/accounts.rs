@@ -17,6 +17,30 @@ impl Orchestrator {
         self.inner.session_admission.lock().await.entry(thread_id).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
     }
 
+    pub(super) fn compatible_native_session(&self, thread: &Thread, provider: &ProviderInstance) -> Result<Option<String>> {
+        let mut receiving = thread.clone();
+        receiving.provider = provider.clone();
+        let expected = self.environment_fingerprint(&receiving)?;
+        let binding =
+            self.inner.store.meta_get(&Self::binding_key(&receiving))?.map(|saved| serde_json::from_str::<Binding>(&saved)).transpose()?;
+        if provider == &thread.provider {
+            let live_owner = self.inner.store.meta_get(&format!("live_owner:{}", thread.id))?;
+            let live_fingerprint = if live_owner.as_deref() == Some(serde_json::to_string(provider)?.as_str()) {
+                self.inner.store.meta_get(&format!("live_fingerprint:{}", thread.id))?
+            } else {
+                None
+            };
+            let admitted = live_fingerprint.as_deref().or(binding.as_ref().map(|binding| binding.environment_fingerprint.as_str()));
+            // Legacy default threads retain their native id when no binding
+            // metadata exists yet. Once recorded, compatibility is mandatory.
+            if admitted.is_none_or(|fingerprint| fingerprint == expected) {
+                return Ok(thread.provider_session_id.clone());
+            }
+            return Ok(None);
+        }
+        Ok(binding.filter(|binding| binding.environment_fingerprint == expected).and_then(|binding| binding.session_id))
+    }
+
     pub(super) fn pending_permission_for(&self, thread: &Thread, provider: &ProviderInstance) -> Result<Option<PermissionMode>> {
         let owner = self
             .inner
@@ -60,8 +84,10 @@ impl Orchestrator {
         target.provider.instance = crate::provider_accounts::resolve(&provider, Some(&project.path), override_id.as_deref());
         crate::provider_accounts::environment(&provider, target.provider.kind, &target.provider.instance)?;
         let pending_permission_mode = self.pending_permission_for(&thread, &target.provider)?;
+        let native_session_id = self.compatible_native_session(&thread, &target.provider)?;
         Ok(methods::ThreadTargetState {
             target,
+            native_session_id,
             account_override: override_id.is_some(),
             effective_permission_mode: thread.permission_mode,
             pending_permission_mode,
@@ -271,9 +297,7 @@ impl Orchestrator {
         // mode for the receiving native binding before writing any transition state.
         let mut receiving = thread.clone();
         receiving.provider = target.provider.clone();
-        if provider_changed {
-            receiving.provider_session_id = None;
-        }
+        receiving.provider_session_id = self.compatible_native_session(thread, &receiving.provider)?;
         validate_permission(&receiving, receiving.permission_mode)?;
         self.save_account_binding(thread)?;
         let previous = thread.provider.clone();
@@ -394,9 +418,7 @@ impl Orchestrator {
             let selected = self.thread_target(thread.id)?.target.provider;
             let mut receiving = current.clone();
             receiving.provider = selected.clone();
-            if receiving.provider != current.provider {
-                receiving.provider_session_id = None;
-            }
+            receiving.provider_session_id = self.compatible_native_session(&current, &selected)?;
             validate_permission(&receiving, mode)?;
             if selected != current.provider || matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
                 self.inner.store.meta_set_many(&[

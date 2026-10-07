@@ -4100,9 +4100,7 @@ impl Orchestrator {
         let target = self.thread_target(message.thread_id)?.target;
         let mut receiving = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
         let mode = self.pending_permission_for(&receiving, &target.provider)?.unwrap_or(receiving.permission_mode);
-        if receiving.provider != target.provider {
-            receiving.provider_session_id = None;
-        }
+        receiving.provider_session_id = self.compatible_native_session(&receiving, &target.provider)?;
         receiving.provider = target.provider.clone();
         accounts::validate_permission(&receiving, mode)?;
         self.inner.store.meta_set_many(&[

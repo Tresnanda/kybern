@@ -440,3 +440,73 @@ async fn outgoing_app_tool_requests_are_rejected_without_blocking_background_own
     assert!(responses[0].1.is_err());
     assert!(fixture.store.events_for_thread(thread.id).unwrap().is_empty());
 }
+
+#[test]
+fn current_cursor_legacy_binding_loses_compatibility_when_native_configuration_changes() {
+    let fixture = Fixture::new();
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Cursor);
+    thread.provider_session_id = Some("legacy-acp-native".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+    fixture.orchestrator.save_account_binding(&thread).unwrap();
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().native_session_id.as_deref(), Some("legacy-acp-native"));
+    let mut settings = fixture.orchestrator.inner.settings.get();
+    settings
+        .providers
+        .entry(ProviderKind::Cursor)
+        .or_default()
+        .env
+        .insert("KYBERN_CURSOR_STATE_DIR".into(), "/changed-native-directory".into());
+    fixture.orchestrator.inner.settings.set(settings).unwrap();
+    assert!(fixture.orchestrator.thread_target(thread.id).unwrap().native_session_id.is_none());
+    let target = SessionTarget { provider: thread.provider.clone(), model: thread.model.clone(), effort: thread.effort.clone() };
+    assert!(fixture.orchestrator.admit_target(&mut thread, target).is_err());
+    assert_eq!(thread.provider_session_id.as_deref(), Some("legacy-acp-native"));
+    assert_eq!(thread.permission_mode, PermissionMode::Supervised);
+}
+
+#[tokio::test]
+async fn returning_cursor_account_exposes_compatible_legacy_id_and_accepts_its_explicit_mode() {
+    let fixture = Fixture::new();
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Cursor);
+    thread.provider_session_id = Some("legacy-acp-native".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+    add_test_account(&fixture, ProviderKind::Cursor, "work");
+    fixture.orchestrator.save_account_binding(&thread).unwrap();
+    let work =
+        SessionTarget { provider: ProviderInstance { kind: ProviderKind::Cursor, instance: "work".into() }, model: None, effort: None };
+    fixture
+        .orchestrator
+        .set_thread_target(methods::ThreadTargetParams { thread_id: thread.id, target: work.clone(), inherit_account: false })
+        .await
+        .unwrap();
+    assert!(fixture.orchestrator.thread_target(thread.id).unwrap().native_session_id.is_none());
+    assert!(fixture.orchestrator.admit_target(&mut thread, work.clone()).is_err());
+    thread.permission_mode = PermissionMode::Auto;
+    fixture.orchestrator.admit_target(&mut thread, work).unwrap();
+    thread.provider_session_id = Some("cursor-sdk:work-native".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+    let original = SessionTarget { provider: ProviderInstance::default_for(ProviderKind::Cursor), model: None, effort: None };
+    let selected = fixture
+        .orchestrator
+        .set_thread_target(methods::ThreadTargetParams { thread_id: thread.id, target: original.clone(), inherit_account: false })
+        .await
+        .unwrap();
+    assert_eq!(selected.native_session_id.as_deref(), Some("legacy-acp-native"));
+    fixture
+        .orchestrator
+        .update_session_fields(methods::ThreadsUpdateParams {
+            thread_id: thread.id,
+            title: None,
+            pinned: None,
+            permission_mode: Some(PermissionMode::Supervised),
+            model: None,
+            effort: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().permission_mode, PermissionMode::Auto);
+    thread.permission_mode = fixture.orchestrator.pending_permission_for(&thread, &original.provider).unwrap().unwrap();
+    fixture.orchestrator.admit_target(&mut thread, original).unwrap();
+    assert_eq!(thread.provider_session_id.as_deref(), Some("legacy-acp-native"));
+    assert_eq!(thread.permission_mode, PermissionMode::Supervised);
+}

@@ -152,7 +152,7 @@ export function ThreadView({
   const page = useRef<HTMLDivElement>(null)
   const previousDepth = useRef<{ id: ThreadId; depth: number } | null>(null)
   const [overlayHeight, setOverlayHeight] = useState(120)
-  const [nextTarget, setNextTarget] = useState<{ threadId: string; state: ThreadTargetState } | null>(null)
+  const [nextTarget, setNextTarget] = useState<{ threadId: string; settings: typeof settings; state: ThreadTargetState } | null>(null)
   const [accountCatalog, setAccountCatalog] = useState<{ key: string; settings: typeof settings; status: ProviderStatus } | null>(null)
   const hasThread = !!thread
   const readOnlyThread = !!thread?.subagent
@@ -160,11 +160,11 @@ export function ThreadView({
     if (!hasThread || readOnlyThread) return
     let canceled = false
     void rpc().call("threads.target.get", { thread_id: threadId }).then((state) => {
-      if (!canceled) setNextTarget({ threadId, state })
+      if (!canceled) setNextTarget({ threadId, settings, state })
     }).catch((error) => { if (!canceled) toast.error("Unable to load account selection", { description: errorText(error) }) })
     return () => { canceled = true }
   }, [threadId, thread?.status, thread?.provider.instance, thread?.model, settings, hasThread, readOnlyThread])
-  const targetState = nextTarget?.threadId === threadId ? nextTarget.state : null
+  const targetState = nextTarget?.threadId === threadId && nextTarget.settings === settings ? nextTarget.state : null
   const target = targetState?.target ?? (thread ? { provider: thread.provider, model: thread.model, effort: thread.effort } : null)
   const catalogKey = target ? `${threadId}:${target.provider.kind}:${target.provider.instance}` : ""
   const targetChanged = !!target && !!thread && (target.provider.kind !== thread.provider.kind || target.provider.instance !== thread.provider.instance)
@@ -182,12 +182,12 @@ export function ThreadView({
   const composerProviders = useMemo(() => providers.map((status) => status.kind !== targetKind ? status : accountCatalog?.key === catalogKey && accountCatalog.settings === settings ? accountCatalog.status : { ...status, models: [] }), [providers, targetKind, accountCatalog, catalogKey, settings])
   const chooseTarget = async (selection: SessionTarget, inherit = !targetState?.account_override) => {
     const state = await rpc().call("threads.target.set", { thread_id: threadId, target: selection, inherit_account: inherit })
-    setNextTarget({ threadId, state })
+    setNextTarget({ threadId, settings, state })
   }
   const changePermission = async (mode: import("@/protocol").PermissionMode) => {
     await updateThread(threadId, { permission_mode: mode })
     const state = await rpc().call("threads.target.get", { thread_id: threadId })
-    setNextTarget({ threadId, state })
+    setNextTarget({ threadId, settings, state })
   }
 
 
@@ -411,7 +411,7 @@ export function ThreadView({
               onModeChange={(m) => changePermission(m).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={target?.provider ?? thread.provider}
               accountControl={target && <AccountPicker provider={target.provider} settings={settings?.providers[target.provider.kind]} inherited={!targetState?.account_override} onChange={(instance) => void chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null).catch((error) => toast.error("Unable to change account", { description: errorText(error) }))} />}
-              providerSessionId={target?.provider.kind === thread.provider.kind && target.provider.instance === thread.provider.instance ? thread.provider_session_id : null}
+              providerSessionId={targetState?.native_session_id ?? null}
               providers={composerProviders}
               onProviderChange={thread.coordinator_project_id ? canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined : (provider, choice) => chooseTarget({ provider, model: choice?.model, effort: choice?.effort }, true)}
               model={target?.model ?? undefined}
@@ -432,7 +432,7 @@ export function ThreadView({
                       <ComposerStackedPanelRowMain>{targetChanged ? "Selected agent uses" : "Permissions change to"} {targetState.pending_permission_mode === "full-access" ? "Full access" : targetState.pending_permission_mode} {targetChanged ? "with your next message." : "after this turn."}</ComposerStackedPanelRowMain>
                       {!targetChanged && <Button variant="ghost" size="sm" onClick={() => void rpc().call("threads.permissions.apply", { thread_id: threadId }).then(async (applied) => {
                         set((state) => ({ threads: { ...state.threads, [threadId]: applied } }))
-                        setNextTarget({ threadId, state: await rpc().call("threads.target.get", { thread_id: threadId }) })
+                        setNextTarget({ threadId, settings, state: await rpc().call("threads.target.get", { thread_id: threadId }) })
                       }).catch((error) => toast.error("Unable to apply permissions", { description: errorText(error) }))}>Stop and apply now</Button>}
                     </ComposerStackedPanelRow>
                   </ComposerStackedPanel>}

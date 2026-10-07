@@ -176,6 +176,9 @@ pub struct ThreadTargetParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadTargetState {
     pub target: SessionTarget,
+    /// Only the native session owned by this resolved account/configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
     pub account_override: bool,
     pub effective_permission_mode: PermissionMode,
     #[serde(default)]

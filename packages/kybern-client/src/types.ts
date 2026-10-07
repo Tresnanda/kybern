@@ -129,6 +129,7 @@ export interface ProviderAccount { name: string; directory: string }
 export interface SessionTarget { provider: ProviderInstance; model?: string | null; effort?: string | null }
 export interface ThreadTargetState {
   target: SessionTarget;
+  native_session_id?: string | null;
   account_override: boolean;
   effective_permission_mode: PermissionMode;
   pending_permission_mode?: PermissionMode | null;
