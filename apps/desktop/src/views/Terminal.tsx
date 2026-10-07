@@ -229,7 +229,7 @@ function TabChip({ tab, active, onSelect, onClose }: { tab: TerminalTab; active:
 }
 
 /** One xterm bound to one daemon pty. Created on first show, kept alive while its tab exists. */
-function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId: ThreadId; tab: TerminalTab; active: boolean; onExit: () => void; onTitle: (t: string) => void }) {
+export function TerminalInstance({ threadId, tab, active, onExit, onTitle, externalTerminal = false }: { threadId: ThreadId; tab: TerminalTab; active: boolean; onExit: () => void; onTitle: (t: string) => void; externalTerminal?: boolean }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [loginUrl, setLoginUrl] = useState<string | null>(null)
@@ -343,7 +343,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     const attach = async () => {
       if (disposed || attaching || client.status !== "open") return
       const startedAt = ownerStore.getState().info?.started_at
-      const saved = ownerStore.getState().terminalTabs[threadId]?.find((item) => item.key === tab.key)
+      const saved = externalTerminal ? tab : ownerStore.getState().terminalTabs[threadId]?.find((item) => item.key === tab.key)
       if (!saved) return
       if (saved.daemonStartedAt && saved.daemonStartedAt !== startedAt) {
         setError("The environment restarted. Open a new terminal tab to start a new process.")
@@ -360,9 +360,9 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       } }))
       try {
         const info = tab.connectorLogin
-          ? (await client.call("terminals.list", { thread_id: threadId })).terminals.find(info => info.id === tab.terminalId)
+          ? (await client.call("terminals.list", externalTerminal ? {} : { thread_id: threadId })).terminals.find(info => info.id === tab.terminalId)
           : await client.call("terminals.create", { terminal_id: tab.key, thread_id: threadId, cwd, cols: term.cols, rows: term.rows, command: tab.command })
-        if (!info) throw new Error("The sign-in terminal closed. Start sign-in again from Integrations.")
+        if (!info) throw new Error("The sign-in terminal closed. Start sign-in again from Settings.")
         if (disposed) {
           if (!ownerStore.getState().terminalTabs[threadId]?.some((item) => item.key === tab.key)) {
             void client.call("terminals.close", { terminal_id: info.id }).catch(() => {})
@@ -416,7 +416,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
       fitRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, cwd, everActive])
+  }, [threadId, cwd, everActive, tab.key, externalTerminal])
 
   useEffect(() => {
     const update = () => rendererRef.current?.setActive(active && !document.hidden)
@@ -437,7 +437,7 @@ function TerminalInstance({ threadId, tab, active, onExit, onTitle }: { threadId
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] px-3 pt-1 pb-2">
       {tab.connectorLogin && <div className="mb-3 space-y-2">
         {loginUrl && <Button size="sm" variant="subtle" onClick={() => void openExternal(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
-        <p className="text-xs text-muted-foreground">After signing in, paste the full redirect URL when Claude asks for it.</p>
+        <p className="text-xs text-muted-foreground">Follow the native sign-in instructions. If asked for a redirect URL, paste it below.</p>
         <InputGroup><InputGroupInput aria-label="Sign-in redirect URL" type="password" autoComplete="off" value={redirect} onChange={e => setRedirect(e.target.value)} placeholder="Paste the redirect URL" /></InputGroup>
         <Button size="chip" variant="subtle" disabled={!ready || !redirect.trim() || submitting} onClick={() => void submitRedirect()}>Complete sign-in</Button>
       </div>}

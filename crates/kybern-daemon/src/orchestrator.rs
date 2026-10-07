@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::config::Paths;
 use crate::settings::SettingsStore;
 
+mod accounts;
 mod agent_items;
 mod delegation;
 mod messaging;
@@ -167,13 +168,9 @@ impl Orchestrator {
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Result<()> {
-        if provider.instance != "default" {
-            return Err(anyhow!(
-                "Unknown {} provider instance '{}'. Available instances: default. Put the model selector in child.model.",
-                provider.kind,
-                provider.instance,
-            ));
-        }
+        let settings = self.inner.settings.get();
+        let provider_settings = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
+        crate::provider_accounts::environment(&provider_settings, provider.kind, &provider.instance)?;
 
         let Some(statuses) = self.cached_provider_statuses(project_id).await? else { return Ok(()) };
         let Some(status) = statuses.iter().find(|status| status.kind == provider.kind) else { return Ok(()) };
@@ -3750,6 +3747,10 @@ impl Orchestrator {
             delegation: None,
         };
         self.inner.store.thread_upsert(&thread)?;
+        if thread.provider.instance != "default" {
+            self.inner.store.meta_set(&format!("account_override:{}", thread.id), &thread.provider.instance)?;
+        }
+
         let ev = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() })?;
         let mut thread = Thread { last_seq: ev.seq, ..thread };
         self.inner.store.thread_upsert(&thread)?;
@@ -3816,30 +3817,6 @@ impl Orchestrator {
             t.effort = Some(effort);
         }
         self.update_thread(t)
-    }
-
-    /// Push mode/model/effort changes to a live session after the store is updated.
-    pub async fn apply_session_settings(
-        &self,
-        thread_id: ThreadId,
-        mode: Option<PermissionMode>,
-        model: Option<&str>,
-        effort: Option<&str>,
-    ) -> Result<()> {
-        let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
-        if let Some(live) = live {
-            live.touch();
-            if let Some(mode) = mode {
-                live.session.set_permission_mode(mode).await?;
-            }
-            if let Some(model) = model {
-                live.session.set_model(model).await?;
-            }
-            if let Some(effort) = effort {
-                live.session.set_effort(effort).await?;
-            }
-        }
-        Ok(())
     }
 
     /// Archive a thread and, with it, every agent it delegated work to. Running
@@ -3928,7 +3905,7 @@ impl Orchestrator {
         if target.subagent.is_some() {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
         }
-        let kind = target.provider.kind;
+        let kind = self.thread_target(thread_id)?.target.provider.kind;
         let _harness = self.inner.harness_gates[&kind]
             .clone()
             .try_read_owned()
@@ -3990,7 +3967,19 @@ impl Orchestrator {
                 return Err(anyhow!("Wait for agents and background tasks to finish before compacting."));
             }
         }
+        let selected_target = if queued {
+            self.inner
+                .store
+                .meta_get(&format!("queue_target:{message_id}"))?
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?
+                .unwrap_or(self.thread_target(thread_id)?.target)
+        } else {
+            self.thread_target(thread_id)?.target
+        };
+        self.admit_target(&mut thread, selected_target)?;
         let turn_id = Uuid::now_v7();
+        self.inner.store.meta_set(&format!("turn_target:{turn_id}"), &serde_json::to_string(&thread.provider)?)?;
         if thread.title == DEFAULT_TITLE {
             thread.title = title_from_message(&message);
         }
@@ -4028,6 +4017,8 @@ impl Orchestrator {
             }
             return Ok(());
         }
+        let target = self.thread_target(message.thread_id)?.target;
+        self.inner.store.meta_set(&format!("queue_target:{}", message.id), &serde_json::to_string(&target)?)?;
         self.emit(message.thread_id, None, EventPayload::MessageQueued { message })?;
         Ok(())
     }
@@ -4069,6 +4060,28 @@ impl Orchestrator {
             return Ok(result);
         }
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let target = self.thread_target(thread.id)?.target;
+        if target.provider != thread.provider || target.model != thread.model || target.effort != thread.effort {
+            self.interrupt(thread.id).await?;
+            for _ in 0..100 {
+                if self
+                    .inner
+                    .store
+                    .thread_get(thread.id)?
+                    .is_some_and(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            return self
+                .send_client_message(methods::ThreadsSendParams {
+                    thread_id: thread.id,
+                    message: params.message,
+                    message_id: Some(params.id),
+                })
+                .await;
+        }
         if !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             return Err(anyhow!("This turn has ended. Send your message to start the next turn."));
         }
@@ -4292,7 +4305,10 @@ impl Orchestrator {
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            live.session.send_message(&message_id.to_string(), &self.provider_message(&message, &live)).await
+            match self.portable_message(&thread, &message) {
+                Ok(portable) => live.session.send_message(&message_id.to_string(), &self.provider_message(&portable, &live)).await,
+                Err(error) => Err(kybern_drivers::DriverError::Unsupported(error.to_string())),
+            }
         };
         if let Err(e) = delivery {
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
@@ -4304,6 +4320,7 @@ impl Orchestrator {
             self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(e.to_string()));
             return Err(e.into());
         }
+        self.inner.store.meta_set(&format!("handoff:{}", thread.id), "")?;
         self.collaboration_delivery_submitted(thread.id, turn_id, message_id)?;
         tracing::info!(
             target: "kybern::turn_startup",
@@ -5058,7 +5075,23 @@ impl Orchestrator {
         let waiting = {
             let sessions = self.inner.sessions.lock().await;
             if let Some(live) = sessions.get(&thread.id).cloned() {
-                return Ok((live, true));
+                let expected = serde_json::to_string(&(
+                    thread.provider.clone(),
+                    thread.model.clone(),
+                    thread.effort.clone(),
+                    thread.permission_mode,
+                    self.account_environment(thread)?,
+                ))?;
+                let identity = self.inner.store.meta_get(&format!("live_identity:{}", thread.id))?;
+                if identity.as_deref().is_none_or(|identity| identity == expected) {
+                    return Ok((live, true));
+                }
+                drop(sessions);
+                live.mark_released();
+                self.revoke_native_session(&live);
+                live.session.close().await?;
+                self.inner.sessions.lock().await.remove(&thread.id);
+                return self.spawn_session(thread, None).await.map(|live| (live, false));
             }
             self.inner.releasing.lock().await.get(&thread.id).cloned()
         };
@@ -5078,8 +5111,9 @@ impl Orchestrator {
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found"))?;
         let mut provider_settings =
             crate::settings::provider_settings(&self.inner.settings.get(), thread.provider.kind, Some(&project.path));
+        provider_settings.env = self.account_environment(thread)?;
         let mut profile_binding = None;
-        if thread.provider.kind == ProviderKind::Omp {
+        if thread.provider.kind == ProviderKind::Omp && thread.provider.instance == "default" {
             // A resumed chat must keep the profile that owns its native session,
             // even after project defaults change or the daemon releases it at idle.
             let key = format!("omp_profile:{}", thread.id);
@@ -5161,6 +5195,16 @@ impl Orchestrator {
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
+        self.inner.store.meta_set(
+            &format!("live_identity:{}", thread.id),
+            &serde_json::to_string(&(
+                thread.provider.clone(),
+                thread.model.clone(),
+                thread.effort.clone(),
+                thread.permission_mode,
+                self.account_environment(thread)?,
+            ))?,
+        )?;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
@@ -6078,6 +6122,13 @@ impl Orchestrator {
                 self.inner.usage.turn_finished(t.provider.kind);
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
+                self.save_account_binding(&t)?;
+                let this = self.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = this.apply_pending_permission(thread_id, false).await {
+                        tracing::warn!(%error, "pending permission change was not applied");
+                    }
+                });
                 self.maybe_generate_title(&t);
                 self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Completed { stop_reason, terminal_message_id });
             }
@@ -6112,7 +6163,13 @@ impl Orchestrator {
                 if let Some(limits) = usage.limits.as_deref()
                     && let Some(thread) = self.inner.store.thread_get(thread_id)?
                 {
-                    self.inner.usage.observe(thread.provider.kind, limits);
+                    if thread.provider.instance == "default" {
+                        self.inner.usage.observe(thread.provider.kind, limits);
+                    }
+                    self.inner.store.meta_set(
+                        &format!("account_usage:{}:{}", thread.provider.kind, thread.provider.instance),
+                        &serde_json::to_string(&usage)?,
+                    )?;
                 }
                 self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
             }
@@ -6369,6 +6426,7 @@ mod tests {
         app_tool_responses: CapturedAppToolResponses,
         hang_interrupt: bool,
         broken_interrupt: bool,
+        reject_permission: bool,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
     }
 
@@ -6400,6 +6458,9 @@ mod tests {
         }
 
         async fn set_permission_mode(&self, _mode: PermissionMode) -> kybern_drivers::Result<()> {
+            if self.reject_permission {
+                return Err(kybern_drivers::DriverError::Unsupported("fixture rejects permissions".into()));
+            }
             Ok(())
         }
 
@@ -10200,4 +10261,5 @@ for line in sys.stdin:
 
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/messaging_tests.rs");
+    include!("orchestrator/account_tests.rs");
 }

@@ -94,7 +94,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                         };
                         async move {
                             match driver {
-                                Some(driver) => driver.probe_with_context(&context).await,
+                                Some(driver) => {
+                                    let mut status = driver.probe_with_context(&context).await;
+                                    status.instances =
+                                        std::iter::once("default".to_string()).chain(provider_settings.accounts.keys().cloned()).collect();
+                                    status
+                                }
                                 None => ProviderStatus {
                                     kind,
                                     display_name: kind.display_name().to_string(),
@@ -118,6 +123,20 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .await;
             ok(ProvidersListResult { providers })
         }
+        AccountsCreate::NAME => ok(crate::provider_accounts::create(state, parse(params)?).map_err(bad)?),
+        AccountsSignIn::NAME => ok(crate::provider_accounts::sign_in(state, parse(params)?).map_err(provider_err)?),
+        AccountsCatalog::NAME => ok(crate::provider_accounts::catalog(state, parse(params)?).await.map_err(provider_err)?),
+        AccountsUsage::NAME => ok(crate::provider_accounts::usage(state, parse(params)?).await.map_err(provider_err)?),
+        ThreadsTargetGet::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            ok(state.orchestrator.thread_target(p.thread_id).map_err(bad)?)
+        }
+        ThreadsTargetSet::NAME => ok(state.orchestrator.set_thread_target(parse(params)?).await.map_err(bad)?),
+        ThreadsPermissionsApply::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            ok(state.orchestrator.apply_pending_permission(p.thread_id, true).await.map_err(provider_err)?)
+        }
+        ThreadsSwitchContinue::NAME => ok(state.orchestrator.switch_continue(parse(params)?).await.map_err(provider_err)?),
         HarnessUpdatesList::NAME => ok(HarnessUpdatesResult { updates: state.harness_updates.list() }),
         HarnessUpdatesRun::NAME => {
             let p: HarnessUpdateParams = parse(params)?;
@@ -300,11 +319,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
-            let mode = p.permission_mode;
-            let model = p.model.clone();
-            let effort = p.effort.clone();
-            let thread = state.orchestrator.update_thread_fields(p).map_err(bad)?;
-            state.orchestrator.apply_session_settings(thread.id, mode, model.as_deref(), effort.as_deref()).await.map_err(provider_err)?;
+            let thread = state.orchestrator.update_session_fields(p).await.map_err(provider_err)?;
             ok(thread)
         }
         ThreadsArchive::NAME => {

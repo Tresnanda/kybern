@@ -1,3 +1,5 @@
+import { AccountPicker } from "@/components/kybern/AccountPicker"
+import type { ThreadTargetState, SessionTarget, ProviderStatus } from "@/protocol"
 import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
 import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
@@ -147,6 +149,43 @@ export function ThreadView({
   const page = useRef<HTMLDivElement>(null)
   const previousDepth = useRef<{ id: ThreadId; depth: number } | null>(null)
   const [overlayHeight, setOverlayHeight] = useState(120)
+  const [nextTarget, setNextTarget] = useState<{ threadId: string; state: ThreadTargetState } | null>(null)
+  const [accountCatalog, setAccountCatalog] = useState<{ key: string; status: ProviderStatus } | null>(null)
+  const hasThread = !!thread
+  const readOnlyThread = !!thread?.subagent
+  useEffect(() => {
+    if (!hasThread || readOnlyThread) return
+    let canceled = false
+    void rpc().call("threads.target.get", { thread_id: threadId }).then((state) => {
+      if (!canceled) setNextTarget({ threadId, state })
+    }).catch((error) => { if (!canceled) toast.error("Unable to load account selection", { description: errorText(error) }) })
+    return () => { canceled = true }
+  }, [threadId, thread?.status, thread?.provider.instance, thread?.model, settings, hasThread, readOnlyThread])
+  const targetState = nextTarget?.threadId === threadId ? nextTarget.state : null
+  const target = targetState?.target ?? (thread ? { provider: thread.provider, model: thread.model, effort: thread.effort } : null)
+  const catalogKey = target ? `${threadId}:${target.provider.kind}:${target.provider.instance}` : ""
+  const targetKind = target?.provider.kind
+  const targetInstance = target?.provider.instance
+  const targetProjectId = thread?.project_id
+  useEffect(() => {
+    if (!targetKind || !targetInstance || !targetProjectId || readOnlyThread) return
+    let canceled = false
+    void rpc().call("providers.accounts.catalog", { provider: { kind: targetKind, instance: targetInstance }, project_id: targetProjectId }).then((status) => {
+      if (!canceled) setAccountCatalog({ key: catalogKey, status })
+    }).catch((error) => { if (!canceled) toast.error("Unable to load account models", { description: errorText(error) }) })
+    return () => { canceled = true }
+  }, [catalogKey, targetKind, targetInstance, targetProjectId, readOnlyThread])
+  const composerProviders = useMemo(() => providers.map((status) => status.kind !== targetKind ? status : accountCatalog?.key === catalogKey ? accountCatalog.status : { ...status, models: [] }), [providers, targetKind, accountCatalog, catalogKey])
+  const chooseTarget = async (selection: SessionTarget, inherit = !targetState?.account_override) => {
+    const state = await rpc().call("threads.target.set", { thread_id: threadId, target: selection, inherit_account: inherit })
+    setNextTarget({ threadId, state })
+  }
+  const changePermission = async (mode: import("@/protocol").PermissionMode) => {
+    await updateThread(threadId, { permission_mode: mode })
+    const state = await rpc().call("threads.target.get", { thread_id: threadId })
+    setNextTarget({ threadId, state })
+  }
+
 
   useEffect(() => {
     if (!loaded && windowHoldsTranscript()) void loadThread(threadId)
@@ -365,24 +404,35 @@ export function ThreadView({
               onSend={onSend}
               onSteer={onSteer}
               mode={thread.permission_mode}
-              onModeChange={(m) => updateThread(threadId, { permission_mode: m }).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
-              provider={thread.provider}
+              onModeChange={(m) => changePermission(m).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
+              provider={target?.provider ?? thread.provider}
+              accountControl={target && <AccountPicker provider={target.provider} settings={settings?.providers[target.provider.kind]} inherited={!targetState?.account_override} onChange={(instance) => void chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null).catch((error) => toast.error("Unable to change account", { description: errorText(error) }))} />}
               providerSessionId={thread.provider_session_id}
-              providers={providers}
-              onProviderChange={canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined}
-              model={thread.model}
-              effort={thread.effort}
+              providers={composerProviders}
+              onProviderChange={thread.coordinator_project_id ? canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined : (provider, choice) => chooseTarget({ provider, model: choice?.model, effort: choice?.effort }, true)}
+              model={target?.model ?? undefined}
+              effort={target?.effort ?? undefined}
               surfaceMode={splitPaneId ? "split" : "single"}
               onModelChange={thread.coordinator_project_id
                 ? canSwitchCoordinator
                   ? (model, effort) => switchCoordinatorHarness(thread.provider, model, effort)
                   : undefined
-                : (model, effort) => updateThread(threadId, { model, effort })}
+                : (model, effort) => target ? chooseTarget({ ...target, model, effort }) : Promise.resolve()}
               projectId={freeChat ? undefined : thread.project_id}
               commands={commands}
               onDigit={(n) => answer(n)}
               above={
                 <ComposerPanelStack closed={hideInput}>
+                  {targetState?.pending_permission_mode && <ComposerStackedPanel>
+                    <ComposerStackedPanelRow compact>
+                      <ComposerStackedPanelRowMain>Permissions change to {targetState.pending_permission_mode === "full-access" ? "Full access" : targetState.pending_permission_mode} after this turn.</ComposerStackedPanelRowMain>
+                      <Button variant="ghost" size="sm" onClick={() => void rpc().call("threads.permissions.apply", { thread_id: threadId }).then(async (applied) => {
+                        set((state) => ({ threads: { ...state.threads, [threadId]: applied } }))
+                        setNextTarget({ threadId, state: await rpc().call("threads.target.get", { thread_id: threadId }) })
+                      }).catch((error) => toast.error("Unable to apply permissions", { description: errorText(error) }))}>Stop and apply now</Button>
+                    </ComposerStackedPanelRow>
+                  </ComposerStackedPanel>}
+                  {thread.status === "failed" && target && <AccountLimitRecovery threadId={threadId} provider={target.provider} />}
                   {thread.coordinator_project_id && <CoordinatorControlsPanel key={thread.id} thread={thread} />}
                   {helperThreads.length > 0 && <HelperThreadsPanel threads={helperThreads} />}
                   <SubagentStrip
@@ -407,6 +457,29 @@ export function ThreadView({
       </div>
     </div>
   )
+}
+
+function AccountLimitRecovery({ threadId, provider }: { threadId: string; provider: import("@/protocol").ProviderInstance }) {
+  const error = useStore((state) => {
+    const blocks = state.transcripts[threadId]?.blocks ?? []
+    for (let index = blocks.length - 1; index >= 0; index--) { const block = blocks[index]; if (block.kind === "turn_end") return block.error }
+    return null
+  })
+  const accounts = useStore((state) => state.settings?.providers[provider.kind]?.accounts)
+  const [selected, setSelected] = useState("")
+  const [busy, setBusy] = useState(false)
+  const attempt = useRef<string | null>(null)
+  if (!error || !/(usage limit|quota|rate_limit_exceeded|hit your limit)/i.test(error) || !/(5.hour|five.hour|week|usage limit)/i.test(error)) return null
+  const options = [{ id: "default", name: "Default account" }, ...Object.entries(accounts ?? {}).map(([id, account]) => ({ id, name: account.name }))].filter((account) => account.id !== provider.instance)
+  const choice = options.find((account) => account.id === selected) ?? options[0]
+  return <ComposerStackedPanel><ComposerStackedPanelRow compact>
+    <ComposerStackedPanelRowMain><span>Account usage limit reached</span><span className="block text-xs text-muted-foreground">Choose an account to continue the interrupted task in this conversation.</span></ComposerStackedPanelRowMain>
+    {choice ? <><Menu><MenuTrigger render={<Button variant="ghost" size="sm" />}>{choice.name}</MenuTrigger><ComposerPickerMenuPopup align="end" side="top"><MenuGroup>{options.map((account) => <MenuItem key={account.id} onClick={() => { setSelected(account.id); attempt.current = null }}>{account.name}</MenuItem>)}</MenuGroup></ComposerPickerMenuPopup></Menu>
+      <Button variant="chrome-outline" size="sm" disabled={busy} onClick={() => {
+        setBusy(true); attempt.current ??= crypto.randomUUID()
+        void rpc().call("threads.switch_continue", { thread_id: threadId, provider: { kind: provider.kind, instance: choice.id }, message_id: attempt.current }).catch((problem) => toast.error("Unable to continue", { description: errorText(problem) })).finally(() => setBusy(false))
+      }}>Switch and continue</Button></> : <Button variant="ghost" size="sm" onClick={() => useStore.getState().set({ settingsOpen: true, settingsTab: "agents" })}>Add an account</Button>}
+  </ComposerStackedPanelRow></ComposerStackedPanel>
 }
 
 function CoordinatorControlsPanel({ thread }: { thread: import("@/protocol").Thread }) {

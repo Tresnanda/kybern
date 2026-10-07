@@ -164,7 +164,7 @@ function ModelPickerPanel({
         // Another harness's favorites are only reachable where the harness can change.
         if (!item.available || (item.kind !== provider.kind && !canPickProvider)) continue
         const starred = favorites
-          .filter((favorite) => favorite.kind === item.kind)
+          .filter((favorite) => favorite.kind === item.kind && (favorite.instance ?? "default") === (item.kind === provider.kind ? provider.instance : "default"))
           .map((favorite) => item.models?.find((entry) => entry.id === favorite.id) ?? { id: favorite.id, display_name: favorite.id })
         const shown = search ? searchModels(starred, search) : starred
         if (!shown.length) continue
@@ -199,10 +199,10 @@ function ModelPickerPanel({
     const sections = modelSections(catalog)
     const grouped = sections.length > 1
     if (grouped) {
-      const starred = catalog.filter((item) => isFavorite(favorites, provider.kind, item.id))
+      const starred = catalog.filter((item) => isFavorite(favorites, provider.kind, item.id, provider.instance))
       if (starred.length) out.push({ key: "starred", label: "Favorites", rows: starred.map((item) => modelRow("starred", item, multiBackend)) })
-      const recent = (recents[provider.kind] ?? [])
-        .filter((id) => !isFavorite(favorites, provider.kind, id))
+      const recent = (recents[`${provider.kind}:${provider.instance}`] ?? (provider.instance === "default" ? recents[provider.kind] : undefined) ?? [])
+        .filter((id) => !isFavorite(favorites, provider.kind, id, provider.instance))
         .map((id) => catalog.find((item) => item.id === id))
         .filter((item): item is ProviderModel => !!item)
       if (recent.length) out.push({ key: "recent", label: "Recent", rows: recent.map((item) => modelRow("recent", item, multiBackend)) })
@@ -215,7 +215,7 @@ function ModelPickerPanel({
       out.push({ key: section.key, label: section.label, rows })
     }
     return out
-  }, [canPickProvider, catalog, current, expanded, favorites, large, model, multiBackend, provider.kind, providers, query, recents, results, showFavorites])
+  }, [canPickProvider, catalog, current, expanded, favorites, large, model, multiBackend, provider.kind, provider.instance, providers, query, recents, results, showFavorites])
 
   const isSelected = (row: Row) =>
     row.kind === "default" ? !selectedId
@@ -234,7 +234,7 @@ function ModelPickerPanel({
   }, [activeRow])
 
   const star = (row: Row) => {
-    if (row.kind === "model") setFavorites((value) => toggleFavorite(value, row.harness, row.model.id))
+    if (row.kind === "model") setFavorites((value) => toggleFavorite(value, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : "default"))
   }
 
   const pick = async (row: Row) => {
@@ -258,7 +258,7 @@ function ModelPickerPanel({
       ? await onModelChange(id, nextEffort)
       : await onProviderChange({ kind: harness, instance: "default" }, { model: id, effort: nextEffort })
     if (saved) {
-      setRecents((value) => ({ ...value, [harness]: rememberModel(value[harness] ?? [], id) }))
+      setRecents((value) => ({ ...value, [`${harness}:${harness === provider.kind ? provider.instance : "default"}`]: rememberModel(value[`${harness}:${harness === provider.kind ? provider.instance : "default"}`] ?? [], id) }))
       close()
     }
   }
@@ -425,7 +425,7 @@ function ModelPickerPanel({
                     agentName={agentName}
                     active={row === activeRow}
                     selected={isSelected(row)}
-                    favorite={row.kind === "model" && isFavorite(favorites, row.harness, row.model.id)}
+                    favorite={row.kind === "model" && isFavorite(favorites, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : "default")}
                     starOnHover={showFavorites}
                     onHover={() => setActiveKey(row.key)}
                     onPick={() => void pick(row)}

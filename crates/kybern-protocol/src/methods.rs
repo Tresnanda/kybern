@@ -144,6 +144,62 @@ pub struct ProvidersListResult {
 method!(ProvidersList, "providers.list", Some(Scope::OrchestrationRead), ProvidersListParams, ProvidersListResult);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsCreateParams {
+    pub kind: ProviderKind,
+    pub name: String,
+    /// Existing native account directory; omitted creates an isolated directory.
+    #[serde(default)]
+    pub directory: Option<String>,
+}
+method!(AccountsCreate, "providers.accounts.create", Some(Scope::OrchestrationOperate), AccountsCreateParams, ProviderInstance);
+method!(AccountsSignIn, "providers.accounts.sign_in", Some(Scope::OrchestrationOperate), ProviderInstance, TerminalInfo);
+method!(AccountsUsage, "providers.accounts.usage", Some(Scope::OrchestrationRead), ProviderInstance, ProviderUsage);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsCatalogParams {
+    pub provider: ProviderInstance,
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    #[serde(default)]
+    pub force_refresh: bool,
+}
+method!(AccountsCatalog, "providers.accounts.catalog", Some(Scope::OrchestrationRead), AccountsCatalogParams, ProviderStatus);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadTargetParams {
+    pub thread_id: ThreadId,
+    pub target: SessionTarget,
+    /// Clear the explicit override and follow project/global selection.
+    #[serde(default)]
+    pub inherit_account: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadTargetState {
+    pub target: SessionTarget,
+    pub account_override: bool,
+    pub effective_permission_mode: PermissionMode,
+    #[serde(default)]
+    pub pending_permission_mode: Option<PermissionMode>,
+}
+method!(ThreadsTargetGet, "threads.target.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadTargetState);
+method!(ThreadsTargetSet, "threads.target.set", Some(Scope::OrchestrationOperate), ThreadTargetParams, ThreadTargetState);
+method!(ThreadsPermissionsApply, "threads.permissions.apply", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Thread);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsSwitchContinueParams {
+    pub thread_id: ThreadId,
+    pub provider: ProviderInstance,
+    /// Idempotent continuation request. Retrying cannot send a second prompt.
+    pub message_id: MessageId,
+}
+method!(
+    ThreadsSwitchContinue,
+    "threads.switch_continue",
+    Some(Scope::OrchestrationOperate),
+    ThreadsSwitchContinueParams,
+    ThreadsSendResult
+);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HarnessUpdatesResult {
     pub updates: Vec<HarnessUpdate>,
 }
@@ -2571,6 +2627,14 @@ registry!(
     SessionsList,
     SessionsResume,
     ProvidersList,
+    AccountsCreate,
+    AccountsSignIn,
+    AccountsUsage,
+    AccountsCatalog,
+    ThreadsTargetGet,
+    ThreadsTargetSet,
+    ThreadsPermissionsApply,
+    ThreadsSwitchContinue,
     HarnessUpdatesList,
     HarnessUpdatesRun,
     DaemonUpdateStatusMethod,

@@ -68,6 +68,15 @@ fn main() {
     method::<SessionsList>(&mut methods);
     method::<SessionsResume>(&mut methods);
     method::<ProvidersList>(&mut methods);
+    method::<AccountsCreate>(&mut methods);
+    method::<AccountsSignIn>(&mut methods);
+    method::<AccountsUsage>(&mut methods);
+    method::<AccountsCatalog>(&mut methods);
+    method::<ThreadsTargetGet>(&mut methods);
+    method::<ThreadsTargetSet>(&mut methods);
+    method::<ThreadsPermissionsApply>(&mut methods);
+    method::<ThreadsSwitchContinue>(&mut methods);
+
     method::<HarnessUpdatesList>(&mut methods);
     method::<HarnessUpdatesRun>(&mut methods);
     method::<DaemonUpdateStatusMethod>(&mut methods);

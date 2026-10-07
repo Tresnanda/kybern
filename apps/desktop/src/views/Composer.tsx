@@ -152,6 +152,7 @@ export interface ComposerProps {
   mode: PermissionMode
   onModeChange: (m: PermissionMode) => void
   provider: ProviderInstance | null
+  accountControl?: React.ReactNode
   providerSessionId?: string | null
   providers: ProviderStatus[]
   /** `choice` carries a model picked from another harness's favorites. */
@@ -1235,6 +1236,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     running={running}
                   />
                 )}
+                {props.accountControl}
                 {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
                 {provider && (
                   <ModelPicker

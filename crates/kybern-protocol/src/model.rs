@@ -104,6 +104,23 @@ impl ProviderInstance {
     }
 }
 
+/// A named, native-isolated account. Secrets remain in the harness directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderAccount {
+    pub name: String,
+    pub directory: String,
+}
+
+/// The target of the next message, separate from the admitted live session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionTarget {
+    pub provider: ProviderInstance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
 /// Availability of a provider binary on the daemon host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderModel {
@@ -1421,6 +1438,13 @@ pub enum TranscriptEntry {
 /// Per-provider configuration in settings.json.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderSettings {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub accounts: std::collections::BTreeMap<String, ProviderAccount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_account: Option<String>,
+    /// Account overrides keyed by the registered project path.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub project_accounts: std::collections::BTreeMap<String, String>,
     /// Absolute path to the executable; omit to look it up on PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,

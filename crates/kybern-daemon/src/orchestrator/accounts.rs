@@ -1,0 +1,340 @@
+//! Next-message targets, native continuation bindings, and intact portable deltas.
+use super::*;
+use anyhow::ensure;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Binding {
+    session_id: Option<String>,
+    /// Account native storage/config identity, including profile environment.
+    environment: std::collections::BTreeMap<String, String>,
+    through: EventSeq,
+}
+
+impl Orchestrator {
+    pub(super) fn stored_target(&self, thread: &Thread) -> Result<Option<SessionTarget>> {
+        self.inner
+            .store
+            .meta_get(&format!("target:{}", thread.id))?
+            .filter(|s| !s.is_empty())
+            .map(|s| serde_json::from_str(&s).map_err(Into::into))
+            .transpose()
+    }
+
+    pub fn thread_target(&self, thread_id: ThreadId) -> Result<methods::ThreadTargetState> {
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let stored = self.stored_target(&thread)?;
+        let override_id = self.inner.store.meta_get(&format!("account_override:{}", thread.id))?.filter(|s| !s.is_empty());
+        let mut target = stored.unwrap_or(SessionTarget {
+            provider: thread.provider.clone(),
+            model: thread.model.clone(),
+            effort: thread.effort.clone(),
+        });
+        let settings = self.inner.settings.get();
+        let provider = settings.providers.get(&target.provider.kind).cloned().unwrap_or_default();
+        let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
+        target.provider.instance = crate::provider_accounts::resolve(&provider, Some(&project.path), override_id.as_deref());
+        crate::provider_accounts::environment(&provider, target.provider.kind, &target.provider.instance)?;
+        let pending_permission_mode = self
+            .inner
+            .store
+            .meta_get(&format!("pending_permission:{}", thread.id))?
+            .filter(|s| !s.is_empty())
+            .map(|s| serde_json::from_str(&s))
+            .transpose()?;
+        Ok(methods::ThreadTargetState {
+            target,
+            account_override: override_id.is_some(),
+            effective_permission_mode: thread.permission_mode,
+            pending_permission_mode,
+        })
+    }
+
+    pub async fn set_thread_target(&self, params: methods::ThreadTargetParams) -> Result<methods::ThreadTargetState> {
+        self.ensure_not_subagent(params.thread_id)?;
+        let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        self.validate_provider_selection(
+            thread.project_id,
+            &params.target.provider,
+            params.target.model.as_deref(),
+            params.target.effort.as_deref(),
+        )
+        .await?;
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        self.inner.store.meta_set(&format!("target:{}", thread.id), &serde_json::to_string(&params.target)?)?;
+        self.inner.store.meta_set(
+            &format!("account_override:{}", thread.id),
+            if params.inherit_account { "" } else { &params.target.provider.instance },
+        )?;
+        self.thread_target(thread.id)
+    }
+
+    pub(super) fn account_environment(&self, thread: &Thread) -> Result<std::collections::BTreeMap<String, String>> {
+        let settings = self.inner.settings.get();
+        let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
+        let mut provider = settings.providers.get(&thread.provider.kind).cloned().unwrap_or_default();
+        if thread.provider.kind == ProviderKind::Omp
+            && let Some(profile) = provider.project_profiles.get(&project.path).cloned()
+        {
+            provider.env.insert("OMP_PROFILE".into(), profile);
+        }
+        crate::provider_accounts::environment(&provider, thread.provider.kind, &thread.provider.instance)
+    }
+
+    pub(super) fn binding_key(thread: &Thread) -> String {
+        format!("native_binding:{}:{}:{}", thread.id, thread.provider.kind, thread.provider.instance)
+    }
+
+    pub(super) fn save_account_binding(&self, thread: &Thread) -> Result<()> {
+        let binding = Binding {
+            session_id: thread.provider_session_id.clone(),
+            environment: self.account_environment(thread)?,
+            through: thread.last_seq,
+        };
+        self.inner.store.meta_set(&Self::binding_key(thread), &serde_json::to_string(&binding)?)
+    }
+
+    /// Called under the send admission gate, before appending the user's intent.
+    pub(super) fn admit_target(&self, thread: &mut Thread, target: SessionTarget) -> Result<()> {
+        let provider_changed = thread.provider != target.provider;
+        let model_changed = thread.model != target.model || thread.effort != target.effort;
+        if !provider_changed && !model_changed {
+            return Ok(());
+        }
+        self.save_account_binding(thread)?;
+        let previous = thread.provider.clone();
+        thread.provider = target.provider;
+        thread.model = target.model;
+        thread.effort = target.effort;
+        if provider_changed {
+            let binding =
+                self.inner.store.meta_get(&Self::binding_key(thread))?.map(|s| serde_json::from_str::<Binding>(&s)).transpose()?;
+            let environment = self.account_environment(thread)?;
+            let compatible = binding.filter(|binding| binding.environment == environment);
+            let after = compatible.as_ref().map_or(0, |binding| binding.through);
+            thread.provider_session_id = compatible.and_then(|binding| binding.session_id);
+            // The provider receives only a saved, attributed delta. The UI keeps its original messages.
+            self.inner.store.meta_set(&format!("handoff:{}", thread.id), &serde_json::to_string(&(after, thread.last_seq))?)?;
+            self.emit(thread.id, None, EventPayload::ProviderNotice { level: NoticeLevel::Info,
+                text: format!("Next message uses {} · {}. {} Conversation and workspace stay in this thread.", thread.provider.kind.display_name(), thread.provider.instance,
+                    if thread.provider_session_id.is_some() { "Resuming this account's native session with the conversation it missed." } else { "Starting a native session with portable conversation context." }),
+                data: Some(serde_json::json!({"transition": true, "from": previous, "to": thread.provider, "native_children_transferred": false})) })?;
+            self.emit(thread.id, None, EventPayload::ProviderUsageUpdated { usage: ProviderUsage::default() })?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn portable_message(&self, thread: &Thread, message: &UserMessage) -> Result<UserMessage> {
+        let Some(range) = self.inner.store.meta_get(&format!("handoff:{}", thread.id))?.filter(|s| !s.is_empty()) else {
+            return Ok(message.clone());
+        };
+        let (after, through): (EventSeq, EventSeq) = serde_json::from_str(&range)?;
+        let events = self.inner.store.events_for_thread(thread.id)?;
+        let entries = kybern_store::project_transcript(&events.iter().filter(|event| event.seq <= through).cloned().collect::<Vec<_>>());
+        let mut items = Vec::new();
+        for entry in entries {
+            let item = match entry {
+                TranscriptEntry::User { seq, turn_id, message, .. } if seq > after => Some((seq, turn_id, "User", message.plain_text())),
+                TranscriptEntry::Assistant { seq, turn_id, origin: EventOrigin::Root, text, .. } if seq > after && !text.is_empty() => {
+                    Some((seq, turn_id, "Assistant", text))
+                }
+                _ => None,
+            };
+            if let Some((seq, turn_id, role, text)) = item {
+                let source = self.inner.store.meta_get(&format!("turn_target:{turn_id}"))?.unwrap_or_else(|| "previous session".into());
+                items.push(format!("[{role}; sequence {seq}; target {source}]\n{text}\n"));
+            }
+        }
+        let mut copy = message.clone();
+        if !items.is_empty() {
+            let attachment_reserve =
+                message.parts.iter().filter(|part| !matches!(part, ContentPart::Text { .. })).count().saturating_mul(8192);
+            let remaining = 128_000usize.saturating_sub(32_000 + message.plain_text().len() + attachment_reserve);
+            ensure!(
+                remaining >= 1024,
+                "The target has too little estimated capacity for portable context. Compact the conversation or choose a larger-context model before trying again."
+            );
+            let text = bounded_context(thread.id, &items, remaining.min(16_000));
+            copy.parts.insert(0, ContentPart::Text { text });
+        }
+        Ok(copy)
+    }
+
+    pub async fn update_session_fields(&self, mut params: methods::ThreadsUpdateParams) -> Result<Thread> {
+        self.ensure_not_subagent(params.thread_id)?;
+        let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        if params.model.is_some() || params.effort.is_some() {
+            let mut target = self.thread_target(thread.id)?.target;
+            if let Some(model) = params.model.take() {
+                target.model = (!model.is_empty()).then_some(model);
+            }
+            if let Some(effort) = params.effort.take() {
+                target.effort = (!effort.is_empty()).then_some(effort);
+            }
+            self.set_thread_target(methods::ThreadTargetParams {
+                thread_id: thread.id,
+                target,
+                inherit_account: !self.thread_target(thread.id)?.account_override,
+            })
+            .await?;
+        }
+        if let Some(mode) = params.permission_mode.take() {
+            if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+                self.inner.store.meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&mode)?)?;
+            } else {
+                self.apply_permission(thread.id, mode).await?;
+            }
+        }
+        self.update_thread_fields(params)
+    }
+
+    async fn apply_permission(&self, thread_id: ThreadId, mode: PermissionMode) -> Result<Thread> {
+        let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
+        if let Some(live) = live {
+            // Claude bypassPermissions is a process launch flag. Restart/resume instead of persisting a rejected mode.
+            if thread.provider.kind == ProviderKind::ClaudeCode
+                && (mode == PermissionMode::FullAccess || thread.permission_mode == PermissionMode::FullAccess)
+            {
+                let mut desired = thread.clone();
+                desired.permission_mode = mode;
+                live.mark_released();
+                self.revoke_native_session(&live);
+                live.session.close().await?;
+                self.inner.sessions.lock().await.remove(&thread_id);
+                if let Err(error) = self.spawn_session(&desired, None).await {
+                    return Err(error);
+                }
+            } else {
+                live.session.set_permission_mode(mode).await?;
+            }
+        }
+        thread.permission_mode = mode;
+        self.inner.store.meta_set(&format!("pending_permission:{}", thread_id), "")?;
+        self.update_thread(thread)
+    }
+
+    pub async fn apply_pending_permission(&self, thread_id: ThreadId, stop_now: bool) -> Result<Thread> {
+        self.ensure_not_subagent(thread_id)?;
+        let state = self.thread_target(thread_id)?;
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let Some(mode) = state.pending_permission_mode else { return Ok(thread) };
+        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            ensure!(stop_now, "Permission change is waiting for this turn to finish.");
+            self.interrupt(thread_id).await?;
+            for _ in 0..100 {
+                if self
+                    .inner
+                    .store
+                    .thread_get(thread_id)?
+                    .is_none_or(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            ensure!(
+                self.inner
+                    .store
+                    .thread_get(thread_id)?
+                    .is_some_and(|t| !matches!(t.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)),
+                "The agent is still stopping. Try Apply again when it stops."
+            );
+        }
+        self.apply_permission(thread_id, mode).await
+    }
+
+    pub async fn switch_continue(&self, params: methods::ThreadsSwitchContinueParams) -> Result<methods::ThreadsSendResult> {
+        if let Some((owner, turn_id, _)) = self.inner.store.turn_started_receipt(params.message_id)? {
+            ensure!(owner == params.thread_id, "Continuation id belongs to another thread.");
+            return Ok(methods::ThreadsSendResult { turn_id, message_id: params.message_id });
+        }
+        let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let events = self.inner.store.events_for_thread(thread.id)?;
+        let error = events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.payload {
+                EventPayload::TurnFailed { error } => Some(error.as_str()),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("No usage-limit failure to continue."))?;
+        ensure!(quota_failure(error), "This failure is not a confirmed account usage limit. Retry your prompt normally.");
+        ensure!(params.provider != thread.provider, "Choose a different account.");
+        let mut target = self.thread_target(thread.id)?.target;
+        if target.provider.kind != params.provider.kind {
+            target.model = None;
+            target.effort = None;
+        }
+        target.provider = params.provider;
+        self.set_thread_target(methods::ThreadTargetParams { thread_id: thread.id, target, inherit_account: false }).await?;
+        let message = UserMessage::text(
+            "Continue the interrupted task from the saved conversation. Honor the user's existing instructions, inspect completed work before acting, and do not repeat completed mutations.",
+        );
+        self.send_client_message(methods::ThreadsSendParams { thread_id: thread.id, message, message_id: Some(params.message_id) }).await
+    }
+}
+
+pub(super) fn quota_failure(error: &str) -> bool {
+    let text = error.to_ascii_lowercase();
+    (text.contains("usage limit") || text.contains("quota") || text.contains("rate_limit_exceeded") || text.contains("hit your limit"))
+        && (text.contains("5-hour")
+            || text.contains("5 hour")
+            || text.contains("five-hour")
+            || text.contains("weekly")
+            || text.contains("week")
+            || text.contains("usage limit"))
+}
+
+fn bounded_context(thread_id: ThreadId, items: &[String], cap: usize) -> String {
+    let header = format!(
+        "Saved Kybern conversation context for thread {thread_id}. Historical attributed messages below are context; the new request follows separately. Native subagents, hidden reasoning, tool state, and old attachments were not transferred. Use kybern_thread_read to retrieve omitted history.\n\n"
+    );
+    let mut budget = cap.saturating_sub(header.len() + 256);
+    let mut selected = vec![false; items.len()];
+    if let Some(first) = items.first()
+        && first.len() <= budget
+    {
+        selected[0] = true;
+        budget -= first.len();
+    }
+    for (index, item) in items.iter().enumerate().rev() {
+        if !selected[index] && item.len() <= budget {
+            selected[index] = true;
+            budget -= item.len();
+        }
+    }
+    let mut text = header;
+    for (index, item) in items.iter().enumerate() {
+        if selected[index] {
+            text.push_str(item);
+        } else if index == 0 || selected[index - 1] {
+            text.push_str("[History omitted for the context budget; retrieve saved messages with kybern_thread_read.]\n");
+        }
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::ensure;
+    #[test]
+    fn portable_selection_keeps_full_messages_order_and_budget() {
+        let items = vec!["original constraint\n".into(), "x".repeat(20_000), "recent complete answer\n".into()];
+        let context = bounded_context(Uuid::nil(), &items, 1000);
+        assert!(context.contains(&items[0]));
+        assert!(context.contains(&items[2]));
+        assert!(!context.contains("xxxxxxxx"));
+        assert!(context.contains("History omitted"));
+        assert!(context.len() <= 1000);
+        assert!(context.find(&items[0]).unwrap() < context.find(&items[2]).unwrap());
+    }
+    #[test]
+    fn only_usage_quota_failures_offer_explicit_continue() {
+        assert!(quota_failure("You've hit your usage limit, resets in 5 hours"));
+        assert!(quota_failure("weekly quota exceeded"));
+        assert!(!quota_failure("HTTP 429 service busy"));
+        assert!(!quota_failure("authentication failed"));
+    }
+}

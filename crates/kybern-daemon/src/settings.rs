@@ -42,6 +42,7 @@ impl SettingsStore {
                 kybern_drivers::omp_profile::normalize(profile)?;
             }
         }
+        crate::provider_accounts::validate(&settings)?;
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();
         Ok(settings)
@@ -80,6 +81,11 @@ pub fn provider_settings(
         && let Some(profile) = project_path.and_then(|path| provider.project_profiles.get(path))
     {
         provider.env.insert("OMP_PROFILE".into(), profile.trim().into());
+    }
+    let instance = crate::provider_accounts::resolve(&provider, project_path, None);
+    // Settings are validated before persistence. Legacy defaults stay unchanged.
+    if let Ok(env) = crate::provider_accounts::environment(&provider, kind, &instance) {
+        provider.env = env;
     }
     provider
 }

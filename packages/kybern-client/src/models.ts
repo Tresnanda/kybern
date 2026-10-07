@@ -210,17 +210,19 @@ export function rememberModel(recent: readonly string[], id: string, limit = 5):
 export interface FavoriteModel {
   kind: string;
   id: string;
+  /** Missing on legacy favorites means the regular CLI account. */
+  instance?: string;
 }
 
-export function isFavorite(favorites: readonly FavoriteModel[], kind: string, id: string): boolean {
-  return favorites.some((item) => item.kind === kind && item.id === id);
+export function isFavorite(favorites: readonly FavoriteModel[], kind: string, id: string, instance = "default"): boolean {
+  return favorites.some((item) => item.kind === kind && item.id === id && (item.instance ?? "default") === instance);
 }
 
 /** Adds or removes a favorite; new favorites go last so the list keeps the order they were starred in. */
-export function toggleFavorite(favorites: readonly FavoriteModel[], kind: string, id: string): FavoriteModel[] {
-  return isFavorite(favorites, kind, id)
-    ? favorites.filter((item) => item.kind !== kind || item.id !== id)
-    : [...favorites, { kind, id }];
+export function toggleFavorite(favorites: readonly FavoriteModel[], kind: string, id: string, instance = "default"): FavoriteModel[] {
+  return isFavorite(favorites, kind, id, instance)
+    ? favorites.filter((item) => item.kind !== kind || item.id !== id || (item.instance ?? "default") !== instance)
+    : [...favorites, { kind, id, ...(instance === "default" ? {} : { instance }) }];
 }
 
 /** A discovered catalog is a set of suggestions, not an allowlist. */

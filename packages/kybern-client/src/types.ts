@@ -125,6 +125,15 @@ export interface ProviderInstance {
 export type PermissionMode =
   "supervised" | "accept-edits" | "auto" | "full-access";
 
+export interface ProviderAccount { name: string; directory: string }
+export interface SessionTarget { provider: ProviderInstance; model?: string | null; effort?: string | null }
+export interface ThreadTargetState {
+  target: SessionTarget;
+  account_override: boolean;
+  effective_permission_mode: PermissionMode;
+  pending_permission_mode?: PermissionMode | null;
+}
+
 export interface ProviderModel {
   /** Model selector accepted by the provider. */
   id: string;
@@ -1546,6 +1555,9 @@ export interface EventsRangeResult {
 // ---- settings, usage, git, github ----
 
 export interface ProviderSettings {
+  accounts?: Record<string, ProviderAccount>;
+  default_account?: string | null;
+  project_accounts?: Record<string, string>;
   binary?: string | null;
   model?: string | null;
   env: Record<string, string>;
@@ -1997,6 +2009,14 @@ export interface Methods {
   "daemon.activity": [Empty, DaemonActivity];
   "sessions.list": [{ provider: ProviderKind; query?: string; project_id?: ProjectId | null; cursor?: string | null }, SessionsListResult];
   "sessions.resume": [{ provider: ProviderKind; session_id: string; project_id?: ProjectId | null }, Thread];
+  "providers.accounts.create": [{ kind: ProviderKind; name: string; directory?: string | null }, ProviderInstance];
+  "providers.accounts.sign_in": [ProviderInstance, TerminalInfo];
+  "providers.accounts.usage": [ProviderInstance, ProviderUsage];
+  "providers.accounts.catalog": [{ provider: ProviderInstance; project_id?: ProjectId | null; force_refresh?: boolean }, ProviderStatus];
+  "threads.target.get": [{ thread_id: ThreadId }, ThreadTargetState];
+  "threads.target.set": [{ thread_id: ThreadId; target: SessionTarget; inherit_account?: boolean }, ThreadTargetState];
+  "threads.permissions.apply": [{ thread_id: ThreadId }, Thread];
+  "threads.switch_continue": [{ thread_id: ThreadId; provider: ProviderInstance; message_id: MessageId }, ThreadsSendResult];
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];

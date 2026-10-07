@@ -135,6 +135,37 @@ enum Cmd {
         #[arg(long)]
         refresh: bool,
     },
+    /// Manage native-isolated named accounts.
+    Accounts {
+        #[command(subcommand)]
+        cmd: AccountsCmd,
+    },
+    /// Inspect or choose the next-message target of an existing conversation.
+    Target {
+        thread: ThreadId,
+        #[arg(long)]
+        provider: Option<ProviderKind>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        #[arg(long)]
+        inherit: bool,
+    },
+    /// Continue an interrupted usage-limited task on an explicitly selected account.
+    SwitchContinue {
+        thread: ThreadId,
+        #[arg(long)]
+        provider: ProviderKind,
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        message_id: Option<MessageId>,
+    },
+    /// Stop the turn and apply a pending permission change now.
+    ApplyPermissions { thread: ThreadId },
     /// List saved conversations from an agent harness.
     Sessions {
         #[arg(long)]
@@ -599,6 +630,47 @@ enum QueueCmd {
 }
 
 #[derive(Subcommand)]
+enum AccountsCmd {
+    List {
+        #[arg(long)]
+        provider: ProviderKind,
+    },
+    Create {
+        #[arg(long)]
+        provider: ProviderKind,
+        name: String,
+        #[arg(long)]
+        directory: Option<String>,
+    },
+    SignIn {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+    },
+    Usage {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+    },
+    Catalog {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        refresh: bool,
+    },
+    Default {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ProjectsCmd {
     List,
     /// Browse directories on the connected environment.
@@ -831,6 +903,120 @@ pub async fn run() -> Result<()> {
             };
             let r = client.call::<ProvidersList>(ProvidersListParams { project_id, force_refresh: refresh }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::providers(&r.providers) }
+        }
+        Cmd::Accounts { cmd } => match cmd {
+            AccountsCmd::List { provider } => {
+                let settings = client.call::<SettingsGet>(Empty {}).await?;
+                let provider_settings = settings.providers.get(&provider).cloned().unwrap_or_default();
+                println!("{}", serde_json::to_string_pretty(&provider_settings)?);
+            }
+            AccountsCmd::Create { provider, name, directory } => {
+                let account = client.call::<AccountsCreate>(AccountsCreateParams { kind: provider, name, directory }).await?;
+                println!("{}", serde_json::to_string_pretty(&account)?);
+            }
+            AccountsCmd::SignIn { provider, account } => {
+                let terminal = client.call::<AccountsSignIn>(ProviderInstance { kind: provider, instance: account }).await?;
+                println!("{}", serde_json::to_string_pretty(&terminal)?);
+            }
+            AccountsCmd::Usage { provider, account } => {
+                let usage = client.call::<AccountsUsage>(ProviderInstance { kind: provider, instance: account }).await?;
+                println!("{}", serde_json::to_string_pretty(&usage)?);
+            }
+            AccountsCmd::Catalog { provider, account, project, refresh } => {
+                let project_id = match project {
+                    Some(project) => Some(resolve_project(&client, &project, false).await?),
+                    None => None,
+                };
+                let status = client
+                    .call::<AccountsCatalog>(AccountsCatalogParams {
+                        provider: ProviderInstance { kind: provider, instance: account },
+                        project_id,
+                        force_refresh: refresh,
+                    })
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            }
+            AccountsCmd::Default { provider, account, project } => {
+                let mut settings = client.call::<SettingsGet>(Empty {}).await?;
+                let path = match project {
+                    Some(project) => {
+                        let id = resolve_project(&client, &project, false).await?;
+                        Some(
+                            client
+                                .call::<ProjectsList>(Empty {})
+                                .await?
+                                .projects
+                                .into_iter()
+                                .find(|p| p.id == id)
+                                .ok_or_else(|| anyhow!("project not found"))?
+                                .path,
+                        )
+                    }
+                    None => None,
+                };
+                let provider_settings = settings.providers.entry(provider).or_default();
+                if let Some(path) = path {
+                    if account == "inherit" {
+                        provider_settings.project_accounts.remove(&path);
+                    } else {
+                        provider_settings.project_accounts.insert(path, account);
+                    }
+                } else {
+                    provider_settings.default_account = Some(account);
+                }
+                println!("{}", serde_json::to_string_pretty(&client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?)?);
+            }
+        },
+        Cmd::Target { thread, provider, account, model, effort, inherit } => {
+            let state = client.call::<ThreadsTargetGet>(ThreadsInterruptParams { thread_id: thread }).await?;
+            if provider.is_some() || account.is_some() || model.is_some() || effort.is_some() || inherit {
+                let mut target = state.target;
+                if let Some(provider) = provider {
+                    target.provider.kind = provider;
+                    target.provider.instance = "default".into();
+                    target.model = None;
+                    target.effort = None;
+                }
+                if let Some(account) = account {
+                    target.provider.instance = account;
+                }
+                if let Some(model) = model {
+                    target.model = (!model.is_empty()).then_some(model);
+                }
+                if let Some(effort) = effort {
+                    target.effort = (!effort.is_empty()).then_some(effort);
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &client
+                            .call::<ThreadsTargetSet>(ThreadTargetParams { thread_id: thread, target, inherit_account: inherit })
+                            .await?
+                    )?
+                );
+            } else {
+                println!("{}", serde_json::to_string_pretty(&state)?);
+            }
+        }
+        Cmd::SwitchContinue { thread, provider, account, message_id } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &client
+                        .call::<ThreadsSwitchContinue>(ThreadsSwitchContinueParams {
+                            thread_id: thread,
+                            provider: ProviderInstance { kind: provider, instance: account },
+                            message_id: message_id.unwrap_or_else(uuid::Uuid::now_v7)
+                        })
+                        .await?
+                )?
+            );
+        }
+        Cmd::ApplyPermissions { thread } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&client.call::<ThreadsPermissionsApply>(ThreadsInterruptParams { thread_id: thread }).await?)?
+            );
         }
         Cmd::Sessions { provider, project, cursor, query } => {
             let project_id = match project {
