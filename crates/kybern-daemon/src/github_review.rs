@@ -174,6 +174,12 @@ async fn write_api(cwd: &Path, endpoint: &str, method: &str, value: Value) -> Re
     Ok(())
 }
 
+pub(crate) fn validate_checkout_head(expected: &str, current: &str) -> Result<()> {
+    ensure!(!expected.is_empty(), "Refresh this pull request before checkout or repair.");
+    ensure!(expected == current, "The pull request changed. Refresh it and check the selected findings before checkout or repair.");
+    Ok(())
+}
+
 pub async fn action(cwd: &Path, p: &PrActionParams) -> Result<()> {
     validate_number(p.number)?;
     ensure!(p.body.len() <= 64 * 1024 && p.inline_comments.len() <= 100, "Keep the review below 64 KiB and 100 inline comments.");
@@ -184,6 +190,8 @@ pub async fn action(cwd: &Path, p: &PrActionParams) -> Result<()> {
     let pull = format!("repos/{{owner}}/{{repo}}/pulls/{}", p.number);
     match p.action {
         PrActionKind::Checkout => {
+            let current = detail(cwd, p.number).await?;
+            validate_checkout_head(&p.head_sha, &current.head_sha)?;
             run(cwd, "gh", &["pr", "checkout", &p.number.to_string()]).await?;
         }
         PrActionKind::Close => write_api(cwd, &pull, "PATCH", json!({"state":"closed"})).await?,

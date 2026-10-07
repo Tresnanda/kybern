@@ -42,6 +42,7 @@ import {
   useReviews,
 } from "@/state/prReview"
 import {
+  assertReviewDraftHead,
   clearReviewDraft,
   repairReviewPrompt,
   reuseReviewDraftText,
@@ -221,6 +222,7 @@ export function PrReview({
     setBusy(true)
     setActionError(null)
     try {
+      assertReviewDraftHead(draft, detail.head_sha)
       const body = repairReviewPrompt(
         number,
         detail.pull_request.title,
@@ -240,15 +242,16 @@ export function PrReview({
         // a second repair conversation or loses the selected findings.
         updateReviewDraft(key, { threadId: target })
       }
-      const status = await client.call("git.status", { thread_id: target })
-      if (status.branch !== detail.pull_request.head) {
-        await client.call("github.pr.action", {
-          project_id: projectId,
-          number,
-          action: "checkout",
-          thread_id: target,
-        })
-      }
+      // Branch names can collide across fork PRs, and a local branch can be stale.
+      // The daemon proves this checkout belongs to the reviewed head before send.
+      await client.call("github.pr.action", {
+        project_id: projectId,
+        number,
+        action: "checkout",
+        thread_id: target,
+        head_sha: detail.head_sha,
+        for_repair: true,
+      })
       await runtime.sendMessage(target, {
         parts: [{ type: "text", text: body }],
       })
@@ -948,6 +951,7 @@ export function PrReview({
                   disabled={
                     busy ||
                     !settings ||
+                    staleDraft ||
                     (!selectedFindings.length && !draft.inline.length) ||
                     linkedThread?.status === "running" ||
                     linkedThread?.status === "awaiting-approval"

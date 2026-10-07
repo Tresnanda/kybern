@@ -244,8 +244,13 @@ impl Orchestrator {
                     if delivered.is_some_and(|sequence| sequence >= event.seq) {
                         break;
                     }
+                    let checkout = if change["verified"].as_bool() == Some(false) {
+                        "attempted checkout (PR identity was not verified) for"
+                    } else {
+                        "checked out"
+                    };
                     let mut text = format!(
-                        "Kybern workspace update requested by the human: checked out pull request #{} on branch {} at {}. This is the same conversation and working directory. Earlier discussion may describe the previous checkout; inspect the current branch and files before editing.\n\n",
+                        "Kybern workspace update requested by the human: {checkout} pull request #{} on branch {} at {}. This is the same conversation and working directory. Earlier discussion may describe the previous checkout; inspect the current branch and files before editing.\n\n",
                         change["number"],
                         change["branch"].as_str().unwrap_or("unknown"),
                         change["head"].as_str().unwrap_or("unknown")
@@ -280,37 +285,147 @@ impl Orchestrator {
             .ok_or_else(|| anyhow!("Choose a linked conversation with its own worktree before checking out this pull request."))?;
         let admission = self.session_admission(id).await;
         let _session = admission.lock().await;
-        let mut thread = self.inner.store.thread_get(id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        let thread = self.inner.store.thread_get(id)?.ok_or_else(|| anyhow!("thread not found"))?;
         ensure!(
             thread.project_id == p.project_id && thread.status != ThreadStatus::Archived,
             "Choose an open conversation in this project."
         );
+        let project = self.inner.store.project_get(p.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+        // Check the remote identity before even recreating a cleaned directory.
+        let current = crate::github_review::detail(Path::new(&project.path), p.number).await?;
+        self.pr_checkout_at_head(p, &current.head_sha, thread).await
+    }
+
+    /// The remote head is read by the admitted RPC immediately before this step.
+    /// Split out so scratch Git fixtures can verify identity without live GitHub.
+    pub(super) async fn pr_checkout_at_head(&self, p: &PrActionParams, remote_head: &str, mut thread: Thread) -> Result<()> {
+        crate::github_review::validate_checkout_head(&p.head_sha, remote_head)?;
+        ensure!(
+            thread.project_id == p.project_id && thread.status != ThreadStatus::Archived,
+            "Choose an open conversation in this project."
+        );
+        ensure!(
+            !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval),
+            "Finish the running conversation before preparing checkout or repair."
+        );
+        ensure!(self.inner.store.queue_list(Some(thread.id))?.is_empty(), "Remove queued messages before preparing checkout or repair.");
         self.restore_worktree_if_cleaned(&thread).await?;
-        let state = self.worktree_inspect(id).await?;
+        let state = self.worktree_inspect(thread.id).await?;
+        if p.for_repair && self.pr_repair_receipt_matches(&thread, p).await? {
+            self.ensure_pr_repair_inactive(&thread).await?;
+            // No native restart or Git mutation: retain this PR's staged source,
+            // untracked source and local repair commits exactly as they are.
+            return Ok(());
+        }
         ensure!(
             state.clean && state.blockers.is_empty(),
             "Finish running work, close terminals and keep the worktree clean before checkout. {}",
             state.blockers.join(" ")
         );
-        if let Some(live) = self.inner.sessions.lock().await.remove(&id) {
+        if let Some(live) = self.inner.sessions.lock().await.remove(&thread.id) {
             live.mark_released();
             self.revoke_native_session(&live);
             live.session.close().await?;
         }
-        let final_state = self.worktree_inspect(id).await?;
+        let final_state = self.worktree_inspect(thread.id).await?;
         ensure!(final_state.clean && final_state.blockers.is_empty(), "{}", final_state.blockers.join(" "));
-        crate::github_review::action(Path::new(&thread.cwd), p).await?;
-        let branch = Repo::new(&thread.cwd).current_branch().await.ok_or_else(|| anyhow!("The pull request checkout has no branch."))?;
-        thread.worktree.as_mut().unwrap().branch = branch;
-        // The path and account stay compatible with native continuation. The next
-        // delivered prompt receives the explicit checkout marker below.
+        let repo = Repo::new(&thread.cwd);
+        let previous_branch = repo.current_branch().await;
+        let previous_head = repo.rev_parse("HEAD").await?;
+        let result = crate::github_review::action(Path::new(&thread.cwd), p).await;
+        // gh can change the worktree before returning an error, or a PR can move
+        // between its preflight and fetch. Always record the actual changed state.
+        let branch = repo.current_branch().await;
+        let head = repo.rev_parse("HEAD").await?;
+        if result.is_ok() || branch != previous_branch || head != previous_head {
+            let verified = result.is_ok() && head == p.head_sha && branch.is_some();
+            self.record_pr_checkout_state(&mut thread, p, branch.as_deref(), &head, verified)?;
+        }
+        result?;
+        ensure!(
+            branch.is_some() && head == p.head_sha,
+            "The pull request changed during checkout. The actual checkout is saved; refresh and inspect it before sending repair findings."
+        );
+        Ok(())
+    }
+
+    pub(super) fn record_pr_checkout_state(
+        &self,
+        thread: &mut Thread,
+        p: &PrActionParams,
+        branch: Option<&str>,
+        head: &str,
+        verified: bool,
+    ) -> Result<()> {
+        thread.worktree.as_mut().ok_or_else(|| anyhow!("This conversation has no managed worktree."))?.branch =
+            branch.unwrap_or("HEAD").to_owned();
         self.update_thread(thread.clone())?;
-        let head = Repo::new(&thread.cwd).rev_parse("HEAD").await?;
         self.emit(thread.id, None, EventPayload::ProviderNotice {
-            level: NoticeLevel::Info,
-            text: format!("Checked out pull request #{} on {}. The next message continues this conversation with the new checkout.", p.number, thread.worktree.as_ref().unwrap().branch),
-            data: Some(serde_json::json!({"workspace_transition":{"number":p.number,"branch":thread.worktree.as_ref().unwrap().branch,"head":head}})),
+            level: if verified { NoticeLevel::Info } else { NoticeLevel::Warning },
+            text: if verified {
+                format!("Checked out pull request #{} on {}. The next message continues this conversation with the new checkout.", p.number, thread.worktree.as_ref().unwrap().branch)
+            } else {
+                format!("Pull request #{} checkout changed the workspace but did not verify the reviewed commit. Refresh and inspect it before sending repair findings.", p.number)
+            },
+            data: Some(serde_json::json!({"workspace_transition":{"number":p.number,"branch":thread.worktree.as_ref().unwrap().branch,"head":head,"verified":verified}})),
         })?;
+        Ok(())
+    }
+
+    pub(super) async fn pr_repair_receipt_matches(&self, thread: &Thread, p: &PrActionParams) -> Result<bool> {
+        let events = self.inner.store.events_for_thread(thread.id)?;
+        let receipt = events.iter().rev().find_map(|event| match &event.payload {
+            EventPayload::ProviderNotice { data: Some(data), .. } => data.get("workspace_transition"),
+            _ => None,
+        });
+        let Some(receipt) = receipt else { return Ok(false) };
+        let repo = Repo::new(&thread.cwd);
+        let branch = repo.current_branch().await;
+        Ok(receipt["number"].as_u64() == Some(p.number)
+            && receipt["head"].as_str() == Some(p.head_sha.as_str())
+            && receipt["verified"].as_bool() != Some(false)
+            && branch.as_deref() == receipt["branch"].as_str()
+            && branch.as_deref() == thread.worktree.as_ref().map(|tree| tree.branch.as_str())
+            && repo.is_ancestor(&p.head_sha, "HEAD").await.unwrap_or(false))
+    }
+
+    async fn ensure_pr_repair_inactive(&self, thread: &Thread) -> Result<()> {
+        ensure!(
+            !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval | ThreadStatus::Archived),
+            "Finish the running conversation before sending repair findings."
+        );
+        ensure!(self.inner.store.queue_list(Some(thread.id))?.is_empty(), "Remove queued messages before preparing this repair.");
+        let owners = self.inner.store.threads_list(Some(thread.project_id), true)?;
+        ensure!(
+            !owners.iter().any(|owner| owner.id != thread.id
+                && owner.subagent.is_none()
+                && (Path::new(&owner.cwd).starts_with(&thread.cwd)
+                    || owner.worktree.as_ref().is_some_and(|tree| tree.branch == thread.worktree.as_ref().unwrap().branch))),
+            "Another conversation owns this folder or branch. Choose its own repair worktree."
+        );
+        for owner in owners.iter().filter(|owner| Path::new(&owner.cwd).starts_with(&thread.cwd)) {
+            ensure!(
+                !matches!(owner.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval),
+                "Finish foreground agents using this worktree before preparing repair."
+            );
+            let active_foreground =
+                kybern_store::project_runtime_tasks(&self.inner.store.events_for_thread(owner.id)?).iter().any(|task| {
+                    task.status.is_active()
+                        && !(task.backgrounded && matches!(task.kind, RuntimeTaskKind::Process | RuntimeTaskKind::Monitor))
+                });
+            ensure!(!active_foreground, "Finish foreground tasks using this worktree before preparing repair.");
+        }
+        if let Some(live) = self.inner.sessions.lock().await.get(&thread.id).cloned() {
+            ensure!(
+                live.turn.lock().await.is_none() && live.app_tool_requests.lock().await.is_empty(),
+                "Wait for the foreground session and tools to finish before preparing repair."
+            );
+            ensure!(
+                !live.tasks.lock().await.values().any(|task| task.status.is_active()
+                    && !(task.backgrounded && matches!(task.kind, RuntimeTaskKind::Process | RuntimeTaskKind::Monitor))),
+                "Finish foreground tasks before preparing repair."
+            );
+        }
         Ok(())
     }
 }

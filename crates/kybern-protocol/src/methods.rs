@@ -1870,12 +1870,15 @@ pub struct PrActionParams {
     pub body: String,
     #[serde(default)]
     pub inline_comments: Vec<PrInlineComment>,
-    /// Required for reviews and merge: reject a changed PR head.
+    /// Required for checkout, reviews and merge: reject a changed PR head.
     #[serde(default)]
     pub head_sha: String,
     /// Checkout is allowed only into this inactive thread's managed worktree.
     #[serde(default)]
     pub thread_id: Option<ThreadId>,
+    /// Verified repair preparation may preserve local changes belonging to this PR.
+    #[serde(default)]
+    pub for_repair: bool,
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
