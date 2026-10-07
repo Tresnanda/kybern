@@ -896,7 +896,7 @@ async fn capabilities_report_harnesses_limits_and_counts() {
     let harnesses = caps["harnesses"].as_array().unwrap();
     let claude = harnesses.iter().find(|h| h["provider"] == "claude-code").expect("claude-code listed");
     assert_eq!(claude["supports_steer"], true);
-    assert_eq!(harnesses.iter().find(|h| h["provider"] == "opencode").map_or(false, |h| h["supports_steer"] == true), false);
+    assert!(!harnesses.iter().any(|h| h["provider"] == "opencode" && h["supports_steer"] == true));
     assert_eq!(caps["you"]["provider"], "claude-code");
 }
 
