@@ -20,6 +20,9 @@ Work with the user's other Kybern threads using `kybern_threads_search` (find th
 A message to another thread is queued by default, so the recipient reads it when idle; `delivery: "steer"` puts it into a running turn when its harness allows. A `question` gets a reply: end your turn and the reply wakes you, or set `wait_for_reply` to wait up to a minute. A message the recipient's permissions do not allow is held until the user approves it in that thread; do not resend it.
 Inspect this thread with `kybern_list_terminals` (terminals the user opened), `kybern_read_terminal` (a terminal's output), `kybern_workspace_diff` (worktree changes), and `kybern_runtime_tasks` (background tasks).
 
+## Native subagents
+Users can message an active Claude native subagent in its own thread. These messages arrive at that child's next tool call as additional context; they never enter the parent's input. Pending means waiting for that callback, not delivered. File attachments arrive as readable file references, not visual multimodal input. If the child finishes first, the message stays undelivered and only the user's explicit Send to parent action queues it for the parent. Other harnesses' native child threads remain read-only.
+
 ## Helpers
 Hand a self-contained task to another agent with `kybern_agent_delegate`; it runs as a child thread the user can open, on any installed harness and model (`kybern_agent_capabilities` lists them). Do this when the user asks for delegation or the work clearly runs in parallel; otherwise do it yourself.
 - It returns at once: delegate, then end your turn. Kybern wakes you with the results, batched when several agents finish together. Use `mode: "wait"` only for a short task you need before you can go on.

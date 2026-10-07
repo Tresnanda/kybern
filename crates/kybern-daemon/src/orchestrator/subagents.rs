@@ -50,6 +50,12 @@ pub(super) struct SubagentRouter {
     pending: VecDeque<(ThreadId, String, DriverEvent)>,
 }
 
+impl SubagentRouter {
+    pub(super) fn message_turn(&self, child: ThreadId) -> Option<TurnId> {
+        self.children.get(&child).filter(|child| child.turn_open).map(|child| child.turn_id)
+    }
+}
+
 struct Child {
     root: ThreadId,
     title: String,
@@ -198,7 +204,7 @@ impl Orchestrator {
     }
 
     /// Start the turn of a subagent whose prompt never arrived, using its title.
-    fn subagent_ensure_started(&self, router: &mut SubagentRouter, child_id: ThreadId) -> Result<()> {
+    pub(super) fn subagent_ensure_started(&self, router: &mut SubagentRouter, child_id: ThreadId) -> Result<()> {
         let Some(child) = router.children.get(&child_id) else { return Ok(()) };
         if child.turn_started || !child.turn_open {
             return Ok(());
@@ -213,7 +219,7 @@ impl Orchestrator {
 
     /// Create or refresh the child thread of an `Agent` runtime task. Idempotent:
     /// call it after every runtime-task event with the latest snapshot.
-    pub(super) fn subagent_sync(&self, root: ThreadId, task: &RuntimeTask) -> Result<()> {
+    pub(super) fn subagent_sync(&self, root: ThreadId, task: &RuntimeTask, session_owner: Option<Uuid>) -> Result<()> {
         if task.kind != RuntimeTaskKind::Agent {
             return Ok(());
         }
@@ -262,6 +268,17 @@ impl Orchestrator {
                 (thread, true)
             }
         };
+
+        if let Some(owner) = session_owner {
+            let key = format!("subagent_owner:{}", child_thread.id);
+            // Task identities must stay bound to their original process.
+            if self.inner.store.meta_get(&key)?.is_none() {
+                self.inner.store.meta_set(&key, &owner.to_string())?;
+            }
+        }
+        if !task.status.is_active() {
+            self.fail_subagent_messages(child_thread.id, "Not delivered — subagent finished.")?;
+        }
 
         // Register every id the provider may use for this subagent.
         let mut keys = vec![task.id.clone()];

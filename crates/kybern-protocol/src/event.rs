@@ -53,6 +53,9 @@ pub enum EventPayload {
     MessageQueueUpdated {
         message: crate::methods::QueuedMessage,
     },
+    SubagentMessageUpdated {
+        message: SubagentMessage,
+    },
     MessageSteered {
         message_id: MessageId,
         message: UserMessage,
@@ -258,6 +261,7 @@ impl EventPayload {
             Self::MessageQueued { .. } => "message_queued",
             Self::MessageRemoved { .. } => "message_removed",
             Self::MessageQueueUpdated { .. } => "message_queue_updated",
+            Self::SubagentMessageUpdated { .. } => "subagent_message_updated",
             Self::MessageSteered { .. } => "message_steered",
             Self::ThreadNotesUpdated { .. } => "thread_notes_updated",
             Self::ProjectCoordinatorDeleted { .. } => "project_coordinator_deleted",

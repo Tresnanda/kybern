@@ -521,6 +521,14 @@ pub struct ThreadNotesSetParams {
 method!(ThreadNotesGet, "threads.notes.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadNotes);
 method!(ThreadNotesSet, "threads.notes.set", Some(Scope::OrchestrationOperate), ThreadNotesSetParams, ThreadNotes);
 method!(ThreadsSteer, "threads.steer", Some(Scope::OrchestrationOperate), QueuedMessage, ThreadsSendResult);
+method!(SubagentsSend, "subagents.send", Some(Scope::OrchestrationOperate), QueuedMessage, SubagentMessage);
+method!(SubagentsMessages, "subagents.messages", Some(Scope::OrchestrationRead), ThreadsInterruptParams, Vec<SubagentMessage>);
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubagentMessageActionParams {
+    pub thread_id: ThreadId,
+    pub message_id: MessageId,
+}
+method!(SubagentsSendToParent, "subagents.send_to_parent", Some(Scope::OrchestrationOperate), SubagentMessageActionParams, SubagentMessage);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsInterruptParams {
@@ -2793,6 +2801,9 @@ registry!(
     ThreadsArchive,
     ThreadsSend,
     ThreadsSteer,
+    SubagentsSend,
+    SubagentsMessages,
+    SubagentsSendToParent,
     ThreadNotesGet,
     ThreadNotesSet,
     NotesList,

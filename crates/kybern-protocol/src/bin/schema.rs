@@ -97,6 +97,9 @@ fn main() {
     method::<ThreadsArchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);
     method::<ThreadsSteer>(&mut methods);
+    method::<SubagentsSend>(&mut methods);
+    method::<SubagentsMessages>(&mut methods);
+    method::<SubagentsSendToParent>(&mut methods);
     method::<ThreadNotesGet>(&mut methods);
     method::<ThreadNotesSet>(&mut methods);
     method::<NotesList>(&mut methods);

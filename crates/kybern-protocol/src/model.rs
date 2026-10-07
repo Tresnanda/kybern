@@ -1986,3 +1986,31 @@ mod orchestration_tests {
         assert_eq!(legacy.orchestration, OrchestrationSettings::default());
     }
 }
+
+/// Delivery through one native child's next tool callback. Pending is not delivered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentMessageStatus {
+    Pending,
+    Delivered,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubagentMessage {
+    pub id: MessageId,
+    pub thread_id: ThreadId,
+    pub root_thread_id: ThreadId,
+    pub task_id: String,
+    /// Daemon-local admitted process. Never reuse this input in a replacement session.
+    pub native_task_id: String,
+    pub session_instance_id: uuid::Uuid,
+    pub turn_id: TurnId,
+    pub message: UserMessage,
+    pub status: SubagentMessageStatus,
+    pub error: Option<String>,
+    pub parent_message_id: Option<MessageId>,
+    pub parent_queued: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}

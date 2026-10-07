@@ -42,6 +42,13 @@ export default mergeConfig(base, {
       const transport = JSON.stringify(path.resolve(import.meta.dirname, "pr-review-rpc.ts"))
       return code.replaceAll('"@/state/rpc"', transport).replaceAll('"./rpc"', transport)
     },
+  }] : process.env.KYBERN_PERF_FIXTURE === "native-subagents" ? [{
+    name: "native-subagent-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/subagents/NativeSubagentComposer.tsx")) return
+      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "native-subagents-rpc.ts")))
+    },
   }] : process.env.KYBERN_PERF_FIXTURE === "theme-provider" ? [{
     name: "theme-provider-fixture-tauri",
     enforce: "pre",

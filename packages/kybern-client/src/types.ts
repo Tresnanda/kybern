@@ -830,6 +830,7 @@ export type EventPayload =
   | { kind: "message_queued"; message: QueuedMessage }
   | { kind: "message_removed"; message_id: MessageId }
   | { kind: "message_queue_updated"; message: QueuedMessage }
+  | { kind: "subagent_message_updated"; message: SubagentMessage }
   | { kind: "message_steered"; message_id: MessageId; message: UserMessage }
   | { kind: "thread_notes_updated"; notes: ThreadNotes }
   | { kind: "thread_message_held"; message: ThreadMessageRecord }
@@ -2000,6 +2001,9 @@ export interface QueuedMessage {
 export interface Methods {
   "queue.add": [QueuedMessage, Record<string, never>];
   "queue.update": [QueuedMessage, Record<string, never>];
+  "subagents.send": [QueuedMessage, SubagentMessage];
+  "subagents.messages": [ThreadsInterruptParams, SubagentMessage[]];
+  "subagents.send_to_parent": [SubagentMessageActionParams, SubagentMessage];
   "threads.steer": [QueuedMessage, ThreadsSendResult];
   "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
   "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
@@ -2191,3 +2195,21 @@ export interface IntegrationsCatalog { items: Integration[]; warnings: string[] 
 export interface IntegrationChangeResult { message: string; connections: Integration[] }
 
 export interface ArtifactTool { seq: number; at: DateTime; call: ToolCall; output: JsonValue | null; is_error: boolean }
+
+export interface SubagentMessage {
+  id: MessageId;
+  thread_id: ThreadId;
+  root_thread_id: ThreadId;
+  task_id: string;
+  native_task_id: string;
+  session_instance_id: string;
+  turn_id: TurnId;
+  message: UserMessage;
+  status: "pending" | "delivered" | "failed";
+  error: string | null;
+  parent_message_id: MessageId | null;
+  parent_queued: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface SubagentMessageActionParams { thread_id: ThreadId; message_id: MessageId; }

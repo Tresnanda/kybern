@@ -245,6 +245,17 @@ enum Cmd {
     },
     /// Steer the currently running turn using the provider's native input control.
     Steer { thread: String, prompt: Vec<String> },
+    /// Queue a message for an active Claude native subagent's next tool call.
+    SubagentSend {
+        thread: String,
+        #[arg(long)]
+        message_id: Option<uuid::Uuid>,
+        prompt: Vec<String>,
+    },
+    /// Read durable native child delivery states.
+    SubagentMessages { thread: String },
+    /// Explicitly send an undelivered child message to its root parent.
+    SubagentSendToParent { thread: String, message_id: uuid::Uuid },
     /// Read or update a thread's personal notes.
     Notes {
         thread: String,
@@ -1174,6 +1185,25 @@ pub async fn run() -> Result<()> {
             if let Some(sub) = sub {
                 render::follow_turn(&client, sub.subscription_id, thread_id, json).await?;
             }
+        }
+        Cmd::SubagentSend { thread, message_id, prompt } => {
+            let result = client
+                .call::<SubagentsSend>(QueuedMessage {
+                    thread_id: thread.parse()?,
+                    id: message_id.unwrap_or_else(uuid::Uuid::now_v7),
+                    message: UserMessage::text(join_prompt(prompt)?),
+                })
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Cmd::SubagentMessages { thread } => {
+            let result = client.call::<SubagentsMessages>(ThreadsInterruptParams { thread_id: thread.parse()? }).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Cmd::SubagentSendToParent { thread, message_id } => {
+            let result =
+                client.call::<SubagentsSendToParent>(SubagentMessageActionParams { thread_id: thread.parse()?, message_id }).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Steer { thread, prompt } => {
             let result = client

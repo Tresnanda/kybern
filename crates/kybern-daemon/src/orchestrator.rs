@@ -27,6 +27,7 @@ mod agent_items;
 mod delegation;
 mod messaging;
 mod notes;
+mod subagent_messaging;
 mod subagents;
 mod tasks;
 mod worktrees;
@@ -3277,6 +3278,7 @@ impl Orchestrator {
     /// Provider-owned tasks and turns cannot survive a daemon restart. Close
     /// both projections explicitly so clients never show immortal work.
     pub async fn recover_after_restart(&self) -> Result<()> {
+        self.fail_all_subagent_messages("Not delivered — native session ended before delivery could be confirmed.")?;
         let threads = self.inner.store.threads_list(None, true)?;
         for t in &threads {
             let tasks = self.inner.store.runtime_tasks_for_thread(t.id)?;
@@ -3290,7 +3292,7 @@ impl Orchestrator {
                 checkpoint_turns.insert(task.origin_turn_id);
                 self.emit(t.id, Some(task.origin_turn_id), EventPayload::RuntimeTaskCompleted { task: task.clone() })?;
                 if t.subagent.is_none()
-                    && let Err(error) = self.subagent_sync(t.id, &task)
+                    && let Err(error) = self.subagent_sync(t.id, &task, None)
                 {
                     tracing::warn!(thread_id = %t.id, task_id = %task.id, %error, "could not settle the subagent thread");
                 }
@@ -5493,7 +5495,7 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
-        if let Err(error) = self.subagent_sync(thread_id, &task) {
+        if let Err(error) = self.subagent_sync(thread_id, &task, Some(live.session_instance_id)) {
             tracing::warn!(%thread_id, task_id = %task.id, %error, "could not update the subagent thread");
         }
         if !task.status.is_active() {
@@ -5570,7 +5572,7 @@ impl Orchestrator {
             _ => unreachable!("runtime task emission changed payload kind"),
         };
         live.tasks.lock().await.insert(task.id.clone(), task.clone());
-        if let Err(error) = self.subagent_sync(thread_id, &task) {
+        if let Err(error) = self.subagent_sync(thread_id, &task, Some(live.session_instance_id)) {
             tracing::warn!(%thread_id, task_id = %task.id, %error, "could not update the subagent thread");
         }
         if !resumed && (completed || !task.status.is_active()) {
@@ -5800,6 +5802,10 @@ impl Orchestrator {
 
     async fn process_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent, retiring: bool) -> Result<()> {
         live.touch();
+        if let DriverEvent::SubagentMessageDelivered { task_id, message_id } = &ev {
+            self.acknowledge_subagent_message(thread_id, live.session_instance_id, task_id, message_id)?;
+            return Ok(());
+        }
         // A subagent's own prose and tool calls belong to its child thread and
         // never reach the parent's log or its turn bookkeeping.
         if live.stop_cleanup.load(Ordering::Relaxed) && !retiring {
@@ -5882,6 +5888,7 @@ impl Orchestrator {
             );
         }
         match ev {
+            DriverEvent::SubagentMessageDelivered { .. } => unreachable!("handled before root turn bookkeeping"),
             // Consumed by `subagent_take_event` before this point.
             DriverEvent::SubagentPrompt { .. } | DriverEvent::SubagentOnly { .. } => {}
             DriverEvent::ResponseStarted => {}
@@ -6567,6 +6574,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AgentSession for TestSession {
+        async fn send_subagent_message(&self, _task_id: &str, _message_id: &str, _message: &UserMessage) -> kybern_drivers::Result<()> {
+            Ok(())
+        }
+
         async fn stop_runtime_task(&self, task: &RuntimeTask) -> kybern_drivers::Result<()> {
             self.stopped_tasks.lock().await.push(task.id.clone());
             Ok(())
@@ -10406,4 +10417,5 @@ for line in sys.stdin:
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");
+    include!("orchestrator/subagent_messaging_tests.rs");
 }

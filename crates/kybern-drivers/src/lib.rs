@@ -314,6 +314,11 @@ impl DriverRuntimeTaskUpdate {
 /// Normalized stream of what a provider is doing. Ordered per session.
 #[derive(Debug, Clone)]
 pub enum DriverEvent {
+    /// A native child's PreToolUse callback accepted exactly this queued input.
+    SubagentMessageDelivered {
+        task_id: String,
+        message_id: String,
+    },
     /// Root provider inference began, possibly after a background notification
     /// with no new user message. Repeated signals within a turn are harmless.
     ResponseStarted,
@@ -445,6 +450,10 @@ pub enum DriverEvent {
 
 #[async_trait]
 pub trait AgentSession: Send + Sync {
+    /// Queue input for this exact active native child. Never write it to root stdin.
+    async fn send_subagent_message(&self, _task_id: &str, _message_id: &str, _message: &UserMessage) -> Result<()> {
+        Err(DriverError::Unsupported("This harness does not support native subagent messages.".into()))
+    }
     /// Queue a user turn. `message_id` is kybern's id for the message; drivers that
     /// accept a client-chosen id use it so rewinds can reference the turn.
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()>;

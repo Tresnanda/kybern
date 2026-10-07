@@ -342,6 +342,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             })?;
             ok(sent)
         }
+        SubagentsSend::NAME => ok(state.orchestrator.send_subagent_message(parse(params)?).await.map_err(bad)?),
+        SubagentsMessages::NAME => {
+            let p: ThreadsInterruptParams = parse(params)?;
+            ok(state.orchestrator.subagent_messages(p.thread_id).await.map_err(bad)?)
+        }
+        SubagentsSendToParent::NAME => ok(state.orchestrator.send_subagent_message_to_parent(parse(params)?).await.map_err(bad)?),
         ThreadsSteer::NAME => ok(state.orchestrator.steer(parse(params)?).await.map_err(bad)?),
         ThreadNotesGet::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;

@@ -424,6 +424,11 @@ const MIGRATIONS: &[&str] = &[
     // v20: bounded, indexed identity lookup for preview-result persistence.
     "CREATE INDEX tool_start_identity ON events(thread_id, json_extract(payload, '$.call.id'), seq)
       WHERE kind = 'tool_call_started';",
+    // v21: durable native child inbox, bound to the admitted process.
+    "CREATE TABLE subagent_messages(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, session_instance_id TEXT NOT NULL,
+      task_id TEXT NOT NULL, status TEXT NOT NULL, record TEXT NOT NULL);
+      CREATE INDEX subagent_messages_child ON subagent_messages(thread_id);
+      CREATE INDEX subagent_messages_pending ON subagent_messages(session_instance_id, task_id, status);",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

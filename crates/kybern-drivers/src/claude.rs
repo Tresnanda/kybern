@@ -218,13 +218,14 @@ impl AgentDriver for ClaudeDriver {
             pending_control: Mutex::new(HashMap::new()),
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new(session_id.clone()),
             catalog,
             _native_mcp_config: native_mcp_config,
         });
 
         // Initialize is optional; we send it for the command and model catalogs and to be a well-behaved client.
-        session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"] })).await?;
+        session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"], "hooks": {"PreToolUse": [{"matcher": null, "hookCallbackIds": [CHILD_MESSAGE_HOOK]}]} })).await?;
 
         let reader = session.clone();
         lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
@@ -797,6 +798,176 @@ impl TurnState {
     }
 }
 
+const CHILD_MESSAGE_HOOK: &str = "kybern_child_message";
+
+#[derive(Default)]
+struct ChildInbox {
+    active: std::collections::HashSet<String>,
+    pending: HashMap<String, Vec<(String, String)>>,
+    /// Session-local dedup survives HTTP retries; durable dedup belongs to the daemon.
+    accepted: HashMap<String, (String, u64)>,
+}
+
+impl ChildInbox {
+    fn queue(&mut self, task_id: &str, id: &str, text: String) -> Result<()> {
+        use std::hash::{Hash, Hasher};
+        let mut digest = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut digest);
+        let fingerprint = digest.finish();
+        if let Some((owner, original)) = self.accepted.get(id) {
+            return if owner == task_id && *original == fingerprint {
+                Ok(())
+            } else {
+                Err(DriverError::Protocol("Message identity already belongs to another input.".into()))
+            };
+        }
+        if !self.active.contains(task_id) {
+            return Err(DriverError::Protocol("Not delivered — subagent finished.".into()));
+        }
+        if self.pending.values().map(Vec::len).sum::<usize>() >= 100 {
+            return Err(DriverError::Protocol("Too many pending subagent messages. Wait for delivery.".into()));
+        }
+        if self.accepted.len() >= 4096 {
+            return Err(DriverError::Protocol("Native child message history is full. Start a new parent session.".into()));
+        }
+        self.accepted.insert(id.into(), (task_id.into(), fingerprint));
+        self.pending.entry(task_id.into()).or_default().push((id.into(), text));
+        Ok(())
+    }
+
+    fn finish(&mut self, task_id: &str) {
+        self.active.remove(task_id);
+        self.pending.remove(task_id);
+    }
+}
+
+/// Hooks are text context, not a multimodal message. Keep stored attachments intact
+/// and supply only honest references that the child can read with its file tools.
+fn child_message_context(message: &UserMessage) -> Result<String> {
+    let mut parts = Vec::new();
+    for part in &message.parts {
+        match part {
+            ContentPart::Image { .. } => {
+                return Err(DriverError::Unsupported(
+                    "Attach an image file so the subagent can read its path. Inline images cannot be delivered through a native hook."
+                        .into(),
+                ));
+            }
+            ContentPart::Attachment { .. } => {
+                return Err(DriverError::Protocol("The attachment must be resolved to a readable file reference.".into()));
+            }
+            _ => parts.push(UserMessage { parts: vec![part.clone()] }.plain_text()),
+        }
+    }
+    let text = parts.join("\n");
+    if text.trim().is_empty() {
+        return Err(DriverError::Protocol("Write a message or attach a file.".into()));
+    }
+    if text.len() > 64 * 1024 {
+        return Err(DriverError::Protocol("Subagent message exceeds 64 KiB.".into()));
+    }
+    Ok(text)
+}
+
+#[cfg(test)]
+mod child_message_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn native_child_callback_routes_once_and_never_drains_root_or_another_child() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(32);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("native-session".into()),
+            catalog: None,
+            _native_mcp_config: None,
+        });
+        let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        session.handle_frame(json!({"type":"system","subtype":"task_started","task_id":"child-a","tool_use_id":"launch-a"})).await;
+        while rx.try_recv().is_ok() {}
+        handle.send_subagent_message("child-a", "message-a", &UserMessage::text("Read the whole file.")).await.unwrap();
+        handle.send_subagent_message("child-a", "message-a", &UserMessage::text("Read the whole file.")).await.unwrap();
+        assert!(handle.send_subagent_message("child-a", "message-a", &UserMessage::text("Different input")).await.is_err());
+        // Queueing does not write any user frame to the parent's stdin.
+        assert!(child.lines.lock().await.try_recv().is_err());
+        for agent in [None, Some("child-b"), Some("child-a"), Some("child-a")] {
+            session
+                .handle_control_request(
+                    &json!({"request_id":"hook-request", "request":{"subtype":"hook_callback", "callback_id":CHILD_MESSAGE_HOOK,
+                "input":{"hook_event_name":"PreToolUse","agent_id":agent,"tool_name":"Read"}}}),
+                )
+                .await;
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(1), child.lines.lock().await.recv()).await.unwrap().unwrap();
+            assert_eq!(frame["type"], "control_response");
+            let context = frame.pointer("/response/response/hookSpecificOutput/additionalContext").and_then(Value::as_str);
+            if agent == Some("child-a") && context.is_some() {
+                assert!(context.unwrap().contains("Read the whole file."));
+                assert!(
+                    matches!(rx.try_recv(), Ok(DriverEvent::SubagentMessageDelivered {task_id, message_id}) if task_id == "child-a" && message_id == "message-a")
+                );
+            } else {
+                assert!(context.is_none());
+                assert!(rx.try_recv().is_err());
+            }
+        }
+        assert!(session.child_inbox.lock().await.pending.is_empty());
+        session.handle_frame(json!({"type":"system","subtype":"task_notification","task_id":"child-a","status":"completed"})).await;
+        assert!(handle.send_subagent_message("child-a", "late", &UserMessage::text("Too late")).await.is_err());
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn failed_callback_write_keeps_pending_without_acknowledgment() {
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(4);
+        let session = ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            _native_mcp_config: None,
+        };
+        session.child_inbox.lock().await.active.insert("child".into());
+        session.child_inbox.lock().await.queue("child", "message", "Pending".into()).unwrap();
+        child.close_stdin().await.unwrap();
+        session
+            .deliver_child_hook(
+                "request",
+                &json!({"callback_id":CHILD_MESSAGE_HOOK,"input":{"hook_event_name":"PreToolUse","agent_id":"child"}}),
+            )
+            .await;
+        assert_eq!(session.child_inbox.lock().await.pending["child"].len(), 1);
+        assert!(rx.try_recv().is_err());
+        child.close().await;
+    }
+
+    #[test]
+    fn hook_messages_keep_all_text_and_file_references_and_refuse_inline_images() {
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "Line one\nLine two".into() },
+                ContentPart::FileMention { path: "/tmp/report.txt".into() },
+            ],
+        };
+        let context = child_message_context(&message).unwrap();
+        assert!(context.contains("Line one\nLine two") && context.contains("/tmp/report.txt"));
+        assert!(
+            child_message_context(&UserMessage { parts: vec![ContentPart::Image { media_type: "image/png".into(), data: "raw".into() }] })
+                .is_err()
+        );
+    }
+}
+
 struct ClaudeSession {
     child: Arc<NdjsonChild>,
     events: mpsc::Sender<DriverEvent>,
@@ -804,6 +975,7 @@ struct ClaudeSession {
     /// request_id -> original tool input, echoed back as `updatedInput` on allow.
     pending_permissions: Mutex<HashMap<String, (Value, Vec<Value>)>>,
     state: Mutex<TurnState>,
+    child_inbox: Mutex<ChildInbox>,
     session_id: Mutex<String>,
     /// Where this session's `initialize` catalog is recorded, keeping the
     /// probe's cached catalog fresh without a separate process.
@@ -996,11 +1168,43 @@ impl ClaudeSession {
                 .await;
             }
             "hook_callback" => {
-                let _ = self.respond_control(&request_id, Ok(json!({ "continue": true }))).await;
+                self.deliver_child_hook(&request_id, req).await;
             }
             other => {
                 tracing::debug!(subtype = other, "unsupported control request from claude");
                 let _ = self.respond_control(&request_id, Err(format!("kybern does not support {other}"))).await;
+            }
+        }
+    }
+
+    async fn deliver_child_hook(&self, request_id: &str, req: &Value) {
+        let input = &req["input"];
+        let agent = input.get("agent_id").and_then(Value::as_str);
+        let mut inbox = self.child_inbox.lock().await;
+        let target = agent.filter(|id| {
+            req.get("callback_id").and_then(Value::as_str) == Some(CHILD_MESSAGE_HOOK)
+                && input.get("hook_event_name").and_then(Value::as_str) == Some("PreToolUse")
+                && inbox.active.contains(*id)
+        });
+        let pending = target.and_then(|id| inbox.pending.get(id)).cloned().unwrap_or_default();
+        let response = if pending.is_empty() {
+            json!({"continue": true})
+        } else {
+            let text = pending.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n\n");
+            json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": format!("The user sent this message to you while you were working. Follow it within your task:\n\n{text}")}})
+        };
+        // Successful write to this actual native callback is the acknowledgment boundary.
+        // If it fails, keep pending until the daemon settles the ended session.
+        if self.respond_control(request_id, Ok(response)).await.is_err() {
+            return;
+        }
+        if let Some(target) = target {
+            inbox.pending.remove(target);
+        }
+        drop(inbox);
+        if let Some(task_id) = target {
+            for (message_id, _) in pending {
+                self.emit(DriverEvent::SubagentMessageDelivered { task_id: task_id.into(), message_id }).await;
             }
         }
     }
@@ -1085,6 +1289,9 @@ impl ClaudeSession {
             "task_started" => {
                 if let Some(mut task) = claude_task_started(v) {
                     self.fill_agent_role(&mut task).await;
+                    if task.kind == RuntimeTaskKind::Agent && task.status.is_active() {
+                        self.child_inbox.lock().await.active.insert(task.id.clone());
+                    }
                     // The launch prompt becomes the first message of the subagent's own thread.
                     if task.kind == RuntimeTaskKind::Agent
                         && let Some(prompt) = v.get("prompt").and_then(Value::as_str).filter(|prompt| !prompt.trim().is_empty())
@@ -1097,6 +1304,9 @@ impl ClaudeSession {
             "task_progress" | "task_updated" => {
                 if let Some(update) = claude_task_update(v) {
                     let terminal = update.status.is_some_and(|status| !status.is_active());
+                    if terminal {
+                        self.child_inbox.lock().await.finish(&update.id);
+                    }
                     self.emit(if terminal { DriverEvent::RuntimeTaskCompleted(update) } else { DriverEvent::RuntimeTaskUpdated(update) })
                         .await;
                 }
@@ -1109,6 +1319,7 @@ impl ClaudeSession {
                     if update.status.is_none() {
                         update.status = Some(RuntimeTaskStatus::Completed);
                     }
+                    self.child_inbox.lock().await.finish(&update.id);
                     self.emit(DriverEvent::RuntimeTaskCompleted(update)).await;
                 }
             }
@@ -1117,6 +1328,9 @@ impl ClaudeSession {
                     for task in tasks {
                         if let Some(mut task) = claude_background_task(task) {
                             self.fill_agent_role(&mut task).await;
+                            if task.kind == RuntimeTaskKind::Agent && task.status.is_active() {
+                                self.child_inbox.lock().await.active.insert(task.id.clone());
+                            }
                             self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
                         }
                     }
@@ -1587,6 +1801,10 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
 
 #[async_trait]
 impl AgentSession for SessionHandle {
+    async fn send_subagent_message(&self, task_id: &str, message_id: &str, message: &UserMessage) -> Result<()> {
+        self.0.child_inbox.lock().await.queue(task_id, message_id, child_message_context(message)?)
+    }
+
     async fn compact(&self) -> Result<()> {
         self.send_message(&uuid::Uuid::now_v7().to_string(), &UserMessage::text("/compact")).await
     }
@@ -1781,6 +1999,7 @@ mod tests {
             pending_control: Mutex::new(HashMap::new()),
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
             _native_mcp_config: None,
@@ -1867,6 +2086,7 @@ mod tests {
             pending_control: Mutex::new(HashMap::new()),
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
             _native_mcp_config: None,
@@ -1928,6 +2148,7 @@ mod tests {
             pending_control: Mutex::new(HashMap::new()),
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
             _native_mcp_config: None,
@@ -1969,6 +2190,7 @@ mod tests {
             pending_control: Mutex::new(HashMap::new()),
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
             _native_mcp_config: None,
@@ -2225,6 +2447,7 @@ mod tests {
             pending_control: Mutex::new(HashMap::new()),
             pending_permissions: Mutex::new(HashMap::new()),
             state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
             _native_mcp_config: None,

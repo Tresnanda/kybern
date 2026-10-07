@@ -613,6 +613,7 @@ fn apply_transcript_event(
             | EventPayload::ThreadMessageHeld { .. }
             | EventPayload::ThreadMessageResolved { .. }
             | EventPayload::ThreadMessageUpdated { .. }
+            | EventPayload::SubagentMessageUpdated { .. }
             | EventPayload::MessageRemoved { .. }
             | EventPayload::WorktreeCleaned { .. }
             | EventPayload::WorktreeRestored { .. }

@@ -739,3 +739,20 @@ test("an omitted settled stream ignores partial late deltas until exact hydratio
   assert.equal(state.blocks[0].streamOmitted, true)
   assert.equal(state.lastSeq, 4)
 })
+
+
+test("native child delivery state does not remount transcript rows and survives streaming", () => {
+  let state = applyEvent(emptyThreadState(), { seq: 1, thread_id: "child", turn_id: T, at: AT, kind: "turn_started", message_id: "launch", message: { parts: [{ type: "text", text: "Original task" }] } })
+  const blocks = state.blocks
+  const record = { id: "child-input", thread_id: "child", task_id: "task", native_task_id: "task", session_instance_id: "process", turn_id: T, message: { parts: [{ type: "text", text: "Queued user input" }] }, status: "pending", created_at: AT, updated_at: AT }
+  state = applyEvent(state, { seq: 2, thread_id: "child", turn_id: T, at: AT, kind: "subagent_message_updated", message: record })
+  assert.equal(state.blocks, blocks)
+  assert.equal(state.subagentMessages[0].status, "pending")
+  state = applyEvent(state, { seq: 3, thread_id: "child", turn_id: T, at: AT, kind: "assistant_text_delta", message_id: "child-response", origin: ROOT, delta: "Readable child output" })
+  const streamed = state.blocks
+  assert.equal(state.subagentMessages[0], record)
+  state = applyEvent(state, { seq: 4, thread_id: "child", turn_id: T, at: AT, kind: "subagent_message_updated", message: { ...record, status: "delivered" } })
+  assert.equal(state.blocks, streamed)
+  assert.equal(state.subagentMessages.length, 1)
+  assert.equal(state.subagentMessages[0].status, "delivered")
+})

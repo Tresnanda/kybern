@@ -86,6 +86,7 @@ import { Transcript } from "./Transcript"
 import { SubagentStrip } from "./subagents/SubagentStrip"
 import { HeldMessagesPanel } from "./delegations/HeldMessagesPanel"
 import { structuredMessageBody, structuredMessageSummary } from "../../../../packages/kybern-client/src/delegations.ts"
+import { NativeSubagentComposer } from "./subagents/NativeSubagentComposer"
 import { SubagentBar, SubagentBreadcrumb } from "./subagents/SubagentPage"
 import { openParentOf, openParentShortcut, stopOneSubagent, useAncestors, useHelperThreads, useSubagentDepth } from "@/state/subagents"
 import { pageDirection, playPageMotion, lastInputWasPointer } from "@/lib/navMotion"
@@ -392,7 +393,7 @@ export function ThreadView({
           }}
         >
           <div className="pointer-events-auto flex min-h-0 flex-col">
-            {thread.subagent ? <SubagentBar thread={thread} /> : <Composer
+            {thread.subagent ? thread.provider.kind === "claude-code" ? <NativeSubagentComposer key={thread.id} isFocused={isFocused} thread={thread} providers={providers} surfaceMode={splitPaneId ? "split" : "single"} /> : <SubagentBar thread={thread} /> : <Composer
               className="thread-composer"
               showProviderUsage
               providerUsage={providerUsage}

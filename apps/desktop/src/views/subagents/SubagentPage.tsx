@@ -2,7 +2,7 @@
 // are the three places it differs: the breadcrumb in the header, the divider and end row in
 // the transcript, and the read-only bar that stands in for the composer.
 
-import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from "react"
+import { Fragment, forwardRef, useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from "react"
 import { toast } from "sonner"
 
 import {
@@ -168,7 +168,8 @@ export function SubagentEndRow({ thread }: { thread: Thread }) {
 // ---- read-only bar ----
 
 /** Takes the composer's place. There is no input: sending to a subagent is not offered (yet). */
-export function SubagentBar({ thread }: { thread: Thread }) {
+export function SubagentBar({ thread, embedded = false }: { thread: Thread; embedded?: boolean }) {
+  const Frame = embedded ? Fragment : ComposerColumnFrame
   const info = thread.subagent!
   const { model, effort } = useSubagentModel(thread)
   const phase = subagentThreadPhase(thread)
@@ -216,11 +217,11 @@ export function SubagentBar({ thread }: { thread: Thread }) {
 
   const label = (text: string) => <span className="@max-[600px]:sr-only">{text}</span>
   return (
-    <ComposerColumnFrame>
-      <div className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, "min-w-0")} data-subagent-bar="">
+    <Frame>
+      <div className={cn(!embedded && COMPOSER_INPUT_SHELL_CLASS_NAME, "min-w-0")} data-subagent-bar="">
         <div
           className={cn(
-            COMPOSER_INPUT_SURFACE_CLASS_NAME,
+            !embedded && COMPOSER_INPUT_SURFACE_CLASS_NAME,
             "@container flex min-h-12 min-w-0 items-center gap-2.5 py-[7px] pr-[7px] pl-4 text-[13px]",
           )}
         >
@@ -294,7 +295,7 @@ export function SubagentBar({ thread }: { thread: Thread }) {
           <span role="status" className="sr-only">{announcement}</span>
         </div>
       </div>
-    </ComposerColumnFrame>
+    </Frame>
   )
 }
 

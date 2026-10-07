@@ -6,6 +6,7 @@
 mod notes;
 mod projection;
 mod schema;
+mod subagent_messages;
 mod tasks;
 mod thread_history;
 mod transcript_page;

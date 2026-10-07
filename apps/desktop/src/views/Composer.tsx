@@ -151,6 +151,8 @@ export interface ComposerProps {
   onStop?: () => void
   mode: PermissionMode
   onModeChange: (m: PermissionMode) => void
+  /** Native children inherit permissions from their owning session. */
+  lockMode?: boolean
   provider: ProviderInstance | null
   accountControl?: React.ReactNode
   providerSessionId?: string | null
@@ -1190,7 +1192,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         <Button
                           size="sm"
                           variant="chrome"
-                          title={`${modeInfo.label}: ${modeInfo.description}. Click to change permissions.`}
+                          disabled={props.lockMode}
+                          title={props.lockMode ? `${modeInfo.label}: inherited from the parent session` : `${modeInfo.label}: ${modeInfo.description}. Click to change permissions.`}
                           className={cn(
                             COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
                             COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,

@@ -94,6 +94,12 @@ fn messaging_summary(payload: &EventPayload) -> Option<String> {
             message.from_thread_id.map_or_else(|| "kybern".to_string(), |id| id.to_string())
         )),
         EventPayload::ThreadMessageResolved { message_id, resolution } => Some(format!("{resolution:?} {message_id}").to_lowercase()),
+        EventPayload::SubagentMessageUpdated { message } => Some(format!(
+            "subagent message {}: {:?}{}",
+            message.id,
+            message.status,
+            message.error.as_deref().map(|s| format!(" — {s}")).unwrap_or_default()
+        )),
         EventPayload::ThreadMessageUpdated { message } => Some(format!("{} {} {}", message.state.as_str(), message.purpose, message.id)),
         _ => None,
     }
@@ -295,6 +301,7 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
             EventPayload::ThreadMessageHeld { .. }
             | EventPayload::ThreadMessageResolved { .. }
             | EventPayload::ThreadMessageUpdated { .. }
+            | EventPayload::SubagentMessageUpdated { .. }
                 if !json =>
             {
                 if line_open {

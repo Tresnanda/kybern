@@ -86,6 +86,7 @@ export interface ThreadState {
   checkpoints: Checkpoint[]
   providerCommands?: import("./types.ts").ProviderCommand[]
   providerUsage?: ProviderUsage
+  subagentMessages?: import("./types.ts").SubagentMessage[]
   lastSeq: number
   loaded: boolean
   nextBeforeSeq?: number | null
@@ -106,6 +107,7 @@ export const emptyThreadState = (): ThreadState => ({
 export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadState {
   return {
     notes: res.notes,
+    subagentMessages: prev?.subagentMessages,
     providerCommands: res.provider_commands ?? [],
     providerUsage: res.provider_usage ?? {},
     thread: res.thread,
@@ -157,6 +159,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
     case "approval_requested": case "user_input_requested": case "approval_resolved":
     case "async_questions_requested": case "async_questions_answered":
     case "provider_commands_updated": case "provider_usage_updated": case "session_transitioned":
+    case "subagent_message_updated":
       return compactThreadState(applyEvent(compact, event))
     default:
       return { ...compact, lastSeq: event.seq }
@@ -450,6 +453,12 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         },
       ]
       break
+    case "subagent_message_updated": {
+      const records = state.subagentMessages ?? []
+      const index = records.findIndex((record) => record.id === ev.message.id)
+      const subagentMessages = (index < 0 ? [...records, ev.message] : replaceAt(records, index, ev.message)).slice(-100)
+      return { ...state, subagentMessages, lastSeq: ev.seq }
+    }
     case "provider_commands_updated":
       return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
     case "session_transitioned":
@@ -482,7 +491,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     default:
       break
   }
-  return { notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded, nextBeforeSeq: state.nextBeforeSeq, loadingEarlier: state.loadingEarlier }
+  return { subagentMessages: state.subagentMessages, notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded, nextBeforeSeq: state.nextBeforeSeq, loadingEarlier: state.loadingEarlier }
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {

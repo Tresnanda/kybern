@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 4;
+pub(crate) const GUIDE_VERSION: u32 = 5;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -115,6 +115,7 @@ pub(crate) fn render(tools: &GuideTools) -> String {
             out.push_str(&format!("Inspect this thread with {}.\n", describe(&inspect)));
         }
     }
+    out.push_str("\n## Native subagents\nUsers can message an active Claude native subagent in its own thread. These messages arrive at that child's next tool call as additional context; they never enter the parent's input. Pending means waiting for that callback, not delivered. File attachments arrive as readable file references, not visual multimodal input. If the child finishes first, the message stays undelivered and only the user's explicit Send to parent action queues it for the parent. Other harnesses' native child threads remain read-only.\n");
     if tools.has("kybern_agent_delegate") {
         out.push_str(
             "\n## Helpers\n\
@@ -169,7 +170,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 4);
+        assert_eq!(GUIDE_VERSION, 5);
     }
 
     #[test]
